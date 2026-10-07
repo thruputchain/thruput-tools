@@ -4,39 +4,48 @@
 use std::time::{Duration, Instant};
 
 use groundhog_json_rpc_server::RpcServerError;
-use groundhog_scheduler::{ParallelBatch, parallel::ParallelSignedTransactionBatch};
-use xdr_common::{BytesM, VecM};
+use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
+use xdr_common::VecM;
+use xdrs::{ChunkedBytes, EncodesAs, WriteXDR};
 
-/// Pack transaction blobs into one `ParallelSignedTransactionBatch`.
+/// Transaction blobs laid out as one scheduler submission batch.
+///
+/// It encodes as a [`ParallelSignedTransactionBatch`], but writes each
+/// transaction from its own buffer instead of first copying them all into
+/// one payload, so it goes straight to `schedgateway_submit_tx_batch`.
+#[derive(Clone, Debug, PartialEq, Eq, WriteXDR)]
+pub struct SubmitBatch<B: AsRef<[u8]>> {
+    /// Tokens per segment; each transaction is a one-token segment.
+    pub segment_tokens: VecM<u32>,
+    /// Each segment's length in bytes.
+    pub segment_bytes: VecM<u32>,
+    /// The transactions, in segment order.
+    pub xdr: ChunkedBytes<Vec<B>>,
+}
+
+// The fields are `ParallelBatch`'s, in its order, with `ChunkedBytes`
+// standing in for the `BytesM` payload.
+impl<B: AsRef<[u8]>> EncodesAs<ParallelSignedTransactionBatch> for SubmitBatch<B> {}
+
+/// Lay out transaction blobs as one scheduler submission batch.
 ///
 /// Each transaction becomes its own single-token segment, so the scheduler
 /// admits or rejects them one by one and the outcome batch lines up with the
 /// input order. A transaction wider than `u32` cannot be described by the
 /// segment table, so it is rejected as invalid rather than truncated.
-pub fn pack<'a, I>(transactions: I) -> Result<ParallelSignedTransactionBatch, RpcServerError>
-where
-    I: IntoIterator<Item = &'a [u8]>,
-    I::IntoIter: ExactSizeIterator + Clone,
-{
-    let transactions = transactions.into_iter();
-    let count = transactions.len();
-    let mut segment_tokens = Vec::with_capacity(count);
-    let mut segment_bytes = Vec::with_capacity(count);
-    // One pass to size the payload buffer; submission is hot enough that
-    // growing it mid-copy is worth the extra walk over the lengths.
-    let mut xdr = Vec::with_capacity(transactions.clone().map(<[u8]>::len).sum());
-    for tx_bytes in transactions {
-        let tx_len = u32::try_from(tx_bytes.len())
-            .map_err(|_| RpcServerError::TxInvalid("transaction too large".into()))?;
-        segment_tokens.push(1);
-        segment_bytes.push(tx_len);
-        xdr.extend_from_slice(tx_bytes);
-    }
-    Ok(ParallelSignedTransactionBatch::new(ParallelBatch {
-        segment_tokens: VecM(segment_tokens),
+pub fn pack<B: AsRef<[u8]>>(transactions: Vec<B>) -> Result<SubmitBatch<B>, RpcServerError> {
+    let segment_bytes = transactions
+        .iter()
+        .map(|tx_bytes| {
+            u32::try_from(tx_bytes.as_ref().len())
+                .map_err(|_| RpcServerError::TxInvalid("transaction too large".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SubmitBatch {
+        segment_tokens: VecM(vec![1; transactions.len()]),
         segment_bytes: VecM(segment_bytes),
-        xdr: BytesM(xdr),
-    }))
+        xdr: ChunkedBytes(transactions),
+    })
 }
 
 /// Group items into cohorts whose deadlines are within `max_skew` of the

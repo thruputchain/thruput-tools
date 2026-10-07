@@ -19,7 +19,6 @@ pub mod config_cmd;
 pub mod contract_spec;
 pub mod deploy;
 pub(crate) mod dev_detail;
-pub mod dev_keys;
 pub mod docs;
 pub mod docs_json;
 pub(crate) mod docs_snapshot;

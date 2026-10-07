@@ -1,16 +1,12 @@
 use groundhog_json_rpc_types::hex::prefixed_hex;
-use groundhog_json_rpc_types::{
-    ContractAddress, NetworkHashHex,
-    runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, RuntimeManifest},
-};
+use groundhog_json_rpc_types::{NetworkHashHex, runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET};
 use groundhog_signing::LocalSigner;
 
 use crate::{
     CliError, codec,
     config::{ResolvedProfile, SavedWalletBinding, resolve_default_key_for_profile},
-    dev_keys,
     keys::load_local_signer,
-    runtime_manifest::{SUPPORTED_DERIVATION_SCHEME, load_configured_runtime_manifest},
+    runtime_manifest::load_configured_runtime_manifest,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,9 +28,7 @@ impl LocalBootstrapRole {
 
 #[derive(Debug)]
 pub(crate) struct ResolvedLocalBootstrapAccount {
-    pub(crate) key_name: String,
     pub(crate) role: String,
-    pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
     /// Network this account signs for. Part of every signature preimage.
     pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
@@ -194,18 +188,6 @@ fn resolve_wallet_selection(
     signer: &LocalSigner,
     selected_wallet: Option<&str>,
 ) -> Result<(Option<String>, groundhog_xdr::types::ContractAddress), CliError> {
-    if let Some(index) = dev_keys::dev_key_index(key_name) {
-        if let Some(wallet_name) = selected_wallet {
-            return Err(CliError::DevWalletSelectionUnsupported {
-                key_name: key_name.to_owned(),
-                wallet_name: wallet_name.to_owned(),
-            });
-        }
-        return Ok((
-            None,
-            resolve_dev_wallet_address(profile, key_name, index, signer)?,
-        ));
-    }
     if let Some(wallet_name) = selected_wallet {
         return resolve_selected_wallet(
             profile,
@@ -342,40 +324,6 @@ fn saved_wallet_owner_public_key_invalid(key_name: &str, message: impl Into<Stri
     }
 }
 
-fn resolve_dev_wallet_address(
-    profile: &ResolvedProfile,
-    key_name: &str,
-    index: usize,
-    signer: &LocalSigner,
-) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
-    let account = resolve_dev_account(profile, key_name, index)?;
-
-    let expected_public_key = signer.verifying_key_bytes();
-    if account.public_key.as_slice() != expected_public_key.as_slice() {
-        return Err(dev_account_error(
-            key_name,
-            format!(
-                "local dev account metadata returned public key {} for dev-{index}, expected 0x{}",
-                prefixed_hex(&account.public_key),
-                hex::encode(expected_public_key),
-            ),
-        ));
-    }
-
-    Ok(account.address)
-}
-
-/// Look up a local dev account address through the configured runtime manifest.
-pub(crate) fn lookup_dev_account_address(
-    profile: &ResolvedProfile,
-    key_name: &str,
-    index: usize,
-) -> Result<ContractAddress, CliError> {
-    Ok(resolve_dev_account(profile, key_name, index)?
-        .address
-        .into())
-}
-
 /// Recognize explicit address prefixes without validating the address itself.
 pub(crate) fn looks_like_address_literal(value: &str) -> bool {
     value.starts_with("0x") || value.starts_with("0X") || value.starts_with('C')
@@ -411,9 +359,6 @@ fn resolve_address_target_with_keys(
     } else {
         None
     };
-    if let Some(index) = dev_keys::dev_key_index(target) {
-        return Ok(lookup_dev_account_address(profile, target, index)?.0);
-    }
     if allow_key_names && let Some(public_key) = crate::keys::load_local_public_key(target)? {
         return resolve_saved_wallet_for_public_key(profile, target, public_key)
             .map(|(_, address)| address);
@@ -442,10 +387,6 @@ pub(crate) fn resolve_address_target_or_default_wallet(
     }
 
     let key_name = resolve_default_key_for_profile(profile)?.ok_or(CliError::MissingSigningKey)?;
-    if let Some(index) = dev_keys::dev_key_index(&key_name) {
-        return lookup_dev_account_address(profile, &key_name, index)
-            .map(|address| (key_name, address.0));
-    }
     let public_key = crate::keys::load_local_public_key(&key_name)?
         .ok_or_else(|| CliError::KeyNotFound(key_name.clone()))?;
     let (wallet_name, address) =
@@ -493,150 +434,56 @@ pub(crate) fn resolve_local_bootstrap_account(
 ) -> Result<ResolvedLocalBootstrapAccount, CliError> {
     let key_name = role.error_key_name();
     let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? else {
-        return Err(dev_account_error(
+        return Err(local_runtime_error(
             key_name,
             "local bootstrap account resolution requires GROUNDHOG_RUNTIME_MANIFEST \
              or profile.<name>.runtime_manifest from `groundhog node`",
         ));
     };
-    if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
-        return Err(dev_account_error(
+    if manifest.kind != "hogd-dev-runtime" || manifest.schema_version != 4 {
+        return Err(local_runtime_error(
             key_name,
-            format!(
-                "runtime manifest uses unsupported bootstrap account derivation scheme `{}`",
-                manifest.bootstrap_account_derivation.scheme
-            ),
+            "local funding requires a schema 4 local runtime; old state requires the previous runtime and tooling",
         ));
     }
-
-    let selected = manifest
+    let mut accounts = manifest
         .bootstrap_accounts
         .iter()
-        .find(|account| account.index == 0 && account.role == role.manifest_role())
-        .ok_or_else(|| {
-            dev_account_error(
-                key_name,
-                "runtime manifest requires bootstrap account dev-0 with role `faucet`",
-            )
-        })?;
-
-    let index = usize::try_from(selected.index).map_err(|_| {
-        dev_account_error(
+        .filter(|account| account.role == role.manifest_role());
+    let selected = accounts.next().ok_or_else(|| {
+        local_runtime_error(
             key_name,
-            format!(
-                "runtime manifest bootstrap account index {} does not fit this platform",
-                selected.index
-            ),
+            "runtime manifest requires one account with role `faucet`",
         )
     })?;
-    let signer = signer_for_manifest_account(&manifest, selected, key_name, index)?;
+    if accounts.next().is_some() {
+        return Err(local_runtime_error(
+            key_name,
+            "runtime manifest contains multiple faucets",
+        ));
+    }
+    let public_key: [u8; 32] = selected
+        .public_key
+        .as_ref()
+        .try_into()
+        .map_err(|_| local_runtime_error(key_name, "invalid faucet public key"))?;
+    if groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address()
+        != selected.wallet_address.0
+    {
+        return Err(local_runtime_error(
+            key_name,
+            "faucet address does not match its nonce-zero native account",
+        ));
+    }
     Ok(ResolvedLocalBootstrapAccount {
-        key_name: format!("dev-{index}"),
         role: selected.role.clone(),
-        signer,
         wallet_address: selected.wallet_address.0,
         network_hash: manifest.network_hash.to_network_hash(),
     })
 }
 
-fn resolve_dev_account(
-    profile: &ResolvedProfile,
-    key_name: &str,
-    index: usize,
-) -> Result<ResolvedDevAccount, CliError> {
-    if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
-        return dev_account_from_manifest(&manifest, key_name, index);
-    }
-    Err(dev_account_error(
-        key_name,
-        "dev-N keys require GROUNDHOG_RUNTIME_MANIFEST or \
-         profile.<name>.runtime_manifest from `groundhog node`",
-    ))
-}
-
-struct ResolvedDevAccount {
-    address: groundhog_xdr::types::ContractAddress,
-    public_key: Vec<u8>,
-}
-
-fn dev_account_from_manifest(
-    manifest: &RuntimeManifest,
-    key_name: &str,
-    index: usize,
-) -> Result<ResolvedDevAccount, CliError> {
-    if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
-        return Err(dev_account_error(
-            key_name,
-            format!(
-                "runtime manifest uses unsupported bootstrap account derivation scheme `{}`",
-                manifest.bootstrap_account_derivation.scheme
-            ),
-        ));
-    }
-    let Some(account) = manifest
-        .bootstrap_accounts
-        .iter()
-        .find(|account| usize::try_from(account.index).ok() == Some(index))
-    else {
-        return Err(dev_account_error(
-            key_name,
-            format!(
-                "runtime manifest returned {} bootstrap accounts, missing dev-{index}",
-                manifest.bootstrap_accounts.len()
-            ),
-        ));
-    };
-
-    let signer = signer_for_manifest_account(manifest, account, key_name, index)?;
-
-    Ok(ResolvedDevAccount {
-        address: account.wallet_address.0,
-        public_key: signer.verifying_key_bytes().to_vec(),
-    })
-}
-
-fn signer_for_manifest_account(
-    manifest: &RuntimeManifest,
-    account: &BootstrapAccount,
-    key_name: &str,
-    index: usize,
-) -> Result<LocalSigner, CliError> {
-    let derived_secret =
-        zeroize::Zeroizing::new(groundhog_signing::dev_account::derive_dev_account_secret(
-            &manifest.bootstrap_account_derivation.seed,
-            index,
-        ));
-    let signer = groundhog_signing::LocalSigner::from_secret_key(*derived_secret);
-    let derived_public_key = signer.verifying_key_bytes();
-    if account.public_key.0.as_ref() != derived_public_key.as_slice() {
-        return Err(dev_account_error(
-            key_name,
-            format!(
-                "runtime manifest bootstrap account dev-{index} public key {} does not match derivation seed",
-                prefixed_hex(account.public_key.0.as_ref()),
-            ),
-        ));
-    }
-    let _initial_storage_tokens = account.initial_storage_tokens.parse::<u64>().map_err(|error| {
-        dev_account_error(
-            key_name,
-            format!(
-                "runtime manifest bootstrap account dev-{index} initialStorageTokens is invalid: {error}"
-            ),
-        )
-    })?;
-    let expected_address = default_native_account(&signer).address();
-    if account.wallet_address.0 != expected_address {
-        return Err(dev_account_error(
-            key_name,
-            "runtime manifest bootstrap address is not its nonce-zero native account",
-        ));
-    }
-    Ok(signer)
-}
-
-fn dev_account_error(key_name: &str, message: impl Into<String>) -> CliError {
-    CliError::LocalDevAccountUnavailable {
+fn local_runtime_error(key_name: &str, message: impl Into<String>) -> CliError {
+    CliError::LocalRuntimeUnavailable {
         key_name: key_name.to_string(),
         message: message.into(),
     }
@@ -840,22 +687,6 @@ mod tests {
     }
 
     #[test]
-    fn address_target_resolves_manifest_dev_account() {
-        let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
-        let manifest_path = temp.path().join("runtime-manifest.json");
-        let expected =
-            default_native_account(&groundhog_signing::derive_default_dev_account_signer(1))
-                .address();
-        write_test_runtime_manifest_with_accounts(&manifest_path, &[(1, "local_user", expected)]);
-        let profile = test_profile("dev-1", Some(manifest_path), BTreeMap::new());
-
-        let resolved = resolve_address_target(&profile, "dev-1")
-            .expect("bug: manifest dev account should resolve");
-
-        assert_eq!(resolved, expected);
-    }
-
-    #[test]
     fn non_dev_key_uses_saved_wallet_address() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let wallet_address = groundhog_xdr::types::ContractAddress::from([0x80; 32]);
@@ -1056,17 +887,6 @@ mod tests {
     }
 
     #[test]
-    fn dev_key_rejects_saved_wallet_selection() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let profile = test_profile("dev-0", None, BTreeMap::new());
-
-        let error = resolve_wallet_selection(&profile, "dev-0", &signer, Some("primary"))
-            .expect_err("bug: dev key wallet selection should fail");
-
-        assert_eq!(error.code(), "dev_wallet_selection_unsupported");
-    }
-
-    #[test]
     fn ordinary_key_without_saved_wallet_uses_native_nonce_zero() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let profile = test_profile("alice", None, BTreeMap::default());
@@ -1254,117 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn dev_key_manifest_resolution_does_not_require_rpc_url() {
-        let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
-        let manifest_path = temp.path().join("runtime-manifest.json");
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = default_native_account(&signer).address();
-        let manifest = serde_json::json!({
-            "schemaVersion": 3,
-            "kind": "hogd-dev-runtime",
-            "chainState": "fresh",
-            "networkHash": "00".repeat(32),
-            "protocol": "hogp/test00000000000",
-            "genesisHash": format!("0x{}", "42".repeat(32)),
-            "producer": {
-                "binary": "hog-devnode",
-                "version": "0.1.0"
-            },
-            "endpoints": {
-                "scheduler": "127.0.0.1:1000"
-            },
-            "bootstrapAccountDerivation": {
-                "scheme": SUPPORTED_DERIVATION_SCHEME,
-                "seed": groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED
-            },
-            "bootstrapAccounts": [{
-                "index": 0,
-                "role": "local_user",
-                "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
-                "walletAddress": format!("0x{}", hex::encode(wallet_address.as_ref())),
-                "initialStorageTokens": "1000000000"
-            }],
-            "bootstrap": {
-                "storageCostModel": {
-                    "hash": format!("0x{}", "53".repeat(32)),
-                    "baseDataItemCost": "12000",
-                    "bytestringCostPerByte": "10",
-                    "baseContractDeploymentCost": "12000",
-                    "contractDeploymentCostPerByte": "10",
-                    "authPerKeyCost": "1111",
-                    "rcqCostPerEntry": "8",
-                    "replayCacheCostPerEntry": "7",
-                    "balanceCost": "1234"
-                }
-            }
-        });
-        std::fs::write(
-            &manifest_path,
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .expect("bug: manifest should write");
-        let profile = ResolvedProfile {
-            name: "default".into(),
-            network: None,
-            rpc_url: None,
-            network_hash: None,
-            rpc_url_cli_override: false,
-            faucet_url: None,
-            default_key: Some("dev-0".into()),
-            default_wallet: None,
-            runtime_manifest: Some(manifest_path),
-            runtime_manifest_cli_override: false,
-            runtime_artifacts_dir: None,
-            contracts: BTreeMap::default(),
-            wallets: BTreeMap::default(),
-            source: None,
-        };
-
-        let resolved = resolve_wallet_selection(&profile, "dev-0", &signer, None)
-            .expect("bug: manifest-backed dev key should not require rpc_url")
-            .1;
-
-        assert_eq!(resolved, wallet_address);
-    }
-
-    #[test]
-    fn dev_key_manifest_resolution_uses_profile_runtime_manifest() {
-        let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
-        let project = temp.path().join("counter");
-        std::fs::create_dir(&project).expect("bug: project dir should be created");
-        let config_path = project.join("groundhog.toml");
-        std::fs::write(&config_path, "[profile.default]\ndefault_key = \"dev-0\"\n")
-            .expect("bug: project config should write");
-        let manifest_path = temp.path().join("runtime-manifest.json");
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = default_native_account(&signer).address();
-        write_test_runtime_manifest(&manifest_path, &signer, wallet_address);
-        let profile = ResolvedProfile {
-            name: "default".into(),
-            network: None,
-            rpc_url: None,
-            network_hash: None,
-            rpc_url_cli_override: false,
-            faucet_url: None,
-            default_key: Some("dev-0".into()),
-            default_wallet: None,
-            runtime_manifest: Some(manifest_path),
-            runtime_manifest_cli_override: false,
-            runtime_artifacts_dir: None,
-            contracts: BTreeMap::default(),
-            wallets: BTreeMap::default(),
-            source: Some(config_path),
-        };
-
-        let resolved = resolve_wallet_selection(&profile, "dev-0", &signer, None)
-            .expect("bug: local-node state manifest should resolve dev key")
-            .1;
-
-        assert_eq!(resolved, wallet_address);
-    }
-
-    #[test]
-    fn local_bootstrap_account_requires_faucet_at_index_zero() {
+    fn local_bootstrap_account_resolves_public_faucet() {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let manifest_path = temp.path().join("runtime-manifest.json");
         let faucet_wallet =
@@ -1376,13 +1086,8 @@ mod tests {
         let resolved = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)
             .expect("bug: faucet role should resolve");
 
-        assert_eq!(resolved.key_name, "dev-0");
         assert_eq!(resolved.role, "faucet");
         assert_eq!(resolved.wallet_address, faucet_wallet);
-        assert_eq!(
-            resolved.signer.verifying_key_bytes(),
-            groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes(),
-        );
     }
 
     #[test]
@@ -1431,21 +1136,6 @@ mod tests {
         }
     }
 
-    fn write_test_runtime_manifest(
-        manifest_path: &std::path::Path,
-        signer: &LocalSigner,
-        wallet_address: groundhog_xdr::types::ContractAddress,
-    ) {
-        let account = serde_json::json!({
-            "index": 0,
-            "role": "local_user",
-            "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
-            "walletAddress": format!("0x{}", hex::encode(wallet_address.as_ref())),
-            "initialStorageTokens": "1000000000"
-        });
-        write_test_runtime_manifest_json(manifest_path, std::slice::from_ref(&account));
-    }
-
     fn write_test_runtime_manifest_with_accounts(
         manifest_path: &std::path::Path,
         accounts: &[(usize, &str, groundhog_xdr::types::ContractAddress)],
@@ -1455,7 +1145,6 @@ mod tests {
             .map(|(index, role, wallet_address)| {
                 let signer = groundhog_signing::derive_default_dev_account_signer(*index);
                 serde_json::json!({
-                    "index": index,
                     "role": role,
                     "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
                     "walletAddress": format!("0x{}", hex::encode(wallet_address.as_ref())),
@@ -1471,7 +1160,7 @@ mod tests {
         accounts: &[serde_json::Value],
     ) {
         let manifest = serde_json::json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -1483,10 +1172,6 @@ mod tests {
             },
             "endpoints": {
                 "scheduler": "127.0.0.1:1000"
-            },
-            "bootstrapAccountDerivation": {
-                "scheme": SUPPORTED_DERIVATION_SCHEME,
-                "seed": groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED
             },
             "bootstrapAccounts": accounts,
             "bootstrap": {

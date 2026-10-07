@@ -78,7 +78,7 @@ struct RpcTargetArgs {
     /// Override the active profile's RPC URL
     #[arg(long)]
     rpc_url: Option<String>,
-    /// Override local-dev runtime manifest path for dev-N/bootstrap accounts
+    /// Override local-dev runtime manifest path for local chain identity and faucet
     #[arg(long)]
     runtime_manifest: Option<PathBuf>,
 }
@@ -685,7 +685,7 @@ impl CallArgs {
 
 #[derive(Args)]
 struct TransferArgs {
-    /// Wallet name, contract alias, dev-N account, or direct address
+    /// Wallet name, contract alias, stored key, or direct address
     recipient: String,
     /// Amount in HOG, with up to 7 decimal places
     amount: String,
@@ -756,7 +756,7 @@ impl AirdropArgs {
 
 #[derive(Args)]
 struct BalanceArgs {
-    /// Wallet name, contract alias, dev-N account, or address (default: effective wallet)
+    /// Wallet name, contract alias, stored key, or address (default: effective wallet)
     target: Option<String>,
     /// Config profile to use
     #[arg(long = "profile")]
@@ -790,7 +790,7 @@ struct ViewArgs {
     /// Raw calldata for explicit-entrypoint calls
     #[arg(long)]
     calldata: Option<String>,
-    /// Simulated caller: saved wallet, key, contract alias, dev-N, or direct address
+    /// Simulated caller: saved wallet, key, contract alias, stored key, or direct address
     #[arg(long = "from")]
     from: Option<String>,
     /// Package whose contract metadata resolves the method (required in workspaces)
@@ -864,12 +864,15 @@ struct NodeArgs {
     /// Show forwarded hog-devnode info logs in addition to supervisor status
     #[arg(long, short = 'v')]
     verbose: bool,
-    /// Number of dev-1+ user accounts to bootstrap; dev-0 faucet is always present
+    /// Stored key to fund on a fresh chain; defaults to the selected project or global key
     #[arg(long)]
-    dev_account_count: Option<usize>,
-    /// Initial HOG allocated to each dev-1+ user account (default: 100; up to 7 decimals)
-    #[arg(long, value_name = "HOG", value_parser = groundhog_cli::node::parse_dev_account_hog)]
-    dev_account_hog: Option<u64>,
+    key: Option<String>,
+    /// Initial HOG for the selected key (default: 100; up to 7 decimals)
+    #[arg(long, value_name = "HOG", value_parser = groundhog_cli::node::parse_initial_account_hog)]
+    initial_account_hog: Option<u64>,
+    /// JSON array of public key allocations for fixture-owned accounts
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["key", "initial_account_hog"])]
+    bootstrap_accounts: Option<PathBuf>,
     /// Explicit hog-devnode binary path
     #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
     hogd_dev_binary: Option<std::path::PathBuf>,
@@ -928,8 +931,16 @@ impl NodeArgs {
         options.startup_timeout = self
             .startup_timeout_secs
             .map(std::time::Duration::from_secs);
-        options.dev_account_count = self.dev_account_count;
-        options.dev_account_tokens = self.dev_account_hog;
+        if let Some(path) = self.bootstrap_accounts {
+            options.bootstrap_accounts = groundhog_cli::node::load_bootstrap_allocations(&path)?;
+        } else {
+            (options.selected_key, options.bootstrap_accounts) =
+                groundhog_cli::node::stored_key_allocation(
+                    self.key.as_deref(),
+                    self.initial_account_hog
+                        .unwrap_or(groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS),
+                )?;
+        }
         options.block_driver = self.block_driver.map(Into::into);
         options.block_interval = self.block_interval_ms.map(std::time::Duration::from_millis);
         options.rpc_max_connections = self.rpc_max_connections;
@@ -1534,7 +1545,7 @@ enum TxCommand {
                        Receipts are not fetched; inspect selected hashes with `groundhog tx show`."
     )]
     List {
-        /// Wallet name, contract alias, dev-N account, or address (default: effective wallet)
+        /// Wallet name, contract alias, stored key, or address (default: effective wallet)
         target: Option<String>,
         /// Number of transaction references to request (default: 50)
         #[arg(long, allow_hyphen_values = true)]
@@ -1605,7 +1616,7 @@ enum EventsCommand {
                        cursor is opaque and must be reused with the same contract and filters."
     )]
     List {
-        /// Wallet name, contract alias, dev-N account, or direct address
+        /// Wallet name, contract alias, stored key, or direct address
         contract: String,
         /// Topic-0 value; repeat for OR within this position
         #[arg(long)]
@@ -1688,7 +1699,7 @@ enum TokenCommand {
                       base-unit decimal strings; token metadata is not fetched."
     )]
     Transfers {
-        /// Token contract alias, wallet name, dev-N account, or direct address
+        /// Token contract alias, wallet name, stored key, or direct address
         token: String,
         /// Include only transfers from this resolved address
         #[arg(long)]
@@ -2090,13 +2101,11 @@ mod tests {
     }
 
     #[test]
-    fn node_dev_account_count_flag_parses() {
-        let cli = Cli::parse_from(["groundhog", "node", "--dev-account-count", "3"]);
+    fn node_key_flag_parses() {
+        let cli = Cli::parse_from(["groundhog", "node", "--key", "alice"]);
 
         match cli.command {
-            Command::Node(NodeArgs {
-                dev_account_count, ..
-            }) => assert_eq!(dev_account_count, Some(3)),
+            Command::Node(NodeArgs { key, .. }) => assert_eq!(key.as_deref(), Some("alice")),
             _ => panic!("expected node command"),
         }
     }
@@ -2136,13 +2145,14 @@ mod tests {
     }
 
     #[test]
-    fn node_dev_account_hog_flag_parses_exact_raw_units() {
-        let cli = Cli::parse_from(["groundhog", "node", "--dev-account-hog", "25.0000001"]);
+    fn node_initial_account_hog_flag_parses_exact_raw_units() {
+        let cli = Cli::parse_from(["groundhog", "node", "--initial-account-hog", "25.0000001"]);
 
         match cli.command {
             Command::Node(NodeArgs {
-                dev_account_hog, ..
-            }) => assert_eq!(dev_account_hog, Some(250_000_001)),
+                initial_account_hog,
+                ..
+            }) => assert_eq!(initial_account_hog, Some(250_000_001)),
             _ => panic!("expected node command"),
         }
     }

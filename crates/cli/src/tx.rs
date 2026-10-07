@@ -196,12 +196,12 @@ async fn fetch_transaction(
         .await
         .map_err(|error| map_rpc_error("getTransactionStatus", &error))?;
     let committed_height = match &status {
-        TransactionStatus::Committed { height } => Some(height.clone()),
+        TransactionStatus::Committed { height } => height.clone(),
         _ => None,
     };
-    let Some(committed_height) = committed_height else {
+    if !matches!(status, TransactionStatus::Committed { .. }) {
         return Ok((status, None));
-    };
+    }
 
     let receipt = client
         .get_transaction_receipt(tx_hash)
@@ -218,7 +218,9 @@ async fn fetch_transaction(
                 ),
             });
         }
-        if receipt.height != committed_height {
+        if let Some(committed_height) = committed_height
+            && receipt.height != committed_height
+        {
             return Err(CliError::RpcMethodFailed {
                 method: "getTransactionReceipt",
                 message: format!(
@@ -254,7 +256,9 @@ fn print_show(
         TransactionStatus::Pending => print.detail("status", "pending"),
         TransactionStatus::Committed { height } => {
             print.detail("status", "committed");
-            print.detail("height", **height);
+            if let Some(height) = height {
+                print.detail("height", **height);
+            }
         }
         TransactionStatus::Invalid { reason } => {
             print.detail("status", "invalid");
@@ -270,8 +274,27 @@ fn print_show(
                 print.detail("cause", terminal_safe(&cause));
             }
         }
+        TransactionStatus::Retry { error } | TransactionStatus::Dropped { error } => {
+            let retry = matches!(status, TransactionStatus::Retry { .. });
+            print.detail("status", if retry { "retry" } else { "dropped" });
+            if let Ok(source) = serde_json::to_string(&error.source) {
+                print.detail("error source", source.trim_matches('"'));
+            }
+            print.detail("error code", error.code);
+            print.detail(
+                "next step",
+                if retry {
+                    "resubmit the transaction; the mempool will not retry it automatically"
+                } else {
+                    "modify the transaction before resubmitting"
+                },
+            );
+        }
         TransactionStatus::Unknown => {
-            print.detail("status", "unknown (not found in the mempool or indexer)");
+            print.detail(
+                "status",
+                "unknown (not found in scheduler outcomes or indexer)",
+            );
         }
         TransactionStatus::Other => print.detail("status", "other (update the CLI)"),
         _ => print.detail("status", "unsupported (update the CLI)"),

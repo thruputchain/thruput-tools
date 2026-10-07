@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::{ContractAddress, Ed25519PublicKey, NetworkHashHex, SHA256Hash};
 
 /// Current runtime manifest schema version.
-pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 3;
+pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 4;
 
 /// Runtime manifest family emitted by hog-devnode.
 pub const HOGD_DEV_RUNTIME_MANIFEST_KIND: &str = "hogd-dev-runtime";
@@ -43,8 +43,9 @@ pub struct RuntimeManifest {
     pub producer: RuntimeManifestProducer,
     /// Dial addresses for services available in this runtime.
     pub endpoints: RuntimeManifestEndpoints,
-    /// Seed and scheme shared by all listed bootstrap accounts.
-    pub bootstrap_account_derivation: BootstrapAccountDerivation,
+    /// Derivation metadata advertised only by hosted schema-3 runtimes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap_account_derivation: Option<BootstrapAccountDerivation>,
     /// Accounts present in genesis and funded by the producer.
     pub bootstrap_accounts: Vec<BootstrapAccount>,
     /// Storage cost model used at genesis.
@@ -74,18 +75,60 @@ impl fmt::Display for RuntimeManifestChainState {
 #[serde(rename_all = "camelCase")]
 struct RuntimeManifestEnvelope {
     schema_version: u32,
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 /// Parse a runtime manifest after validating its schema envelope.
 pub fn parse_runtime_manifest(bytes: &[u8]) -> Result<RuntimeManifest, RuntimeManifestParseError> {
+    use serde::de::Error;
+
     let envelope: RuntimeManifestEnvelope = serde_json::from_slice(bytes)?;
-    if envelope.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
+    let expected = match envelope.kind.as_deref() {
+        Some(HOSTED_DEVNET_RUNTIME_MANIFEST_KIND) => 3,
+        Some(HOGD_DEV_RUNTIME_MANIFEST_KIND) | None => RUNTIME_MANIFEST_SCHEMA_VERSION,
+        Some(kind) => {
+            return Err(serde_json::Error::custom(format!(
+                "unsupported runtime manifest kind {kind}"
+            ))
+            .into());
+        }
+    };
+    if envelope.schema_version != expected {
         return Err(RuntimeManifestParseError::UnsupportedSchema {
-            expected: RUNTIME_MANIFEST_SCHEMA_VERSION,
+            expected,
             actual: envelope.schema_version,
         });
     }
-    Ok(serde_json::from_slice(bytes)?)
+    let manifest: RuntimeManifest = serde_json::from_slice(bytes)?;
+    if manifest.kind == HOGD_DEV_RUNTIME_MANIFEST_KIND {
+        let value: serde_json::Value = serde_json::from_slice(bytes)?;
+        if value.get("bootstrapAccountDerivation").is_some()
+            || value["bootstrapAccounts"]
+                .as_array()
+                .is_some_and(|accounts| {
+                    accounts
+                        .iter()
+                        .any(|account| account.get("index").is_some())
+                })
+        {
+            return Err(serde_json::Error::custom(
+                "local schema 4 must not contain account derivation or index fields",
+            )
+            .into());
+        }
+    } else if manifest.bootstrap_account_derivation.is_none()
+        || manifest
+            .bootstrap_accounts
+            .iter()
+            .any(|account| account.index.is_none())
+    {
+        return Err(serde_json::Error::custom(
+            "hosted schema 3 requires account derivation and indices",
+        )
+        .into());
+    }
+    Ok(manifest)
 }
 
 /// Errors returned while parsing a versioned runtime manifest.
@@ -171,10 +214,11 @@ pub struct BootstrapAccountDerivation {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct BootstrapAccount {
-    /// Position passed to the derivation scheme.
-    pub index: u32,
-    /// Account role discriminator. Local runtimes use `faucet` for index 0 and
-    /// `local_user` for ordinary workload accounts.
+    /// Hosted schema-3 fixture derivation index; absent on local schema 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    /// Account role discriminator. Local runtimes use `faucet` for the service
+    /// account and `local_user` for ordinary workload accounts.
     pub role: String,
     /// Public key authorized for the wallet.
     pub public_key: Ed25519PublicKey,
@@ -235,10 +279,9 @@ mod tests {
     use crate::hex::Hex0x;
 
     use super::{
-        BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, BootstrapAccountDerivation,
-        RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest, RuntimeManifestBootstrap,
-        RuntimeManifestChainState, RuntimeManifestEndpoints, RuntimeManifestProducer,
-        RuntimeManifestStorageCostModel,
+        BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, RUNTIME_MANIFEST_SCHEMA_VERSION,
+        RuntimeManifest, RuntimeManifestBootstrap, RuntimeManifestChainState,
+        RuntimeManifestEndpoints, RuntimeManifestProducer, RuntimeManifestStorageCostModel,
     };
 
     #[test]
@@ -248,7 +291,7 @@ mod tests {
         assert!(matches!(
             super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()),
             Err(super::RuntimeManifestParseError::UnsupportedSchema {
-                expected: 3,
+                expected: 4,
                 actual: 2
             })
         ));
@@ -261,7 +304,7 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 3,
+                "schemaVersion": 4,
                 "kind": "hogd-dev-runtime",
                 "chainState": "fresh",
                 "networkHash": "4242424242424242424242424242424242424242424242424242424242424242",
@@ -278,12 +321,7 @@ mod tests {
                     "dbGateway": "127.0.0.1:1002",
                     "viewGateway": "127.0.0.1:1003",
                 },
-                "bootstrapAccountDerivation": {
-                    "scheme": "groundhog-bootstrap-account-v1",
-                    "seed": "groundhog-dev-accounts",
-                },
                 "bootstrapAccounts": [{
-                    "index": 0,
                     "role": BOOTSTRAP_ACCOUNT_ROLE_FAUCET,
                     "publicKey": prefixed_hex(0x61),
                     "walletAddress": prefixed_hex(0x71),
@@ -379,6 +417,57 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn hosted_three_is_supported_but_local_three_is_rejected() {
+        let mut value = serde_json::to_value(full_manifest()).unwrap();
+        value["schemaVersion"] = json!(3);
+        assert!(super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
+        value["kind"] = json!(super::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND);
+        value["bootstrapAccountDerivation"] =
+            json!({"scheme":"groundhog-bootstrap-account-v1","seed":"hosted-fixture"});
+        value["bootstrapAccounts"][0]["index"] = json!(0);
+        assert!(super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()).is_ok());
+        value["schemaVersion"] = json!(4);
+        assert!(super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn local_four_rejects_legacy_derivation_even_null() {
+        for field in ["bootstrapAccountDerivation", "index"] {
+            let mut value = serde_json::to_value(full_manifest()).unwrap();
+            if field == "index" {
+                value["bootstrapAccounts"][0][field] = json!(null);
+            } else {
+                value[field] = json!(null);
+            }
+            assert!(super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn runtime_manifest_rejects_duplicate_known_fields() {
+        let original = serde_json::to_string(&full_manifest()).unwrap();
+        for (needle, replacement) in [
+            (
+                "\"schemaVersion\":4",
+                "\"schemaVersion\":4,\"schemaVersion\":4",
+            ),
+            (
+                "\"kind\":\"hogd-dev-runtime\"",
+                "\"kind\":\"hogd-dev-runtime\",\"kind\":\"hogd-dev-runtime\"",
+            ),
+            (
+                "\"role\":\"faucet\"",
+                "\"role\":\"faucet\",\"role\":\"faucet\"",
+            ),
+        ] {
+            let duplicate = original.replace(needle, replacement);
+            assert_ne!(duplicate, original);
+            let error = super::parse_runtime_manifest(duplicate.as_bytes()).unwrap_err();
+            assert!(error.to_string().contains("duplicate field"), "{error}");
+        }
+    }
+
     fn full_manifest() -> RuntimeManifest {
         RuntimeManifest {
             schema_version: RUNTIME_MANIFEST_SCHEMA_VERSION,
@@ -398,12 +487,9 @@ mod tests {
                 db_gateway: Some(addr("127.0.0.1:1002")),
                 view_gateway: Some(addr("127.0.0.1:1003")),
             },
-            bootstrap_account_derivation: BootstrapAccountDerivation {
-                scheme: "groundhog-bootstrap-account-v1".into(),
-                seed: "groundhog-dev-accounts".into(),
-            },
+            bootstrap_account_derivation: None,
             bootstrap_accounts: vec![BootstrapAccount {
-                index: 0,
+                index: None,
                 role: BOOTSTRAP_ACCOUNT_ROLE_FAUCET.into(),
                 public_key: public_key(0x61),
                 wallet_address: contract_address(0x71),
@@ -469,7 +555,7 @@ mod tests {
         }))
         .expect("bug: additive manifest fields should be ignored");
 
-        assert_eq!(account.index, 0);
+        assert_eq!(account.index, Some(0));
     }
 
     fn addr(value: &str) -> SocketAddr {

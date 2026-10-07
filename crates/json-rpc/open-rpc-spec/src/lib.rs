@@ -1,5 +1,6 @@
+use groundhog_json_rpc_api::types::airdrop::LocalFundingErrorData;
 use groundhog_json_rpc_api::{
-    AirdropApiOpenRpc, GroundhogApiOpenRpc, WIRE_FORMAT_VERSION,
+    AirdropApiOpenRpc, GroundhogApiOpenRpc, LocalFundingApiOpenRpc, WIRE_FORMAT_VERSION,
     types::error::{ERROR_INFOS, RpcErrorInfo, TxInvalidDetail, codes, error_info_by_code},
 };
 use groundhog_open_rpc::{Project, ProjectInfo};
@@ -16,6 +17,7 @@ pub fn build_spec() -> serde_json::Value {
     });
     spec.module(GroundhogApiOpenRpc::module_doc);
     spec.module(AirdropApiOpenRpc::module_doc);
+    spec.module(LocalFundingApiOpenRpc::module_doc);
     let mut json = spec.to_json();
     add_error_docs(&mut json);
     canonicalize(json)
@@ -93,6 +95,10 @@ fn error_data_schema(code: i32) -> Option<serde_json::Value> {
             .with(|settings| settings.meta_schema = None)
             .into_generator()
             .into_root_schema_for::<TxInvalidDetail>(),
+        codes::LOCAL_FUNDING_UNRESOLVED => SchemaSettings::draft2020_12()
+            .with(|settings| settings.meta_schema = None)
+            .into_generator()
+            .into_root_schema_for::<LocalFundingErrorData>(),
         _ => return None,
     };
     Some(serde_json::to_value(schema).expect("bug: schemars Schema serialization cannot fail"))
@@ -144,6 +150,14 @@ fn method_error_codes(method: &str) -> &'static [i32] {
             codes::NOT_IMPLEMENTED,
         ],
         "groundhog_networkInfo" | "groundhog_serverLimits" | "groundhog_version" => &[],
+        "groundhog_fundAccount" => &[
+            codes::LOCAL_FUNDING_UNRESOLVED,
+            codes::INVALID_PARAMS,
+            codes::TX_REJECTED,
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+        ],
         "groundhog_requestAirdrop" => &[
             codes::INVALID_PARAMS,
             codes::TX_REJECTED,

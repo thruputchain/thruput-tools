@@ -155,10 +155,9 @@ impl Fixture {
 }
 
 fn native_runtime_document() -> serde_json::Value {
-    let mut document: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../docs/gateway/examples/runtime-manifest.hogd-dev.example.json"
-    ))
-    .unwrap();
+    let mut document: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/hosted-runtime.json")).unwrap();
+    document["kind"] = "hosted-devnet-runtime".into();
     for index in 0..2 {
         let signer = derive_dev_account_signer("groundhog-dev-accounts", index);
         document["bootstrapAccounts"][index]["publicKey"] =

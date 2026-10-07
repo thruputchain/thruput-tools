@@ -77,3 +77,35 @@ fn plain_tx_invalid_carries_no_data() {
     assert_eq!(obj.code(), codes::TX_INVALID);
     assert!(obj.data().is_none());
 }
+
+#[test]
+fn unresolved_local_funding_carries_evidence_without_asserting_an_outcome() {
+    let evidence = groundhog_json_rpc_types::airdrop::LocalFundingErrorData::new(
+        groundhog_json_rpc_types::transaction::TxHash(
+            groundhog_xdr::types::SHA256Hash::from([0x42; 32]).into(),
+        ),
+        groundhog_json_rpc_types::hex::HexBytes(vec![1, 2, 3]),
+    );
+    let object: ErrorObjectOwned = RpcServerError::LocalFundingUnresolved {
+        reason: "receipt unavailable".into(),
+        evidence: evidence.clone(),
+    }
+    .into();
+    assert_eq!(object.code(), codes::LOCAL_FUNDING_UNRESOLVED);
+    assert_eq!(
+        serde_json::from_str::<groundhog_json_rpc_types::airdrop::LocalFundingErrorData>(
+            object.data().unwrap().get()
+        )
+        .unwrap(),
+        evidence
+    );
+    let mut extended = serde_json::to_value(&evidence).unwrap();
+    extended["futureDiagnostic"] = serde_json::json!("additional output metadata");
+    assert_eq!(
+        serde_json::from_value::<groundhog_json_rpc_types::airdrop::LocalFundingErrorData>(
+            extended
+        )
+        .unwrap(),
+        evidence
+    );
+}

@@ -16,15 +16,19 @@ use sha2::{Digest, Sha256};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 
-const ARCHIVE_SCHEMA_VERSION: u32 = 2;
+const ARCHIVE_SCHEMA_VERSION: u32 = 3;
 const LEGACY_ARCHIVE_SCHEMA_VERSION: u32 = 1;
-const REPORT_SCHEMA_VERSION: u32 = 1;
+const REPORT_SCHEMA_VERSION: u32 = 2;
 const ARCHIVE_KIND: &str = "groundhog-chain-dump";
 // Files are compressed independently in bounded chunks so restore never has to
 // hold an entire database file in memory.
 const CHUNK_SIZE: usize = 1024 * 1024;
 const COMPRESSION_LEVEL: i32 = 3;
 const DATA_DIR_METADATA: &str = "hog-devnode-data.json";
+const PRIVATE_STATE_FILES: [&str; 2] = [
+    groundhog_node_supervisor::LOCAL_FAUCET_KEY_FILE,
+    groundhog_node_supervisor::LOCAL_FUNDING_ATTEMPTS_FILE,
+];
 const LOCK_FILE: &str = ".hog-devnode.lock";
 const NODE_PID_FILE: &str = "hog-devnode.pid";
 // Runtime state is deliberately excluded: endpoints, PIDs, and other process
@@ -38,6 +42,8 @@ pub struct ChainDumpReport {
     pub schema_version: u32,
     pub archive_path: PathBuf,
     pub data_dir: PathBuf,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<usize>")]
     pub file_count: usize,
     pub uncompressed_bytes: String,
     pub archive_bytes: String,
@@ -51,6 +57,8 @@ pub struct ChainRestoreReport {
     pub schema_version: u32,
     pub archive_path: PathBuf,
     pub data_dir: PathBuf,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<usize>")]
     pub file_count: usize,
     pub uncompressed_bytes: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,6 +67,7 @@ pub struct ChainRestoreReport {
 
 #[derive(Debug, Default)]
 struct ArchiveStats {
+    schema_version: u32,
     file_count: usize,
     uncompressed_bytes: u64,
     // Tracks both duplicate entries and the required persistent-state entries.
@@ -470,7 +479,34 @@ fn ensure_outside_data_dir(data_dir: &Path, archive: &Path) -> Result<(), CliErr
 fn collect_archive_files(data_dir: &Path) -> Result<Vec<(String, PathBuf)>, CliError> {
     let metadata = data_dir.join(DATA_DIR_METADATA);
     require_regular_file(&metadata)?;
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&metadata)?)
+        .map_err(|error| archive_io(error.to_string()))?;
+    if value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(4)
+    {
+        return Err(archive_io(
+            "old local state requires the previous runtime and tooling".into(),
+        ));
+    }
     let mut files = vec![(DATA_DIR_METADATA.to_owned(), metadata)];
+    for relative in PRIVATE_STATE_FILES {
+        let path = data_dir.join(relative);
+        require_regular_file(&path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.mode() & 0o077 != 0 || metadata.uid() != unsafe { libc::geteuid() } {
+                return Err(archive_io(format!(
+                    "private state '{}' must belong to this user and have owner-only permissions",
+                    path.display()
+                )));
+            }
+        }
+        files.push((relative.to_owned(), path));
+    }
     for directory in PERSISTENT_DIRS {
         let root = data_dir.join(directory);
         let metadata = fs::symlink_metadata(&root).map_err(|error| {
@@ -688,7 +724,7 @@ impl<'de> Visitor<'de> for ArchiveVisitor<'_> {
                     // and size contract have been validated.
                     if !matches!(
                         schema,
-                        Some(LEGACY_ARCHIVE_SCHEMA_VERSION | ARCHIVE_SCHEMA_VERSION)
+                        Some(LEGACY_ARCHIVE_SCHEMA_VERSION | 2 | ARCHIVE_SCHEMA_VERSION)
                     ) || kind.as_deref() != Some(ARCHIVE_KIND)
                         || compression.as_deref() != Some("zstd")
                         || encoding.as_deref() != Some("base64")
@@ -698,6 +734,7 @@ impl<'de> Visitor<'de> for ArchiveVisitor<'_> {
                             "archive metadata must precede files and match the supported format",
                         ));
                     }
+                    stats.schema_version = schema.expect("bug: supported schema checked");
                     stats = map.next_value_seed(FilesSeed {
                         root: self.root,
                         stats,
@@ -962,6 +999,8 @@ enum ArchiveContentError {
     // The archive carries no chain state at all.
     #[error("archive contains no RAMDB files")]
     MissingRamdb,
+    #[error("archive is missing private local state file {0}")]
+    MissingPrivateState(String),
 }
 
 // Restricts an archive entry to the known persistent-state namespace.
@@ -981,7 +1020,7 @@ fn validate_archive_path(path: &str) -> Result<(), ArchiveContentError> {
     {
         return Err(unsafe_path());
     }
-    if path == DATA_DIR_METADATA {
+    if path == DATA_DIR_METADATA || PRIVATE_STATE_FILES.contains(&path) {
         return Ok(());
     }
     if PERSISTENT_DIRS
@@ -999,6 +1038,13 @@ fn validate_archive_path(path: &str) -> Result<(), ArchiveContentError> {
 fn validate_required_entries(stats: &ArchiveStats) -> Result<(), ArchiveContentError> {
     if !stats.paths.contains(DATA_DIR_METADATA) {
         return Err(ArchiveContentError::MissingMetadata);
+    }
+    if stats.schema_version == ARCHIVE_SCHEMA_VERSION {
+        for path in PRIVATE_STATE_FILES {
+            if !stats.paths.contains(path) {
+                return Err(ArchiveContentError::MissingPrivateState(path.into()));
+            }
+        }
     }
     if !stats.paths.iter().any(|path| path.starts_with("ramdb/")) {
         return Err(ArchiveContentError::MissingRamdb);
@@ -1165,6 +1211,7 @@ fn acquire_lock_file(data_dir: &Path, name: &str) -> Result<File, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
     use tempfile::TempDir;
 
     // Builds the smallest representative persistent data directory for archive tests.
@@ -1172,9 +1219,17 @@ mod tests {
         let temp = TempDir::new().unwrap();
         fs::write(
             temp.path().join(DATA_DIR_METADATA),
-            b"{\"schemaVersion\":1}",
+            b"{\"schemaVersion\":4}",
         )
         .unwrap();
+        for relative in PRIVATE_STATE_FILES {
+            fs::write(temp.path().join(relative), b"private fixture").unwrap();
+            fs::set_permissions(
+                temp.path().join(relative),
+                fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
         for directory in PERSISTENT_DIRS {
             fs::create_dir(temp.path().join(directory)).unwrap();
         }
@@ -1182,6 +1237,16 @@ mod tests {
         fs::write(temp.path().join("events/event.bin"), b"events").unwrap();
         fs::write(temp.path().join("indexer/CURRENT"), b"MANIFEST-1\n").unwrap();
         temp
+    }
+
+    #[test]
+    fn dump_refuses_missing_or_public_faucet_state() {
+        let source = fixture();
+        let key = source.path().join(PRIVATE_STATE_FILES[0]);
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(collect_archive_files(source.path()).is_err());
+        fs::remove_file(key).unwrap();
+        assert!(collect_archive_files(source.path()).is_err());
     }
 
     fn replace_archive_schema(path: &Path, from: u32, to: u32) {
@@ -1213,6 +1278,8 @@ mod tests {
         restore(&restored, &archive, false, "chain.restore", &Print::quiet()).unwrap();
         for relative in [
             DATA_DIR_METADATA,
+            PRIVATE_STATE_FILES[0],
+            PRIVATE_STATE_FILES[1],
             "ramdb/0.log",
             "events/event.bin",
             "indexer/CURRENT",
@@ -1223,6 +1290,19 @@ mod tests {
             );
         }
         assert!(!restored.join("runtime").exists());
+        for path in std::iter::once(archive.as_path()).chain(
+            PRIVATE_STATE_FILES
+                .iter()
+                .map(|name| restored.join(name))
+                .collect::<Vec<_>>()
+                .iter()
+                .map(PathBuf::as_path),
+        ) {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 
     #[test]
@@ -1239,33 +1319,47 @@ mod tests {
 
         let envelope: serde_json::Value =
             serde_json::from_slice(&fs::read(archive.path()).unwrap()).unwrap();
-        assert_eq!(envelope["schemaVersion"], 2);
+        assert_eq!(envelope["schemaVersion"], 3);
         assert_eq!(envelope["producerVersion"], "0.9.6");
         assert_eq!(envelope["producerPlatformVersion"], "0.1.23");
     }
 
     #[test]
-    fn restore_accepts_legacy_v1_archive() {
+    fn legacy_archives_restore_without_private_state_but_v3_requires_it() {
         let source = fixture();
-        let files = collect_archive_files(source.path()).unwrap();
+        let mut files = collect_archive_files(source.path()).unwrap();
+        files.retain(|(name, _)| !PRIVATE_STATE_FILES.contains(&name.as_str()));
+        fs::write(
+            source.path().join(DATA_DIR_METADATA),
+            br#"{"schemaVersion":1}"#,
+        )
+        .unwrap();
         let parent = TempDir::new().unwrap();
-        let archive = parent.path().join("chain-v1.json");
-        let mut output = File::create(&archive).unwrap();
-        write_archive(&mut output, &files, BuildVersion::new("0.9.5", None)).unwrap();
-        drop(output);
-
-        replace_archive_schema(
-            &archive,
-            ARCHIVE_SCHEMA_VERSION,
-            LEGACY_ARCHIVE_SCHEMA_VERSION,
-        );
-
-        let restored = parent.path().join("restored");
-        restore(&restored, &archive, false, "chain.restore", &Print::quiet()).unwrap();
-        assert_eq!(
-            fs::read(restored.join("ramdb/0.log")).unwrap(),
-            fs::read(source.path().join("ramdb/0.log")).unwrap()
-        );
+        for version in [1, 2, 3] {
+            let archive = parent.path().join(format!("chain-v{version}.json"));
+            let mut output = File::create(&archive).unwrap();
+            write_archive(&mut output, &files, BuildVersion::new("0.9.5", None)).unwrap();
+            drop(output);
+            if version != ARCHIVE_SCHEMA_VERSION {
+                replace_archive_schema(&archive, ARCHIVE_SCHEMA_VERSION, version);
+            }
+            let restored = parent.path().join(format!("restored-{version}"));
+            let result = restore(&restored, &archive, false, "chain.restore", &Print::quiet());
+            if version == ARCHIVE_SCHEMA_VERSION {
+                assert!(result.is_err());
+                continue;
+            }
+            result.unwrap();
+            assert_eq!(
+                fs::read(restored.join("ramdb/0.log")).unwrap(),
+                fs::read(source.path().join("ramdb/0.log")).unwrap()
+            );
+            assert!(
+                PRIVATE_STATE_FILES
+                    .iter()
+                    .all(|name| !restored.join(name).exists())
+            );
+        }
     }
 
     #[test]

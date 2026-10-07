@@ -26,6 +26,8 @@ groundhog_scheduler = { workspace = true }
 groundhog_view = { workspace = true }
 tracing = { workspace = true }
 xdr-common = { workspace = true }
+xdrs = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tokio = { workspace = true }

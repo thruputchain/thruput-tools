@@ -5,6 +5,11 @@ on:
   pull_request:
     paths:
       - '.github/workflows/release.yml'
+      - 'scripts/split-release-debuginfo.sh'
+      - 'scripts/split-release-dsym.sh'
+      - 'scripts/test_split_release_dsym.py'
+      - 'Cargo.toml'
+      - '.cargo/config.toml'
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -54,9 +59,10 @@ jobs:
     steps:
       - uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
-        with:
-          toolchain: 1.96.0
+      - name: Set up Rust 1.96.0
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal --no-self-update
+          rustup default 1.96.0
 
       - uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
@@ -68,6 +74,9 @@ jobs:
           crate_version=${crate_id##*[@#]}
           test -n "$crate_version"
           echo "CRATE_VERSION=$crate_version" >> "$GITHUB_ENV"
+
+      - name: Test macOS debuginfo packaging
+        run: python3 -m unittest discover -s scripts -p test_split_release_dsym.py
 
       - name: Verify native architecture
         run: test "$(uname -m)" = "${{ matrix.machine }}"
@@ -191,6 +200,13 @@ jobs:
             archive="artifacts/${archive_base}.tar.gz"
             mkdir -p "$package_dir"
             cp "target/release/${app}" "$package_dir/"
+            debug_root="package/${archive_base}-debuginfo"
+            debug_archive="artifacts/${archive_base}-debuginfo.tar.gz"
+            if [ "${{ matrix.platform }}" = linux ]; then
+              bash scripts/split-release-debuginfo.sh "$package_dir/$app" "$debug_root" "$debug_archive"
+            else
+              bash scripts/split-release-dsym.sh "$package_dir/$app" "$debug_root" "$debug_archive"
+            fi
             cp README.md LICENSE "$package_dir/"
             if [ "$app" = groundhog ]; then
               cp agent-guide.md "$package_dir/"
@@ -224,7 +240,7 @@ jobs:
       - name: Build and package Zen 5 gateway
         if: matrix.platform == 'linux' && matrix.architecture == 'x86_64'
         env:
-          RUSTFLAGS: "-C target-cpu=znver5"
+          RUSTFLAGS: "-C target-cpu=znver5 -C force-frame-pointers=yes -C link-arg=-Wl,--build-id=sha1"
           CARGO_TARGET_DIR: target/znver5
         run: |
           set -euo pipefail
@@ -236,6 +252,8 @@ jobs:
           archive_base="hog-gateway-${release_ref}-x86_64-unknown-linux-gnu-znver5"
           mkdir -p "package/$archive_base"
           cp target/znver5/x86_64-unknown-linux-gnu/release/hog-gateway README.md LICENSE "package/$archive_base/"
+          bash scripts/split-release-debuginfo.sh "package/$archive_base/hog-gateway" \
+            "package/${archive_base}-debuginfo" "artifacts/${archive_base}-debuginfo.tar.gz"
           tar -czf "artifacts/$archive_base.tar.gz" -C package "$archive_base"
 
       - name: Upload release artifacts
@@ -276,7 +294,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
-          test "${#archives[@]}" -eq 12
+          test "${#archives[@]}" -eq 24
           for archive in "${archives[@]}"; do
             test -s "$archive"
           done

@@ -111,8 +111,70 @@ pub struct ResolvedProfile {
     pub runtime_artifacts_dir: Option<PathBuf>,
     pub contracts: BTreeMap<String, String>,
     #[serde(default)]
+    #[serde(with = "wallet_json")]
+    #[schemars(with = "BTreeMap<String, wallet_json::Wallet>")]
     pub wallets: BTreeMap<String, SavedWalletBinding>,
     pub source: Option<PathBuf>,
+}
+
+// Resolved profiles appear in command reports. Persisted TOML bindings retain
+// their numeric nonce; only the report projection uses decimal JSON strings.
+mod wallet_json {
+    use super::{SavedWalletBinding, WalletKind};
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(remote = "SavedWalletBinding")]
+    #[schemars(rename = "JsonWalletBinding")]
+    pub(super) struct Wallet {
+        address: String,
+        #[serde(default)]
+        owner_public_key: String,
+        #[serde(default, skip_serializing_if = "WalletKind::is_legacy")]
+        kind: WalletKind,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "groundhog_json_rpc_types::decimal::option"
+        )]
+        #[schemars(with = "Option<groundhog_json_rpc_types::decimal::Decimal<u64>>")]
+        account_nonce: Option<u64>,
+    }
+
+    struct WalletRef<'a>(&'a SavedWalletBinding);
+
+    impl Serialize for WalletRef<'_> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            Wallet::serialize(self.0, serializer)
+        }
+    }
+
+    pub(super) fn serialize<S: serde::Serializer>(
+        wallets: &BTreeMap<String, SavedWalletBinding>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(
+            wallets
+                .iter()
+                .map(|(name, wallet)| (name, WalletRef(wallet))),
+        )
+    }
+
+    pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<String, SavedWalletBinding>, D::Error> {
+        #[derive(Deserialize)]
+        struct Owned(#[serde(with = "Wallet")] SavedWalletBinding);
+
+        BTreeMap::<String, Owned>::deserialize(deserializer).map(|wallets| {
+            wallets
+                .into_iter()
+                .map(|(name, wallet)| (name, wallet.0))
+                .collect()
+        })
+    }
 }
 
 /// Explicit CLI profile overrides.
@@ -729,9 +791,7 @@ pub fn save_profile_default_wallet(
 ///
 /// Prefers `groundhog.toml` when the profile specifies
 /// `default_key`, otherwise falls back to the global default
-/// selected via `keys use`. Profiles targeting the active runtime
-/// started by `groundhog node` use the lowest-index local-user signer when
-/// neither selection is present.
+/// selected via `keys use`. No selection leaves the default key unset.
 pub fn resolve_default_key(
     start: &Path,
     explicit_profile: Option<&str>,
@@ -742,40 +802,14 @@ pub fn resolve_default_key(
 
 /// Resolve the effective default key from an already resolved profile.
 ///
-/// The implicit local-user signer is available only when the profile still
-/// targets the active local runtime recorded by `groundhog node`. Explicit
-/// project or CLI target overrides must select a key themselves.
+/// Project or profile selection takes precedence over the stored global default.
 pub fn resolve_default_key_for_profile(
     profile: &ResolvedProfile,
 ) -> Result<Option<String>, CliError> {
-    if let Some(key) = &profile.default_key {
-        return Ok(Some(key.clone()));
+    match &profile.default_key {
+        Some(key) => Ok(Some(key.clone())),
+        None => load_default_key(),
     }
-
-    if let Some(key) = load_default_key()? {
-        return Ok(Some(key));
-    }
-
-    if profile.network != Some(Network::Local) {
-        return Ok(None);
-    }
-
-    let local_runtime_state = load_local_runtime_state()?;
-    let uses_active_local_runtime = local_runtime_state.is_some_and(|state| {
-        profile.rpc_url.as_deref() == Some(state.rpc_url.as_str())
-            && profile.runtime_manifest.as_deref() == Some(state.runtime_manifest.as_path())
-    });
-
-    if !uses_active_local_runtime {
-        return Ok(None);
-    }
-
-    let Some(manifest) =
-        crate::runtime_manifest::load_configured_runtime_manifest(profile, "local_user")?
-    else {
-        return Ok(None);
-    };
-    Ok(crate::runtime_manifest::lowest_local_user_key(&manifest))
 }
 
 /// Resolve the active profile and apply transient local-node state.
@@ -897,6 +931,30 @@ fn is_valid_address(addr: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolved_wallet_json_preserves_wide_nonces_without_changing_toml() {
+        let wire = serde_json::json!({
+            "name": "test", "contracts": {}, "wallets": {
+                "native": {"address": "address", "owner_public_key": "owner",
+                    "kind": "native", "account_nonce": "9007199254740993"}
+            }
+        });
+        let profile: super::ResolvedProfile = serde_json::from_value(wire.clone()).unwrap();
+        let wallet = &profile.wallets["native"];
+        assert_eq!(wallet.account_nonce, Some(9_007_199_254_740_993));
+        assert!(
+            toml::to_string(wallet)
+                .unwrap()
+                .contains("account_nonce = 9007199254740993")
+        );
+        let output = serde_json::to_value(profile).unwrap();
+        assert_eq!(output["wallets"], wire["wallets"]);
+
+        let mut invalid = wire;
+        invalid["wallets"]["native"]["account_nonce"] = serde_json::json!(42);
+        assert!(serde_json::from_value::<super::ResolvedProfile>(invalid).is_err());
+    }
+
     use super::{
         PreparedWalletRemoval, ProjectProfile, WalletRemovalPeer, remove_prepared_profile_wallet,
     };

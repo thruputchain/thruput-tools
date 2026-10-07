@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::airdrop::LocalFundingErrorData;
 use groundhog_json_rpc_types::error::{TxInvalidDetail, codes};
 use jsonrpsee::types::ErrorObjectOwned;
 
@@ -5,6 +6,14 @@ use jsonrpsee::types::ErrorObjectOwned;
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum RpcServerError {
+    /// Retained local funding evidence whose outcome still needs reconciliation.
+    #[error("local funding unresolved: {reason}")]
+    LocalFundingUnresolved {
+        /// Failure encountered while observing or submitting the retained transaction.
+        reason: String,
+        /// Signed evidence, independent of admission or execution status.
+        evidence: LocalFundingErrorData,
+    },
     /// Transaction was malformed.
     #[error("invalid transaction: {0}")]
     TxInvalid(String),
@@ -52,6 +61,7 @@ impl RpcServerError {
     /// The JSON-RPC error code this error is reported under.
     pub fn code(&self) -> i32 {
         match self {
+            Self::LocalFundingUnresolved { .. } => codes::LOCAL_FUNDING_UNRESOLVED,
             Self::TxInvalid(_) | Self::TxInvalidDetailed(_) => codes::TX_INVALID,
             Self::TxRejected(_) => codes::TX_REJECTED,
             Self::TxNotFound => codes::TX_NOT_FOUND,
@@ -68,6 +78,9 @@ impl RpcServerError {
 impl From<RpcServerError> for ErrorObjectOwned {
     fn from(err: RpcServerError) -> Self {
         let code = err.code();
+        if let RpcServerError::LocalFundingUnresolved { evidence, .. } = &err {
+            return ErrorObjectOwned::owned(code, err.to_string(), Some(evidence));
+        }
         if let RpcServerError::TxInvalidDetailed(detail) = &err {
             return ErrorObjectOwned::owned(code, err.to_string(), Some(detail));
         }

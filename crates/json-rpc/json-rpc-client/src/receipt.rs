@@ -181,8 +181,8 @@ pub enum ReceiptPollError<E> {
 /// Wait for a transaction's receipt, retrying on the schedule `config` sets.
 ///
 /// Receipts are authoritative. While one is missing, an `Invalid` status ends
-/// polling early. A best-effort `RecentFailure` diagnostic is retained while
-/// polling continues, because the same transaction may still commit; if no
+/// polling early, as do scheduler `Retry` and `Dropped` outcomes. A best-effort
+/// `RecentFailure` diagnostic is retained while polling continues, because the same transaction may still commit; if no
 /// receipt appears, that diagnostic is returned instead of a bare timeout.
 pub async fn poll_receipt<S>(
     source: &S,
@@ -204,7 +204,11 @@ where
         match source.transaction_receipt(tx_hash).await {
             Ok(Some(receipt)) => return Ok(receipt),
             Ok(None) => match source.transaction_status(tx_hash).await {
-                Ok(Some(status @ TransactionStatus::Invalid { .. })) => {
+                Ok(Some(
+                    status @ (TransactionStatus::Invalid { .. }
+                    | TransactionStatus::Retry { .. }
+                    | TransactionStatus::Dropped { .. }),
+                )) => {
                     return Err(ReceiptPollError::Status { tx_hash, status });
                 }
                 Ok(Some(status @ TransactionStatus::RecentFailure { .. })) => {

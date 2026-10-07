@@ -17,6 +17,8 @@ pub struct AddressAuthDataResponse {
     pub address: ContractAddress,
     /// Committed block height used for the read, reported whether or not
     /// the address has a registered configuration.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub height: BlockHeight,
     /// The registered configuration, or `null` when the address has none.
     ///

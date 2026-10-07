@@ -1,4 +1,4 @@
-//! Decode `SchedGateway` results: submission outcomes, mempool lookups, and
+//! Decode `SchedGateway` results: admission and processing outcomes, and
 //! the committed chain tip.
 
 use groundhog_json_rpc_server::{RpcServerError, TipReading};
@@ -6,7 +6,6 @@ use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
 use groundhog_scheduler::{
     DbTip, ExpectedDBTip, RPCError, SchedGatewaySubmitOutcome, consensus::ConsensusValue,
 };
-use groundhog_xdr::transaction::OptSignedTransactionBatch;
 
 /// What the scheduler gateway answered when asked for the committed tip.
 #[derive(Debug)]
@@ -45,24 +44,61 @@ pub fn submit_result(outcome: SchedGatewaySubmitOutcome) -> Result<(), RpcServer
     }
 }
 
-/// Read a single-hash `schedgateway_lookup_tx` answer: whether the mempool
-/// holds the transaction.
-///
-/// A slot count other than one leaves the queried transaction unaccounted
-/// for and is a `BackendUnavailable` naming `service`, never `false`: a
-/// status of `Unknown` claims the transaction is in neither the mempool nor
-/// the indexer.
-pub fn mempool_holds_tx(
+/// Decode a single-hash scheduler outcome lookup. Malformed cardinality or
+/// unknown protocol values are backend failures, never an absent transaction.
+pub fn transaction_outcome(
     service: &str,
-    results: &OptSignedTransactionBatch,
-) -> Result<bool, RpcServerError> {
-    match results.iter().next() {
-        Some(slot) if results.0.len() == 1 => Ok(slot.is_some()),
-        _ => Err(RpcServerError::BackendUnavailable(format!(
+    results: &groundhog_scheduler::SchedulerTransactionOutcomeBatch,
+) -> Result<Option<groundhog_json_rpc_types::transaction::TransactionStatus>, RpcServerError> {
+    use groundhog_json_rpc_types::transaction::{
+        SchedulerTransactionError, SchedulerTransactionErrorSource, TransactionStatus,
+    };
+    use groundhog_scheduler::{
+        SchedulerTransactionErrorSource as Source, SchedulerTransactionStatus as Status,
+    };
+    let [outcome] = results.0.as_slice() else {
+        return Err(RpcServerError::BackendUnavailable(format!(
             "{service} returned {} lookup results for one transaction",
             results.0.len()
-        ))),
-    }
+        )));
+    };
+    let status = match outcome.status {
+        Status::SchedulerTransactionNotFound => return Ok(None),
+        Status::SchedulerTransactionPending => TransactionStatus::Pending,
+        // Success supplies no block height. Keep it absent until indexing supplies
+        // the actual height; zero is a real height, not a sentinel.
+        Status::SchedulerTransactionSucceeded => TransactionStatus::Committed { height: None },
+        Status::SchedulerTransactionRetry | Status::SchedulerTransactionDropped => {
+            let source = match outcome.error_source {
+                Source::SchedulerTransactionErrorAuth => SchedulerTransactionErrorSource::Auth,
+                Source::SchedulerTransactionErrorScheduler => {
+                    SchedulerTransactionErrorSource::Scheduler
+                }
+                Source::SchedulerTransactionErrorExecutor => {
+                    SchedulerTransactionErrorSource::Executor
+                }
+                other => {
+                    return Err(RpcServerError::BackendUnavailable(format!(
+                        "{service} returned unknown scheduler error source {}",
+                        other.0
+                    )));
+                }
+            };
+            let error = SchedulerTransactionError::new(source, outcome.error_code);
+            if outcome.status == Status::SchedulerTransactionRetry {
+                TransactionStatus::Retry { error }
+            } else {
+                TransactionStatus::Dropped { error }
+            }
+        }
+        other => {
+            return Err(RpcServerError::BackendUnavailable(format!(
+                "{service} returned unknown transaction outcome {}",
+                other.0
+            )));
+        }
+    };
+    Ok(Some(status))
 }
 
 /// Compute the public chain tip for a consensus value.

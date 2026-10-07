@@ -106,7 +106,7 @@ build:
 # A separate target directory keeps the portable build cache valid.
 .PHONY: build-native
 build-native:
-	RUSTFLAGS="-C target-cpu=native" $(CARGO) build --workspace $(CARGO_PROFILE_FLAG) --target-dir "$(TARGET_ROOT)/native"
+	RUSTFLAGS="-C target-cpu=native -C force-frame-pointers=yes" $(CARGO) build --workspace $(CARGO_PROFILE_FLAG) --target-dir "$(TARGET_ROOT)/native"
 
 # Advisory only: instruction presence does not prove runtime dispatch uses it.
 # Apple objdump adds a vector suffix (sha256h.4s); do not also count sha256h2.

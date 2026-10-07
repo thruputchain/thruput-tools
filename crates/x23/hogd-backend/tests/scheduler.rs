@@ -3,7 +3,11 @@ use groundhog_scheduler::ExpectedDBTip;
 use groundhog_scheduler::RPCError;
 use groundhog_scheduler::SchedGatewaySubmitOutcome;
 
-use groundhog_xdr::transaction::OptSignedTransaction;
+use groundhog_json_rpc_types::transaction::{SchedulerTransactionErrorSource, TransactionStatus};
+use groundhog_scheduler::{
+    SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
+    SchedulerTransactionStatus as Status,
+};
 use xdr_common::VecM;
 
 use groundhog_hogd_backend::scheduler::*;
@@ -29,23 +33,96 @@ fn admission_outcomes_separate_client_faults_from_backend_faults() {
     ));
 }
 
+fn outcome(status: Status, source: Source, code: i32) -> SchedulerTransactionOutcome {
+    SchedulerTransactionOutcome {
+        status,
+        error_source: source,
+        error_code: code,
+    }
+}
+
 #[test]
-fn a_lookup_slot_count_other_than_one_is_not_an_absence() {
-    assert_eq!(
-        mempool_holds_tx("scheduler", &VecM(vec![OptSignedTransaction::None])),
-        Ok(false)
-    );
+fn scheduler_outcomes_preserve_processing_results() {
+    let decode = |status| {
+        transaction_outcome("scheduler", &VecM(vec![outcome(status, Source(999), 999)])).unwrap()
+    };
+    assert!(decode(Status::SchedulerTransactionNotFound).is_none());
     assert!(matches!(
-        mempool_holds_tx("scheduler", &VecM(vec![])),
-        Err(RpcServerError::BackendUnavailable(_))
+        decode(Status::SchedulerTransactionPending),
+        Some(TransactionStatus::Pending)
     ));
     assert!(matches!(
-        mempool_holds_tx(
-            "scheduler",
-            &VecM(vec![OptSignedTransaction::None, OptSignedTransaction::None]),
+        decode(Status::SchedulerTransactionSucceeded),
+        Some(TransactionStatus::Committed { height: None })
+    ));
+    for (source, expected) in [
+        (
+            Source::SchedulerTransactionErrorAuth,
+            SchedulerTransactionErrorSource::Auth,
         ),
-        Err(RpcServerError::BackendUnavailable(_))
-    ));
+        (
+            Source::SchedulerTransactionErrorScheduler,
+            SchedulerTransactionErrorSource::Scheduler,
+        ),
+        (
+            Source::SchedulerTransactionErrorExecutor,
+            SchedulerTransactionErrorSource::Executor,
+        ),
+    ] {
+        for status in [
+            Status::SchedulerTransactionRetry,
+            Status::SchedulerTransactionDropped,
+        ] {
+            let decoded =
+                transaction_outcome("scheduler", &VecM(vec![outcome(status, source, -7)]))
+                    .unwrap()
+                    .unwrap();
+            let error = match decoded {
+                TransactionStatus::Retry { error }
+                    if status == Status::SchedulerTransactionRetry =>
+                {
+                    error
+                }
+                TransactionStatus::Dropped { error }
+                    if status == Status::SchedulerTransactionDropped =>
+                {
+                    error
+                }
+                other => panic!("unexpected status: {other:?}"),
+            };
+            assert_eq!(error.source, expected);
+            assert_eq!(error.code, -7);
+        }
+    }
+}
+
+#[test]
+fn malformed_scheduler_outcomes_are_not_absence() {
+    let absent = outcome(
+        Status::SchedulerTransactionNotFound,
+        Source::SchedulerTransactionErrorNone,
+        0,
+    );
+    for batch in [
+        VecM(vec![]),
+        VecM(vec![absent.clone(), absent]),
+        VecM(vec![outcome(Status(4242), Source(0), 0)]),
+        VecM(vec![outcome(
+            Status::SchedulerTransactionRetry,
+            Source(4242),
+            0,
+        )]),
+        VecM(vec![outcome(
+            Status::SchedulerTransactionDropped,
+            Source::SchedulerTransactionErrorNone,
+            0,
+        )]),
+    ] {
+        assert!(matches!(
+            transaction_outcome("scheduler", &batch),
+            Err(RpcServerError::BackendUnavailable(_))
+        ));
+    }
 }
 
 #[test]

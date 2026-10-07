@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 pub(crate) const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
 
 /// Schema version of the `build --json` data payload.
-pub const BUILD_JSON_SCHEMA_VERSION: u32 = 1;
+pub const BUILD_JSON_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {
@@ -31,11 +31,14 @@ pub struct BuildResult {
     pub spec_xdr: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bindings_ts: Option<PathBuf>,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
     pub size_bytes: u64,
     /// Bytes in the artifact's code section.
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
     pub code_bytes: usize,
     /// Guest data address space the artifact declares (`memory_bytes` in its
     /// header).
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
     pub memory_bytes: usize,
     pub target: ArtifactKind,
     pub profile: crate::config::ResolvedProfile,
@@ -110,9 +113,9 @@ pub fn run(
             "specJson": result.spec_json,
             "specXdr": result.spec_xdr,
             "bindingsTs": result.bindings_ts,
-            "sizeBytes": result.size_bytes,
-            "codeBytes": result.code_bytes,
-            "memoryBytes": result.memory_bytes,
+            "sizeBytes": result.size_bytes.to_string(),
+            "codeBytes": result.code_bytes.to_string(),
+            "memoryBytes": result.memory_bytes.to_string(),
             "profile": result.profile,
             "cargoStdout": result.cargo_stdout,
             "cargoStderr": result.cargo_stderr,

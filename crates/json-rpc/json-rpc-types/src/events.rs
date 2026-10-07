@@ -119,7 +119,11 @@ pub enum IterationOrder {
 pub enum BlockAnchor {
     AtBeginning,
     AtEnd,
-    AtHeight { height: BlockHeight },
+    AtHeight {
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+        height: BlockHeight,
+    },
 }
 
 /// `BlockAnchor` as it is read off the wire. serde's `deny_unknown_fields`
@@ -138,7 +142,11 @@ pub enum BlockAnchor {
 enum BlockAnchorFields {
     AtBeginning {},
     AtEnd {},
-    AtHeight { height: BlockHeight },
+    AtHeight {
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+        height: BlockHeight,
+    },
 }
 
 impl From<BlockAnchorFields> for BlockAnchor {
@@ -270,6 +278,8 @@ pub struct IdentifiedEvent {
     pub tx_hash: TxHash,
 
     /// Block height at which the event was emitted.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub block_height: BlockHeight,
 
     /// Sequence number within the transaction's event log.
@@ -299,11 +309,15 @@ pub struct EventPage {
     pub cursor: PaginationCursor,
 
     /// Highest block height indexed at response time, not an application checkpoint.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub latest_block: BlockHeight,
 
     /// Oldest block height the indexer still retains data for at
     /// response time.  Today always 0; meaningful once retention/
     /// pruning lands.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub oldest_block: BlockHeight,
 }
 

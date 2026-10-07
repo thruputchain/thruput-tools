@@ -68,8 +68,14 @@ local waiting, and backend duration.
 
 ## Transaction Status Lookup Order
 
-A committed indexer answer wins immediately. Otherwise the shared probe consults
-the mempool; presence there takes precedence over an older advisory failure.
+Any indexer record wins immediately, including an advisory failure diagnostic;
+the scheduler is not consulted when the indexer has information. Otherwise the
+shared probe looks up pending and retained scheduler outcomes. Scheduler retry
+and dropped outcomes preserve their error source and protocol error code.
+Scheduler success reports `Committed` with the height omitted because its lookup
+response does not carry a block height. Indexed records supply the actual height,
+including block zero. Callers must handle an omitted status height and can obtain
+the height from a receipt once indexing catches up.
 `Unknown` requires successful misses from both backends. Backend unavailability
 cannot establish absence. These rules prevent an unavailable scheduler from
 making a pending transaction appear to have disappeared.
@@ -115,6 +121,13 @@ target being used.
 
 The public API projects binary XDR into JSON-friendly types: `camelCase` fields,
 tagged unions, decimal quantities, and `0x`-prefixed lowercase hex bytes.
+All 64-bit-or-wider integers use canonical decimal strings, even for small
+values. Smaller bounded integers remain JSON numbers. Requests reject numeric
+JSON for wide fields, leading zeros, `+` prefixes, negative zero, whitespace,
+exponents, and overflow. This preserves nanosecond timestamps and full protocol
+integer ranges through JavaScript's JSON parser. The shared
+[decimal adapters](../../crates/json-rpc/json-rpc-types/src/decimal.rs) keep Rust
+integers typed and generate the corresponding schemas; XDR is unchanged.
 Opaque cursors are returned verbatim. The projection belongs in
 [json-rpc-types](../../crates/json-rpc/json-rpc-types/src/lib.rs), rather than
 separate gateway and client copies.

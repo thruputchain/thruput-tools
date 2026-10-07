@@ -14,7 +14,7 @@ use crate::checks;
 use crate::{CliError, Print};
 
 /// Schema version of the `status --json` data payload.
-pub const STATUS_JSON_SCHEMA_VERSION: u32 = 3;
+pub const STATUS_JSON_SCHEMA_VERSION: u32 = 4;
 
 /// Run the `status` diagnostic command.
 pub fn run(
@@ -49,9 +49,9 @@ pub fn run(
                         report.project.default_wallet_source,
                     "rpcUrl": report.project.rpc_url,
                     "walletCount":
-                        report.project.wallet_count,
+                        report.project.wallet_count.to_string(),
                     "contractCount":
-                        report.project.contract_count,
+                        report.project.contract_count.to_string(),
                 },
                 "effectiveDefaultKey":
                     report.effective_default_key

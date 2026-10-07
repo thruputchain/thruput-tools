@@ -131,12 +131,20 @@ fn write_chain_data_fixture(root: &std::path::Path) {
     std::fs::create_dir_all(root.join("indexer")).unwrap();
     std::fs::write(
         root.join("hog-devnode-data.json"),
-        br#"{"schemaVersion":1,"kind":"hog-devnode-data"}"#,
+        br#"{"schemaVersion":4,"kind":"hog-devnode-data"}"#,
     )
     .unwrap();
     std::fs::write(root.join("ramdb/0.log"), b"ramdb-state").unwrap();
     std::fs::write(root.join("events/block.events"), b"event-state").unwrap();
     std::fs::write(root.join("indexer/CURRENT"), b"MANIFEST-1\n").unwrap();
+    for relative in [
+        groundhog_node_supervisor::LOCAL_FAUCET_KEY_FILE,
+        groundhog_node_supervisor::LOCAL_FUNDING_ATTEMPTS_FILE,
+    ] {
+        let path = root.join(relative);
+        std::fs::write(&path, b"private fixture").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 }
 
 #[cfg(unix)]
@@ -165,8 +173,8 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     );
     let dump_json: serde_json::Value = serde_json::from_slice(&dump.stdout).unwrap();
     assert_eq!(dump_json["command"], "chain.dump");
-    assert_eq!(dump_json["data"]["schemaVersion"], 1);
-    assert_eq!(dump_json["data"]["fileCount"], 4);
+    assert_eq!(dump_json["data"]["schemaVersion"], 2);
+    assert_eq!(dump_json["data"]["fileCount"], "6");
     assert!(archive.is_file());
 
     let original_archive = std::fs::read(&archive).unwrap();
@@ -224,7 +232,7 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     // command-specific schema version used by automation.
     let restore_json: serde_json::Value = serde_json::from_slice(&restored.stdout).unwrap();
     assert_eq!(restore_json["command"], "chain.restore");
-    assert_eq!(restore_json["data"]["schemaVersion"], 1);
+    assert_eq!(restore_json["data"]["schemaVersion"], 2);
     assert_eq!(
         std::fs::read(destination.join("ramdb/0.log")).unwrap(),
         b"ramdb-state"
@@ -1000,7 +1008,7 @@ rpc_url = "https://rpc.example"
     let stdout = String::from_utf8(output.stdout).unwrap();
     let payload: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(payload["command"], "config.get");
-    assert_eq!(payload["data"]["schemaVersion"], 1);
+    assert_eq!(payload["data"]["schemaVersion"], 2);
     assert_eq!(payload["data"]["selectionSource"]["kind"], "explicit");
     assert_eq!(payload["data"]["scope"], "resolved");
     assert_eq!(payload["data"]["rpcUrl"], "https://rpc.example");
@@ -1907,6 +1915,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     let data_root = TempDir::new().unwrap();
     let data_dir = data_root.path().join("node-data");
     let config_home = TempDir::new().unwrap();
+    generate_key_public_key(config_home.path(), "alice");
     let pid_path = pid_dir.path().join("hogd.pid");
     let child = groundhog()
         .arg("--json")
@@ -1919,7 +1928,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
         .arg(fake)
         .arg("--data-dir")
         .arg(&data_dir)
-        .arg("--dev-account-hog")
+        .arg("--initial-account-hog")
         .arg("25.0000001")
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
@@ -1942,10 +1951,9 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
 
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "node");
-    assert_eq!(payload["data"]["schemaVersion"], 3);
+    assert_eq!(payload["data"]["schemaVersion"], 4);
     assert_eq!(payload["data"]["chain_state"], "fresh");
     assert_eq!(payload["data"]["data_dir"], data_dir.display().to_string());
-    assert_eq!(payload["data"]["experimental"], false);
     assert_eq!(payload["data"]["backend"]["kind"], "hogd_dev");
     assert_eq!(payload["data"]["backend"]["stability"], "supported");
     assert!(payload["data"]["backend"].get("limitations").is_none());
@@ -2261,7 +2269,7 @@ fn node_human_startup_reports_chain_state() {
         .stderr
         .take()
         .expect("bug: stderr should be piped");
-    let output = read_until_with_timeout(stderr, "dev-key manifest", CLI_ACTION_TIMEOUT)
+    let output = read_until_with_timeout(stderr, "account manifest", CLI_ACTION_TIMEOUT)
         .expect("bug: human startup output should be readable");
 
     assert!(output.contains("chain state"), "startup output: {output}");
@@ -2283,7 +2291,7 @@ fn node_human_startup_reports_chain_state() {
 
 #[cfg(unix)]
 #[test]
-fn node_hogd_dev_profile_write_failure_stops_supervisor() {
+fn node_invalid_key_configuration_fails_before_supervisor() {
     let fake = fake_hogd_dev_binary();
     let pid_dir = TempDir::new().unwrap();
     let config_home = TempDir::new().unwrap();
@@ -2308,10 +2316,9 @@ fn node_hogd_dev_profile_write_failure_stops_supervisor() {
         !output.status.success(),
         "profile write failure should make groundhog node fail"
     );
-    let pid = read_pid_file(&pid_path);
     assert!(
-        wait_pid_gone(pid, CLI_ACTION_TIMEOUT),
-        "fake hogd-dev pid {pid} still alive after profile write failure"
+        !pid_path.exists(),
+        "invalid configuration must fail before child startup"
     );
 }
 
@@ -3015,7 +3022,7 @@ fn global_non_interactive_key_import_accepts_piped_seed() {
 }
 
 #[test]
-fn key_generation_rejects_reserved_dev_names_without_mutation() {
+fn key_generation_stores_dev_named_keys_without_implicit_derivation() {
     for name in ["dev-0", "dev-1", "dev-01"] {
         let tmp = TempDir::new().unwrap();
         let config = tmp.path().join("groundhog/config.toml");
@@ -3028,10 +3035,14 @@ fn key_generation_rejects_reserved_dev_names_without_mutation() {
             .env("XDG_CONFIG_HOME", tmp.path())
             .output()
             .unwrap();
-        assert!(!output.status.success());
-        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(report["error"]["code"], "reserved_dev_key_name");
-        assert!(!tmp.path().join("groundhog/keys").exists());
+        assert!(output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["data"]["key"]["name"], name);
+        assert!(
+            tmp.path()
+                .join(format!("groundhog/keys/{name}.json"))
+                .exists()
+        );
         assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
     }
 }
@@ -3593,7 +3604,7 @@ fn status_dumb_terminal_keeps_plain_report_and_exit_code() {
     assert!(!plain.stderr.contains(&0x1b));
     assert!(String::from_utf8_lossy(&plain.stderr).contains("Cargo: installed"));
     let payload: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(payload["data"]["schemaVersion"], 3);
+    assert_eq!(payload["data"]["schemaVersion"], 4);
 }
 
 #[cfg(unix)]
@@ -3939,7 +3950,14 @@ fn build_default_json_success_reports_rv32_artifact_paths() {
             .contains("Counter")
     );
     // v4 stores only the high-water prefix, so the artifact is well under 64 KiB.
-    assert!(stdout["data"]["sizeBytes"].as_u64().unwrap() < 64 * 1024);
+    assert!(
+        stdout["data"]["sizeBytes"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            < 64 * 1024
+    );
 }
 
 #[cfg(unix)]
@@ -4073,9 +4091,9 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("--hog-devnode-version"));
     assert!(stdout.contains("--data-dir"));
     assert!(stdout.contains("persistent hog-devnode state"));
-    assert!(stdout.contains("--dev-account-count"));
-    assert!(stdout.contains("--dev-account-hog <HOG>"));
-    assert!(stdout.contains("Initial HOG allocated to each dev-1+ user account"));
+    assert!(stdout.contains("--key <KEY>"));
+    assert!(stdout.contains("--initial-account-hog <HOG>"));
+    assert!(stdout.contains("Initial HOG for the selected key"));
     assert!(stdout.contains("--hogd-protocol"));
     assert!(stdout.contains("GROUNDHOG_DEVNODE_BINARY"));
     assert!(stdout.contains("GROUNDHOG_OFFLINE"));
@@ -4578,19 +4596,19 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "test");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(stdout["data"]["schemaVersion"], 6);
+    assert_eq!(stdout["data"]["schemaVersion"], 7);
     assert_eq!(stdout["data"]["mode"], "rv32");
     assert_eq!(stdout["data"]["package"], "demo-contract");
     assert_rv32_test_artifact(&stdout["data"]);
     assert!(stdout["data"]["projectRoot"].as_str().is_some());
     assert_eq!(stdout["data"]["success"], false);
     assert_eq!(stdout["data"]["summary"]["source"], "parsed");
-    assert_eq!(stdout["data"]["summary"]["passed"], 1);
-    assert_eq!(stdout["data"]["summary"]["failed"], 1);
-    assert_eq!(stdout["data"]["summary"]["filteredOut"], 2);
+    assert_eq!(stdout["data"]["summary"]["passed"], "1");
+    assert_eq!(stdout["data"]["summary"]["failed"], "1");
+    assert_eq!(stdout["data"]["summary"]["filteredOut"], "2");
     assert_eq!(stdout["data"]["runs"][0]["success"], false);
     assert_eq!(stdout["data"]["runs"][0]["summary"]["source"], "parsed");
-    assert_eq!(stdout["data"]["runs"][0]["summary"]["filteredOut"], 2);
+    assert_eq!(stdout["data"]["runs"][0]["summary"]["filteredOut"], "2");
     assert_eq!(stdout["data"]["runs"][0]["tests"][0]["name"], "tests::ok");
     assert_eq!(stdout["data"]["runs"][0]["tests"][0]["status"], "passed");
     assert_eq!(
@@ -5239,8 +5257,8 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 6);
-    assert_eq!(stdout["data"]["schemaVersion"], 6);
+    assert_eq!(groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 7);
+    assert_eq!(stdout["data"]["schemaVersion"], 7);
     for old_key in ["dry_run", "rpc_url", "artifact_kind", "signed_tx"] {
         assert!(stdout["data"].get(old_key).is_none(), "found {old_key}");
     }
@@ -5252,7 +5270,7 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
         stdout["data"]["artifactPath"].as_str().unwrap(),
         rv32_path.to_string_lossy()
     );
-    assert_eq!(stdout["data"]["artifactBytes"], 13);
+    assert_eq!(stdout["data"]["artifactBytes"], "13");
     assert!(
         stdout["data"]["predictedAddress"]
             .as_str()
@@ -5365,9 +5383,9 @@ fn wallet_create_is_offline_idempotent_and_funding_is_explicit() {
     );
     let report: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
     let data = &report["data"];
-    assert_eq!(data["schemaVersion"], 5);
+    assert_eq!(data["schemaVersion"], 6);
     assert_eq!(data["kind"], "native");
-    assert_eq!(data["accountNonce"], 0);
+    assert_eq!(data["accountNonce"], "0");
     assert_eq!(data["created"], true);
     assert_eq!(data["saved"], true);
     assert!(
@@ -6083,14 +6101,14 @@ fn airdrop_dry_run_json_uses_default_wallet_when_recipient_is_omitted() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "airdrop");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["schemaVersion"], 4);
     assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["recipient"], "alice");
     assert_eq!(stdout["data"]["recipientWallet"], recipient_wallet);
     assert_eq!(stdout["data"]["amountHog"], "1.25");
     assert_eq!(stdout["data"]["rawAmount"], "12500000");
-    assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
+    assert_eq!(stdout["data"]["faucet"]["address"], faucet_wallet);
     assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
     assert!(stdout["data"].get("signedTx").is_none());
 }
@@ -6231,6 +6249,62 @@ fn airdrop_default_submits_without_recipient_signer() {
             );
         }
     }
+}
+
+#[test]
+fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config");
+    let cache_home = tmp.path().join("cache");
+    std::fs::create_dir_all(&project).unwrap();
+    let owner = generate_key_public_key(&config_home, "alice");
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+        groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+        0,
+    );
+    let recipient = format!("0x{}", hex::encode(account.address().as_ref()));
+    let faucet = advertised_dev_wallet_address(0);
+    let listener = MockListener::bind();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let rpc_url = format!("http://{addr}");
+    let manifest = write_runtime_manifest(&project, 0, &faucet, None);
+    std::fs::write(project.join("groundhog.toml"), format!(
+        "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
+        serve_balance(&listener, deadline, &faucet, "200012006", 41);
+        let signed = serve_local_funding_transaction_with_receipt_failure(
+            &listener, deadline, &faucet, &recipient, true,
+        );
+        assert_no_follow_up_rpc(&listener);
+        signed
+    });
+    let output = groundhog()
+        .args(["--json", "airdrop", "--force"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CACHE_HOME", &cache_home)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let signed = server.join().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let hash = format!(
+        "0x{}",
+        hex::encode(groundhog_signing::transaction_hash(&signed.tx).unwrap())
+    );
+    assert_eq!(report["error"]["code"], "local_funding_unresolved");
+    assert_eq!(report["error"]["details"]["txHash"], hash);
+    let path = report["error"]["details"]["attemptPath"].as_str().unwrap();
+    let attempt: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(attempt["transaction"]["txHash"], hash);
+    assert_eq!(
+        attempt["transaction"]["signedTransaction"],
+        format!("0x{}", hex::encode(xdrs::txs::encode(&signed).unwrap()))
+    );
+    assert!(attempt["request"]["clientNonce"].is_string());
 }
 
 #[test]
@@ -6456,7 +6530,7 @@ fn local_airdrop_json_warns_when_projected_faucet_balance_is_below_ten_hog() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["warnings"][0]["level"], "warn");
     assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
-    assert_eq!(payload["data"]["schemaVersion"], 3);
+    assert_eq!(payload["data"]["schemaVersion"], 4);
 }
 
 #[test]
@@ -6489,7 +6563,7 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["mode"], "remote");
-    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["schemaVersion"], 4);
     assert_eq!(stdout["data"]["recipientWallet"], recipient);
     assert_eq!(stdout["data"]["rawAmount"], "25000000");
     assert_eq!(stdout["data"]["txHash"], format!("0x{}", "22".repeat(32)));
@@ -6653,6 +6727,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     let output = groundhog()
         .args(["--json", "transfer", "alice", "10.5000000", "--dry-run"])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -6668,7 +6743,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "transfer");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(data["schemaVersion"], 1);
+    assert_eq!(data["schemaVersion"], 2);
     assert_eq!(data["profile"], "default");
     assert_eq!(data["rpcUrl"], rpc_url);
     assert_eq!(data["dryRun"], true);
@@ -6689,7 +6764,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     assert_eq!(data["tokenAddress"], format!("0x{}01", "00".repeat(31)));
     assert_eq!(data["amount"], "10.5");
     assert_eq!(data["rawAmount"], "105000000");
-    assert_eq!(data["expiryHeight"], 1042);
+    assert_eq!(data["expiryHeight"], "1042");
     for absent in [
         "height",
         "status",
@@ -6755,6 +6830,7 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
     let output = groundhog()
         .args(["transfer", &recipient, "1", "--dry-run"])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -7052,6 +7128,7 @@ fn transfer_dry_run_profile_and_cli_target_overrides_select_endpoint() {
             manifest_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -7095,6 +7172,7 @@ fn transfer_dry_run_rejects_invalid_inputs_before_rpc() {
         let output = groundhog()
             .args(["--json", "transfer", &recipient, amount, "--dry-run"])
             .current_dir(&project)
+            .env("XDG_CONFIG_HOME", project.join("fixture-config"))
             .output()
             .unwrap();
         assert!(!output.status.success());
@@ -7320,9 +7398,9 @@ fn transfer_live_success_returns_matching_receipt_and_events() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "transfer");
     assert_transfer_live_common(data, &run.local_hash, None);
-    assert_eq!(data["height"], 43);
+    assert_eq!(data["height"], "43");
     assert_eq!(data["status"], serde_json::json!({ "result": "ok" }));
-    assert_eq!(data["gasUsed"], 1500);
+    assert_eq!(data["gasUsed"], "1500");
     assert_eq!(data["events"], serde_json::json!([event]));
     assert_eq!(data["returnData"], "0x0506");
     for absent in [
@@ -7356,6 +7434,7 @@ fn transfer_live_rejects_invalid_persisted_rpc_url() {
     let output = groundhog()
         .args(["--json", "transfer", &recipient, "1.5"])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .output()
         .unwrap();
 
@@ -7402,7 +7481,7 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
         assert_eq!(stdout["ok"], false);
         assert_eq!(stdout["error"]["code"], expected_code);
         assert_transfer_live_common(&stdout["data"], &run.local_hash, None);
-        assert_eq!(stdout["data"]["height"], 43);
+        assert_eq!(stdout["data"]["height"], "43");
         assert_eq!(stdout["data"]["status"], status);
         assert_eq!(stdout["data"]["events"], serde_json::json!([event]));
         assert_eq!(stdout["data"]["returnData"], "0x0102");
@@ -7506,7 +7585,7 @@ fn transfer_live_terminal_invalid_is_conclusive_command_failure() {
 fn transfer_live_poll_failures_are_unavailable_command_failures() {
     let recent = serde_json::json!({
         "status": "recentFailure",
-        "attemptHeight": 43,
+        "attemptHeight": "43",
         "cause": { "kind": "dbConflict", "conflict": {
             "address": format!("0x{}", "77".repeat(32)),
             "key": "0x0102",
@@ -7846,7 +7925,7 @@ fn assert_transfer_live_common(
     local_hash: &str,
     sender_wallet: Option<&str>,
 ) {
-    assert_eq!(data["schemaVersion"], 1);
+    assert_eq!(data["schemaVersion"], 2);
     assert_eq!(data["profile"], "default");
     assert!(
         data["rpcUrl"]
@@ -7910,13 +7989,13 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 6);
+    assert_eq!(stdout["data"]["schemaVersion"], 7);
     assert_eq!(stdout["data"]["artifactKind"], "rv32");
     assert_eq!(
         stdout["data"]["artifactPath"].as_str().unwrap(),
         rv32_path.to_string_lossy()
     );
-    assert_eq!(stdout["data"]["artifactBytes"], 13);
+    assert_eq!(stdout["data"]["artifactBytes"], "13");
     assert_eq!(
         signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
         "rv32"
@@ -7970,7 +8049,7 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
             .unwrap()
             .to_string_lossy()
     );
-    assert_eq!(stdout["data"]["artifactBytes"], 9);
+    assert_eq!(stdout["data"]["artifactBytes"], "9");
     assert_eq!(
         signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
         "rv32"
@@ -8008,6 +8087,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .output()
         .unwrap();
 
@@ -8030,7 +8110,6 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
 #[test]
 fn deploy_dry_run_uses_profile_rpc_and_manifest() {
     let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
@@ -8059,7 +8138,7 @@ fn deploy_dry_run_uses_profile_rpc_and_manifest() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
 
@@ -8112,6 +8191,7 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .env("GROUNDHOG_RUNTIME_MANIFEST", &env_manifest)
         .output()
         .unwrap();
@@ -8172,6 +8252,7 @@ fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .env("GROUNDHOG_RUNTIME_MANIFEST", &env_manifest)
         .output()
         .unwrap();
@@ -8223,6 +8304,7 @@ fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .env("GROUNDHOG_RUNTIME_MANIFEST", "   ")
         .output()
         .unwrap();
@@ -8275,12 +8357,13 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
 
     assert!(!output.status.success());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
+    assert_eq!(stderr["error"]["code"], "local_runtime_unavailable");
     assert!(
         stderr["error"]["message"]
             .as_str()
@@ -8290,112 +8373,7 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
 }
 
 #[test]
-fn deploy_dry_run_rejects_manifest_public_key_mismatch_before_rpc() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let advertised_wallet = advertised_dev_wallet_address(0);
-    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, Some([0x99; 32]));
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            manifest_path.display()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = groundhog()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
-    assert!(
-        stderr["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("does not match derivation seed")
-    );
-}
-
-#[test]
-fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let signer = groundhog_signing::derive_dev_account_signer("alternate-dev-seed", 0);
-    let advertised_wallet = format!(
-        "0x{}",
-        hex::encode(
-            groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                signer.verifying_key_bytes(),
-                0
-            )
-            .address()
-            .as_ref()
-        )
-    );
-    let manifest_path = write_runtime_manifest_with_seed(
-        tmp.path(),
-        0,
-        &advertised_wallet,
-        "alternate-dev-seed",
-        None,
-    );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            manifest_path.display()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = groundhog()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
-    assert!(
-        stderr["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("expected 0x")
-    );
-}
-
-#[test]
-fn deploy_dev_key_requires_runtime_manifest() {
+fn deploy_requires_stored_key_even_for_dev_named_selection() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
@@ -8429,12 +8407,12 @@ fn deploy_dev_key_requires_runtime_manifest() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "deploy");
-    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
+    assert_eq!(stderr["error"]["code"], "key_not_found");
     assert!(
         stderr["error"]["message"]
             .as_str()
-            .expect("bug: error message should be string")
-            .contains("runtime_manifest"),
+            .unwrap()
+            .contains("dev-0")
     );
 }
 
@@ -8486,8 +8464,8 @@ fn deploy_live_json_submits_and_returns_receipt() {
     let expected_address = format!("0x{}", "bb".repeat(32));
     assert_eq!(stdout["data"]["address"], expected_address);
     assert_eq!(stdout["data"]["addressSource"], "receipt");
-    assert_eq!(stdout["data"]["gasUsed"], 1500);
-    assert_eq!(stdout["data"]["height"], 42);
+    assert_eq!(stdout["data"]["gasUsed"], "1500");
+    assert_eq!(stdout["data"]["height"], "42");
     assert_eq!(stdout["data"]["status"]["result"], "ok");
     assert!(stdout["data"].get("returnData").is_none());
     assert!(stdout["data"].get("abortData").is_none());
@@ -8531,7 +8509,7 @@ fn deploy_live_json_fails_with_receipt_context() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "deploy");
     assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
-    assert_eq!(stdout["data"]["height"], 42);
+    assert_eq!(stdout["data"]["height"], "42");
     assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
     assert_eq!(stdout["data"]["returnData"], "0x0102");
     assert_eq!(stdout["data"]["abortData"], "0x0304");
@@ -8573,8 +8551,8 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 6);
-    assert_eq!(stdout["data"]["height"], 42);
+    assert_eq!(stdout["data"]["schemaVersion"], 7);
+    assert_eq!(stdout["data"]["height"], "42");
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["error"]["code"], "transaction_insufficient_funds");
     assert_eq!(
@@ -8705,7 +8683,7 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
     );
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["transactionDetail"]["gasConsumed"], 12450);
+    assert_eq!(stdout["data"]["transactionDetail"]["gasConsumed"], "12450");
     assert_eq!(
         stdout["data"]["transactionDetail"]["storageDeltas"][0]["kind"],
         "bytestringSet"
@@ -8804,16 +8782,16 @@ fn view_json_returns_raw_output() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "view");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["contract"], address);
     assert_eq!(stdout["data"]["entrypointId"], entrypoint);
     assert_eq!(stdout["data"]["calldata"], calldata);
     assert_eq!(stdout["data"]["caller"], serde_json::Value::Null);
-    assert_eq!(stdout["data"]["height"], 12);
+    assert_eq!(stdout["data"]["height"], "12");
     assert_eq!(stdout["data"]["output"]["result"], "return");
     assert_eq!(stdout["data"]["output"]["returnData"], "0x0102");
-    assert_eq!(stdout["data"]["gasUsed"], 4321);
+    assert_eq!(stdout["data"]["gasUsed"], "4321");
     assert_eq!(stdout["data"]["events"], serde_json::json!([]));
     // Abort fields stay absent (not null) on non-abort payloads so the
     // v1 schema shape is unchanged for existing consumers.
@@ -9013,7 +8991,13 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
             )
             .unwrap();
         }
-        let (rpc_url, rpc_server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
+        let expected_caller = if collision == "none" {
+            &caller
+        } else {
+            &shadow_address
+        };
+        let (rpc_url, rpc_server) =
+            spawn_view_rpc_with_caller(&address, entrypoint, "0x", expected_caller);
         let profile_config = format!(
             "default_profile = 'default'\n[profile.default]\n\
              rpc_url = '{rpc_url}'\nruntime_manifest = '{}'\n{bindings}",
@@ -9024,7 +9008,7 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
         let output = groundhog()
             .args(["--json", "view", &address, entrypoint, "--from", "dev-0"])
             .current_dir(&project)
-            .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+            .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
             .env_remove("GROUNDHOG_RUNTIME_MANIFEST")
             .output()
             .unwrap();
@@ -9041,7 +9025,7 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
         let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(stdout["ok"], true);
         assert_eq!(stdout["command"], "view");
-        assert_eq!(stdout["data"]["caller"], caller, "{collision}");
+        assert_eq!(stdout["data"]["caller"], *expected_caller, "{collision}");
     }
 }
 
@@ -9201,11 +9185,11 @@ fn storage_json_reads_latest_item() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "storage");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["address"], address);
     assert_eq!(stdout["data"]["key"], key);
-    assert_eq!(stdout["data"]["blockHeight"], 12);
+    assert_eq!(stdout["data"]["blockHeight"], "12");
     assert_eq!(stdout["data"]["item"]["kind"], "bytestring");
     assert_eq!(
         stdout["data"]["item"]["bytes"],
@@ -9248,13 +9232,13 @@ fn balance_json_uses_default_wallet_when_target_is_omitted() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "balance");
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["target"], "alice");
     assert_eq!(stdout["data"]["address"], address);
     assert_eq!(stdout["data"]["rawBalance"], "123456789");
     assert_eq!(stdout["data"]["balanceHog"], "12.3456789");
-    assert_eq!(stdout["data"]["height"], 34);
+    assert_eq!(stdout["data"]["height"], "34");
 }
 
 #[test]
@@ -9451,7 +9435,7 @@ fn storage_json_uses_profile_runtime_manifest_with_global_dev_key() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["blockHeight"], 12);
+    assert_eq!(stdout["data"]["blockHeight"], "12");
 }
 
 #[test]
@@ -9489,7 +9473,7 @@ fn storage_json_cli_rpc_url_overrides_profile_rpc_url() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["blockHeight"], 12);
+    assert_eq!(stdout["data"]["blockHeight"], "12");
 }
 
 #[test]
@@ -9782,8 +9766,8 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "call");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(groundhog_cli::call::CALL_JSON_SCHEMA_VERSION, 1);
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(groundhog_cli::call::CALL_JSON_SCHEMA_VERSION, 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     for old_key in ["dry_run", "rpc_url", "entrypoint_id", "signed_tx"] {
         assert!(stdout["data"].get(old_key).is_none(), "found {old_key}");
     }
@@ -9893,6 +9877,7 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
             "0x0102",
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
 
@@ -9930,7 +9915,7 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
             stream,
             &request["id"],
             serde_json::json!({
-                "height": 42,
+                "height": "42",
                 "blockHash": format!("0x{}", "00".repeat(32)),
             }),
         );
@@ -9943,7 +9928,7 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
             serde_json::json!({
                 "address": format!("0x{}", "aa".repeat(32)),
                 "rawBalance": "10000000",
-                "height": 42,
+                "height": "42",
             }),
         );
         assert_no_follow_up_rpc(&listener);
@@ -10167,6 +10152,7 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
             "--force",
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
 
@@ -10179,7 +10165,7 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
     assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
-    assert_eq!(stdout["data"]["gasUsed"], 1500);
+    assert_eq!(stdout["data"]["gasUsed"], "1500");
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["address"],
         advertised_wallet
@@ -10340,7 +10326,7 @@ fn call_native_decodes_forwarded_aborts_and_preserves_unknown_bytes() {
     );
     let library_abort = library_abort_hex("NonNegativeIntUnderflow");
     for (abort, expected) in [
-        (custom_abort.as_str(), Some(serde_json::json!(7))),
+        (custom_abort.as_str(), Some(serde_json::json!("7"))),
         (
             library_abort.as_str(),
             Some(serde_json::json!({"case": "NonNegativeIntUnderflow"})),
@@ -10455,7 +10441,7 @@ fn call_live_json_decodes_library_abort() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_reverted");
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert!(stdout["data"].get("abort_exception").is_none());
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["data"]["abortData"], abort_hex);
@@ -11259,8 +11245,8 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     });
     let receipt = serde_json::json!({
         "txHash": hash,
-        "height": 42,
-        "gasUsed": 1500,
+        "height": "42",
+        "gasUsed": "1500",
         "status": { "result": "ok" },
         "events": [event.clone()],
         "returnData": "0x0506",
@@ -11270,7 +11256,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": 42,
+            "height": "42",
         })),
         Some(TxShowRpcResponse::Result(receipt.clone())),
     );
@@ -11301,14 +11287,72 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "tx.show");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["profile"], "devnet");
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["txHash"], hash);
     assert_eq!(stdout["data"]["status"]["status"], "committed");
-    assert_eq!(stdout["data"]["status"]["height"], 42);
+    assert_eq!(stdout["data"]["status"]["height"], "42");
     assert_eq!(stdout["data"]["receipt"], receipt);
     assert_eq!(stdout["data"]["receipt"]["events"][0], event);
+}
+
+#[test]
+fn tx_show_committed_without_height_handles_indexer_catching_up() {
+    let hash = format!("0x{}", "ab".repeat(32));
+    for json_output in [false, true] {
+        for receipt_available in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let receipt = if receipt_available {
+                serde_json::json!({
+                    "txHash": hash,
+                    "height": "42",
+                    "gasUsed": "1500",
+                    "status": { "result": "ok" },
+                    "events": [],
+                })
+            } else {
+                serde_json::Value::Null
+            };
+            let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+                &hash,
+                TxShowRpcResponse::Result(serde_json::json!({"status": "committed"})),
+                Some(TxShowRpcResponse::Result(receipt.clone())),
+            );
+            let mut command = groundhog();
+            if json_output {
+                command.arg("--json");
+            }
+            let output = command
+                .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+                .current_dir(tmp.path())
+                .output()
+                .unwrap();
+            rpc_server.join().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if json_output {
+                let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(
+                    stdout["data"]["status"],
+                    serde_json::json!({"status": "committed"})
+                );
+                assert_eq!(stdout["data"]["receipt"], receipt);
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(stderr.contains("status: committed"));
+                assert!(!stderr.contains("height: 0"));
+                if receipt_available {
+                    assert!(stderr.contains("receipt height: 42"));
+                } else {
+                    assert!(stderr.contains("receipt: unavailable"));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -11373,12 +11417,12 @@ fn tx_show_human_output_includes_raw_committed_receipt_data() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": 43,
+            "height": "43",
         })),
         Some(TxShowRpcResponse::Result(serde_json::json!({
             "txHash": hash,
-            "height": 43,
-            "gasUsed": 1500,
+            "height": "43",
+            "gasUsed": "1500",
             "status": { "result": "reverted", "message": "bad\ncall" },
             "events": [event],
             "returnData": "0xccdd",
@@ -11414,19 +11458,21 @@ fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
         serde_json::json!({ "status": "invalid", "reason": "bad transaction" }),
         serde_json::json!({
             "status": "recentFailure",
-            "attemptHeight": 17,
+            "attemptHeight": "17",
             "cause": { "kind": "dbConflict", "conflict": {
                 "address": format!("0x{}", "11".repeat(32)),
                 "key": "0xaabb",
                 "code": "boundsExceeded",
             } },
         }),
+        serde_json::json!({ "status": "retry", "error": { "source": "scheduler", "code": 1 } }),
+        serde_json::json!({ "status": "dropped", "error": { "source": "auth", "code": 2 } }),
         serde_json::json!({ "status": "unknown" }),
         serde_json::json!({ "status": "futureStatus", "futureField": 1 }),
     ];
 
     for (index, status) in statuses.into_iter().enumerate() {
-        let expected_status = if index == 4 {
+        let expected_status = if status["status"] == "futureStatus" {
             serde_json::json!({ "status": "other" })
         } else {
             status.clone()
@@ -11461,7 +11507,7 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": 51,
+            "height": "51",
         })),
         Some(TxShowRpcResponse::Result(serde_json::Value::Null)),
     );
@@ -11478,11 +11524,11 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
     assert_eq!(
         stdout["data"],
         serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "profile": "default",
             "rpcUrl": rpc_url,
             "txHash": hash,
-            "status": { "status": "committed", "height": 51 },
+            "status": { "status": "committed", "height": "51" },
             "receipt": null,
         })
     );
@@ -11496,12 +11542,12 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": 52,
+            "height": "52",
         })),
         Some(TxShowRpcResponse::Result(serde_json::json!({
             "txHash": hash,
-            "height": 52,
-            "gasUsed": 1500,
+            "height": "52",
+            "gasUsed": "1500",
             "status": { "result": "ok" },
             "events": [],
         }))),
@@ -11520,8 +11566,8 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
         stdout["data"]["receipt"],
         serde_json::json!({
             "txHash": hash,
-            "height": 52,
-            "gasUsed": 1500,
+            "height": "52",
+            "gasUsed": "1500",
             "status": { "result": "ok" },
             "events": [],
         })
@@ -11535,7 +11581,7 @@ fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
     let hash = format!("0x{}", "d1".repeat(32));
     for (status, receipt, expected, forbidden) in [
         (
-            serde_json::json!({ "status": "committed", "height": 53 }),
+            serde_json::json!({ "status": "committed", "height": "53" }),
             Some(TxShowRpcResponse::Result(serde_json::Value::Null)),
             "receipt: unavailable",
             "status: invalid",
@@ -11543,7 +11589,7 @@ fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
         (
             serde_json::json!({ "status": "unknown" }),
             None,
-            "status: unknown (not found in the mempool or indexer)",
+            "status: unknown (not found in scheduler outcomes or indexer)",
             "status: invalid",
         ),
     ] {
@@ -11605,8 +11651,8 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
             "hash",
             serde_json::json!({
                 "txHash": format!("0x{}", "ef".repeat(32)),
-                "height": 61,
-                "gasUsed": 1500,
+                "height": "61",
+                "gasUsed": "1500",
                 "status": { "result": "ok" },
                 "events": [],
             }),
@@ -11615,8 +11661,8 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
             "height",
             serde_json::json!({
                 "txHash": hash,
-                "height": 62,
-                "gasUsed": 1500,
+                "height": "62",
+                "gasUsed": "1500",
                 "status": { "result": "ok" },
                 "events": [],
             }),
@@ -11627,7 +11673,7 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
             &hash,
             TxShowRpcResponse::Result(serde_json::json!({
                 "status": "committed",
-                "height": 61,
+                "height": "61",
             })),
             Some(TxShowRpcResponse::Result(receipt)),
         );
@@ -11784,7 +11830,7 @@ fn tx_show_receipt_rpc_errors_remain_failures() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": 71,
+            "height": "71",
         })),
         Some(TxShowRpcResponse::Error(-32052, "receipt unsupported")),
     );
@@ -11929,12 +11975,12 @@ fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
     });
     let page = serde_json::json!({
         "refs": [
-            { "txHash": first_hash, "height": 90 },
-            { "txHash": second_hash, "height": 80 },
+            { "txHash": first_hash, "height": "90" },
+            { "txHash": second_hash, "height": "80" },
         ],
         "cursor": "0xaabb",
-        "latestBlock": 100,
-        "oldestBlock": 7,
+        "latestBlock": "100",
+        "oldestBlock": "7",
     });
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(expected_query, TxListRpcResponse::Result(page));
 
@@ -11974,18 +12020,18 @@ fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
     assert_eq!(
         stdout["data"],
         serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "profile": "devnet",
             "rpcUrl": rpc_url,
             "targetInput": "alice",
             "address": wallet_address,
             "refs": [
-                { "txHash": first_hash, "height": 90 },
-                { "txHash": second_hash, "height": 80 },
+                { "txHash": first_hash, "height": "90" },
+                { "txHash": second_hash, "height": "80" },
             ],
             "cursor": "0xaabb",
-            "latestBlock": 100,
-            "oldestBlock": 7,
+            "latestBlock": "100",
+            "oldestBlock": "7",
         })
     );
     assert!(stdout["data"].get("order").is_none());
@@ -12009,8 +12055,8 @@ fn tx_list_continuation_forwards_cursor_and_endpoint_owned_limit() {
         TxListRpcResponse::Result(serde_json::json!({
             "refs": [],
             "cursor": "0x0102",
-            "latestBlock": 100,
-            "oldestBlock": 0,
+            "latestBlock": "100",
+            "oldestBlock": "0",
         })),
     );
 
@@ -12052,12 +12098,12 @@ fn tx_list_rejects_page_larger_than_requested_limit() {
         }),
         TxListRpcResponse::Result(serde_json::json!({
             "refs": [
-                { "txHash": format!("0x{}", "66".repeat(32)), "height": 2 },
-                { "txHash": format!("0x{}", "67".repeat(32)), "height": 1 },
+                { "txHash": format!("0x{}", "66".repeat(32)), "height": "2" },
+                { "txHash": format!("0x{}", "67".repeat(32)), "height": "1" },
             ],
             "cursor": "0x",
-            "latestBlock": 2,
-            "oldestBlock": 0,
+            "latestBlock": "2",
+            "oldestBlock": "0",
         })),
     );
 
@@ -12105,8 +12151,8 @@ fn tx_list_accepts_empty_exhausted_page() {
         TxListRpcResponse::Result(serde_json::json!({
             "refs": [],
             "cursor": "0x",
-            "latestBlock": 9,
-            "oldestBlock": 2,
+            "latestBlock": "9",
+            "oldestBlock": "2",
         })),
     );
 
@@ -12147,8 +12193,8 @@ fn tx_list_human_output_marks_exhausted_empty_page() {
         TxListRpcResponse::Result(serde_json::json!({
             "refs": [],
             "cursor": "0x",
-            "latestBlock": 9,
-            "oldestBlock": 2,
+            "latestBlock": "9",
+            "oldestBlock": "2",
         })),
     );
 
@@ -12190,8 +12236,8 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
             TxListRpcResponse::Result(serde_json::json!({
                 "refs": [],
                 "cursor": "0x",
-                "latestBlock": 1,
-                "oldestBlock": 0,
+                "latestBlock": "1",
+                "oldestBlock": "0",
             })),
         );
         match target_kind {
@@ -12221,6 +12267,7 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
         let output = groundhog()
             .args(["--json", "tx", "list", &target])
             .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
             .output()
             .unwrap();
         rpc_server.join().unwrap();
@@ -12382,8 +12429,8 @@ fn tx_list_human_output_marks_sparse_page_and_reusable_cursor() {
         TxListRpcResponse::Result(serde_json::json!({
             "refs": [],
             "cursor": "0xcafe",
-            "latestBlock": 20,
-            "oldestBlock": 3,
+            "latestBlock": "20",
+            "oldestBlock": "3",
         })),
     );
 
@@ -12434,10 +12481,10 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
             "limit": 50,
         }),
         TxListRpcResponse::Result(serde_json::json!({
-            "refs": [{ "txHash": tx_hash, "height": 18 }],
+            "refs": [{ "txHash": tx_hash, "height": "18" }],
             "cursor": "0x",
-            "latestBlock": 20,
-            "oldestBlock": 3,
+            "latestBlock": "20",
+            "oldestBlock": "3",
         })),
     );
 
@@ -12544,7 +12591,7 @@ fn events_spec_selected_event_injects_filter_and_decodes_payload() {
         EventRpcResponse::Result(serde_json::json!({
             "events": [{
                 "txHash": format!("0x{}", "82".repeat(32)),
-                "blockHeight": 9,
+                "blockHeight": "9",
                 "sequenceNumber": 1,
                 "event": {
                     "contractAddress": contract,
@@ -12553,8 +12600,8 @@ fn events_spec_selected_event_injects_filter_and_decodes_payload() {
                 },
             }],
             "cursor": "0x",
-            "latestBlock": 9,
-            "oldestBlock": 1,
+            "latestBlock": "9",
+            "oldestBlock": "1",
         })),
     );
 
@@ -12586,7 +12633,7 @@ fn events_spec_selected_event_injects_filter_and_decodes_payload() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(
         stdout["data"]["filters"]["topic0"],
         serde_json::json!([signature, signature])
@@ -12601,7 +12648,7 @@ fn events_spec_selected_event_injects_filter_and_decodes_payload() {
     assert_eq!(event["decodeStatus"], "decoded");
     assert_eq!(event["decoded"]["name"], "PingEvent");
     assert_eq!(event["decoded"]["topics"]["tag"], tag);
-    assert_eq!(event["decoded"]["fields"]["value"], 7);
+    assert_eq!(event["decoded"]["fields"]["value"], "7");
     assert_eq!(event["data"], data);
 }
 
@@ -12627,7 +12674,7 @@ fn events_spec_human_output_uses_named_topics_without_raw_duplicates() {
         EventRpcResponse::Result(serde_json::json!({
             "events": [{
                 "txHash": format!("0x{}", "94".repeat(32)),
-                "blockHeight": 9,
+                "blockHeight": "9",
                 "sequenceNumber": 1,
                 "event": {
                     "contractAddress": contract,
@@ -12636,8 +12683,8 @@ fn events_spec_human_output_uses_named_topics_without_raw_duplicates() {
                 },
             }],
             "cursor": "0x",
-            "latestBlock": 9,
-            "oldestBlock": 1,
+            "latestBlock": "9",
+            "oldestBlock": "1",
         })),
     );
 
@@ -12667,7 +12714,7 @@ fn events_spec_human_output_uses_named_topics_without_raw_duplicates() {
         &format!("signature: {signature}"),
         &format!("tag: {tag}"),
         &format!("data: {data}"),
-        "value: 7",
+        "value: \"7\"",
     ] {
         assert!(
             stderr.contains(expected),
@@ -12784,7 +12831,7 @@ fn events_list_json_sends_default_filter_and_reports_complete_raw_schema() {
         EventRpcResponse::Result(serde_json::json!({
             "events": [{
                 "txHash": tx_hash,
-                "blockHeight": 90,
+                "blockHeight": "90",
                 "sequenceNumber": 3,
                 "event": {
                     "contractAddress": emitter,
@@ -12793,8 +12840,8 @@ fn events_list_json_sends_default_filter_and_reports_complete_raw_schema() {
                 },
             }],
             "cursor": "0xaabb",
-            "latestBlock": 100,
-            "oldestBlock": 7,
+            "latestBlock": "100",
+            "oldestBlock": "7",
         })),
     );
 
@@ -12818,7 +12865,7 @@ fn events_list_json_sends_default_filter_and_reports_complete_raw_schema() {
             "ok": true,
             "command": "events.list",
             "data": {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "profile": "default",
                 "rpcUrl": rpc_url,
                 "contractInput": contract,
@@ -12827,7 +12874,7 @@ fn events_list_json_sends_default_filter_and_reports_complete_raw_schema() {
                 "spec": null,
                 "events": [{
                     "txHash": tx_hash,
-                    "blockHeight": 90,
+                    "blockHeight": "90",
                     "sequenceNumber": 3,
                     "contractAddress": emitter,
                     "topics": [topic],
@@ -12836,8 +12883,8 @@ fn events_list_json_sends_default_filter_and_reports_complete_raw_schema() {
                     "decoded": null,
                 }],
                 "cursor": "0xaabb",
-                "latestBlock": 100,
-                "oldestBlock": 7,
+                "latestBlock": "100",
+                "oldestBlock": "7",
             },
             "warnings": [],
         })
@@ -12850,13 +12897,13 @@ fn events_list_preserves_duplicate_returned_records_in_order() {
     let contract = format!("0x{}", "45".repeat(32));
     let first = serde_json::json!({
         "txHash": format!("0x{}", "46".repeat(32)),
-        "blockHeight": 9,
+        "blockHeight": "9",
         "sequenceNumber": 2,
         "event": { "contractAddress": contract, "topics": [], "data": "0xaaaa" },
     });
     let second = serde_json::json!({
         "txHash": format!("0x{}", "47".repeat(32)),
-        "blockHeight": 8,
+        "blockHeight": "8",
         "sequenceNumber": 1,
         "event": { "contractAddress": contract, "topics": [], "data": "0xbbbb" },
     });
@@ -12874,8 +12921,8 @@ fn events_list_preserves_duplicate_returned_records_in_order() {
         EventRpcResponse::Result(serde_json::json!({
             "events": [first.clone(), second, first],
             "cursor": "0x",
-            "latestBlock": 9,
-            "oldestBlock": 0,
+            "latestBlock": "9",
+            "oldestBlock": "0",
         })),
     );
 
@@ -12922,8 +12969,8 @@ fn events_list_preserves_repeated_topic_order_and_forwards_cursor_and_limit() {
         EventRpcResponse::Result(serde_json::json!({
             "events": [],
             "cursor": "0x",
-            "latestBlock": 8,
-            "oldestBlock": 1,
+            "latestBlock": "8",
+            "oldestBlock": "1",
         })),
     );
 
@@ -12975,7 +13022,7 @@ fn events_list_uses_selected_profile_rpc_and_explicit_rpc_precedence() {
                 "limit": 50,
             }),
             EventRpcResponse::Result(serde_json::json!({
-                "events": [], "cursor": "0x", "latestBlock": 1, "oldestBlock": 0,
+                "events": [], "cursor": "0x", "latestBlock": "1", "oldestBlock": "0",
             })),
         );
         let configured_url = if explicit_override {
@@ -13031,7 +13078,7 @@ fn events_list_resolves_runtime_manifest_dev_account() {
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
-            "events": [], "cursor": "0x", "latestBlock": 1, "oldestBlock": 0,
+            "events": [], "cursor": "0x", "latestBlock": "1", "oldestBlock": "0",
         })),
     );
     std::fs::write(
@@ -13046,6 +13093,7 @@ fn events_list_resolves_runtime_manifest_dev_account() {
     let output = groundhog()
         .args(["--json", "events", "list", "dev-7"])
         .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -13081,7 +13129,7 @@ fn events_list_resolves_saved_wallet_before_contract_alias_and_alias_without_wal
                 "limit": 50,
             }),
             EventRpcResponse::Result(serde_json::json!({
-                "events": [], "cursor": "0x", "latestBlock": 1, "oldestBlock": 0,
+                "events": [], "cursor": "0x", "latestBlock": "1", "oldestBlock": "0",
             })),
         );
         let wallet = if has_wallet {
@@ -13149,7 +13197,7 @@ fn events_list_explicit_runtime_manifest_overrides_profile_manifest_for_dev_acco
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
-            "events": [], "cursor": "0x", "latestBlock": 1, "oldestBlock": 0,
+            "events": [], "cursor": "0x", "latestBlock": "1", "oldestBlock": "0",
         })),
     );
     std::fs::write(
@@ -13171,6 +13219,10 @@ fn events_list_explicit_runtime_manifest_overrides_profile_manifest_for_dev_acco
             explicit_manifest.to_str().unwrap(),
         ])
         .current_dir(tmp.path())
+        .env(
+            "XDG_CONFIG_HOME",
+            explicit_tmp.path().join("fixture-config"),
+        )
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -13254,7 +13306,7 @@ fn events_list_rejects_page_larger_than_requested_limit() {
     let contract = format!("0x{}", "91".repeat(32));
     let event = serde_json::json!({
         "txHash": format!("0x{}", "92".repeat(32)),
-        "blockHeight": 2,
+        "blockHeight": "2",
         "sequenceNumber": 0,
         "event": { "contractAddress": contract, "topics": [], "data": "0x" },
     });
@@ -13272,8 +13324,8 @@ fn events_list_rejects_page_larger_than_requested_limit() {
         EventRpcResponse::Result(serde_json::json!({
             "events": [event.clone(), event],
             "cursor": "0x",
-            "latestBlock": 2,
-            "oldestBlock": 0,
+            "latestBlock": "2",
+            "oldestBlock": "0",
         })),
     );
 
@@ -13333,13 +13385,13 @@ fn events_list_rejects_oversized_event_shapes() {
             EventRpcResponse::Result(serde_json::json!({
                 "events": [{
                     "txHash": format!("0x{}", "a4".repeat(32)),
-                    "blockHeight": 12,
+                    "blockHeight": "12",
                     "sequenceNumber": 4,
                     "event": { "contractAddress": contract, "topics": topics, "data": data },
                 }],
                 "cursor": "0x",
-                "latestBlock": 12,
-                "oldestBlock": 0,
+                "latestBlock": "12",
+                "oldestBlock": "0",
             })),
         );
 
@@ -13379,7 +13431,7 @@ fn events_list_enforces_exact_combined_serialized_event_bound() {
             EventRpcResponse::Result(serde_json::json!({
                 "events": [{
                     "txHash": format!("0x{}", "a9".repeat(32)),
-                    "blockHeight": 12,
+                    "blockHeight": "12",
                     "sequenceNumber": 4,
                     "event": {
                         "contractAddress": contract,
@@ -13388,8 +13440,8 @@ fn events_list_enforces_exact_combined_serialized_event_bound() {
                     },
                 }],
                 "cursor": "0x",
-                "latestBlock": 12,
-                "oldestBlock": 0,
+                "latestBlock": "12",
+                "oldestBlock": "0",
             })),
         );
 
@@ -13420,7 +13472,7 @@ fn events_list_nonempty_human_output_reports_complete_raw_event() {
     let topics = ["b5", "b6", "b7"].map(|byte| format!("0x{}", byte.repeat(32)));
     let event = serde_json::json!({
         "txHash": tx_hash,
-        "blockHeight": 88,
+        "blockHeight": "88",
         "sequenceNumber": 6,
         "event": {
             "contractAddress": emitter,
@@ -13442,8 +13494,8 @@ fn events_list_nonempty_human_output_reports_complete_raw_event() {
         EventRpcResponse::Result(serde_json::json!({
             "events": [event.clone(), event],
             "cursor": "0xcafe",
-            "latestBlock": 100,
-            "oldestBlock": 7,
+            "latestBlock": "100",
+            "oldestBlock": "7",
         })),
     );
     std::fs::write(
@@ -13545,8 +13597,8 @@ fn events_list_human_output_distinguishes_empty_page_states() {
             EventRpcResponse::Result(serde_json::json!({
                 "events": [],
                 "cursor": response_cursor,
-                "latestBlock": 9,
-                "oldestBlock": 2,
+                "latestBlock": "9",
+                "oldestBlock": "2",
             })),
         );
         let mut args = vec!["events", "list", contract.as_str()];
@@ -13661,7 +13713,7 @@ fn token_event_json(
     let [token, signature, from, to] = addresses;
     serde_json::json!({
         "txHash": format!("0x{}", tx_byte.repeat(32)),
-        "blockHeight": block_height,
+        "blockHeight": block_height.to_string(),
         "sequenceNumber": sequence_number,
         "event": {
             "contractAddress": token,
@@ -13739,8 +13791,8 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
                 token_supply_event_json(("a7", 9, 0), &token, &burn_signature(), &from, &amount_data),
             ],
             "cursor": "0xcafe",
-            "latestBlock": 12,
-            "oldestBlock": 2,
+            "latestBlock": "12",
+            "oldestBlock": "2",
         })),
     );
 
@@ -13765,13 +13817,13 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["command"], "token.transfers");
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["tokenInput"], token);
     assert_eq!(stdout["data"]["tokenAddress"], token);
     assert!(stdout["data"]["participantFilter"].is_null());
     assert_eq!(stdout["data"]["cursor"], "0xcafe");
-    assert_eq!(stdout["data"]["latestBlock"], 12);
-    assert_eq!(stdout["data"]["oldestBlock"], 2);
+    assert_eq!(stdout["data"]["latestBlock"], "12");
+    assert_eq!(stdout["data"]["oldestBlock"], "2");
     let records = stdout["data"]["records"].as_array().unwrap();
     assert_eq!(records.len(), 5);
     assert_eq!(records[0]["decodeStatus"], "decoded");
@@ -13833,8 +13885,8 @@ fn token_transfers_account_uses_four_server_side_filters_in_one_request() {
         EventRpcResponse::Result(serde_json::json!({
             "events": [],
             "cursor": "0x",
-            "latestBlock": 12,
-            "oldestBlock": 2,
+            "latestBlock": "12",
+            "oldestBlock": "2",
         })),
     );
 
@@ -13906,8 +13958,8 @@ fn token_transfers_maps_directional_filters_and_cursor_to_one_query() {
             EventRpcResponse::Result(serde_json::json!({
                 "events": [],
                 "cursor": "0x",
-                "latestBlock": 12,
-                "oldestBlock": 2,
+                "latestBlock": "12",
+                "oldestBlock": "2",
             })),
         );
         let mut args = vec!["--json", "token", "transfers", &token];
@@ -13948,7 +14000,7 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
             "events": [
                 {
                     "txHash": format!("0x{}", "e4".repeat(32)),
-                    "blockHeight": 12,
+                    "blockHeight": "12",
                     "sequenceNumber": 1,
                     "event": {
                         "contractAddress": token,
@@ -13958,7 +14010,7 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
                 },
                 {
                     "txHash": format!("0x{}", "e5".repeat(32)),
-                    "blockHeight": 11,
+                    "blockHeight": "11",
                     "sequenceNumber": 2,
                     "event": {
                         "contractAddress": token,
@@ -13968,7 +14020,7 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
                 },
                 {
                     "txHash": format!("0x{}", "e6".repeat(32)),
-                    "blockHeight": 10,
+                    "blockHeight": "10",
                     "sequenceNumber": 1,
                     "event": {
                         "contractAddress": token,
@@ -13978,7 +14030,7 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
                 },
                 {
                     "txHash": format!("0x{}", "e7".repeat(32)),
-                    "blockHeight": 9,
+                    "blockHeight": "9",
                     "sequenceNumber": 0,
                     "event": {
                         "contractAddress": token,
@@ -13988,8 +14040,8 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
                 },
             ],
             "cursor": "0x",
-            "latestBlock": 12,
-            "oldestBlock": 2,
+            "latestBlock": "12",
+            "oldestBlock": "2",
         })),
     );
 
@@ -14054,8 +14106,8 @@ fn token_transfers_human_output_distinguishes_empty_page_states() {
             EventRpcResponse::Result(serde_json::json!({
                 "events": [],
                 "cursor": response_cursor,
-                "latestBlock": 9,
-                "oldestBlock": 2,
+                "latestBlock": "9",
+                "oldestBlock": "2",
             })),
         );
         let mut args = vec!["token", "transfers", token.as_str()];
@@ -14376,8 +14428,8 @@ fn spawn_network_descriptor_with_hash(
             "faucet": { "walletAddress": format!("0x{}", "71".repeat(32)) },
             "airdrop": {
                 "rawAmount": "25000000",
-                "recipientCooldownSeconds": 60,
-                "clientQuotaWindowSeconds": 3600,
+                "recipientCooldownSeconds": "60",
+                "clientQuotaWindowSeconds": "3600",
                 "clientQuotaMax": 5,
                 "maxPendingPerRecipient": 1
             },
@@ -14491,7 +14543,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
             stream,
             &request["id"],
             serde_json::json!({
-                "height": height,
+                "height": height.to_string(),
                 "blockHash": format!("0x{}", "00".repeat(32)),
             }),
         );
@@ -14561,8 +14613,8 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
                 "recipient": recipient,
                 "rawAmount": "25000000",
                 "txHash": format!("0x{}", "22".repeat(32)),
-                "height": 42,
-                "gasUsed": 1500,
+                "height": "42",
+                "gasUsed": "1500",
                 "status": { "result": "ok" },
             }),
         );
@@ -14580,8 +14632,7 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         serve_balance(&listener, deadline, &faucet, "200012006", 41);
-        serve_chain_tip(&listener, deadline, 42);
-        let signed_tx = serve_successful_transaction(&listener, deadline, 43);
+        let signed_tx = serve_local_funding_transaction(&listener, deadline, &faucet, &recipient);
         assert_eq!(
             signed_tx.tx.invocation.entrypoint,
             groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
@@ -14636,6 +14687,81 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
     (format!("http://{addr}"), handle)
 }
 
+fn serve_local_funding_transaction(
+    listener: &TcpListener,
+    deadline: Instant,
+    faucet: &str,
+    recipient: &str,
+) -> groundhog_xdr::transaction::SignedTransaction {
+    serve_local_funding_transaction_with_receipt_failure(
+        listener, deadline, faucet, recipient, false,
+    )
+}
+
+fn serve_local_funding_transaction_with_receipt_failure(
+    listener: &TcpListener,
+    deadline: Instant,
+    faucet: &str,
+    recipient: &str,
+    fail_receipt: bool,
+) -> groundhog_xdr::transaction::SignedTransaction {
+    let (stream, request) = read_jsonrpc_request(listener, deadline, "fundAccount");
+    assert_eq!(request["method"], "groundhog_fundAccount");
+    assert_eq!(request["params"][0]["faucet"], faucet);
+    assert_eq!(request["params"][0]["recipient"], recipient);
+    assert_eq!(request["params"][0]["rawAmount"], "100000000");
+    let sponsor = groundhog_signing::derive_default_dev_account_signer(0);
+    let network = groundhog_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
+        .unwrap()
+        .to_network_hash();
+    let account =
+        groundhog_signing::PubkeyAccount::from_public_key_bytes(sponsor.verifying_key_bytes(), 0);
+    let recipient_address = groundhog_signing::strkey::parse_contract_address(recipient).unwrap();
+    let calldata = xdrs::cxs::encode(&(recipient_address, 100_000_000u128)).unwrap();
+    let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
+        groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+            account: &account,
+            target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
+            target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            target_calldata: &calldata,
+            gas_limit: groundhog_signing::DEFAULT_TX_GAS_LIMIT * 2,
+            target_gas_limit: groundhog_signing::DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height: 100,
+            nonce: 42,
+        },
+    )
+    .unwrap();
+    let signed_tx = groundhog_signing::sign_transaction(
+        tx,
+        &sponsor,
+        groundhog_signing::SignTransactionParams::default(),
+        &network,
+    )
+    .unwrap();
+    let tx_hash = format!(
+        "0x{}",
+        hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
+    );
+    send_jsonrpc_response(
+        stream,
+        &request["id"],
+        serde_json::json!({ "recipient":recipient, "rawAmount":"100000000", "txHash":tx_hash, "signedTransaction":format!("0x{}",hex::encode(xdrs::txs::encode(&signed_tx).unwrap())) }),
+    );
+    let (stream, request) = read_jsonrpc_request(listener, deadline, "getTransactionReceipt");
+    assert_eq!(request["method"], "groundhog_getTransactionReceipt");
+    assert_eq!(request["params"][0], tx_hash);
+    if fail_receipt {
+        send_jsonrpc_error_response(stream, &request["id"], -32050, "receipt read unavailable");
+    } else {
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({ "txHash":tx_hash,"height":"43","gasUsed":"1500","status":{"result":"ok"},"events":[] }),
+        );
+    }
+    signed_tx
+}
+
 fn serve_balance(
     listener: &TcpListener,
     deadline: Instant,
@@ -14652,7 +14778,7 @@ fn serve_balance(
         serde_json::json!({
             "address": address,
             "rawBalance": raw_balance,
-            "height": height,
+            "height": height.to_string(),
         }),
     );
 }
@@ -14672,40 +14798,10 @@ fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
         stream,
         &request["id"],
         serde_json::json!({
-            "height": height,
+            "height": height.to_string(),
             "blockHash": format!("0x{}", "00".repeat(32)),
         }),
     );
-}
-
-fn serve_successful_transaction(
-    listener: &TcpListener,
-    deadline: Instant,
-    height: i64,
-) -> groundhog_xdr::transaction::SignedTransaction {
-    let (stream, request) = read_jsonrpc_request(listener, deadline, "sendRawTransaction");
-    assert_eq!(request["method"], "groundhog_sendRawTransaction");
-    let signed_tx = decode_signed_tx(request["params"][0].as_str().unwrap());
-    let tx_hash = format!(
-        "0x{}",
-        hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
-    );
-    send_jsonrpc_response(stream, &request["id"], serde_json::json!(tx_hash));
-
-    let (stream, request) = read_jsonrpc_request(listener, deadline, "getTransactionReceipt");
-    assert_eq!(request["method"], "groundhog_getTransactionReceipt");
-    send_jsonrpc_response(
-        stream,
-        &request["id"],
-        serde_json::json!({
-            "txHash": tx_hash,
-            "height": height,
-            "gasUsed": 1500,
-            "status": { "result": "ok" },
-            "events": [],
-        }),
-    );
-    signed_tx
 }
 
 fn spawn_balance_then_chain_tip_rpc(
@@ -14729,20 +14825,10 @@ fn spawn_balance_then_chain_tip_rpc(
             serde_json::json!({
                 "address": address,
                 "rawBalance": raw_balance,
-                "height": height,
+                "height": height.to_string(),
             }),
         );
 
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
-        assert_eq!(request["method"], "groundhog_chainTip");
-        send_jsonrpc_response(
-            stream,
-            &request["id"],
-            serde_json::json!({
-                "height": height,
-                "blockHash": format!("0x{}", "00".repeat(32)),
-            }),
-        );
         assert_no_follow_up_rpc(&listener);
     });
     (format!("http://{addr}"), handle)
@@ -14843,6 +14929,7 @@ fn run_transfer_live_mock_with_rpc_override(
     }
     let output = command
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
         .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
         .output()
@@ -14926,7 +15013,7 @@ fn spawn_transfer_rpc(
             stream,
             &request["id"],
             serde_json::json!({
-                "height": 42,
+                "height": "42",
                 "blockHash": format!("0x{}", "00".repeat(32)),
             }),
         );
@@ -15011,10 +15098,10 @@ fn serve_transfer_poll(
                 } else {
                     local_hash.to_owned()
                 },
-                "height": 43,
+                "height": "43",
                 "status": status,
                 "events": events,
-                "gasUsed": 1500,
+                "gasUsed": "1500",
             });
             if let Some(value) = return_data {
                 receipt["returnData"] = serde_json::json!(value);
@@ -15160,7 +15247,7 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
             stream,
             &request["id"],
             serde_json::json!({
-                "blockHeight": 12,
+                "blockHeight": "12",
                 "item": {
                     "kind": "bytestring",
                     "bytes": "0x6c6f63616c2d6e6f64652d73746f72616765",
@@ -15192,7 +15279,7 @@ fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinH
             serde_json::json!({
                 "address": expected_address,
                 "rawBalance": raw_balance,
-                "height": 34,
+                "height": "34",
             }),
         );
     });
@@ -15315,8 +15402,8 @@ fn spawn_view_rpc_inner_with_events(
             serde_json::json!({
                 "output": output,
                 "events": events,
-                "height": 12,
-                "gasUsed": 4321,
+                "height": "12",
+                "gasUsed": "4321",
             }),
         );
     });
@@ -15375,7 +15462,7 @@ fn write_runtime_manifest_with_seed(
     let public_key = public_key_override.unwrap_or_else(|| signer.verifying_key_bytes());
     let path = dir.join(format!("runtime-manifest-{index}.json"));
     let manifest = serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
         "networkHash": TEST_NETWORK_HASH,
@@ -15388,19 +15475,14 @@ fn write_runtime_manifest_with_seed(
         "endpoints": {
             "scheduler": "127.0.0.1:1000"
         },
-        "bootstrapAccountDerivation": {
-            "scheme": "groundhog-bootstrap-account-v1",
-            "seed": seed
-        },
         "bootstrapAccounts": [{
-            "index": index,
             "role": if index == 0 { "faucet" } else { "local_user" },
             "publicKey": format!("0x{}", hex::encode(public_key)),
             "walletAddress": address,
             "initialStorageTokens": if index == 0 {
                 groundhog_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS
             } else {
-                groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_ACCOUNT_TOKENS
+                groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS
             }.to_string()
         }],
         "bootstrap": {
@@ -15418,6 +15500,18 @@ fn write_runtime_manifest_with_seed(
         }
     });
     std::fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    std::fs::create_dir_all(dir.join("fixture-config/groundhog")).unwrap();
+    std::fs::write(
+        dir.join("fixture-config/groundhog/config.toml"),
+        "default_profile = 'default'\n[profile.default]\n",
+    )
+    .unwrap();
+    let key_dir = dir.join("fixture-config/groundhog/keys");
+    std::fs::create_dir_all(&key_dir).unwrap();
+    let key_path = key_dir.join(format!("dev-{index}.json"));
+    std::fs::write(&key_path, serde_json::to_vec(&serde_json::json!({"version":1,"scheme":"ed25519","keypair_hex":hex::encode(signer.to_keypair_bytes()),"public_key_hex":hex::encode(signer.verifying_key_bytes())})).unwrap()).unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     path
 }
 
@@ -15628,7 +15722,7 @@ fn spawn_transaction_rpc(
                 serde_json::json!({
                     "address": address,
                     "rawBalance": "100000000",
-                    "height": height,
+                    "height": height.to_string(),
                 }),
             );
             (stream, request) = read_jsonrpc_request(&listener, deadline, "sendRawTransaction");
@@ -15675,8 +15769,8 @@ fn spawn_transaction_rpc(
 fn sample_deploy_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
         "txHash": mock_tx_hash(),
-        "height": height,
-        "gasUsed": 1500,
+        "height": height.to_string(),
+        "gasUsed": "1500",
         "status": { "result": "ok" },
         "events": [],
         "returnData": format!("0x{}", "bb".repeat(32)),
@@ -15686,8 +15780,8 @@ fn sample_deploy_receipt(height: i64) -> serde_json::Value {
 fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
         "txHash": mock_tx_hash(),
-        "height": height,
-        "gasUsed": 4242,
+        "height": height.to_string(),
+        "gasUsed": "4242",
         "status": {
             "result": "deterministicError",
             "kind": "outOfGas",
@@ -15706,8 +15800,8 @@ fn sample_insufficient_funding_deploy_receipt(height: i64) -> serde_json::Value 
     .expect("bug: ERC20 exception should encode");
     serde_json::json!({
         "txHash": mock_tx_hash(),
-        "height": height,
-        "gasUsed": 1500,
+        "height": height.to_string(),
+        "gasUsed": "1500",
         "status": { "result": "reverted", "message": null },
         "events": [],
         "abortData": format!("0x{}", hex::encode(abort_data)),
@@ -15718,8 +15812,8 @@ fn sample_call_receipt(height: i64) -> serde_json::Value {
     let contract_address = format!("0x{}", "11".repeat(32));
     serde_json::json!({
         "txHash": mock_tx_hash(),
-        "height": height,
-        "gasUsed": 1500,
+        "height": height.to_string(),
+        "gasUsed": "1500",
         "status": { "result": "ok" },
         "events": [{
             "contractAddress": contract_address,
@@ -15733,8 +15827,8 @@ fn sample_call_receipt(height: i64) -> serde_json::Value {
 fn sample_deterministic_error_call_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
         "txHash": mock_tx_hash(),
-        "height": height,
-        "gasUsed": 1500,
+        "height": height.to_string(),
+        "gasUsed": "1500",
         "status": {
             "result": "deterministicError",
             "kind": "fault",
@@ -15746,8 +15840,8 @@ fn sample_deterministic_error_call_receipt(height: i64) -> serde_json::Value {
 fn sample_reverted_call_receipt(height: i64, abort_hex: &str) -> serde_json::Value {
     serde_json::json!({
         "txHash": mock_tx_hash(),
-        "height": height,
-        "gasUsed": 1500,
+        "height": height.to_string(),
+        "gasUsed": "1500",
         "status": { "result": "reverted" },
         "events": [],
         "abortData": abort_hex,
@@ -15785,8 +15879,8 @@ fn sample_detail_result(height: i64) -> serde_json::Value {
     let contract_address = format!("0x{}", "11".repeat(32));
     serde_json::json!({
         "receipt": sample_call_receipt(height),
-        "gasConsumed": 12450,
-        "gasLimit": 1_000_000_000_u64,
+        "gasConsumed": "12450",
+        "gasLimit": "1000000000",
         "storageDeltas": [{
             "address": contract_address,
             "key": "0xabcdef",
@@ -15799,7 +15893,7 @@ fn sample_detail_result(height: i64) -> serde_json::Value {
             "invocation": {
                 "address": contract_address,
                 "entrypoint": "0x0123456789abcdef",
-                "gasLimit": 1_000_000_000_u64,
+                "gasLimit": "1000000000",
                 "calldata": "0x0102",
             },
             "systemCalls": [],
@@ -15829,7 +15923,7 @@ fn run_issuer_event_command(
         .map(|(index, record)| {
             serde_json::json!({
                 "txHash": format!("0x{:064x}", index + 1),
-                "blockHeight": 20 - index,
+                "blockHeight": (20 - index).to_string(),
                 "sequenceNumber": 0,
                 "event": record["event"],
             })
@@ -15846,8 +15940,8 @@ fn run_issuer_event_command(
         EventRpcResponse::Result(serde_json::json!({
             "events": events,
             "cursor": "0x",
-            "latestBlock": 20,
-            "oldestBlock": 0,
+            "latestBlock": "20",
+            "oldestBlock": "0",
         })),
     );
     let output = groundhog()
@@ -15912,7 +16006,7 @@ fn issuer_token_movements_count_clawback_once() {
     let records = report["data"]["records"].as_array().unwrap();
     assert_eq!(movements.len(), 4);
     assert_eq!(records.len(), movements.len());
-    assert_eq!(report["data"]["schemaVersion"], 2);
+    assert_eq!(report["data"]["schemaVersion"], 3);
     for ((record, original), amount) in records.iter().zip(&movements).zip(["100", "25", "5", "7"])
     {
         for field in ["contractAddress", "topics", "data"] {
@@ -15931,4 +16025,56 @@ fn issuer_token_movements_count_clawback_once() {
     let alice = format!("0x{}", "13".repeat(32));
     assert_eq!(clawback_burn["transfer"]["from"], alice);
     assert!(clawback_burn["transfer"]["to"].is_null());
+}
+
+#[test]
+fn transfer_live_scheduler_failures_preserve_json_outcome() {
+    for tag in ["retry", "dropped"] {
+        let status =
+            serde_json::json!({ "status": tag, "error": { "source": "scheduler", "code": 1 } });
+        let run = run_transfer_live_mock_with_hash(
+            TransferRpcMock {
+                submit: TransferSubmitMock::MatchingHash,
+                poll: Some(TransferPollMock::Status(status.clone())),
+            },
+            true,
+        );
+        assert!(!run.output.status.success());
+        assert!(run.output.stderr.is_empty());
+        let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+        assert_eq!(stdout["ok"], false);
+        assert_eq!(stdout["error"]["code"], format!("transaction_{tag}"));
+        assert_eq!(stdout["data"]["confirmation"], tag);
+        assert_eq!(stdout["data"]["transactionStatus"], status);
+    }
+}
+
+#[test]
+fn tx_show_scheduler_failures_render_next_steps() {
+    let hash = format!("0x{}", "bc".repeat(32));
+    for (tag, next_step) in [
+        ("retry", "resubmit the transaction"),
+        ("dropped", "modify the transaction"),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+            &hash,
+            TxShowRpcResponse::Result(serde_json::json!({
+                "status":tag, "error":{"source":"scheduler", "code":3}
+            })),
+            None,
+        );
+        let output = groundhog()
+            .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+        assert!(output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(&format!("status: {tag}")), "{stderr}");
+        assert!(stderr.contains("error source: scheduler"), "{stderr}");
+        assert!(stderr.contains("error code: 3"), "{stderr}");
+        assert!(stderr.contains(next_step), "{stderr}");
+    }
 }

@@ -171,8 +171,12 @@ async fn prepare_inner(
             )
         })?;
         let manifest = manifest.ok_or(BenchError::MissingRuntimeManifest)?;
-        let accounts =
-            transaction_inputs_for_method("sendRawTransaction", Some(manifest), cli.accounts)?;
+        let accounts = transaction_inputs_for_method(
+            "sendRawTransaction",
+            Some(manifest),
+            cli.accounts,
+            cli.account_seed.as_deref(),
+        )?;
         let first_nonce = match cli.seed_nonce_start {
             Some(value) => value,
             None => u64::try_from(
@@ -244,7 +248,8 @@ async fn prepare_inner(
                 .map_err(|error| BenchError::Setup(format!("invalid receipt: {error}")))?;
                 let receipt = receipt
                     .ok_or_else(|| BenchError::Setup("committed hash has no receipt".into()))?;
-                if receipt.tx_hash != *hash || receipt.height != height {
+                if receipt.tx_hash != *hash || height.is_some_and(|height| receipt.height != height)
+                {
                     return Err(BenchError::Setup(
                         "receipt hash/height differs from committed status".into(),
                     ));
@@ -257,7 +262,7 @@ async fn prepare_inner(
                 })).expect("bug: receipt shape serializes"));
                 records.push(ConfirmedRecord {
                     hash: *hash,
-                    height: height.into_inner(),
+                    height: receipt.height.into_inner(),
                 });
                 break;
             }

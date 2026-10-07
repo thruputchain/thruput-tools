@@ -2,8 +2,8 @@
 # Real local-DX smoke test.
 #
 # Exercises the user-facing CLI path against a real hog-devnode binary:
-#   groundhog new -> build -> persistent node -> dev-1 deploy/call/view/storage
-#   -> dev-1/dev-2 transfer with recipient and sender balance validation
+#   groundhog new -> build -> persistent node -> smoke-sender deploy/call/view/storage
+#   -> smoke-sender/smoke-recipient transfer with recipient and sender balance validation
 #   -> transaction show and bounded sender-history pagination
 #   -> raw/spec-decoded counter events and canonical token transfer history
 #   -> ordinary native key -> explicit airdrop -> atomic deploy/init -> save identity
@@ -28,8 +28,8 @@ PROJECT_NAME="smoke-counter"
 SMOKE_PROFILE="local"
 INITIAL_VALUE=7
 INCREMENT_AMOUNT=5
-CUSTOM_DEV_ACCOUNT_HOG="1234567.0000001"
-CUSTOM_DEV_ACCOUNT_RAW="12345670000001"
+CUSTOM_ACCOUNT_HOG="1234567.0000001"
+CUSTOM_ACCOUNT_RAW="12345670000001"
 FIXED_FAUCET_RAW="10000000000000"
 
 log() {
@@ -589,7 +589,7 @@ NODE_DATA_DIR="$WORK/node-data"
 NODE_ARGS=(
     --json node
     --port 0
-    --dev-account-count 3
+    --bootstrap-accounts "$WORK/bootstrap-accounts.json"
     --hog-devnode-binary "$DEVNODE_BINARY"
     --data-dir "$NODE_DATA_DIR"
 )
@@ -660,8 +660,24 @@ COUNTER_SPEC_XDR="$(json_field data.specXdr "$COUNTER_BUILD_JSON")"
 [[ "$COUNTER_SPEC_XDR" != "null" && -r "$COUNTER_SPEC_XDR" ]] \
     || die "counter build did not return a readable specXdr path: $COUNTER_SPEC_XDR"
 
+log "Creating stored smoke keys and public bootstrap allocations"
+for name in smoke-sender smoke-recipient smoke-third; do
+    "$CLI" --json keys generate "$name" > "$WORK/$name.json"
+done
+"$CLI" keys use smoke-sender
+python3 - "$WORK" "$CUSTOM_ACCOUNT_RAW" <<'ALLOCATIONS'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+allocations = [
+    {"publicKey":json.loads((root / f"{name}.json").read_text())["data"]["key"]["public_key"],
+     "initialStorageTokens":sys.argv[2]}
+    for name in ("smoke-sender", "smoke-recipient", "smoke-third")
+]
+(root / "bootstrap-accounts.json").write_text(json.dumps(allocations))
+ALLOCATIONS
+
 log "Starting local node"
-"$CLI" "${NODE_ARGS[@]}" --dev-account-hog "$CUSTOM_DEV_ACCOUNT_HOG" \
+"$CLI" "${NODE_ARGS[@]}" \
     > "$WORK/node.json" 2> "$WORK/node.err" &
 NODE_PID=$!
 if ! wait_for_node_json "$WORK/node.json"; then
@@ -686,7 +702,14 @@ log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
     || die "groundhog node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
 RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
-[[ "$(json_len bootstrapAccounts "$RUNTIME_JSON")" == "4" ]] \
+python3 - "$RUNTIME_MANIFEST" <<'MANIFEST'
+import json, sys
+m = json.load(open(sys.argv[1]))
+assert m["schemaVersion"] == 4
+assert "bootstrapAccountDerivation" not in m
+assert all("index" not in a for a in m["bootstrapAccounts"])
+MANIFEST
+[[  "$(json_len bootstrapAccounts "$RUNTIME_JSON")" == "4" ]] \
     || die "runtime manifest did not contain exactly four bootstrap accounts"
 [[ "$(json_field bootstrapAccounts.0.role "$RUNTIME_JSON")" == "faucet" ]] \
     || die "runtime manifest account 0 was not the faucet"
@@ -694,13 +717,11 @@ RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
     || die "runtime manifest faucet did not retain its fixed allocation"
 [[ "$(json_field bootstrapAccounts.1.role "$RUNTIME_JSON")" == "local_user" ]] \
     || die "runtime manifest account 1 was not a local user"
-[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_DEV_ACCOUNT_RAW" ]] \
+[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_ACCOUNT_RAW" ]] \
     || die "runtime manifest did not propagate custom local-user HOG allocation"
 for index in 0 1 2 3; do
-    [[ "$(json_field bootstrapAccounts.$index.index "$RUNTIME_JSON")" == "$index" ]] \
-        || die "runtime manifest account position $index did not advertise index $index"
     expected_role="local_user"
-    expected_tokens="$CUSTOM_DEV_ACCOUNT_RAW"
+    expected_tokens="$CUSTOM_ACCOUNT_RAW"
     if (( index == 0 )); then
         expected_role="faucet"
         expected_tokens="$FIXED_FAUCET_RAW"
@@ -728,8 +749,8 @@ GLOBAL_RUNTIME_MANIFEST="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.runti
     || die "local_runtime_state.runtime_manifest was $GLOBAL_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
 unset GROUNDHOG_RUNTIME_MANIFEST
 
-TRANSFER_SENDER="dev-1"
-TRANSFER_RECIPIENT="dev-2"
+TRANSFER_SENDER="smoke-sender"
+TRANSFER_RECIPIENT="smoke-recipient"
 TRANSFER_AMOUNT="0.0000001"
 TRANSFER_RAW_AMOUNT="1"
 
@@ -933,7 +954,7 @@ DECODED_EVENTS_JSON="$(run_json "decoded counter events" "$CLI" --json events li
     || die "counter ping decoded as the wrong event"
 log "counter event result: tx=$PING_TX_HASH raw+decoded"
 
-VIEW_FROM="dev-1"
+VIEW_FROM="smoke-sender"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC to standalone gateway for view/storage checks"
     export GROUNDHOG_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
@@ -1083,7 +1104,7 @@ WALLET_EMPTY_JSON="$(run_json "empty saved wallet balance" "$CLI" --json balance
 AIRDROP_JSON="$(run_json "explicitly fund empty native wallet" "$CLI" --json airdrop --force "$USER_KEY" --amount 100)"
 [[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
     || die "saved-wallet airdrop did not commit successfully"
-[[ "$(json_field data.faucet.key "$AIRDROP_JSON")" == "dev-0" && "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
+[[ "$(json_field data.faucet.address "$AIRDROP_JSON")" == "$(json_field bootstrapAccounts.0.walletAddress "$RUNTIME_JSON")" && "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
     || die "saved-wallet airdrop did not identify the local faucet"
 WALLET_FUNDED_JSON="$(run_json "explicitly funded native balance" "$CLI" --json balance "$USER_KEY")"
 # A first transfer creates storage, so free balance can be below the exact
@@ -1116,14 +1137,14 @@ USER_INCREMENT_JSON="$(run_json "saved native increment" "$CLI" --json call --fo
 assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
 
 NATIVE_SENDER_BEFORE_JSON="$(run_json "native transfer sender before" "$CLI" --json balance "$USER_KEY")"
-NATIVE_RECIPIENT_BEFORE_JSON="$(run_json "native transfer recipient before" "$CLI" --json balance dev-2)"
-NATIVE_TRANSFER_JSON="$(run_json "native transfer to bootstrap dev account" "$CLI" --json transfer --force dev-2 1)"
+NATIVE_RECIPIENT_BEFORE_JSON="$(run_json "native transfer recipient before" "$CLI" --json balance smoke-recipient)"
+NATIVE_TRANSFER_JSON="$(run_json "native transfer to bootstrap dev account" "$CLI" --json transfer --force smoke-recipient 1)"
 [[ "$(json_field data.status.result "$NATIVE_TRANSFER_JSON")" == "ok" ]] \
     || die "native transfer did not commit"
 [[ "$(json_field data.sender "$NATIVE_TRANSFER_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.recipient "$NATIVE_TRANSFER_JSON")" == "$RECIPIENT_ADDRESS" ]] \
     || die "native transfer changed a native or bootstrap identity"
 NATIVE_SENDER_AFTER_JSON="$(run_json "native transfer sender after" "$CLI" --json balance "$USER_KEY")"
-NATIVE_RECIPIENT_AFTER_JSON="$(run_json "native transfer recipient after" "$CLI" --json balance dev-2)"
+NATIVE_RECIPIENT_AFTER_JSON="$(run_json "native transfer recipient after" "$CLI" --json balance smoke-recipient)"
 assert_transfer_balance_deltas \
     "$(json_field data.rawBalance "$NATIVE_SENDER_BEFORE_JSON")" \
     "$(json_field data.rawBalance "$NATIVE_SENDER_AFTER_JSON")" \
@@ -1134,7 +1155,7 @@ WALLET_BALANCE_BEFORE_RESTART="$(json_field data.rawBalance "$NATIVE_SENDER_AFTE
 log "native wallet flow passed: address=$WALLET_ADDRESS contract=$USER_CONTRACT_ADDRESS"
 
 unset GROUNDHOG_RUNTIME_MANIFEST
-VIEW_FROM="dev-1"
+VIEW_FROM="smoke-sender"
 PERSISTED_VIEW_BEFORE="$(run_view_json "view before persistent restart" "$PROJECT_NAME" get)"
 PERSISTED_VALUE_BEFORE="$(json_field data.returnValue "$PERSISTED_VIEW_BEFORE")"
 [[ "$PERSISTED_VALUE_BEFORE" != "null" ]] \
@@ -1173,7 +1194,7 @@ CHAIN_RESTORE_JSON="$(run_json "chain restore" "$CLI" --json chain restore --for
 log "Restarting persistent local node with the original allocation"
 : > "$WORK/node.json"
 : > "$WORK/node.err"
-"$CLI" "${NODE_ARGS[@]}" --dev-account-hog "$CUSTOM_DEV_ACCOUNT_HOG" \
+"$CLI" "${NODE_ARGS[@]}" \
     > "$WORK/node.json" 2> "$WORK/node.err" &
 NODE_PID=$!
 if ! wait_for_node_json "$WORK/node.json"; then
@@ -1193,7 +1214,7 @@ REPORTED_DATA_DIR="$(json_field data.data_dir "$NODE_JSON")"
 RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
 [[ "$(json_field bootstrapAccounts.0.initialStorageTokens "$RUNTIME_JSON")" == "$FIXED_FAUCET_RAW" ]] \
     || die "restarted runtime manifest faucet did not retain its fixed allocation"
-[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_DEV_ACCOUNT_RAW" ]] \
+[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_ACCOUNT_RAW" ]] \
     || die "restarted runtime manifest did not retain custom local-user HOG allocation"
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
@@ -1205,9 +1226,9 @@ WALLET_AFTER_RESTART_JSON="$(run_json "native wallet balance after restart" "$CL
 REPEATED_WALLET_JSON="$(run_json "repeat native wallet creation after restart" "$CLI" --json wallet create --force --key "$USER_KEY")"
 [[ "$(json_field data.wallet "$REPEATED_WALLET_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.created "$REPEATED_WALLET_JSON")" == "false" ]] \
     || die "repeated creation did not retain the saved native identity"
-DEV_RECIPIENT_RESTART_JSON="$(run_json "bootstrap dev identity after restart" "$CLI" --json balance dev-2)"
+DEV_RECIPIENT_RESTART_JSON="$(run_json "bootstrap dev identity after restart" "$CLI" --json balance smoke-recipient)"
 [[ "$(json_field data.address "$DEV_RECIPIENT_RESTART_JSON")" == "$RECIPIENT_ADDRESS" ]] \
-    || die "manifest-backed dev-2 changed identity across restart"
+    || die "manifest-backed smoke-recipient changed identity across restart"
 
 PERSISTED_VIEW_AFTER="$(run_view_json "view after persistent restart" "$PROJECT_NAME" get)"
 PERSISTED_VALUE_AFTER="$(json_field data.returnValue "$PERSISTED_VIEW_AFTER")"

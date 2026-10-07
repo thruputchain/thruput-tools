@@ -16,7 +16,7 @@ use crate::result::CommandResult;
 use crate::{CliError, Print};
 
 /// Schema version of the `balance --json` data payload.
-pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 1;
+pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 2;
 const LOW_LOCAL_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
 /// Read native HOG balance for a wallet, contract, dev account, or address.
@@ -77,7 +77,7 @@ pub fn run(
             "address": address_hex,
             "rawBalance": balance.raw_balance,
             "balanceHog": balance_hog,
-            "height": balance.height,
+            "height": balance.height.to_string(),
         }),
     ))?;
 

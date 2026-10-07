@@ -14,14 +14,20 @@ use serde::{Deserialize, Serialize};
 pub struct ServerLimits {
     /// Largest `gasLimit` a `view` request may ask for, and the budget a view
     /// runs under when it names none.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub max_view_gas: u64,
     /// Largest `view` calldata, in bytes.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub max_view_calldata_bytes: u64,
     /// Largest `limit` a `getEvents` page may ask for.
     pub max_events_per_page: u32,
     /// Largest `limit` a `getTransactionsByAddress` page may ask for.
     pub max_transactions_per_page: u32,
     /// Longest opaque pagination cursor accepted, in bytes.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub max_cursor_bytes: u64,
 }
 

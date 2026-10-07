@@ -14,6 +14,9 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainTip {
+    /// Signed protocol block height, encoded as a decimal string.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub height: BlockHeight,
     pub block_hash: SHA256Hash,
 }
@@ -33,7 +36,13 @@ pub struct BlockInfo {
     /// Hash of the post-block network configuration committed by consensus.
     pub config_hash: SHA256Hash,
     pub proposer: ValidatorID,
+    /// Unix time in nanoseconds since 1970-01-01 UTC, encoded as a decimal string.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<TimePoint>")]
     pub block_timepoint: TimePoint,
+    /// Signed protocol block height, encoded as a decimal string.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub block_height: BlockHeight,
     pub txs_hash: SHA256Hash,
     pub storage_hash: StorageHash,

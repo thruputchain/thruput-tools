@@ -5,7 +5,7 @@ pub use groundhog_json_rpc_types as types;
 
 pub mod receipt;
 
-pub use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
+pub use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient, LocalFundingApiClient};
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use jsonrpsee::core::client::ClientT;
@@ -191,7 +191,7 @@ pub async fn poll_transaction_receipt(
 /// Poll an accepted transaction with explicit retry settings.
 ///
 /// Receipts are authoritative. When a receipt is not yet available, an
-/// An `Invalid` status ends polling early. A best-effort `RecentFailure`
+/// An `Invalid`, `Retry`, or `Dropped` status ends polling early. A best-effort `RecentFailure`
 /// diagnostic is retained while polling continues because the same transaction
 /// may still commit; if no receipt appears, the diagnostic is returned after
 /// polling is exhausted.

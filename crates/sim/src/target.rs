@@ -377,7 +377,7 @@ struct LocalLaunchConfig {
     block_driver: Option<TargetBlockDriverMode>,
     block_interval_ms: Option<u64>,
     max_rpc_connections: Option<u32>,
-    required_accounts: u32,
+    bootstrap_accounts: PathBuf,
     startup_timeout_secs: u64,
     logs_dir: PathBuf,
     ownership_path: PathBuf,
@@ -489,7 +489,10 @@ impl LocalTargetProvider {
         context: TargetProviderContext,
     ) -> Result<ResolvedTarget, SimError> {
         let groundhog = resolve_groundhog_binary(overrides.groundhog_binary.as_deref())?;
-        let required_accounts = required_bootstrap_accounts(manifest);
+        tokio::fs::create_dir_all(&context.logs_dir).await?;
+        let bootstrap_accounts = context.logs_dir.join("bootstrap-accounts.json");
+        let allocations = local_public_allocations(manifest)?;
+        crate::util::write_json_pretty_atomic(bootstrap_accounts.clone(), &allocations).await?;
         let hogd_dev_binary = overrides
             .hogd_dev_binary
             .or_else(|| manifest.target.hogd_dev_binary.clone());
@@ -503,7 +506,7 @@ impl LocalTargetProvider {
             block_driver: manifest.target.block_driver,
             block_interval_ms: manifest.target.block_interval_ms,
             max_rpc_connections: manifest.target.max_rpc_connections,
-            required_accounts,
+            bootstrap_accounts,
             startup_timeout_secs,
             logs_dir: context.logs_dir,
             ownership_path: context.ownership_path,
@@ -651,7 +654,7 @@ struct LocalNodeStartup {
 
 #[derive(Debug, Clone, Copy)]
 struct LocalNodeArgOptions<'a> {
-    required_accounts: u32,
+    bootstrap_accounts: &'a Path,
     hogd_dev_binary: Option<&'a Path>,
     hogd_protocol: Option<&'a str>,
     block_driver: Option<TargetBlockDriverMode>,
@@ -664,8 +667,8 @@ struct LocalNodeArgOptions<'a> {
 fn local_node_args(options: LocalNodeArgOptions<'_>) -> Vec<String> {
     let mut args = vec![
         "node".to_string(),
-        "--dev-account-count".to_string(),
-        options.required_accounts.to_string(),
+        "--bootstrap-accounts".to_string(),
+        options.bootstrap_accounts.display().to_string(),
         "--json".to_string(),
         "--startup-timeout-secs".to_string(),
         options.startup_timeout_secs.to_string(),
@@ -697,6 +700,37 @@ fn local_node_args(options: LocalNodeArgOptions<'_>) -> Vec<String> {
     args
 }
 
+fn local_public_allocations(
+    manifest: &SimulationManifest,
+) -> Result<Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>, SimError>
+{
+    let Some(spec) = &manifest.accounts else {
+        return Ok(Vec::new());
+    };
+    if spec.funding == crate::manifest::NativeAccountFunding::Faucet {
+        return Ok(Vec::new());
+    }
+    let amount = spec.funding_amount_raw.as_deref().unwrap_or("1000000000");
+    let raw = amount
+        .parse::<u64>()
+        .map_err(|_| SimError::Executor("local initial allocation must fit positive i64".into()))?;
+    if raw == 0 || raw > i64::MAX as u64 || raw.to_string() != amount {
+        return Err(SimError::Executor(
+            "local initial allocation must fit positive canonical i64".into(),
+        ));
+    }
+    let allocations = (0..required_bootstrap_accounts(manifest) as usize)
+        .map(|index| {
+            let signer = groundhog_signing::derive_dev_account_signer(&spec.seed, index);
+            groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+                groundhog_json_rpc_types::hex::Hex0x(signer.verifying_key_bytes().into()),
+                amount.to_owned(),
+            )
+        })
+        .collect();
+    Ok(allocations)
+}
+
 async fn launch_local_node(
     config: &LocalLaunchConfig,
     port: Option<u16>,
@@ -704,7 +738,7 @@ async fn launch_local_node(
     launch_attempt: Option<usize>,
 ) -> Result<LocalLaunchedTarget, SimError> {
     let args = local_node_args(LocalNodeArgOptions {
-        required_accounts: config.required_accounts,
+        bootstrap_accounts: &config.bootstrap_accounts,
         hogd_dev_binary: config.hogd_dev_binary.as_deref(),
         hogd_protocol: config.hogd_protocol.as_deref(),
         block_driver: config.block_driver,
@@ -1531,9 +1565,9 @@ mod tests {
     }
 
     #[test]
-    fn local_node_args_include_required_account_count() {
+    fn local_node_args_include_public_allocations() {
         let args = local_node_args(LocalNodeArgOptions {
-            required_accounts: 5,
+            bootstrap_accounts: Path::new("/tmp/accounts.json"),
             hogd_dev_binary: Some(std::path::Path::new("/tmp/hog-devnode")),
             hogd_protocol: Some("hogp/test00000000000"),
             block_driver: Some(TargetBlockDriverMode::Interval),
@@ -1547,8 +1581,8 @@ mod tests {
             args,
             vec![
                 "node",
-                "--dev-account-count",
-                "5",
+                "--bootstrap-accounts",
+                "/tmp/accounts.json",
                 "--json",
                 "--startup-timeout-secs",
                 "45",
@@ -1579,7 +1613,7 @@ mod tests {
     #[test]
     fn restart_args_use_resolved_port() {
         let args = local_node_args(LocalNodeArgOptions {
-            required_accounts: 5,
+            bootstrap_accounts: Path::new("/tmp/accounts.json"),
             hogd_dev_binary: None,
             hogd_protocol: None,
             block_driver: Some(TargetBlockDriverMode::Interval),
@@ -1593,8 +1627,8 @@ mod tests {
             args,
             vec![
                 "node",
-                "--dev-account-count",
-                "5",
+                "--bootstrap-accounts",
+                "/tmp/accounts.json",
                 "--json",
                 "--startup-timeout-secs",
                 "30",
@@ -1605,6 +1639,41 @@ mod tests {
                 "--port",
                 "49152"
             ]
+        );
+    }
+
+    #[test]
+    fn local_allocations_use_owned_fixture_keys_and_explicit_amount() {
+        let mut manifest: SimulationManifest = serde_json::from_str(include_str!(
+            "../../../examples/sim/local-wallet-submit-smoke.json"
+        ))
+        .expect("scenario");
+        manifest.load_shape[0].users = 2;
+        let spec = manifest.accounts.as_mut().expect("fixture accounts");
+        spec.funding_amount_raw = Some("123456789".into());
+        let seed = spec.seed.clone();
+        let allocations = local_public_allocations(&manifest).expect("allocations");
+        assert_eq!(allocations.len(), 2);
+        for (index, allocation) in allocations.iter().enumerate() {
+            let expected = groundhog_signing::derive_dev_account_signer(&seed, index);
+            assert_eq!(
+                allocation.public_key,
+                groundhog_json_rpc_types::hex::Hex0x(expected.verifying_key_bytes().into())
+            );
+            assert_eq!(allocation.initial_storage_tokens, "123456789");
+        }
+        manifest.accounts.as_mut().expect("accounts").funding =
+            crate::manifest::NativeAccountFunding::Faucet;
+        assert!(
+            local_public_allocations(&manifest)
+                .expect("faucet")
+                .is_empty()
+        );
+        manifest.accounts = None;
+        assert!(
+            local_public_allocations(&manifest)
+                .expect("read only")
+                .is_empty()
         );
     }
 

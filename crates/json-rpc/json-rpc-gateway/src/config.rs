@@ -470,9 +470,11 @@ impl GatewayConfig {
         &mut self,
         manifest: &RuntimeManifest,
     ) -> Result<(), RuntimeManifestConfigError> {
-        if manifest.schema_version
-            != groundhog_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION
-        {
+        let expected_schema = match manifest.kind.as_str() {
+            HOSTED_DEVNET_RUNTIME_MANIFEST_KIND => 3,
+            _ => groundhog_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION,
+        };
+        if manifest.schema_version != expected_schema {
             return Err(RuntimeManifestConfigError::UnsupportedSchemaVersion {
                 actual: manifest.schema_version,
             });
@@ -875,6 +877,13 @@ network_hash = "0x1234"
             "viewGateway": "127.0.0.1:1003",
         }));
         manifest.kind = "hosted-devnet-runtime".into();
+        manifest.schema_version = 3;
+        manifest.bootstrap_account_derivation = Some(
+            serde_json::from_value(json!({
+                "scheme": "groundhog-bootstrap-account-v1", "seed": "hosted-test-fixtures"
+            }))
+            .expect("bug: hosted derivation fixture should parse"),
+        );
         manifest.chain_state = None;
 
         config
@@ -958,7 +967,7 @@ network_hash = "0x1234"
 
     fn manifest_with_endpoints(endpoints: &serde_json::Value) -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -969,10 +978,6 @@ network_hash = "0x1234"
                 "commitHash": "abcdef0",
             },
             "endpoints": endpoints,
-            "bootstrapAccountDerivation": {
-                "scheme": "groundhog-bootstrap-account-v1",
-                "seed": "groundhog-dev-accounts",
-            },
             "bootstrapAccounts": [],
             "bootstrap": {
                 "storageCostModel": {

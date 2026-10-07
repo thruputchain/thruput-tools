@@ -1,8 +1,8 @@
 //! Adaptive batching submitter for `sendRawTransaction`.
 //!
 //! Drives the shared adaptive-batching machinery in `adaptive_batch.rs`
-//! with a tx-submission–specific processor: pack N client tx-byte blobs
-//! into one `ParallelSignedTransactionBatch`, call
+//! with a tx-submission–specific processor: move N client tx-byte blobs
+//! into one batch that encodes as a `ParallelSignedTransactionBatch`, call
 //! `schedgateway_submit_tx_batch`, and fan out each
 //! request-scoped result to its matching waiter.
 //!
@@ -13,12 +13,12 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
-use groundhog_hogd_backend::{scheduler as shared_scheduler, submit as shared_submit};
+use groundhog_hogd_backend::scheduler as shared_scheduler;
+use groundhog_hogd_backend::submit::{self as shared_submit, SubmitBatch};
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::error::outcome_for_code;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_scheduler::SchedGatewaySubmitOutcomeBatch;
-use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
 use tokio::sync::{RwLock, oneshot};
 
 use crate::adaptive_batch::{
@@ -35,7 +35,7 @@ use groundhog_json_rpc_server::RpcServerError;
 pub trait SubmitSink: Send + Sync + 'static {
     async fn submit(
         &self,
-        batch: ParallelSignedTransactionBatch,
+        batch: SubmitBatch<Vec<u8>>,
         deadline: Instant,
     ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError>;
 }
@@ -69,7 +69,7 @@ impl SchedulerSink {
 impl SubmitSink for SchedulerSink {
     async fn submit(
         &self,
-        batch: ParallelSignedTransactionBatch,
+        batch: SubmitBatch<Vec<u8>>,
         deadline: Instant,
     ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
         let client = self.scheduler.read().await.clone();
@@ -181,7 +181,7 @@ impl BatchProcessor for SubmitProcessor {
             }
             self.metrics
                 .observe_internal_batch_size("submit_batcher", cohort.len());
-            let packed = match pack(&cohort) {
+            let packed = match pack(&mut cohort) {
                 Ok(packed) => packed,
                 Err(error) => {
                     let outcome = outcome_for_submit_error(&error);
@@ -225,11 +225,18 @@ impl BatchProcessor for SubmitProcessor {
     }
 }
 
-/// Pack N client tx-byte blobs into one `ParallelSignedTransactionBatch`.
+/// Move N client tx-byte blobs into one scheduler batch.
 ///
 /// One segment per tx — same shape as today's single-tx handler, scaled up.
-fn pack(items: &[Item]) -> Result<ParallelSignedTransactionBatch, RpcServerError> {
-    shared_submit::pack(items.iter().map(|item| item.tx_bytes.as_slice()))
+/// The bytes move rather than copy; the items keep their replies, which is
+/// all the fan-out needs.
+fn pack(items: &mut [Item]) -> Result<SubmitBatch<Vec<u8>>, RpcServerError> {
+    shared_submit::pack(
+        items
+            .iter_mut()
+            .map(|item| std::mem::take(&mut item.tx_bytes))
+            .collect(),
+    )
 }
 
 /// Handle returned to the rest of the gateway.  Clone-friendly; each
@@ -436,7 +443,7 @@ mod tests {
     impl SubmitSink for MockSink {
         async fn submit(
             &self,
-            batch: ParallelSignedTransactionBatch,
+            batch: SubmitBatch<Vec<u8>>,
             deadline: Instant,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
             let size = batch.segment_bytes.0.len();
@@ -472,7 +479,7 @@ mod tests {
     impl SubmitSink for TimeoutInvalidatesSink {
         async fn submit(
             &self,
-            _batch: ParallelSignedTransactionBatch,
+            _batch: SubmitBatch<Vec<u8>>,
             deadline: Instant,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
             self.deadlines.lock().unwrap().push(deadline);
@@ -1168,7 +1175,7 @@ mod tests {
 
     #[tokio::test]
     async fn pack_shape_is_correct() {
-        let items: Vec<Item> = [vec![0x11; 3], vec![0x22; 5], vec![0x33; 2]]
+        let mut items: Vec<Item> = [vec![0x11; 3], vec![0x22; 5], vec![0x33; 2]]
             .into_iter()
             .map(|bytes| {
                 let (tx, _rx) = oneshot::channel();
@@ -1179,13 +1186,16 @@ mod tests {
                 }
             })
             .collect();
-        let packed = pack(&items).expect("test transactions should pack");
+        let packed = pack(&mut items).expect("test transactions should pack");
         assert_eq!(packed.segment_tokens.0, vec![1, 1, 1]);
         assert_eq!(packed.segment_bytes.0, vec![3, 5, 2]);
-        let mut expected = Vec::new();
-        expected.extend_from_slice(&[0x11; 3]);
-        expected.extend_from_slice(&[0x22; 5]);
-        expected.extend_from_slice(&[0x33; 2]);
-        assert_eq!(packed.xdr.0, expected);
+        assert_eq!(
+            packed.xdr.0,
+            vec![vec![0x11; 3], vec![0x22; 5], vec![0x33; 2]]
+        );
+        assert!(
+            items.iter().all(|item| item.tx_bytes.is_empty()),
+            "packing should move the bytes out of the items"
+        );
     }
 }

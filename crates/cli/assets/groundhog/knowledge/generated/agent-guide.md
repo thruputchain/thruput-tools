@@ -7,7 +7,7 @@ description: >
   contains Groundhog configuration, SDK dependencies, or generated artifacts.
 ---
 
-<!-- groundhog-cli-version: 0.22.1 -->
+<!-- groundhog-cli-version: 0.24.0 -->
 
 # Groundhog
 
@@ -144,8 +144,8 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.42.2, standard interfaces 0.1.44, protocol-rs 0.43.0,
-and XDR 0.10.2. Update the SDK and interface dependencies together when
+This CLI uses SDK 0.44.2, standard interfaces 0.1.47, protocol-rs 0.46.0,
+and XDR 0.10.3. Update the SDK and interface dependencies together when
 migrating an existing Rust project.
 
 The normal starter contract is a counter, one of the narrower cases where
@@ -231,12 +231,11 @@ and byte slices expose only a hash, not their preimage.
 
 ## TypeScript Application Path
 
-Use public package exports and generated bindings, not package internals.
-Connect a cluster-aware client, create or load an account, then bind a wallet.
-One public client supports multiple independent wallet bindings. Pubkey accounts
-use DefaultWallet, including schema-3 bootstrap accounts. Historical saved
-legacy source-address wallets use `devWalletAdapter`; preserve their addresses.
-Do not submit an application invocation directly as the transaction root.
+Use public exports and generated bindings. Connect a cluster-aware client, create
+or load an account, and bind a wallet. One client supports multiple wallets.
+Pubkey accounts, including hosted schema-3 bootstrap accounts, use DefaultWallet.
+Historical source-address wallets use `devWalletAdapter`; preserve their addresses.
+Never submit an application invocation directly as the transaction root.
 
 Select an interface version for values; explicit types use the full namespace:
 
@@ -278,16 +277,16 @@ broadcast. Explicit prepare/sign/persist/submit remains available.
   failure. Classification does not authorize transaction resubmission.
 - `getVersion` returns nullable `releaseVersion` and `bundleManifestDigest`.
   Use `wireFormat` for compatibility; release identity is diagnostic.
+- RPC wire 10 and CLI JSON use canonical decimal strings for all 64-bit-or-wider
+  integers; TypeScript uses `bigint`, never `Number`. Smaller integers stay numbers.
 
 ### HTTP batching
 
-`new HttpTransport(url, { batch: true })` groups concurrent requests; defaults are
-`{ maxSize: 100, waitMs: 0 }`. It is off by default. Both supported servers cap
-arrays at 1,000 entries. Match responses by ID; RPC errors remain per-call.
-Shared HTTP or malformed-response failures affect the group. No automatic
-retry occurs. `timeoutMs` includes body reading after dispatch. One cancellation
-does not cancel neighboring calls. HTTP grouping provides no shared snapshot,
-execution order, or atomicity. Await dependent operations separately.
+`new HttpTransport(url, { batch: true })` enables batching, off by default, with
+`{ maxSize: 100, waitMs: 0 }`. Servers cap arrays at 1,000. Match responses by ID.
+RPC errors are per-call; HTTP and malformed-response failures affect the group.
+No automatic retries. `timeoutMs` includes body reading. Cancellation is per-call.
+Batching provides no shared snapshot, ordering, or atomicity. Await dependencies.
 
 ### Event pages and restart
 
@@ -319,11 +318,9 @@ existing selections are preserved. `init` writes; `status --json` is read-only.
 Create projects with `groundhog new`.
 
 Start `groundhog node`. `toolchain list`, `install`, and `which` inspect,
-prefetch, and locate its pinned bundle. `--offline node` forbids managed downloads,
-not other RPC/Cargo access. `GROUNDHOG_DEVNODE_BINARY` selects a matching build.
-Diagnose compatibility failures; do not override protocols. Use `status --json`
-or `node --json` for runtime information and `--help` for flags. Never use
-deterministic local keys in production.
+prefetch, and locate its pinned bundle. `--offline node` forbids managed downloads.
+`GROUNDHOG_DEVNODE_BINARY` selects a matching build. Diagnose compatibility
+failures; do not override protocols. Never use fixture keys in production.
 
 `--quiet` does not grant consent. `--non-interactive` disables prompts/UI: protected
 operations require authorized `--force`. Key imports need piped stdin; Cargo/test
@@ -332,26 +329,24 @@ subprocesses cannot read terminal stdin. Use `--json` for machine results.
 `--no-ui` selects plain output; `NO_COLOR` disables color. Explicit live-output
 modes stream immediately without animation.
 
-Hosted signing can discover an unconfigured network hash from matching descriptor
-and RPC identities. Configured hashes remain enforced.
+Hosted signing discovers network hashes from matching descriptor/RPC identities;
+configured hashes stay enforced.
 
 Timeout or `unknown` does not prove transaction failure. Inspect the hash before
 retrying. `node --verbose` enables backend logs; restarting an ephemeral node
 loses its state.
 
-`events list`, `tx list`, and `token transfers` return newest-first pages.
-Omit `--cursor` to refresh; use the opaque cursor and unchanged target/filters
-for older rows. `tx list` matches root invocation targets, not every touched address.
-See [Event pages and restart](#event-pages-and-restart) for cursor rules.
+`tx list` matches root invocation targets, not every touched address.
+See [Event pages and restart](#event-pages-and-restart) for pagination.
 
 ### Key and address interoperability
 
 `keys import <name>` reads a checksummed S StrKey or 32-byte hex seed from
 hidden input or piped stdin, never a 64-byte keypair or CLI argument. It does not
-overwrite names. Generation and import reject reserved bootstrap `dev-N` names.
-Import JSON is camelCase (`data.schemaVersion = 1`). Malformed TOML or an invalid
-`default_key` is rejected before storing. If default selection fails after saving,
-run `keys use <name>`; do not reimport. `isDefault` is null if config cannot be reread.
+overwrite names. Names such as `dev-1` are ordinary stored keys.
+Import JSON uses camelCase (`data.schemaVersion = 1`). Invalid config fails before
+storing. If default selection fails after saving, run `keys use <name>`; do not
+reimport. `isDefault` is null if config cannot be reread.
 
 `keys export <name> --format strkey` exports an S StrKey after confirmation;
 the default is hex. For an authorized key transfer, pipe export stdout directly
@@ -366,18 +361,20 @@ encodings remain unchanged.
 
 Ordinary keys derive nonce-zero native accounts. `wallet create` saves offline;
 fund with `airdrop`, not `--prefund`. Legacy wallets retain identity and format.
-Schema-3 dev-N accounts use native nonce-zero identities from the advertised seed.
-Use a matching runtime; schema-2 state needs its original runtime.
+Local schema-4 manifests contain public allocations. `node --key alice` allocates
+100 HOG to that stored key; no key starts only the random private faucet.
+Harnesses own fixture signers and pass `--bootstrap-accounts`. Chain state and
+dumps retain the private faucet and funding journal. Old local state requires its
+previous runtime and CLI. Retry uncertain local funding with the retained
+recipient, amount and nonce. Hosted bootstrap derivation stays separate.
 
 Wallet creation, selection, address inspection, and `status` ownership checks use
 cached public metadata without a private signer. Older keyfiles derive missing
 metadata from the keypair. Keep metadata consistent: transactions still load the
 signer and validate selected-wallet ownership.
 
-`view --from` accepts wallets, keys, aliases, dev-N, or literal addresses.
-Dev-N takes bootstrap precedence; other saved wallets take
-precedence. Bindings retain their native nonce or legacy address. Omission leaves
-the caller unset.
+`view --from` accepts wallets, stored keys, aliases, or addresses. Saved wallets
+take precedence and retain identity. Omission leaves the caller unset.
 
 Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2+. Funding is exact;
 zero skips transfer. Use `--init <METHOD>` and repeated `--init-arg <VALUE>` with
@@ -386,6 +383,8 @@ child gas. Init runs as the wallet, discards returns, and rolls back with fundin
 and deployment on failure. Dry-run submits nothing. Inspect unverified signed
 identity before retrying: nonce/address change. Aliases require verified success
 at the predicted address.
+
+`tx show`: indexer wins; resubmit `retry`, modify `dropped`. Committed height is optional.
 
 ## Sources and Escalation
 

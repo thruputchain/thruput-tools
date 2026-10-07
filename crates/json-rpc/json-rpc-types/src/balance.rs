@@ -12,5 +12,7 @@ pub struct BalanceResponse {
     /// Raw native HOG balance as a decimal string.
     pub raw_balance: String,
     /// Committed block height used for the read.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub height: BlockHeight,
 }

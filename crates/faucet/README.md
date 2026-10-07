@@ -51,9 +51,10 @@ Set the variable to the faucet account's 32-byte Ed25519 secret key as 64 hex
 characters, with an optional `0x` prefix. Its derived public key must equal
 `network.faucet.public_key`; startup fails before serving if they differ. The
 configured `network.faucet.wallet_address` must equal the nonce-zero pubkey account
-derived from that public key; startup rejects a different address. Local flows may
-use the seed-derived `dev-0` wallet that `groundhog` already treats as the
-fallback local faucet sponsor.
+derived from that public key; startup rejects a different address. Hosted Devnet retains its separate deterministic bootstrap configuration.
+A schema-4 local node owns a random private faucet credential in its chain
+directory and serves local funding directly; public runtime metadata cannot
+provide its signing key.
 
 ## Hosted AWS Key Source
 

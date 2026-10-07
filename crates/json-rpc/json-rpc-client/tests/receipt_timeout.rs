@@ -138,3 +138,25 @@ async fn invalid_still_stops_polling() {
         }
     ));
 }
+
+#[tokio::test]
+async fn scheduler_processing_failures_stop_polling_before_a_later_receipt() {
+    use groundhog_json_rpc_types::transaction::{
+        SchedulerTransactionError, SchedulerTransactionErrorSource,
+    };
+    for status in [
+        TransactionStatus::Retry {
+            error: SchedulerTransactionError::new(SchedulerTransactionErrorSource::Scheduler, 1),
+        },
+        TransactionStatus::Dropped {
+            error: SchedulerTransactionError::new(SchedulerTransactionErrorSource::Auth, 2),
+        },
+    ] {
+        let expected = serde_json::to_value(&status).unwrap();
+        let error = poll(vec![Some(status), None], Some(1)).await.unwrap_err();
+        let PollTransactionReceiptError::TransactionStatus { status, .. } = error else {
+            panic!("unexpected error: {error:?}")
+        };
+        assert_eq!(serde_json::to_value(status).unwrap(), expected);
+    }
+}
