@@ -15,12 +15,15 @@ fn groundhog(home: &Path, directory: &Path) -> Command {
 #[test]
 fn generated_guides_identify_their_template_and_supply_working_offline_context_commands() {
     let temp = tempfile::tempdir().unwrap();
-    for template in ["counter", "stub"] {
-        let name = format!("guide-{template}");
-        let created = groundhog(temp.path(), temp.path())
-            .args(["new", &name, "--template", template, "--json"])
-            .output()
-            .unwrap();
+    for template in [None, Some("counter"), Some("counter-app")] {
+        let template_name = template.unwrap_or("minimal");
+        let name = format!("guide-{template_name}");
+        let mut command = groundhog(temp.path(), temp.path());
+        command.args(["new", &name, "--json"]);
+        if let Some(template) = template {
+            command.args(["--template", template]);
+        }
+        let created = command.output().unwrap();
         assert!(
             created.status.success(),
             "{}",
@@ -47,7 +50,7 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
             .unwrap();
         }
         assert!(guide.contains(&format!(
-            "Scaffolded with Groundhog {}, template `{template}`",
+            "Scaffolded with Groundhog {}, template `{template_name}`",
             env!("CARGO_PKG_VERSION")
         )));
         let manifest: toml::Value =
@@ -86,7 +89,7 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
         }
         assert!(!guide.contains("groundhog --skill"));
         assert!(!guide.contains("{{"));
-        assert!(!guide.contains("npm run"));
+        assert_eq!(guide.contains("npm run"), template == Some("counter-app"));
     }
 }
 
@@ -95,7 +98,7 @@ fn the_documented_docs_export_works_outside_the_generated_project() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     fs::create_dir(&project).unwrap();
-    groundhog_cli::scaffold::generate(&project, "project", "counter").unwrap();
+    groundhog_cli::scaffold::generate(&project, "project", Some("counter")).unwrap();
     let guide = fs::read_to_string(project.join("AGENTS.md")).unwrap();
     assert!(guide.contains("groundhog docs export --output <new-directory>"));
     let destination = temp.path().join("docs");

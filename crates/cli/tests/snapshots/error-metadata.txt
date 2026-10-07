@@ -86,9 +86,14 @@ DirNotEmpty
   code: dir_not_empty
   hint text: use an empty directory, or pick a different target path
 
+ProjectDirectory
+  code: project_directory
+  hint text: choose a destination with an existing parent directory and check its permissions; relative paths, absolute paths, and ~/ paths are supported
+  details: path
+
 UnknownTemplate
   code: unknown_template
-  hint text: available templates: `counter`, `stub`
+  hint text: run `groundhog templates list` for available templates; omit --template for a minimal contract
 
 Io
   code: io_error

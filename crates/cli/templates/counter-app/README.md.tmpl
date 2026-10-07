@@ -1,0 +1,89 @@
+# {{PROJECT_NAME}}
+
+A Groundhog counter contract with a small React + Vite frontend. Contract calls
+use generated TypeScript bindings and a temporary native wallet in the browser.
+
+## Prerequisites
+
+- Node.js 22.12+ and npm.
+- Groundhog CLI installed and configured with `groundhog init`.
+- Rust with rustup and access to the Groundhog Cargo registry.
+- Access to the Groundhog npm packages. Configure registry authentication using
+  the [TypeScript client instructions](https://github.com/groundhogchain/client-ts#registry-auth-one-time-setup).
+- A compatible local runtime; install it with `groundhog toolchain install`.
+
+## Run
+
+Start the node in another terminal:
+
+```sh
+groundhog node
+```
+
+From this project:
+
+```sh
+npm install
+npm run contract:deploy
+npm run dev
+```
+
+`npm run contract:deploy` builds the contract and bindings, funds the configured
+CLI wallet, and deploys and initializes a fresh counter. It saves the address,
+RPC endpoint, and deployment transaction hash in `.groundhog/app.json`.
+`npm run dev` starts Vite using that deployment. Open the printed URL.
+The browser generates a private key in memory, derives a native account, and
+requests an airdrop before enabling the buttons. Keys are never written to disk.
+
+Each page reload creates a new wallet. Restarting `npm run dev` preserves the
+contract and its state. After editing the contract, run `npm run contract:deploy`
+and reload the browser to use the new counter, starting at zero. Vite can keep
+running during deployment. React and CSS edits use Vite's live updates.
+
+If you reset the node, deploy again. The app checks the saved deployment receipt
+and reports when it is unavailable. Ctrl-C stops the app; your node keeps running.
+Decrementing zero demonstrates a rejected transaction.
+
+After a successful increment or decrement, the app briefly retries the counter
+read until it reaches the transaction's block. This has a five-second read
+budget and never resubmits the transaction. There is no background polling.
+If the read cannot catch up, the app reports the confirmed transaction and asks
+you to reload for a fresh value.
+
+Deployment uses the `local` profile. `GROUNDHOG_RPC_URL` overrides its endpoint
+when deploying; the dev server uses the saved endpoint. If deployment changes
+the endpoint, restart `npm run dev`. `PORT` overrides Vite's default 5173.
+`GROUNDHOG_CLI` selects a different CLI binary for builds and deployment.
+
+## Commands
+
+| Command | Action |
+| --- | --- |
+| `npm run contract:build` | Build the contract and generate TypeScript bindings. |
+| `npm run contract:deploy` | Build, fund, deploy, initialize, and save a fresh counter. |
+| `npm run dev` | Start the frontend using the saved deployment; no build or deployment. |
+| `npm run typecheck` | Check frontend TypeScript after generating bindings. |
+| `npm run build` | Rebuild contract/bindings, check TypeScript, and bundle the frontend; no deployment. |
+
+## Project layout
+
+- `src/` and `tests/`: Rust contract and native/RV32/integration tests, shared with the counter template.
+- `web/main.tsx`: counter UI and transaction feedback.
+- `web/wallet.ts`: temporary browser wallet and funding.
+- `web/generated/counter.ts`: generated bindings, refreshed on build/deployment.
+- `scripts/`: thin CLI build/deploy orchestration and Vite startup.
+- `.groundhog/app.json`: public configuration for the current local deployment.
+
+## Check your changes
+
+```sh
+cargo test
+groundhog test
+groundhog test --integration
+npm run build
+```
+
+`npm run build` rebuilds the bindings, checks TypeScript, and bundles the frontend.
+The example runs locally through `npm run dev`, which supplies `/deployment.json`
+and proxies `/rpc` to the node. Hosting the bundle elsewhere requires providing
+those endpoints and an appropriate wallet flow.

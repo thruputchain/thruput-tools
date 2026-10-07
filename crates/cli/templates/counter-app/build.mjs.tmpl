@@ -1,0 +1,17 @@
+import { build } from "vite";
+import { buildContract, command, onShutdown } from "./groundhog.mjs";
+
+onShutdown();
+try {
+  await buildContract();
+  const check = await command(process.execPath, [
+    "node_modules/typescript/bin/tsc",
+    "--noEmit",
+  ]);
+  if (check.code !== 0)
+    throw new Error(check.stdout || "TypeScript checks failed.");
+  await build({ root: "web", build: { outDir: "../dist", emptyOutDir: true } });
+} catch (error) {
+  console.error(`Build failed: ${error.message}`);
+  process.exitCode = 1;
+}

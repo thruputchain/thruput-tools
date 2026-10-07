@@ -793,6 +793,110 @@ fn background_process_fixture() {
 }
 
 #[test]
+fn new_guides_name_destination_and_catalog_selection() {
+    for (template, no_ui) in [("", false), ("counter", false), ("", true)] {
+        let tmp = TempDir::new().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        command
+            .arg("new")
+            .current_dir(tmp.path())
+            .env("HOME", tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+            .env("TERM", "xterm-256color")
+            .env("LC_ALL", "C.UTF-8")
+            .env_remove("NO_COLOR");
+        if no_ui {
+            command.arg("--no-ui");
+        }
+        let mut pty = Pty::spawn(command);
+        pty.resize(100, 40);
+        pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Project name:"));
+        let screen = pty.parser.screen().contents();
+        assert!(screen.contains("New Groundhog Project"), "{screen}");
+        assert_eq!(screen.contains("Progress"), !no_ui, "{screen}");
+        if no_ui {
+            assert!(screen.contains("[1/3] Project name"), "{screen}");
+        } else {
+            assert!(
+                screen
+                    .lines()
+                    .any(|line| line.contains("Project name") && line.contains("current")),
+                "{screen}"
+            );
+        }
+        pty.master.write_all(b"guided-project\n").unwrap();
+        pty.until(|pty| {
+            String::from_utf8_lossy(&pty.raw).contains("Destination [guided-project]:")
+        });
+        let destination = if template == "counter" {
+            "~/chosen-directory\n"
+        } else {
+            "chosen-directory\n"
+        };
+        pty.master.write_all(destination.as_bytes()).unwrap();
+        pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Enter for minimal"));
+        let screen = pty.parser.screen().contents();
+        assert!(screen.contains("Empty contract"), "{screen}");
+        if no_ui {
+            assert!(screen.contains("[3/3] Template"), "{screen}");
+        } else {
+            for label in ["Project name", "Destination"] {
+                assert!(
+                    screen
+                        .lines()
+                        .any(|line| line.contains(label) && line.contains("done")),
+                    "{screen}"
+                );
+            }
+            assert!(
+                screen
+                    .lines()
+                    .any(|line| line.contains("Template") && line.contains("current")),
+                "{screen}"
+            );
+        }
+        pty.master
+            .write_all(format!("{template}\n").as_bytes())
+            .unwrap();
+        assert!(pty.finish_guided().success(), "{}", pty.history());
+        if no_ui {
+            assert!(!pty.raw.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+        } else {
+            let screen = pty.parser.screen().contents();
+            assert!(screen.contains("Project Ready"), "{screen}");
+            assert!(!screen.contains("Progress"), "{screen}");
+        }
+        assert!(!tmp.path().join("guided-project").exists());
+        let project = tmp.path().join("chosen-directory");
+        let manifest = fs::read_to_string(project.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("name = \"guided-project\""));
+        let source = fs::read_to_string(project.join("src/implementation.rs")).unwrap();
+        assert_eq!(source.contains("pub fn increment"), template == "counter");
+    }
+}
+
+#[test]
+fn new_wizard_preserves_explicit_destination_and_template() {
+    let tmp = TempDir::new().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    command
+        .args(["new", "--path", "chosen-directory", "--template", "counter"])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("TERM", "xterm-256color");
+    let mut pty = Pty::spawn(command);
+    pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Project name:"));
+    pty.master.write_all(b"guided-project\n").unwrap();
+    assert!(pty.finish_guided().success(), "{}", pty.history());
+    let raw = String::from_utf8_lossy(&pty.raw);
+    assert!(!raw.contains("Destination ["));
+    assert!(!raw.contains("Enter for minimal"));
+    let source =
+        fs::read_to_string(tmp.path().join("chosen-directory/src/implementation.rs")).unwrap();
+    assert!(source.contains("pub fn increment"));
+}
+
+#[test]
 fn guided_setup_keeps_scaffold_warnings_on_the_final_screen() {
     let fixture = Fixture::new();
     fs::remove_file(fixture.root.join("groundhog.toml")).unwrap();

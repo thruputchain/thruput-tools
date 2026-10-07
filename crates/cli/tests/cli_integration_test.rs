@@ -2383,7 +2383,7 @@ fn new_creates_project() {
     assert!(stderr.contains("[ok] Created project `my-test-project`"));
     assert!(stderr.contains("Project Ready"));
     assert!(stderr.contains("Project: my-test-project"));
-    assert!(stderr.contains("Template: counter"));
+    assert!(stderr.contains("Template: minimal"));
     assert!(stderr.contains("Config: "));
     assert!(stderr.contains("Next:"));
     assert!(stderr.contains(&format!("cd '{}'", dir.display())));
@@ -2413,9 +2413,9 @@ fn new_json_outputs_structured_payload() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "new");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["projectName"], "json-project");
-    assert_eq!(stdout["data"]["template"], "counter");
+    assert_eq!(stdout["data"]["template"], serde_json::Value::Null);
 }
 
 #[cfg(unix)]
@@ -2598,7 +2598,7 @@ fn new_warns_on_stderr_when_cargo_ignores_rustup() {
 }
 
 #[test]
-fn new_with_stub_template() {
+fn new_with_stub_template_explains_minimal_default() {
     let tmp = TempDir::new().unwrap();
     let output = groundhog()
         .arg("new")
@@ -2609,10 +2609,9 @@ fn new_with_stub_template() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
-
-    let imp = std::fs::read_to_string(tmp.path().join("stub-proj/src/implementation.rs")).unwrap();
-    assert!(imp.contains("pub struct Contract"));
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("omit --template"));
+    assert!(!tmp.path().join("stub-proj").exists());
 }
 
 fn init_command(root: &std::path::Path) -> Command {
@@ -10696,9 +10695,9 @@ fn invalid_template_rejected() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("possible values"));
-    assert!(stderr.contains("counter"));
-    assert!(stderr.contains("stub"));
+    assert!(stderr.contains("unknown template"));
+    assert!(stderr.contains("templates list"));
+    assert!(!tmp.path().join("bad").exists());
 }
 
 #[test]

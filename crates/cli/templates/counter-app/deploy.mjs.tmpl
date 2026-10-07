@@ -1,0 +1,75 @@
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import { createGroundhogClient, localnet } from "@groundhogchain/client";
+import { buildContract, groundhog, onShutdown } from "./groundhog.mjs";
+
+onShutdown();
+let stage = "Checking CLI setup";
+try {
+  console.log(stage);
+  const status = await groundhog(["status", "--profile", "local"], {
+    allowWarnings: true,
+  });
+  if (!status.effectiveDefaultKey)
+    throw new Error("Run groundhog init to configure a signing key.");
+  const rpcUrl = process.env.GROUNDHOG_RPC_URL ?? status.project?.rpcUrl;
+  if (!rpcUrl)
+    throw new Error("Run groundhog init to configure the local RPC endpoint.");
+
+  stage = "Connecting to the local node";
+  console.log(stage);
+  const client = await createGroundhogClient({ cluster: localnet({ rpcUrl }) });
+  await client.getChainTip();
+
+  stage = "Building the contract and bindings";
+  console.log(stage);
+  const artifact = await buildContract();
+  const target = ["--profile", "local", "--rpc-url", rpcUrl];
+
+  stage = "Funding the deployment wallet";
+  console.log(stage);
+  await groundhog(["airdrop", ...target, "--amount", "100", "--force"]);
+
+  stage = "Deploying and initializing a fresh counter";
+  console.log(stage);
+  const deployment = await groundhog([
+    "deploy",
+    "--artifact",
+    artifact.rv32,
+    ...target,
+    "--fund",
+    "10",
+    "--init",
+    "initialize",
+    "--init-arg",
+    "0",
+    "--force",
+  ]);
+  if (
+    typeof deployment.address !== "string" ||
+    typeof deployment.txHash !== "string"
+  )
+    throw new Error(
+      "Deployment returned no confirmed address or transaction hash.",
+    );
+  await mkdir(".groundhog", { recursive: true });
+  const config = {
+    contractAddress: deployment.address,
+    rpcUrl,
+    txHash: deployment.txHash,
+  };
+  // Vite can keep serving while deployment replaces the saved address.
+  const temporary = `.groundhog/app.json.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`);
+  await rename(temporary, ".groundhog/app.json");
+  console.log(`Counter deployed: ${deployment.address}`);
+  console.log(
+    "Run npm run dev, or reload the browser if it is already running.",
+  );
+} catch (error) {
+  console.error(`${stage} failed: ${error.message}`);
+  if (stage === "Connecting to the local node")
+    console.error(
+      "Run groundhog node in another terminal, then retry npm run contract:deploy.",
+    );
+  process.exitCode = 1;
+}

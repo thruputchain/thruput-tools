@@ -44,7 +44,7 @@ Install the CLI's selected runtime bundle, then create and build a project:
 ```sh
 groundhog toolchain install
 groundhog init
-groundhog new my-counter
+groundhog new my-counter --template counter
 cd my-counter
 groundhog status
 groundhog build
@@ -131,6 +131,21 @@ Process-level smokes need registry access and a compatible runtime; the ordinary
 workspace test command does not run ignored live-node tests.
 [CI](.github/workflows/ci.yml) also checks generated projects and TypeScript
 bindings.
+
+The counter-app browser smoke generates a fresh project and verifies wallet
+funding, execution, failure feedback, reloads, state across frontend restarts,
+explicit redeployment, node resets, and cleanup:
+
+```sh
+npm ci --prefix scripts/scaffold-app
+npx --prefix scripts/scaffold-app playwright install chromium
+GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode npm test --prefix scripts/scaffold-app
+```
+
+It requires Node.js 22.12+, Groundhog Cargo and npm registry access, and a compatible
+runtime. `CHROMIUM_EXECUTABLE` can select an installed Chromium. The harness owns
+its node and uses isolated CLI configuration and dynamically allocated ports;
+the generated app connects to the node without managing it.
 
 Crates are grouped by subsystem: `crates/json-rpc` (public API and gateway),
 `crates/x23` (hogd adapters), and `crates/rv32` (artifact format and lowering).

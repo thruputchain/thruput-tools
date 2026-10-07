@@ -46,6 +46,73 @@ impl StepState {
     }
 }
 
+/// Shared step tracking and terminal fallback for guided commands.
+#[derive(Debug)]
+pub(crate) struct Wizard<'a, const N: usize> {
+    print: &'a Print,
+    title: &'static str,
+    subtitle: &'static str,
+    steps: [(&'static str, StepState); N],
+    active: bool,
+}
+
+impl<'a, const N: usize> Wizard<'a, N> {
+    pub(crate) fn new(
+        print: &'a Print,
+        title: &'static str,
+        subtitle: &'static str,
+        labels: [&'static str; N],
+    ) -> Self {
+        Self {
+            print,
+            title,
+            subtitle,
+            steps: labels.map(|label| (label, StepState::Pending)),
+            active: false,
+        }
+    }
+
+    pub(crate) fn begin_step(&mut self, index: usize) -> Result<(), CliError> {
+        self.steps[index].1 = StepState::Current;
+        let refreshed = self
+            .print
+            .wizard_view(self.title, self.subtitle, &self.steps)?;
+        self.active |= refreshed;
+        if !refreshed {
+            if index == 0 {
+                self.print
+                    .summary_card(self.title, &[(String::new(), self.subtitle.into())]);
+            }
+            self.print.status(format_args!(
+                "[{}/{}] {}",
+                index + 1,
+                N,
+                self.steps[index].0
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish_step(&mut self, index: usize, state: StepState) {
+        self.steps[index].1 = state;
+        if state == StepState::Skipped {
+            self.print
+                .note(format_args!("{}: {}", self.steps[index].0, state.label()));
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub(crate) fn finish_view(&self) -> Result<(), CliError> {
+        if self.active {
+            self.print.clear_guided_view()?;
+        }
+        Ok(())
+    }
+}
+
 impl Print {
     /// Guided input may refresh only an exclusive, supported foreground terminal.
     pub(crate) fn can_refresh_screen(&self) -> bool {
