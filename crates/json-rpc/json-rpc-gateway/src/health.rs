@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, future::Future, path::PathBuf, sync::Arc, time:
 
 use groundhog_build_info::BuildVersion;
 use groundhog_hogd_backend::{IntroOutcome, intro, scheduler as shared_scheduler};
-use groundhog_json_rpc_types::{BlockHeight, NetworkHashHex, block::ChainTip};
+use groundhog_json_rpc_types::{BlockHeight, NetworkHashHex};
 use groundhog_scheduler::{DbTip, ExpectedDBTip};
 use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_x23_transport::ConnectError;
@@ -31,7 +31,7 @@ pub struct GatewayHealth {
     updated: Arc<tokio::sync::Notify>,
     max_chain_tip_age_ms: u64,
     max_snapshot_age_ms: u64,
-    scheduler_required: bool,
+    db_gateway_required: bool,
     build_version: BuildVersion,
     commit_hash: Option<&'static str>,
     airdrop: Option<HostedAirdrop>,
@@ -68,7 +68,7 @@ impl GatewayHealth {
             updated: Arc::new(tokio::sync::Notify::new()),
             max_chain_tip_age_ms: config.health_chain_tip_max_age_ms,
             max_snapshot_age_ms: config.health_probe_interval_ms.saturating_mul(3).max(1),
-            scheduler_required: backend_required(config, HealthBackend::Scheduler),
+            db_gateway_required: backend_required(config, HealthBackend::DbGateway),
             build_version,
             commit_hash,
             airdrop,
@@ -81,7 +81,7 @@ impl GatewayHealth {
         snapshot.refresh(
             self.max_chain_tip_age_ms,
             self.max_snapshot_age_ms,
-            self.scheduler_required,
+            self.db_gateway_required,
         );
         snapshot
     }
@@ -283,7 +283,7 @@ impl HealthSnapshot {
         &mut self,
         max_chain_tip_age_ms: u64,
         max_snapshot_age_ms: u64,
-        scheduler_required: bool,
+        db_gateway_required: bool,
     ) {
         let elapsed_ms = u64::try_from(self.snapshot_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.snapshot_age_ms = elapsed_ms;
@@ -292,7 +292,7 @@ impl HealthSnapshot {
         }
         if let Some(age_ms) = self.chain_tip.age_ms.as_mut() {
             *age_ms = age_ms.saturating_add(elapsed_ms);
-            if scheduler_required && *age_ms > max_chain_tip_age_ms {
+            if db_gateway_required && *age_ms > max_chain_tip_age_ms {
                 self.status = HealthStatus::Error;
             }
         }
@@ -686,13 +686,8 @@ async fn probe_once(
     let view_gateway = probes.view_gateway.result;
     let faucet = probes.faucet.result;
 
-    if let Some(tip) = scheduler.tip.as_ref() {
-        state.last_tip = Some((
-            tip.height.clone(),
-            scheduler
-                .tip_observed_at
-                .expect("successful scheduler tip should record its observation time"),
-        ));
+    if let Some(tip) = db_gateway.tip.as_ref() {
+        state.last_tip = Some(tip.clone());
     }
     let chain_tip = state.last_tip.as_ref().map_or(
         ChainTipHealth {
@@ -861,18 +856,18 @@ async fn probe_faucet(airdrop: Option<&HostedAirdrop>, timeout: Duration) -> Pro
     ProbeResult {
         up: result.up,
         error: result.error.map(bounded_error),
+        tip: None,
     }
 }
 
 struct ProbeResult {
     up: bool,
     error: Option<String>,
+    tip: Option<(BlockHeight, Instant)>,
 }
 
 struct SchedulerProbeResult {
     up: bool,
-    tip: Option<ChainTip>,
-    tip_observed_at: Option<Instant>,
     error: Option<String>,
     identity_status: SchedulerIdentityStatus,
 }
@@ -1030,10 +1025,8 @@ fn successful_scheduler_probe(
     state.identity_status = SchedulerIdentityStatus::Validated;
 
     match shared_scheduler::chain_tip(SCHEDULER, &db_tip.value) {
-        Ok(tip) => SchedulerProbeResult {
+        Ok(_) => SchedulerProbeResult {
             up: true,
-            tip: Some(tip),
-            tip_observed_at: Some(Instant::now()),
             error: None,
             identity_status: SchedulerIdentityStatus::Validated,
         },
@@ -1200,8 +1193,6 @@ fn scheduler_probe_failure(
 ) -> SchedulerProbeResult {
     SchedulerProbeResult {
         up: false,
-        tip: None,
-        tip_observed_at: None,
         error: Some(bounded_error(message.into())),
         identity_status: state.identity_status,
     }
@@ -1305,23 +1296,59 @@ async fn probe_indexer(
 
 async fn probe_db_gateway(
     ctx: &GatewayContext,
-    protocol: &Protocol,
+    _protocol: &Protocol,
     probe_timeout: Duration,
     timeout_streak: &mut u8,
 ) -> ProbeResult {
-    probe_optional_backend(
-        ctx,
-        OptionalSlot {
-            names: &DB_GATEWAY_NAMES,
-            slot: &ctx.db_gateway,
-        },
-        protocol,
-        probe_timeout,
-        timeout_streak,
-        async |client, protocol| client.dbgateway_intro(protocol).await,
-        intro::db_gateway,
-    )
-    .await
+    let Some(client) = ctx.db_gateway.read().await.clone() else {
+        return failed_probe("db_gateway not connected");
+    };
+    let generation = client.generation();
+    let started_at = Instant::now();
+    let result =
+        tokio::time::timeout(probe_timeout, client.probe_client().dbgateway_get_config()).await;
+    let outcome = match &result {
+        Ok(Ok(groundhog_db_gateway::DbGatewayConfigResult::kRPCNone { .. })) => {
+            BackendRequestOutcome::Ok
+        }
+        Ok(Ok(_)) => BackendRequestOutcome::Rejected,
+        Ok(Err(_)) => BackendRequestOutcome::Error,
+        Err(_) => BackendRequestOutcome::Timeout,
+    };
+    ctx.metrics.observe_backend_request(
+        HealthBackend::DbGateway,
+        "dbgateway_get_config",
+        outcome,
+        started_at.elapsed(),
+    );
+    match result {
+        Ok(Ok(result)) => {
+            *timeout_streak = 0;
+            match groundhog_hogd_backend::db_gateway::tip_reading(
+                "db_gateway",
+                result,
+                ctx.config.network_hash.as_ref(),
+            ) {
+                Ok(reading) => ProbeResult {
+                    up: true,
+                    error: None,
+                    tip: Some((reading.tip.height, Instant::now())),
+                },
+                Err(error) => failed_probe(error.to_string()),
+            }
+        }
+        Ok(Err(error)) => {
+            *timeout_streak = 0;
+            crate::context::clear_db_gateway_if_current(&ctx.db_gateway, generation).await;
+            failed_probe(format!("db_gateway configuration probe failed: {error}"))
+        }
+        Err(_) => {
+            if repeated_probe_timeout(timeout_streak) {
+                crate::context::clear_db_gateway_if_current(&ctx.db_gateway, generation).await;
+            }
+            failed_probe("db_gateway configuration probe timed out")
+        }
+    }
 }
 
 async fn probe_view_gateway(
@@ -1349,6 +1376,7 @@ fn ok_probe() -> ProbeResult {
     ProbeResult {
         up: true,
         error: None,
+        tip: None,
     }
 }
 
@@ -1356,6 +1384,7 @@ fn failed_probe(message: impl Into<String>) -> ProbeResult {
     ProbeResult {
         up: false,
         error: Some(bounded_error(message.into())),
+        tip: None,
     }
 }
 
@@ -1413,7 +1442,7 @@ fn readiness_status(
         return HealthStatus::Error;
     }
 
-    if backend_required(config, HealthBackend::Scheduler)
+    if backend_required(config, HealthBackend::DbGateway)
         && chain_tip
             .age_ms
             .is_none_or(|age| age > config.health_chain_tip_max_age_ms)
@@ -1540,7 +1569,7 @@ mod tests {
         config::X23MultiplexConnections,
         metrics::GatewayMetrics,
         observability::spawn_observability_server,
-        tip_coalescer::{SchedulerTipSink, TipSink},
+        tip_coalescer::{DbTipSink, TipSink},
     };
 
     use super::*;
@@ -1564,7 +1593,10 @@ mod tests {
     }
 
     struct SaturatedIndexer(HandlerGate);
-    struct SaturatedDbGateway(HandlerGate);
+    struct SaturatedDbGateway {
+        gate: HandlerGate,
+        block_config: bool,
+    }
     struct SaturatedViewGateway(HandlerGate);
 
     #[async_trait]
@@ -1622,9 +1654,10 @@ mod tests {
         async fn dbgateway_get_config(
             &self,
         ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
-            Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
-                error: groundhog_scheduler::RPCError::kRPCUnimplemented.0,
-            })
+            if self.block_config {
+                self.gate.wait().await;
+            }
+            Ok(test_db_config())
         }
         async fn dbgateway_intro(
             &self,
@@ -1637,7 +1670,7 @@ mod tests {
             &self,
             _batch: AddressAndKeyBatch,
         ) -> Result<DbGatewayResult, ProgramError> {
-            self.0.wait().await;
+            self.gate.wait().await;
             Err(ProgramError::msg("released db_gateway handler"))
         }
     }
@@ -1683,6 +1716,27 @@ mod tests {
         tip_behavior: TipBehavior,
         null_behavior: NullBehavior,
         lookup_gate: Option<HandlerGate>,
+    }
+
+    fn test_db_config() -> groundhog_db_gateway::DbGatewayConfigResult {
+        let tip = test_db_tip([0x41; 32]);
+        groundhog_db_gateway::DbGatewayConfigResult::kRPCNone {
+            config: groundhog_db_gateway::DbGatewayConfig {
+                effective_config: tip.network_config.clone(),
+                tip,
+                storage_cost_model: groundhog_xdr::storage_cost::StorageCostModelXdr {
+                    ext: ExtensionPoint::_0,
+                    base_data_item_cost: 12_000,
+                    bytestring_cost_per_byte: 10,
+                    base_contract_deployment_cost: 12_000,
+                    contract_deployment_cost_per_byte: 10,
+                    auth_per_key_cost: 1111,
+                    rcq_cost_per_entry: 8,
+                    replay_cache_cost_per_entry: 7,
+                    balance_cost: 1234,
+                },
+            },
+        }
     }
 
     fn test_db_tip(network_hash: [u8; 32]) -> DbTip {
@@ -1748,7 +1802,6 @@ mod tests {
         let result = successful_scheduler_probe(&test_db_tip([0x41; 32]), &mut state);
 
         assert!(!result.up);
-        assert!(result.tip.is_none());
         assert_eq!(result.identity_status, SchedulerIdentityStatus::Mismatch);
         assert_eq!(
             result.error.as_deref(),
@@ -1944,9 +1997,7 @@ mod tests {
         async fn dbgateway_get_config(
             &self,
         ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
-            Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
-                error: groundhog_scheduler::RPCError::kRPCUnimplemented.0,
-            })
+            Ok(test_db_config())
         }
         async fn dbgateway_intro(
             &self,
@@ -2258,7 +2309,9 @@ mod tests {
         (addr, handle, gate)
     }
 
-    async fn start_saturated_db_gateway() -> (
+    async fn start_saturated_db_gateway(
+        block_config: bool,
+    ) -> (
         std::net::SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
         HandlerGate,
@@ -2272,7 +2325,10 @@ mod tests {
         let gate = HandlerGate::default();
         let mut services = ServiceMap::new();
         services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
-            SaturatedDbGateway(gate.clone()),
+            SaturatedDbGateway {
+                gate: gate.clone(),
+                block_config,
+            },
         ))));
         let handle = RpcServer::new(listener, services).start().await;
         (addr, handle, gate)
@@ -2860,90 +2916,90 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scheduler_request_deadline_fails_closed_before_worker_cancellation() {
-        let (scheduler_addr, _server, calls) =
-            start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
-        let client = connect_optional_scheduler(
+    async fn db_request_deadline_fails_closed_before_worker_cancellation() {
+        let (db_addr, _server, gate) = start_saturated_db_gateway(true).await;
+        let client = connect_optional_db_gateway(
             X23MultiplexConnections::default(),
-            &scheduler_addr.to_string(),
-            PROTOCOL_VERSION,
+            Some(&db_addr.to_string()),
+            Some(PROTOCOL_VERSION),
+            Duration::from_secs(1),
             None,
         )
         .await
-        .expect("scheduler connection should succeed")
-        .expect("scheduler should be connected");
+        .expect("DB connection should succeed")
+        .expect("DB should be connected");
         let metrics = GatewayMetrics::for_tests();
-        let scheduler = Arc::new(RwLock::new(Some(client)));
-        let sink =
-            SchedulerTipSink::new(scheduler.clone(), metrics.clone(), Duration::from_secs(1));
+        let db = Arc::new(RwLock::new(Some(client)));
+        let sink = DbTipSink::new(db.clone(), metrics.clone(), Duration::from_secs(1), None);
 
         assert!(matches!(
             sink.get_tip(std::time::Instant::now() + Duration::from_millis(25))
                 .await,
             Err(RpcServerError::BackendTimeout)
         ));
-        assert!(scheduler.read().await.is_none());
-        assert_eq!(calls.tip.load(Ordering::SeqCst), 1);
+        assert!(db.read().await.is_none());
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
 
         let snapshot = HealthSnapshot::for_test(HealthStatus::Error, None, &[]);
         let body = metrics.gather(&snapshot).expect("metrics should encode");
         assert!(body.contains(
-            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_get_tip\",outcome=\"timeout\"} 1"
+            "groundhog_gateway_backend_requests_total{backend=\"db_gateway\",operation=\"dbgateway_get_config\",outcome=\"timeout\"} 1"
         ));
     }
 
     #[tokio::test]
-    async fn old_scheduler_timeout_does_not_clear_new_generation() {
-        let (scheduler_addr, _server, calls) =
-            start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
-        let old_client = connect_optional_scheduler(
+    async fn old_db_timeout_does_not_clear_new_generation() {
+        let (db_addr, _server, gate) = start_saturated_db_gateway(true).await;
+        let old_client = connect_optional_db_gateway(
             X23MultiplexConnections::default(),
-            &scheduler_addr.to_string(),
-            PROTOCOL_VERSION,
+            Some(&db_addr.to_string()),
+            Some(PROTOCOL_VERSION),
+            Duration::from_secs(1),
             None,
         )
         .await
-        .expect("old scheduler connection should succeed")
-        .expect("old scheduler should be connected");
-        let new_client = connect_optional_scheduler(
+        .expect("old DB connection should succeed")
+        .expect("old DB should be connected");
+        let new_client = connect_optional_db_gateway(
             X23MultiplexConnections::default(),
-            &scheduler_addr.to_string(),
-            PROTOCOL_VERSION,
+            Some(&db_addr.to_string()),
+            Some(PROTOCOL_VERSION),
+            Duration::from_secs(1),
             None,
         )
         .await
-        .expect("new scheduler connection should succeed")
-        .expect("new scheduler should be connected");
+        .expect("new DB connection should succeed")
+        .expect("new DB should be connected");
         let new_generation = new_client.generation();
-        let scheduler = Arc::new(RwLock::new(Some(old_client)));
-        let sink = Arc::new(SchedulerTipSink::new(
-            scheduler.clone(),
+        let db = Arc::new(RwLock::new(Some(old_client)));
+        let sink = Arc::new(DbTipSink::new(
+            db.clone(),
             GatewayMetrics::for_tests(),
             Duration::from_millis(25),
+            None,
         ));
         let call = tokio::spawn(async move {
             sink.get_tip(std::time::Instant::now() + Duration::from_secs(1))
                 .await
         });
         tokio::time::timeout(Duration::from_secs(1), async {
-            while calls.tip.load(Ordering::SeqCst) == 0 {
+            while gate.calls.load(Ordering::SeqCst) == 0 {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("old scheduler call should reach the backend");
-        *scheduler.write().await = Some(new_client);
+        .expect("old DB call should reach the backend");
+        *db.write().await = Some(new_client);
 
         assert!(matches!(
             call.await.unwrap(),
             Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(
-            scheduler
-                .read()
+            db.read()
                 .await
                 .as_ref()
-                .expect("new scheduler generation should remain installed")
+                .expect("new DB generation should remain installed")
                 .generation(),
             new_generation
         );
@@ -3303,7 +3359,7 @@ mod tests {
     {
         let (indexer_addr, _indexer_server, indexer_gate) = start_saturated_indexer().await;
         let (db_gateway_addr, _db_gateway_server, db_gateway_gate) =
-            start_saturated_db_gateway().await;
+            start_saturated_db_gateway(false).await;
         let (view_gateway_addr, _view_gateway_server, view_gateway_gate) =
             start_saturated_view_gateway().await;
         let startup_timeout = Duration::from_secs(1);
@@ -3606,8 +3662,8 @@ mod tests {
             backend
                 .chain_tip(RpcRequestContext::unbounded())
                 .await
-                .is_err(),
-            "scheduler-backed calls should remain unavailable during quarantine"
+                .is_ok(),
+            "DB-backed tip reads should recover during scheduler quarantine"
         );
 
         ctx.scheduler_quarantine

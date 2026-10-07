@@ -44,16 +44,6 @@ use crate::{
 
 const HOGD_DEV_POOL_SIZE: usize = 2;
 
-async fn read_execution_config(
-    client: &DbGateway_DbGateway1_Client,
-) -> Result<Option<groundhog_json_rpc_types::network_config::ChainConfig>, RpcServerError> {
-    let result = client
-        .dbgateway_get_config()
-        .await
-        .map_err(|error| RpcServerError::BackendUnavailable(format!("{DB_GATEWAY}: {error}")))?;
-    shared_db_gateway::chain_config(DB_GATEWAY, result)
-}
-
 /// Indexer-backed read plane for hogd-dev.
 ///
 /// Implements the `ReadPlane` trait: receipts and events come from the indexer;
@@ -73,6 +63,10 @@ impl fmt::Debug for HogdDevReadBackend {
 }
 
 impl HogdDevReadBackend {
+    pub(crate) fn db_gateway_client(&self) -> Option<&DbGateway_DbGateway1_Client> {
+        self.db_gateway.as_ref()
+    }
+
     /// Connect to hogd-dev's `IndexerBlockExplorer` endpoint and wire the
     /// shared `SchedGateway` client for pending-tx probes.
     ///
@@ -189,6 +183,10 @@ impl fmt::Debug for HogdDevStorageReadBackend {
 }
 
 impl HogdDevStorageReadBackend {
+    pub(crate) fn db_gateway_client(&self) -> &DbGateway_DbGateway1_Client {
+        &self.db_gateway
+    }
+
     pub(crate) async fn connect(
         endpoint: SocketAddr,
         protocol_version: &str,
@@ -202,14 +200,6 @@ impl HogdDevStorageReadBackend {
 
 #[async_trait]
 impl ReadPlane for HogdDevStorageReadBackend {
-    #[tracing::instrument(skip_all)]
-    async fn execution_config(
-        &self,
-        context: RpcRequestContext,
-    ) -> Result<Option<groundhog_json_rpc_types::network_config::ChainConfig>, RpcServerError> {
-        within_request_deadline(context, read_execution_config(&self.db_gateway)).await
-    }
-
     async fn transaction_receipt(
         &self,
         _context: RpcRequestContext,
@@ -289,17 +279,6 @@ impl ReadPlane for HogdDevStorageReadBackend {
 
 #[async_trait]
 impl ReadPlane for HogdDevReadBackend {
-    #[tracing::instrument(skip_all)]
-    async fn execution_config(
-        &self,
-        context: RpcRequestContext,
-    ) -> Result<Option<groundhog_json_rpc_types::network_config::ChainConfig>, RpcServerError> {
-        match &self.db_gateway {
-            Some(client) => within_request_deadline(context, read_execution_config(client)).await,
-            None => Ok(None),
-        }
-    }
-
     /// Return a committed transaction receipt from the indexer, or `None` if
     /// the transaction is not (yet) committed.
     #[tracing::instrument(skip_all, fields(?tx_hash))]

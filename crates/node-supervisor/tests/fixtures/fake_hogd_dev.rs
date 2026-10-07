@@ -411,7 +411,7 @@ fn run_with_db_gateway_no_indexer(db_gateway_mode: FakeDbGatewayMode) {
     install_sigterm_handler();
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
-    let db_gateway = start_fake_db_gateway(db_gateway_mode);
+    let db_gateway = start_fake_db_gateway(db_gateway_mode, scheduler.tip.clone());
     println!(
         "{}",
         readiness_with_gateway(scheduler.addr, scheduler.gateway_addr, db_gateway.addr)
@@ -433,7 +433,7 @@ fn run_with_indexer_and_db_gateway(
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     let indexer = start_fake_indexer(indexer_mode);
-    let db_gateway = start_fake_db_gateway(db_gateway_mode);
+    let db_gateway = start_fake_db_gateway(db_gateway_mode, scheduler.tip.clone());
     println!(
         "{}",
         readiness_full(
@@ -470,7 +470,7 @@ fn run_indexer_connect_fail() {
     install_sigterm_handler();
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
-    let db_gateway = start_fake_db_gateway(FakeDbGatewayMode::Normal);
+    let db_gateway = start_fake_db_gateway(FakeDbGatewayMode::Normal, scheduler.tip.clone());
     // Grab an ephemeral addr and immediately close the listener.
     let dead_indexer_addr = dead_loopback_addr();
     println!(
@@ -752,6 +752,7 @@ struct FakeSchedulerRuntime {
     _runtime: Runtime,
     addr: SocketAddr,
     gateway_addr: SocketAddr,
+    tip: Arc<Mutex<Option<DbTip>>>,
 }
 
 fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
@@ -760,6 +761,8 @@ fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
         .enable_all()
         .build()
         .expect("bug: fake scheduler runtime should build");
+    let scheduler = FakeScheduler::new(mode);
+    let tip = scheduler.tip.clone();
     let (addr, gateway_addr) = runtime.block_on(async {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -773,7 +776,6 @@ fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
         let gateway_addr = gateway_listener
             .local_addr()
             .expect("bug: fake scheduler gateway should have local addr");
-        let scheduler = FakeScheduler::new(mode);
         let mut services = ServiceMap::new();
         services.add_service(Box::new(SchedulerCoord_SchedulerCoord1_Dispatcher::new(
             Box::new(scheduler.clone()),
@@ -792,6 +794,7 @@ fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
         _runtime: runtime,
         addr,
         gateway_addr,
+        tip,
     }
 }
 
@@ -1365,7 +1368,10 @@ enum FakeDbGatewayMode {
     IntroRejected,
 }
 
-fn start_fake_db_gateway(mode: FakeDbGatewayMode) -> FakeDbGatewayRuntime {
+fn start_fake_db_gateway(
+    mode: FakeDbGatewayMode,
+    tip: Arc<Mutex<Option<DbTip>>>,
+) -> FakeDbGatewayRuntime {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -1380,7 +1386,7 @@ fn start_fake_db_gateway(mode: FakeDbGatewayMode) -> FakeDbGatewayRuntime {
             .expect("bug: fake DbGateway should have local addr");
         let mut services = ServiceMap::new();
         services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
-            FakeDbGateway { mode },
+            FakeDbGateway { mode, tip },
         ))));
         let server = RpcServer::new(listener, services);
         let _server_handle = server.start().await;
@@ -1394,6 +1400,7 @@ fn start_fake_db_gateway(mode: FakeDbGatewayMode) -> FakeDbGatewayRuntime {
 
 struct FakeDbGateway {
     mode: FakeDbGatewayMode,
+    tip: Arc<Mutex<Option<DbTip>>>,
 }
 
 #[async_trait]
@@ -1401,8 +1408,32 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
     async fn dbgateway_get_config(
         &self,
     ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
-        Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
-            error: groundhog_scheduler::RPCError::kRPCUnimplemented.0,
+        let tip = self
+            .tip
+            .lock()
+            .expect("bug: fake tip mutex poisoned")
+            .clone();
+        let Some(tip) = tip else {
+            return Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
+                error: RPCError::kRPCNotFound.0,
+            });
+        };
+        Ok(groundhog_db_gateway::DbGatewayConfigResult::kRPCNone {
+            config: groundhog_db_gateway::DbGatewayConfig {
+                effective_config: tip.network_config.clone(),
+                tip,
+                storage_cost_model: groundhog_xdr::storage_cost::StorageCostModelXdr {
+                    ext: ExtensionPoint::_0,
+                    base_data_item_cost: 12_000,
+                    bytestring_cost_per_byte: 10,
+                    base_contract_deployment_cost: 12_000,
+                    contract_deployment_cost_per_byte: 10,
+                    auth_per_key_cost: 1111,
+                    rcq_cost_per_entry: 8,
+                    replay_cache_cost_per_entry: 7,
+                    balance_cost: 1234,
+                },
+            },
         })
     }
     async fn dbgateway_intro(

@@ -104,29 +104,6 @@ impl ChainPlane for GatewayBackend {
 
 #[async_trait]
 impl ReadPlane for GatewayBackend {
-    #[tracing::instrument(skip_all)]
-    async fn execution_config(
-        &self,
-        context: RpcRequestContext,
-    ) -> Result<Option<groundhog_json_rpc_types::network_config::ChainConfig>, RpcServerError> {
-        let context = self.bounded_context(context);
-        self.with_deadline(context, async {
-            let Some(client) = self.ctx.db_gateway.read().await.clone() else {
-                if self.ctx.config.db_gateway_address.is_none() {
-                    return Ok(None);
-                }
-                return Err(RpcServerError::BackendUnavailable(
-                    "db_gateway not connected".into(),
-                ));
-            };
-            let result = client.dbgateway_get_config().await.map_err(|error| {
-                RpcServerError::BackendUnavailable(format!("db_gateway: {error}"))
-            })?;
-            groundhog_hogd_backend::db_gateway::chain_config("db_gateway", result)
-        })
-        .await
-    }
-
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_receipt(
         &self,

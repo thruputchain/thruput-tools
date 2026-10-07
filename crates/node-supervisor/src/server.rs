@@ -406,6 +406,10 @@ async fn start_rpc_server(
             readiness.protocol.as_deref(),
         )
         .await?;
+        let scheduler_backend = scheduler_backend.with_db_gateway(
+            read.db_gateway_client().cloned(),
+            readiness.network_hash.clone(),
+        );
         start_rpc_server_with_read(
             listen_address,
             scheduler_backend,
@@ -427,6 +431,10 @@ async fn start_rpc_server(
             readiness.protocol.as_deref(),
         )
         .await?;
+        let scheduler_backend = scheduler_backend.with_db_gateway(
+            Some(read.db_gateway_client().clone()),
+            readiness.network_hash.clone(),
+        );
         start_rpc_server_with_read(
             listen_address,
             scheduler_backend,

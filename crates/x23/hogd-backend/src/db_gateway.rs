@@ -6,7 +6,7 @@
 //! key; every other one is a backend failure that must not read as a miss.
 
 use groundhog_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
-use groundhog_json_rpc_server::RpcServerError;
+use groundhog_json_rpc_server::{RpcServerError, TipReading};
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
     address_auth::{AddressAuthDataInfo, AddressAuthDataResponse},
@@ -17,29 +17,39 @@ use groundhog_xdr::storage_item::WireStorageItem;
 use groundhog_xdr::types::{StorageKey, StorageKeyContractData};
 
 /// Project one snapshot-bound rules reading without supplying missing defaults.
-pub fn chain_config(
+pub fn tip_reading(
     service: &str,
     result: groundhog_db_gateway::DbGatewayConfigResult,
-) -> Result<Option<groundhog_json_rpc_types::network_config::ChainConfig>, RpcServerError> {
-    use groundhog_json_rpc_types::network_config::{
-        ChainConfig, ExecutionConfig, NetworkConfigParams,
-    };
-    if matches!(&result, groundhog_db_gateway::DbGatewayConfigResult::Default { error } if *error == RPCError::kRPCUnimplemented.0)
-    {
-        return Ok(None);
-    }
+    expected_network: Option<&groundhog_json_rpc_types::NetworkHashHex>,
+) -> Result<TipReading, RpcServerError> {
+    use groundhog_json_rpc_types::network_config::{ExecutionConfig, NetworkConfigParams};
     let groundhog_db_gateway::DbGatewayConfigResult::kRPCNone { config } = result else {
         return Err(RpcServerError::BackendUnavailable(format!(
             "{service}: configuration unavailable"
         )));
     };
+    if let Some(expected) = expected_network {
+        let observed = groundhog_json_rpc_types::NetworkHashHex::from(
+            config
+                .tip
+                .value
+                .proposal_header
+                .network_hash
+                .clone()
+                .into_inner()
+                .into_inner(),
+        );
+        if expected != &observed {
+            return Err(RpcServerError::BackendUnavailable(format!(
+                "{service}: network hash mismatch: expected {expected}, observed {observed}"
+            )));
+        }
+    }
     if config.storage_cost_model.ext != groundhog_xdr::types::ExtensionPoint::_0 {
         return Err(RpcServerError::BackendUnavailable(format!(
             "{service}: unsupported storage cost model"
         )));
     }
-    let stated = NetworkConfigParams::from_network_config(&config.tip.network_config)
-        .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
     let effective = NetworkConfigParams::from_network_config(&config.effective_config)
         .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
     let tip = crate::scheduler::chain_tip(service, &config.tip.value)?;
@@ -48,15 +58,13 @@ pub fn chain_config(
             "{service}: no committed configuration"
         )));
     }
-    Ok(Some(ChainConfig::with_execution(
-        stated,
-        ExecutionConfig::new(
-            tip,
-            groundhog_json_rpc_types::hex::Hex0x(*config.tip.value.proposal_header.config_hash),
-            effective,
-            (&config.storage_cost_model).into(),
-        ),
-    )))
+    let execution = ExecutionConfig::new(
+        tip.clone(),
+        groundhog_json_rpc_types::hex::Hex0x(*config.tip.value.proposal_header.config_hash),
+        effective,
+        (&config.storage_cost_model).into(),
+    );
+    Ok(TipReading::new(tip, config.tip.network_config).with_execution(execution))
 }
 
 /// The storage key for one 32-byte contract-data slot.
@@ -202,21 +210,16 @@ mod config_tests {
     use super::*;
 
     #[test]
-    fn only_explicitly_unsupported_readings_allow_stated_only_fallback() {
+    fn failed_readings_never_fall_back_to_partial_configuration() {
         use groundhog_db_gateway::DbGatewayConfigResult;
-        assert!(
-            chain_config(
-                "test",
-                DbGatewayConfigResult::Default {
-                    error: RPCError::kRPCUnimplemented.0,
-                }
-            )
-            .unwrap()
-            .is_none()
-        );
-        for error in [RPCError::kRPCNotFound.0, RPCError::kRPCUnrecoverable.0, 999] {
+        for error in [
+            RPCError::kRPCNotFound.0,
+            RPCError::kRPCUnrecoverable.0,
+            RPCError::kRPCUnimplemented.0,
+            999,
+        ] {
             assert!(matches!(
-                chain_config("test", DbGatewayConfigResult::Default { error }),
+                tip_reading("test", DbGatewayConfigResult::Default { error }, None),
                 Err(RpcServerError::BackendUnavailable(_))
             ));
         }

@@ -1,14 +1,15 @@
-//! hogd-dev scheduler-backed adapters for the submit and chain planes.
+//! hogd-dev adapters for submission and chain metadata.
 //!
-//! Public submit and chain queries use hogd-dev's advertised `SchedGateway`
-//! endpoint. The internal `SchedulerCoord` endpoint remains available only for
+//! Submissions use `SchedGateway`; tip/configuration reads use `DbGateway`.
+//! The internal `SchedulerCoord` endpoint remains available only for
 //! genesis and local block driving. The read plane is implemented in
 //! [`crate::read_backend`] and backed by hogd-dev's `IndexerBlockExplorer` /
 //! `DbGateway` endpoints. Dev-control remains stubbed pending a hogd-dev stable
 //! x23 surface.
 
 use async_trait::async_trait;
-use groundhog_hogd_backend::{intro, scheduler as shared_scheduler};
+use groundhog_db_gateway::DbGateway_DbGateway1_Client;
+use groundhog_hogd_backend::{db_gateway as shared_db_gateway, intro};
 use groundhog_json_rpc_server::{
     ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading, ValidatedTransaction,
 };
@@ -23,8 +24,11 @@ use groundhog_x23_transport::{connect_with_config, hogd_large_message_config};
 use std::{fmt, net::SocketAddr};
 
 use crate::{
-    NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::require_dev_genesis,
-    request_deadline::within_request_deadline, service::SCHEDULER_GATEWAY,
+    NodeSupervisorError,
+    block_driver::BlockDriverTrigger,
+    genesis::require_dev_genesis,
+    request_deadline::within_request_deadline,
+    service::{DB_GATEWAY, SCHEDULER_GATEWAY},
     submit_batcher::SubmitBatcher,
 };
 
@@ -33,12 +37,14 @@ const SCHEDULER_COORD_POOL_SIZE: usize = 1;
 // long-running submit does not block tip and pending probes.
 const SCHEDULER_GATEWAY_POOL_SIZE: usize = 2;
 
-/// Scheduler-backed adapter for hogd-dev chain and submit planes.
+/// Scheduler submission and DB-backed committed chain reads for hogd-dev.
 #[derive(Clone)]
 pub(crate) struct HogdDevSchedulerBackend {
     coordinator: SchedulerCoord_SchedulerCoord1_Client,
     gateway: SchedGateway_SchedGateway1_Client,
     submitter: SubmitBatcher,
+    db_gateway: Option<DbGateway_DbGateway1_Client>,
+    expected_network: Option<NetworkHashHex>,
 }
 
 impl fmt::Debug for HogdDevSchedulerBackend {
@@ -100,6 +106,8 @@ impl HogdDevSchedulerBackend {
             coordinator,
             gateway,
             submitter,
+            db_gateway: None,
+            expected_network: None,
         })
     }
 
@@ -148,6 +156,18 @@ impl HogdDevSchedulerBackend {
         &self.gateway
     }
 
+    /// Share the already-connected storage client with the chain plane.
+    #[must_use]
+    pub(crate) fn with_db_gateway(
+        mut self,
+        client: Option<DbGateway_DbGateway1_Client>,
+        expected_network: NetworkHashHex,
+    ) -> Self {
+        self.db_gateway = client;
+        self.expected_network = Some(expected_network);
+        self
+    }
+
     /// Return a copy that wakes the local block driver after submit RPC success.
     pub(crate) fn with_block_driver(self, block_driver: BlockDriverTrigger) -> Self {
         self.submitter.set_block_driver(block_driver);
@@ -191,38 +211,18 @@ impl SubmitPlane for HogdDevSchedulerBackend {
     }
 }
 
-impl HogdDevSchedulerBackend {
-    /// Read the scheduler gateway's committed db tip.
-    ///
-    /// Startup bootstraps genesis before the RPC surface opens, so a missing
-    /// tip here means the child lost state rather than that the chain has
-    /// not started.
-    async fn db_tip(&self) -> Result<DbTip, RpcServerError> {
-        let result = self
-            .gateway
-            .schedgateway_get_tip()
-            .await
-            .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
-        match shared_scheduler::tip_answer(SCHEDULER_GATEWAY, result)? {
-            shared_scheduler::TipAnswer::Tip(db_tip) => Ok(*db_tip),
-            shared_scheduler::TipAnswer::NoCommittedBlock => {
-                tracing::error!(
-                    "hogd-dev scheduler gateway reported no genesis after startup bootstrap"
-                );
-                Err(RpcServerError::BackendUnavailable(format!(
-                    "{SCHEDULER_GATEWAY} has no genesis block"
-                )))
-            }
-        }
-    }
-}
-
 #[async_trait]
 impl ChainPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all)]
     async fn chain_tip(&self, context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
         within_request_deadline(context, async {
-            shared_scheduler::tip_reading(SCHEDULER_GATEWAY, self.db_tip().await?)
+            let client = self.db_gateway.as_ref().ok_or_else(|| {
+                RpcServerError::BackendUnavailable("db_gateway not connected".into())
+            })?;
+            let result = client.dbgateway_get_config().await.map_err(|error| {
+                RpcServerError::BackendUnavailable(format!("{DB_GATEWAY}: {error}"))
+            })?;
+            shared_db_gateway::tip_reading(DB_GATEWAY, result, self.expected_network.as_ref())
         })
         .await
     }

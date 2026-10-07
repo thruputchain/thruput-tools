@@ -421,10 +421,10 @@ where
     C: ChainPlane,
 {
     /// Db-tip reading served from the shared rate-limited cache, for the
-    /// submit pre-checks and `chainConfig`. Its state is `None` when no
+    /// submit pre-checks. Its state is `None` when no
     /// reading is available (probe failed or timed out with no prior
     /// success); a submit then runs only the checks that need no chain
-    /// reading, and `chainConfig` has nothing to report.
+    /// reading.
     async fn cached_tip_state(&self, context: RpcRequestContext) -> TipRead {
         self.tip_state_within(Duration::from_millis(self.config.tip_cache_ttl_ms), context)
             .await
@@ -577,24 +577,15 @@ where
     ) -> RpcResult<groundhog_json_rpc_types::network_config::ChainConfig> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            if let Some(config) = self.read.execution_config(context).await? {
-                return Ok(config);
-            }
-            // Same rate-limited reading as the submit pre-checks: one tip
-            // fetch per TTL window.
-            let Some(state) = self.cached_tip_state(context).await.state else {
-                return Err(RpcServerError::BackendUnavailable(
-                    "no chain tip reading is available".into(),
-                )
-                .into());
-            };
-            let Some(params) = state.params else {
-                return Err(RpcServerError::BackendUnavailable(
-                    "tip network config is a version this server cannot read".into(),
-                )
-                .into());
-            };
-            Ok(params.into())
+            // Price reads must report a failed fetch, even when advisory submit
+            // checks can still use a previously cached tip.
+            let reading = self.chain.chain_tip(context).await?;
+            let stated = NetworkConfigParams::from_network_config(&reading.network_config)
+                .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
+            self.tip_cache.store(TipState::from_reading(&reading)).await;
+            let mut config = groundhog_json_rpc_types::network_config::ChainConfig::from(stated);
+            config.execution = reading.execution;
+            Ok(config)
         })
         .await
     }
@@ -875,7 +866,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         status_read: tokio::sync::Notify,
         event_calls: Mutex<u32>,
         tx_by_address_calls: Mutex<u32>,
-        execution_config_error: Mutex<Option<String>>,
     }
 
     #[derive(Clone)]
@@ -1017,17 +1007,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ReadPlane for Arc<MockBackend> {
-        async fn execution_config(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<Option<groundhog_json_rpc_types::network_config::ChainConfig>, RpcServerError>
-        {
-            match self.execution_config_error.lock().await.as_ref() {
-                Some(message) => Err(RpcServerError::BackendUnavailable(message.clone())),
-                None => Ok(None),
-            }
-        }
-
         async fn transaction_receipt(
             &self,
             _context: RpcRequestContext,
@@ -1582,6 +1561,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     struct ConfigChain {
         params: Arc<Mutex<Vec<groundhog_xdr::network_config::ConfigParam>>>,
         tip_calls: Arc<Mutex<u32>>,
+        tip_error: Arc<Mutex<Option<String>>>,
+        execution: Arc<Mutex<Option<groundhog_json_rpc_types::network_config::ExecutionConfig>>>,
     }
 
     /// A config stating only `maxNewContractsPerTx`.
@@ -1605,6 +1586,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Self {
                 params: Arc::new(Mutex::new(params)),
                 tip_calls: Arc::new(Mutex::new(0)),
+                tip_error: Arc::new(Mutex::new(None)),
+                execution: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -1621,10 +1604,15 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             _context: RpcRequestContext,
         ) -> Result<TipReading, RpcServerError> {
             *self.tip_calls.lock().await += 1;
-            Ok(tip_reading_with_params(
-                42,
-                self.params.lock().await.clone(),
-            ))
+            if let Some(message) = self.tip_error.lock().await.as_ref() {
+                return Err(RpcServerError::BackendUnavailable(message.clone()));
+            }
+            let mut reading = tip_reading_with_params(42, self.params.lock().await.clone());
+            reading.execution = self.execution.lock().await.clone();
+            if let Some(execution) = &reading.execution {
+                reading.tip = execution.observed_tip.clone();
+            }
+            Ok(reading)
         }
 
         async fn get_block_by_number(
@@ -1882,7 +1870,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
-    async fn chain_config_rpc_serves_the_cached_reading_within_the_ttl() {
+    async fn chain_config_rpc_fetches_even_within_the_cache_ttl() {
         let chain = ConfigChain::new(3);
         let server = expiry_check_server(
             chain.clone(),
@@ -1899,8 +1887,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(
             *chain.tip_calls.lock().await,
-            1,
-            "calls inside the TTL window must not each fetch the db tip"
+            3,
+            "configuration must be fetched during each request"
         );
     }
 
@@ -1966,7 +1954,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(cached.stated.max_new_contracts_per_tx, Some(3));
         assert!(cached.execution.is_none());
         assert_eq!(*chain.tip_calls.lock().await, 1);
-        *backend.execution_config_error.lock().await = Some("storage prices unavailable".into());
+        *chain.tip_error.lock().await = Some("storage prices unavailable".into());
 
         let error = server.chain_config().await.expect_err(
             "bug: a failed price read must remain an error even with a populated tip cache",
@@ -1974,7 +1962,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
         assert!(error.message().contains("storage prices unavailable"));
-        assert_eq!(*chain.tip_calls.lock().await, 1);
+        assert_eq!(*chain.tip_calls.lock().await, 2);
     }
 
     /// Chain plane that yields before answering, so a second caller can
@@ -2009,7 +1997,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
-    async fn concurrent_chain_config_calls_on_a_cold_cache_share_the_first_fetch() {
+    async fn concurrent_chain_config_calls_each_request_a_fresh_reading() {
         let chain = ConfigChain::new(3);
         let server = expiry_check_server(
             YieldingChain(chain.clone()),
@@ -2035,8 +2023,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         );
         assert_eq!(
             *chain.tip_calls.lock().await,
-            1,
-            "the second caller shares the fetch rather than adding one"
+            2,
+            "only the backend may coalesce fresh configuration reads"
         );
     }
 

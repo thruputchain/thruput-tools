@@ -217,10 +217,10 @@ impl Default for AdaptiveBatchConfig {
     }
 }
 
-/// Request-coalescing config for `chainTip`.
+/// Request-coalescing config for `chainTip` and `chainConfig`.
 ///
-/// A single task serializes backend `schedgateway_get_tip` calls. While
-/// one call is in flight, subsequent `chainTip` requests accumulate in
+/// A single task coordinates backend `dbgateway_get_config` calls. While
+/// one call is in flight, subsequent tip/config requests accumulate in
 /// a waiter list; when the call returns, every waiter receives the
 /// same `BlockTip` via fanout. Linearizable: each waiter's result
 /// comes from an RPC initiated strictly after they arrived.

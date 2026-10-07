@@ -1,4 +1,4 @@
-//! Request coalescing for `chainTip`.
+//! Request coalescing for committed DB tip and configuration reads.
 //!
 //! See `TipConfig` for the design rationale.  Structurally this is
 //! the same shape as `submitter` — bounded in-flight, fanout on
@@ -13,58 +13,61 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
-use groundhog_hogd_backend::scheduler as shared_scheduler;
+use groundhog_db_gateway::DbGatewayConfigResult;
+use groundhog_hogd_backend::db_gateway as shared_db_gateway;
 use groundhog_json_rpc_server::{RpcRequestContext, TipReading};
+use groundhog_json_rpc_types::NetworkHashHex;
 #[cfg(test)]
 use groundhog_json_rpc_types::block::ChainTip;
-use groundhog_scheduler::ExpectedDBTip;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
 
 use crate::adaptive_batch::deadline_cohorts;
 use crate::config::{HealthBackend, TipConfig};
-use crate::context::{AbortTaskOnDrop, SchedulerClient, clear_scheduler_if_current};
-use crate::handlers::SCHEDULER;
+use crate::context::{AbortTaskOnDrop, DbGatewayClient, clear_db_gateway_if_current};
+use crate::handlers::DB_GATEWAY;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics, REASON_CLOSED, REASON_INGRESS_FULL};
 use groundhog_json_rpc_server::RpcServerError;
 
 const TIP_COALESCER_COMPONENT: &str = "tip_coalescer";
 
 /// Backend for chain-tip lookups.  In production this wraps the
-/// scheduler client; tests substitute a mock.
+/// database client; tests substitute a mock.
 #[async_trait]
 pub trait TipSink: Send + Sync + 'static {
     async fn get_tip(&self, deadline: Instant) -> Result<TipReading, RpcServerError>;
 }
 
-/// Production sink: forwards to `schedgateway_get_tip` and maps the
-/// outcome to a `ChainTip` (or a gateway error).
-pub struct SchedulerTipSink {
-    scheduler: Arc<RwLock<Option<SchedulerClient>>>,
+/// Production sink: reads a committed tip and its configuration from the DB.
+pub struct DbTipSink {
+    db_gateway: Arc<RwLock<Option<DbGatewayClient>>>,
     metrics: GatewayMetrics,
     timeout: Duration,
+    expected_network: Option<NetworkHashHex>,
 }
 
-impl SchedulerTipSink {
+impl DbTipSink {
     pub(crate) fn new(
-        scheduler: Arc<RwLock<Option<SchedulerClient>>>,
+        db_gateway: Arc<RwLock<Option<DbGatewayClient>>>,
         metrics: GatewayMetrics,
         timeout: Duration,
+        expected_network: Option<NetworkHashHex>,
     ) -> Self {
         Self {
-            scheduler,
+            db_gateway,
             metrics,
             timeout,
+            expected_network,
         }
     }
 }
 
 #[async_trait]
-impl TipSink for SchedulerTipSink {
+impl TipSink for DbTipSink {
     async fn get_tip(&self, deadline: Instant) -> Result<TipReading, RpcServerError> {
-        let client = self.scheduler.read().await.clone();
+        let client = self.db_gateway.read().await.clone();
         let client = client
-            .ok_or_else(|| RpcServerError::BackendUnavailable("scheduler not connected".into()))?;
+            .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
         let generation = client.generation();
         let started_at = Instant::now();
         let timeout = self
@@ -73,42 +76,35 @@ impl TipSink for SchedulerTipSink {
         if timeout.is_zero() {
             return Err(RpcServerError::BackendTimeout);
         }
-        let mut call = tokio::spawn(async move { client.schedgateway_get_tip().await });
+        let mut call = tokio::spawn(async move { client.dbgateway_get_config().await });
         let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
         let rpc_result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
             Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
         } else {
-            clear_scheduler_if_current(&self.scheduler, generation).await;
+            clear_db_gateway_if_current(&self.db_gateway, generation).await;
             call.abort();
             let _ = call.await;
             Err(())
         };
         let outcome = match &rpc_result {
-            Ok(Ok(ExpectedDBTip::kRPCNone { .. })) => BackendRequestOutcome::Ok,
+            Ok(Ok(DbGatewayConfigResult::kRPCNone { .. })) => BackendRequestOutcome::Ok,
             Ok(Ok(_)) => BackendRequestOutcome::Rejected,
             Ok(Err(_)) => BackendRequestOutcome::Error,
             Err(()) => BackendRequestOutcome::Timeout,
         };
         self.metrics.observe_backend_request(
-            HealthBackend::Scheduler,
-            "schedgateway_get_tip",
+            HealthBackend::DbGateway,
+            "dbgateway_get_config",
             outcome,
             started_at.elapsed(),
         );
         if matches!(rpc_result, Ok(Err(_))) {
-            clear_scheduler_if_current(&self.scheduler, generation).await;
+            clear_db_gateway_if_current(&self.db_gateway, generation).await;
         }
         let result = rpc_result
             .map_err(|()| RpcServerError::BackendTimeout)?
             .map_err(|e| RpcServerError::BackendUnavailable(e.to_string()))?;
-        match shared_scheduler::tip_answer(SCHEDULER, result)? {
-            shared_scheduler::TipAnswer::Tip(db_tip) => {
-                Ok(shared_scheduler::tip_reading(SCHEDULER, *db_tip)?)
-            }
-            shared_scheduler::TipAnswer::NoCommittedBlock => Err(
-                RpcServerError::BackendUnavailable("no committed blocks yet".into()),
-            ),
-        }
+        shared_db_gateway::tip_reading(DB_GATEWAY, result, self.expected_network.as_ref())
     }
 }
 
@@ -363,7 +359,7 @@ mod tests {
 
     enum MockResponse {
         Gate(oneshot::Receiver<Result<TipReading, RpcServerError>>),
-        Immediate(Result<TipReading, RpcServerError>),
+        Immediate(Box<Result<TipReading, RpcServerError>>),
     }
 
     impl MockSink {
@@ -389,7 +385,7 @@ mod tests {
             self.responses
                 .lock()
                 .unwrap()
-                .push_back(MockResponse::Immediate(r));
+                .push_back(MockResponse::Immediate(Box::new(r)));
         }
 
         fn seen(&self) -> u32 {
@@ -437,7 +433,7 @@ mod tests {
             let next = self.responses.lock().unwrap().pop_front();
             match next {
                 None => Ok(default_tip(self.default_height)),
-                Some(MockResponse::Immediate(r)) => r,
+                Some(MockResponse::Immediate(r)) => *r,
                 Some(MockResponse::Gate(rx)) => rx.await.unwrap_or_else(|_| {
                     Err(RpcServerError::BackendUnavailable(
                         "test gate dropped".into(),
