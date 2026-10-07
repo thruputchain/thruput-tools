@@ -1064,6 +1064,10 @@ struct NodeArgs {
     /// Override the hog-devnode handshake protocol token
     #[arg(long)]
     hogd_protocol: Option<String>,
+    /// Initialize a new chain: 64 lowercase hex digits, optionally 0x-prefixed
+    /// (default: all zeros for new chains). Omit on restart; initialized directories reject it.
+    #[arg(long, value_name = "HEX64", value_parser = groundhog_cli::config::parse_network_hash)]
+    init_network_hash: Option<groundhog_json_rpc_types::NetworkHashHex>,
     /// Override hog-devnode readiness timeout for smoke tests
     #[arg(long, hide = true)]
     startup_timeout_secs: Option<u64>,
@@ -1104,6 +1108,7 @@ impl NodeArgs {
         options.offline = ctx.offline;
         options.data_dir = self.data_dir;
         options.hogd_protocol = self.hogd_protocol;
+        options.init_network_hash = self.init_network_hash;
         options.startup_timeout = self
             .startup_timeout_secs
             .map(std::time::Duration::from_secs);
@@ -2281,6 +2286,66 @@ mod tests {
         };
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn node_init_network_hash_parses_and_normalizes() {
+        for input in [
+            "ab".repeat(32),
+            format!("0x{}", "ab".repeat(32)),
+            "00".repeat(32),
+        ] {
+            let cli =
+                Cli::try_parse_from(["groundhog", "node", "--init-network-hash", &input]).unwrap();
+            let Command::Node(args) = cli.command else {
+                panic!("expected node")
+            };
+            assert_eq!(
+                args.init_network_hash.unwrap().as_str(),
+                input.strip_prefix("0x").unwrap_or(&input)
+            );
+        }
+        let cli = Cli::try_parse_from(["groundhog", "node"]).unwrap();
+        let Command::Node(args) = cli.command else {
+            panic!("expected node")
+        };
+        assert!(args.init_network_hash.is_none());
+    }
+
+    #[test]
+    fn node_init_network_hash_rejects_invalid_inputs() {
+        for input in [
+            "",
+            "ab",
+            &"a".repeat(63),
+            &"a".repeat(65),
+            &"AB".repeat(32),
+            &"gg".repeat(32),
+            &format!("0X{}", "ab".repeat(32)),
+            &"é".repeat(32),
+        ] {
+            let error = Cli::try_parse_from(["groundhog", "node", "--init-network-hash", input])
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{input}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("64 lowercase hexadecimal digits")
+            );
+        }
+    }
+
+    #[test]
+    fn node_rejects_the_old_network_hash_flag() {
+        let error = Cli::try_parse_from(["groundhog", "node", "--network-hash", &"ab".repeat(32)])
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]

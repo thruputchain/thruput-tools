@@ -198,6 +198,9 @@ pub struct LocalNodeOptions {
     pub data_dir: Option<PathBuf>,
     /// Override hogd protocol string for local cross-repo smoke tests.
     pub hogd_protocol: Option<String>,
+    /// Signing domain for a new chain. Omission initializes zero for fresh starts.
+    /// Initialized directories reject this option and load their persisted identity instead.
+    pub init_network_hash: Option<groundhog_json_rpc_types::NetworkHashHex>,
     /// Override readiness timeout while waiting for hogd-dev.
     pub startup_timeout: Option<Duration>,
     /// PID-file behavior for orphan detection.
@@ -1174,6 +1177,10 @@ fn local_node_config(
         }
     }
     let hogd = hogd.with_network_config_overrides(network_config_overrides);
+    let hogd = match options.init_network_hash {
+        Some(network_hash) => hogd.with_init_network_hash(network_hash),
+        None => hogd,
+    };
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address(rpc_listen_address(options.host, options.port))
         .with_hogd_dev(hogd)
@@ -1509,6 +1516,7 @@ mod tests {
             offline: false,
             data_dir: Some(PathBuf::from("/tmp/hog-devnode-data")),
             hogd_protocol: Some("test-protocol".into()),
+            init_network_hash: Some([0xab; 32].into()),
             startup_timeout: Some(Duration::from_secs(30)),
             pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hog-devnode-test.pid")),
             bootstrap_accounts: vec![
@@ -1528,6 +1536,7 @@ mod tests {
         .expect("bug: local node config should build");
 
         assert_eq!(config.rpc_listen_address, "127.0.0.1:0");
+        assert_eq!(config.hogd_dev.init_network_hash, Some([0xab; 32].into()));
         assert_eq!(config.hogd_dev.binary_path, Some(binary));
         assert_eq!(
             config.hogd_dev.contract_artifact_directories,
@@ -1586,6 +1595,18 @@ mod tests {
             config.hogd_dev.listen_host,
             groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_LISTEN_HOST
         );
+    }
+
+    #[test]
+    fn local_node_config_preserves_optional_initial_network_hash() {
+        for init_network_hash in [None, Some([0; 32].into())] {
+            let config = local_node_config(LocalNodeOptions {
+                init_network_hash: init_network_hash.clone(),
+                ..LocalNodeOptions::default()
+            })
+            .unwrap();
+            assert_eq!(config.hogd_dev.init_network_hash, init_network_hash);
+        }
     }
 
     #[test]

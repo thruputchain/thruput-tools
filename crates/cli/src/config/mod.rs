@@ -46,5 +46,6 @@ pub use read::{
     ConfigFieldValue, ConfigGetReport, ConfigProfileRow, ConfigProfileStatus, ConfigProfilesReport,
     ConfigScope, ConfigSource, ConfigSourceKind, ConfigWalletBinding, PersistedConfig,
     PersistedConfigLayer, PersistedProfile, PersistedProfileState, ProfileSelection,
-    ProfileSources, load_persisted_config, resolve_persisted_profile, validate_profile_name,
+    ProfileSources, load_persisted_config, parse_network_hash, resolve_persisted_profile,
+    validate_profile_name,
 };

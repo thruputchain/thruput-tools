@@ -846,7 +846,7 @@ fn funding_request(raw_amount: &str) -> FundAccountRequest {
 fn durable_rpc(dir: &std::path::Path, fresh: bool, backend: Arc<TestBackend>) -> LocalAirdropRpc {
     let signer = fixture_signer();
     let faucet = funding_request("42").faucet;
-    let journal = FundingJournal::open(dir, [0; 32].into(), faucet, fresh, &signer).unwrap();
+    let journal = FundingJournal::open(dir, None, faucet, fresh, &signer).unwrap();
     let mut rpc = LocalAirdropRpc::with_parts(
         backend,
         Arc::new(NativeAirdropBuilder {
@@ -1159,7 +1159,7 @@ async fn expired_retained_funding_without_outcome_never_creates_another_transfer
         assert_eq!(evidence.tx_hash, signed.tx_hash);
         let original = FundingJournal::open(
             dir.path(),
-            [0; 32].into(),
+            None,
             funding_request("42").faucet,
             false,
             &fixture_signer(),
@@ -1191,14 +1191,7 @@ async fn corrupt_retained_intent_fails_startup_and_failed_persistence_never_broa
     data["records"][0]["request"]["rawAmount"] = serde_json::json!("43");
     std::fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
     assert!(
-        FundingJournal::open(
-            dir.path(),
-            [0; 32].into(),
-            request.faucet,
-            false,
-            &fixture_signer()
-        )
-        .is_err()
+        FundingJournal::open(dir.path(), None, request.faucet, false, &fixture_signer()).is_err()
     );
     let dir = tempfile::tempdir().unwrap();
     let backend = Arc::new(TestBackend::new(vec![]));

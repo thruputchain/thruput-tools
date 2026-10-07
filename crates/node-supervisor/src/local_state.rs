@@ -8,7 +8,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use groundhog_json_rpc_types::{bootstrap_manifest::BootstrapManifestAllocation, hex::Hex0x};
+use groundhog_json_rpc_types::{
+    NetworkHashHex, bootstrap_manifest::BootstrapManifestAllocation, hex::Hex0x,
+};
 use groundhog_signing::LocalSigner;
 use groundhog_tx_validation::ConfigParamName;
 use serde::Deserialize;
@@ -30,6 +32,7 @@ const MAX_METADATA_BYTES: usize = 256 * 1024;
 pub(crate) struct LocalChainState {
     pub(crate) signer: Arc<LocalSigner>,
     pub(crate) config: HogdDevConfig,
+    pub(crate) network_hash: NetworkHashHex,
     pub(crate) lock: Option<Arc<File>>,
     pub(crate) journal: Arc<Mutex<FundingJournal>>,
 }
@@ -80,6 +83,10 @@ fn read_overrides<'de, D: serde::Deserializer<'de>>(
 impl LocalChainState {
     pub(crate) fn prepare(config: &HogdDevConfig) -> Result<Self, NodeSupervisorError> {
         let Some(dir) = config.data_dir.as_deref() else {
+            let network_hash = config
+                .init_network_hash
+                .clone()
+                .unwrap_or_else(|| [0; 32].into());
             let signer = Arc::new(random_signer(Path::new("ephemeral faucet"))?);
             let faucet = Hex0x(
                 groundhog_signing::PubkeyAccount::from_public_key_bytes(
@@ -91,12 +98,14 @@ impl LocalChainState {
             return Ok(Self {
                 signer,
                 config: config.clone(),
+                network_hash: network_hash.clone(),
                 lock: None,
-                journal: Arc::new(Mutex::new(FundingJournal::memory([0; 32].into(), faucet))),
+                journal: Arc::new(Mutex::new(FundingJournal::memory(network_hash, faucet))),
             });
         };
         let lock = acquire_chain_lock(dir)?;
         let metadata = read_chain_metadata(dir)?;
+        reject_reinitialization(config, metadata.is_some())?;
         if metadata.is_none() {
             reject_unidentified_state(dir)?;
         }
@@ -110,8 +119,13 @@ impl LocalChainState {
             .address(),
         );
         let signer = Arc::new(signer);
-        let journal =
-            FundingJournal::open(dir, [0; 32].into(), faucet, metadata.is_none(), &signer)?;
+        let journal = FundingJournal::open(
+            dir,
+            config.init_network_hash.clone(),
+            faucet,
+            metadata.is_none(),
+            &signer,
+        )?;
         let mut effective = config.clone();
         if let Some(metadata) = metadata {
             if metadata
@@ -143,6 +157,7 @@ impl LocalChainState {
         Ok(Self {
             signer,
             config: effective,
+            network_hash: journal.network_hash().clone(),
             lock: Some(Arc::new(lock)),
             journal: Arc::new(Mutex::new(journal)),
         })
@@ -158,9 +173,30 @@ impl LocalChainState {
 /// Check old versions before orphan cleanup, then check again under the chain lock.
 pub(crate) fn preflight_state_version(config: &HogdDevConfig) -> Result<(), NodeSupervisorError> {
     if let Some(dir) = config.data_dir.as_deref() {
-        read_chain_metadata(dir)?;
+        let metadata = read_chain_metadata(dir)?;
+        reject_reinitialization(config, metadata.is_some())?;
     }
     Ok(())
+}
+
+fn reject_reinitialization(
+    config: &HogdDevConfig,
+    has_metadata: bool,
+) -> Result<(), NodeSupervisorError> {
+    if let Some(dir) = config.data_dir.as_deref()
+        && config.init_network_hash.is_some()
+        && (has_metadata || entry_exists(&dir.join(LOCAL_FUNDING_ATTEMPTS_FILE))?)
+    {
+        return Err(already_initialized(dir));
+    }
+    Ok(())
+}
+
+pub(crate) fn already_initialized(path: &Path) -> NodeSupervisorError {
+    state_error(
+        path,
+        "directory is already initialized; --init-network-hash is only for a new chain; omit it to restart with the persisted network identity",
+    )
 }
 
 #[derive(Deserialize)]
@@ -417,6 +453,84 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn initialized_identity_restarts_without_flag_and_rejects_any_initialization_without_writes() {
+        for original_hash in [[0; 32], [0xab; 32]] {
+            let dir = tempfile::tempdir().unwrap();
+            let initial = config(dir.path()).with_init_network_hash(original_hash.into());
+            let state = LocalChainState::prepare(&initial).unwrap();
+            assert_eq!(state.network_hash, original_hash.into());
+            persist_metadata(dir.path(), &state);
+            drop(state);
+            let files = [
+                LOCAL_FUNDING_ATTEMPTS_FILE,
+                LOCAL_FAUCET_KEY_FILE,
+                STATE_METADATA_FILE,
+            ];
+            let original: Vec<_> = files
+                .iter()
+                .map(|name| fs::read(dir.path().join(name)).unwrap())
+                .collect();
+            for requested in [[0; 32], [0xab; 32], [0xcd; 32]] {
+                let attempt = config(dir.path()).with_init_network_hash(requested.into());
+                let preflight = preflight_state_version(&attempt).unwrap_err();
+                assert!(preflight.to_string().contains("already initialized"));
+                let error = LocalChainState::prepare(&attempt).unwrap_err();
+                assert!(error.to_string().contains("omit it to restart"));
+                for (name, bytes) in files.iter().zip(&original) {
+                    assert_eq!(&fs::read(dir.path().join(name)).unwrap(), bytes);
+                }
+            }
+            let restarted = LocalChainState::prepare(&config(dir.path())).unwrap();
+            assert_eq!(restarted.network_hash, original_hash.into());
+        }
+    }
+
+    #[test]
+    fn fresh_ephemeral_and_persistent_identity_defaults_to_zero() {
+        for init_network_hash in [None, Some([0; 32].into()), Some([0xab; 32].into())] {
+            let expected = init_network_hash.clone().unwrap_or_else(|| [0; 32].into());
+            let ephemeral = HogdDevConfig {
+                init_network_hash: init_network_hash.clone(),
+                ..HogdDevConfig::default()
+            };
+            let state = LocalChainState::prepare(&ephemeral).unwrap();
+            assert_eq!(state.network_hash, expected);
+            let dir = tempfile::tempdir().unwrap();
+            let persistent = HogdDevConfig {
+                data_dir: Some(dir.path().into()),
+                ..ephemeral
+            };
+            let state = LocalChainState::prepare(&persistent).unwrap();
+            assert_eq!(state.network_hash, expected);
+            assert_eq!(state.journal.lock().unwrap().network_hash(), &expected);
+        }
+    }
+
+    #[test]
+    fn prepared_identity_survives_an_interrupted_first_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = config(dir.path()).with_init_network_hash([0xab; 32].into());
+        let state = LocalChainState::prepare(&initial).unwrap();
+        let key = state.public_key();
+        drop(state); // No runtime metadata yet, but the journal already binds the identity.
+        assert!(
+            preflight_state_version(&initial)
+                .unwrap_err()
+                .to_string()
+                .contains("already initialized")
+        );
+        assert!(
+            LocalChainState::prepare(&initial)
+                .unwrap_err()
+                .to_string()
+                .contains("already initialized")
+        );
+        let retry = LocalChainState::prepare(&config(dir.path())).unwrap();
+        assert_eq!(retry.network_hash, [0xab; 32].into());
+        assert_eq!(retry.public_key(), key);
     }
 
     /// A child spawned from another thread and held between fork and exec,

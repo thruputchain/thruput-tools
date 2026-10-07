@@ -1896,6 +1896,10 @@ fn config_use_warns_when_environment_profile_remains_active() {
 
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one CLI lifecycle verifies bind, bootstrap, RPC identity and shutdown"
+)]
 fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     let fake = fake_hogd_dev_binary();
     let pid_dir = TempDir::new().unwrap();
@@ -1917,6 +1921,8 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
         .arg(&data_dir)
         .arg("--initial-account-hog")
         .arg("25.0000001")
+        .arg("--init-network-hash")
+        .arg(format!("0x{}", "ab".repeat(32)))
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
         .env("XDG_CONFIG_HOME", config_home.path())
@@ -1938,6 +1944,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
 
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "node");
+    assert_eq!(payload["data"]["chain"], "ab".repeat(32));
     assert_eq!(payload["data"]["schemaVersion"], 4);
     assert_eq!(payload["data"]["chain_state"], "fresh");
     assert_eq!(payload["data"]["data_dir"], data_dir.display().to_string());
@@ -1975,6 +1982,9 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
         .as_str()
         .expect("bug: runtime manifest path should be a string");
     assert_split_bootstrap_accounts(std::path::Path::new(manifest_path), "250000001");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["networkHash"], "ab".repeat(32));
 
     assert_local_runtime_state_rpc_url(config_home.path(), &rpc_url);
 
@@ -1984,6 +1994,10 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
             let client = HttpClientBuilder::default()
                 .build(&rpc_url)
                 .expect("bug: JSON-RPC client should build");
+            assert_eq!(
+                client.network_info().await.unwrap().network_hash.as_ref(),
+                &[0xab; 32]
+            );
             client
                 .chain_tip()
                 .await
@@ -1992,6 +2006,37 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     assert_eq!(*tip.height, 0);
 
     let pid = read_pid_file(&pid_path);
+    let journal_path = data_dir.join("groundhog-funding.json");
+    let journal = std::fs::read(&journal_path).unwrap();
+    for hash in ["ab", "cd", "00"] {
+        let output = groundhog()
+            .args([
+                "node",
+                "--port",
+                "0",
+                "--init-network-hash",
+                &hash.repeat(32),
+            ])
+            .arg("--hog-devnode-binary")
+            .arg(fake_hogd_dev_binary())
+            .arg("--data-dir")
+            .arg(&data_dir)
+            .env("XDG_CONFIG_HOME", config_home.path())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("already initialized"), "{error}");
+        assert!(error.contains("omit it to restart"), "{error}");
+        assert_eq!(std::fs::read(&journal_path).unwrap(), journal);
+    }
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let client = HttpClientBuilder::default().build(&rpc_url).unwrap();
+        assert_eq!(
+            client.network_info().await.unwrap().network_hash.as_ref(),
+            &[0xab; 32]
+        );
+    });
     send_sigint(child.child());
     let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(status.success(), "groundhog node should stop cleanly");
@@ -4076,6 +4121,9 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("--contract-artifacts-dir <DIR>"));
     assert!(stdout.contains("--hog-devnode-version"));
     assert!(stdout.contains("--data-dir"));
+    assert!(stdout.contains("--init-network-hash <HEX64>"));
+    assert!(stdout.contains("optionally 0x-prefixed"));
+    assert!(stdout.contains("default: all zeros for new chains"));
     assert!(stdout.contains("persistent hog-devnode state"));
     assert!(stdout.contains("--key <KEY>"));
     assert!(stdout.contains("--initial-account-hog <HOG>"));

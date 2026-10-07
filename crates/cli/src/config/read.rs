@@ -43,15 +43,7 @@ impl ConfigField {
                 // runtime manifest uses. Reuse the wire type's validation so a
                 // profile cannot hold a hash the signing path would later
                 // reject.
-                let value = value.trim();
-                let value = value.strip_prefix("0x").unwrap_or(value);
-                groundhog_json_rpc_types::NetworkHashHex::try_from(value)
-                    .map_err(|_| {
-                        invalid_field(
-                            self,
-                            "expected 64 lowercase hexadecimal digits, optionally 0x-prefixed",
-                        )
-                    })
+                parse_network_hash(value)
                     .map(|hash| ConfigFieldValue::String(hash.as_ref().to_owned()))
             }
             Self::DefaultKey => {
@@ -63,6 +55,21 @@ impl ConfigField {
             }
         }
     }
+}
+
+/// Parse a profile or local-node network identity, accepting an optional `0x` prefix.
+/// Returns the manifest's canonical 64 lowercase hexadecimal digits.
+pub fn parse_network_hash(
+    value: &str,
+) -> Result<groundhog_json_rpc_types::NetworkHashHex, CliError> {
+    let value = value.trim();
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    groundhog_json_rpc_types::NetworkHashHex::try_from(value).map_err(|_| {
+        invalid_field(
+            ConfigField::NetworkHash,
+            "expected 64 lowercase hexadecimal digits, optionally 0x-prefixed",
+        )
+    })
 }
 
 impl std::fmt::Display for ConfigField {

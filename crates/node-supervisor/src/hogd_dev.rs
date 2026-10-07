@@ -174,6 +174,7 @@ struct HogdDevReadinessEnvelope {
 pub(crate) fn validate_bootstrap_accounts(
     readiness: &HogdDevReadiness,
     config: &HogdDevConfig,
+    network_hash: &NetworkHashHex,
     faucet_public_key: groundhog_json_rpc_types::Ed25519PublicKey,
 ) -> Result<(), NodeSupervisorError> {
     let fail = |reason: String| NodeSupervisorError::InvalidRuntimeManifest {
@@ -183,7 +184,7 @@ pub(crate) fn validate_bootstrap_accounts(
     let manifest = readiness.runtime_manifest.as_ref().ok_or_else(|| {
         fail("hog-devnode readiness must advertise a schema-4 runtime manifest".into())
     })?;
-    let expected = config.to_bootstrap_manifest(local_dev_network_hash(), faucet_public_key);
+    let expected = config.to_bootstrap_manifest(network_hash.clone(), faucet_public_key);
     if manifest.bootstrap_accounts.len() != expected.bootstrap_accounts.len() + 1 {
         return Err(fail(
             "runtime bootstrap allocations do not match public intent".into(),
@@ -225,11 +226,11 @@ pub(crate) fn validate_bootstrap_accounts(
 pub(crate) fn validate_runtime_identity(
     readiness: &HogdDevReadiness,
     expected_protocol: &str,
+    expected_network_hash: &NetworkHashHex,
 ) -> Result<(), NodeSupervisorError> {
-    let expected_network_hash = local_dev_network_hash();
-    if readiness.network_hash != expected_network_hash {
+    if readiness.network_hash != *expected_network_hash {
         return Err(NodeSupervisorError::RuntimeNetworkHashMismatch {
-            expected: expected_network_hash,
+            expected: expected_network_hash.clone(),
             observed: readiness.network_hash.clone(),
         });
     }
@@ -309,7 +310,8 @@ impl HogdDevProcess {
                 }
             };
         let effective = state.config.clone();
-        let bootstrap_manifest = write_bootstrap_manifest(&effective, state.public_key())?;
+        let bootstrap_manifest =
+            write_bootstrap_manifest(&effective, &state.network_hash, state.public_key())?;
         let spec = build_hogd_dev_spec_with_bootstrap_manifest(
             binary,
             &effective,
@@ -387,7 +389,12 @@ impl HogdDevProcess {
         };
 
         if let Some(state) = &local_state
-            && let Err(error) = validate_bootstrap_accounts(&readiness, config, state.public_key())
+            && let Err(error) = validate_bootstrap_accounts(
+                &readiness,
+                config,
+                &state.network_hash,
+                state.public_key(),
+            )
         {
             kill_unready_child(&mut child).await;
             wait_for_stderr_task(stderr_task.take()).await;
@@ -409,6 +416,15 @@ impl HogdDevProcess {
     /// Parsed readiness metadata.
     pub fn readiness(&self) -> &HogdDevReadiness {
         &self.readiness
+    }
+
+    /// Identity selected from initialization input or persisted state before spawning.
+    pub(crate) fn expected_network_hash(&self) -> &NetworkHashHex {
+        &self
+            .local_state
+            .as_ref()
+            .expect("bug: supervised node must retain its prepared local chain state")
+            .network_hash
     }
 
     pub(crate) fn faucet_signer(&self) -> Result<std::sync::Arc<LocalSigner>, NodeSupervisorError> {
@@ -697,9 +713,10 @@ impl BootstrapManifestFile {
 
 fn write_bootstrap_manifest(
     config: &HogdDevConfig,
+    network_hash: &NetworkHashHex,
     faucet_public_key: groundhog_json_rpc_types::Ed25519PublicKey,
 ) -> Result<BootstrapManifestFile, NodeSupervisorError> {
-    let manifest = config.to_bootstrap_manifest(local_dev_network_hash(), faucet_public_key);
+    let manifest = config.to_bootstrap_manifest(network_hash.clone(), faucet_public_key);
     let bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|source| NodeSupervisorError::BootstrapManifestSerialize { source })?;
     let dir = tempfile::Builder::new()
@@ -712,10 +729,6 @@ fn write_bootstrap_manifest(
         source,
     })?;
     Ok(BootstrapManifestFile { _dir: dir, path })
-}
-
-fn local_dev_network_hash() -> NetworkHashHex {
-    NetworkHashHex::from([0; 32])
 }
 
 /// Build the hogd-dev command specification used by the supervisor path.
