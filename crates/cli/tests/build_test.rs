@@ -1377,6 +1377,7 @@ fn counter_fragments(interface_name: &str) -> Vec<groundhog_spec_tool::SpecFragm
                     name: spec_string("get"),
                     args: vec![].try_into().unwrap(),
                     return_type: groundhog_spec_tool::ContractType::U64,
+                    effect: None,
                 },
             },
         },

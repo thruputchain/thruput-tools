@@ -2491,6 +2491,7 @@ mod tests {
                         max_len: u32::MAX,
                     },
                 },
+                effect: None,
             }],
             false,
         );
@@ -2616,6 +2617,7 @@ mod tests {
                         preimage_type: None,
                     },
                 },
+                effect: None,
             }],
             false,
         );
@@ -3056,11 +3058,13 @@ export type Result =
                     name: spec_string("get_balance"),
                     args: vec![].try_into().unwrap(),
                     return_type: ContractType::U64,
+                    effect: None,
                 },
                 ContractSpecMethod {
                     name: spec_string("getBalance"),
                     args: vec![].try_into().unwrap(),
                     return_type: ContractType::U64,
+                    effect: None,
                 },
             ],
             false,
@@ -3087,6 +3091,7 @@ export type Result =
                         .try_into()
                         .unwrap(),
                         return_type: ContractType::Void,
+                        effect: None,
                     }]
                     .try_into()
                     .unwrap(),
@@ -3104,6 +3109,7 @@ export type Result =
                         .try_into()
                         .unwrap(),
                         return_type: ContractType::Void,
+                        effect: None,
                     }]
                     .try_into()
                     .unwrap(),
@@ -3135,6 +3141,7 @@ export type Result =
                 name: spec_string(method),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::U64,
+                effect: None,
             }]
             .try_into()
             .unwrap(),
@@ -3228,6 +3235,7 @@ export type Result =
             name: spec_string("Balance"),
             args: vec![].try_into().unwrap(),
             return_type: ContractType::U64,
+            effect: None,
         });
         let error =
             generate_ts_bindings(&spec_with_interfaces(vec![iface]), "x.spec.xdr").unwrap_err();
@@ -3294,6 +3302,7 @@ export type Result =
                 .try_into()
                 .unwrap(),
                 return_type: ContractType::Void,
+                effect: None,
             }],
             false,
         );
@@ -3310,6 +3319,7 @@ export type Result =
                 name: spec_string("get"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::U64,
+                effect: None,
             }],
             false,
         );
@@ -3861,6 +3871,7 @@ export type Result =
                 .try_into()
                 .unwrap(),
                 return_type: ContractType::String,
+                effect: None,
             }],
             false,
         );
@@ -3878,6 +3889,7 @@ export type Result =
                 name: spec_string("transfer-from"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,
+                effect: None,
             }],
             false,
         );
@@ -3893,6 +3905,7 @@ export type Result =
                 name: spec_string("__proto__"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,
+                effect: None,
             }],
             false,
         );
@@ -3913,6 +3926,7 @@ export type Result =
                 .try_into()
                 .unwrap(),
                 return_type: ContractType::Void,
+                effect: None,
             }],
             false,
         );
@@ -3958,6 +3972,7 @@ export type Result =
                 name: spec_string("get"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::U64,
+                effect: None,
             },
             ContractSpecMethod {
                 name: spec_string("increment"),
@@ -3968,6 +3983,7 @@ export type Result =
                 .try_into()
                 .unwrap(),
                 return_type: ContractType::Void,
+                effect: None,
             },
         ]
     }
@@ -4080,11 +4096,13 @@ export type Result =
                         .try_into()
                         .unwrap(),
                         return_type: ContractType::Void,
+                        effect: None,
                     },
                     ContractSpecMethod {
                         name: spec_string("get_balance"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U128,
+                        effect: None,
                     },
                     ContractSpecMethod {
                         name: spec_string("get_balance_of"),
@@ -4095,6 +4113,7 @@ export type Result =
                         .try_into()
                         .unwrap(),
                         return_type: ContractType::U128,
+                        effect: None,
                     },
                 ]
                 .try_into()
@@ -4258,6 +4277,7 @@ export type Result =
                     .try_into()
                     .unwrap(),
                     return_type: ContractType::U32,
+                    effect: None,
                 }]
                 .try_into()
                 .unwrap(),
@@ -4662,6 +4682,7 @@ export type Result =
                 .try_into()
                 .unwrap(),
                 return_type: ContractType::Void,
+                effect: None,
             }],
             false,
         );
@@ -4751,6 +4772,7 @@ export type Result =
                                 .try_into()
                                 .unwrap(),
                         },
+                        effect: None,
                     },
                     ContractSpecMethod {
                         name: spec_string("update"),
@@ -4769,6 +4791,7 @@ export type Result =
                         .try_into()
                         .unwrap(),
                         return_type: ContractType::Void,
+                        effect: None,
                     },
                 ]
                 .try_into()
@@ -4867,6 +4890,7 @@ export type Result =
                     .try_into()
                     .unwrap(),
                     return_type: signed_token.clone(),
+                    effect: None,
                 }]
                 .try_into()
                 .unwrap(),
@@ -5053,6 +5077,7 @@ export type Result =
                 name: spec_string("balance"),
                 args: args.try_into().unwrap(),
                 return_type,
+                effect: None,
             }]
             .try_into()
             .unwrap(),
@@ -5072,6 +5097,7 @@ export type Result =
                         name: spec_string("get"),
                         args: vec![].try_into().unwrap(),
                         return_type: kind(),
+                        effect: None,
                     }]
                     .try_into()
                     .unwrap(),

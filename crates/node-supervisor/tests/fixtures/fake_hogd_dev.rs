@@ -1390,6 +1390,14 @@ struct FakeDbGateway {
 
 #[async_trait]
 impl DbGateway_DbGateway1 for FakeDbGateway {
+    async fn dbgateway_get_config(
+        &self,
+    ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, ProgramError> {
+        Err(ProgramError::msg(
+            "configuration RPC is not supported by this test server",
+        ))
+    }
+
     async fn dbgateway_intro(
         &self,
         _arg0: ProtocolCommit,

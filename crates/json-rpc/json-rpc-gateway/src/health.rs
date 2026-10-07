@@ -1619,6 +1619,14 @@ mod tests {
 
     #[async_trait]
     impl DbGateway_DbGateway1 for SaturatedDbGateway {
+        async fn dbgateway_get_config(
+            &self,
+        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, ProgramError> {
+            Err(ProgramError::msg(
+                "configuration RPC is not supported by this test server",
+            ))
+        }
+
         async fn dbgateway_intro(
             &self,
             _protocol: Protocol,
@@ -1933,6 +1941,14 @@ mod tests {
 
     #[async_trait]
     impl DbGateway_DbGateway1 for LifecycleDbGateway {
+        async fn dbgateway_get_config(
+            &self,
+        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, ProgramError> {
+            Err(ProgramError::msg(
+                "configuration RPC is not supported by this test server",
+            ))
+        }
+
         async fn dbgateway_intro(
             &self,
             _protocol: Protocol,

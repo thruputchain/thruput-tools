@@ -115,6 +115,7 @@ pub fn contract_spec_raw_for_interface(interface_name: &str) -> Vec<u8> {
                     name: spec_string("get"),
                     args: vec![].try_into().unwrap(),
                     return_type: groundhog_spec_tool::ContractType::U64,
+                    effect: None,
                 },
             },
         },

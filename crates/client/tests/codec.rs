@@ -42,6 +42,7 @@ fn numeric_tuple_metadata(ty: ContractType) -> CallMetadata {
             .try_into()
             .unwrap(),
             return_type: tuple,
+            effect: None,
         },
         type_defs: vec![],
         throws: vec![],
@@ -266,6 +267,7 @@ fn throwing_spec_metadata() -> SpecMethodMetadata {
             name: spec_string("decrement"),
             args: vec![].try_into().unwrap(),
             return_type: ContractType::Void,
+            effect: None,
         },
         type_defs: counter_error_type_defs(),
         throws: vec![groundhog_contract_spec::ContractExceptionType {
@@ -297,6 +299,7 @@ fn encode_abort_bytes(
             .try_into()
             .unwrap(),
             return_type: ContractType::Void,
+            effect: None,
         },
         type_defs,
         throws: vec![],
@@ -485,6 +488,7 @@ fn strkey_spec_address_arguments_match_hex_and_reject_wrong_type() {
             .try_into()
             .unwrap(),
             return_type: ContractType::Void,
+            effect: None,
         },
         type_defs: vec![],
         throws: vec![],

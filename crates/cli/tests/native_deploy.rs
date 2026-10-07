@@ -411,6 +411,7 @@ async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments()
                 .try_into()
                 .unwrap(),
                 return_type: ContractType::Void,
+                effect: None,
             }]
             .try_into()
             .unwrap(),
@@ -513,6 +514,7 @@ async fn native_deploy_decodes_the_prepared_initializer_spec() {
                 name: "initialize".try_into().unwrap(),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,
+                effect: None,
             }]
             .try_into()
             .unwrap(),
