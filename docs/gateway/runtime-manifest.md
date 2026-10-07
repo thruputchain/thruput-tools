@@ -115,6 +115,14 @@ runtime selection, logging, persistence, and supported overrides. The lifecycle
 implementation is in [process.rs](../../crates/node-supervisor/src/process.rs)
 and [pid_file.rs](../../crates/node-supervisor/src/pid_file.rs).
 
+`groundhog node --init-network-hash` selects a new chain's bootstrap signing domain.
+Distinct ports alone do not create distinct networks. Omission initializes zero for
+a new chain; a restart loads the identity from the existing chain-bound funding
+journal. Initialized directories reject the initialization flag, including a matching
+hash. The supervisor checks runtime and scheduler identities against the initialized
+or recovered identity. Use the emitted manifest with its matching RPC URL
+for signing/funding consumers; see the CLI reference for the two-node example.
+
 Older local runtimes and state directories require their original runtime and tooling. A native
 runtime refuses old metadata before opening the database and preserves the data.
 Use a new data directory for an ordinary-account chain; saved legacy wallet identities remain

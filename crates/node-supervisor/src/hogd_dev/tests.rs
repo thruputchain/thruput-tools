@@ -169,7 +169,7 @@ fn bootstrap_manifest_file_serializes_config() {
         ),
     ]);
 
-    let manifest = write_bootstrap_manifest(&config, fixture_public_key(0))
+    let manifest = write_bootstrap_manifest(&config, &[0; 32].into(), fixture_public_key(0))
         .expect("bug: bootstrap manifest file should be written");
     let value: serde_json::Value = serde_json::from_slice(
         &std::fs::read(manifest.path()).expect("bug: bootstrap manifest should be readable"),
@@ -208,7 +208,7 @@ fn runtime_identity_rejects_non_bootstrap_network() {
         parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
     readiness.network_hash = groundhog_json_rpc_types::NetworkHashHex::from([0xff; 32]);
 
-    let err = validate_runtime_identity(&readiness, "hogp/test00000000000")
+    let err = validate_runtime_identity(&readiness, "hogp/test00000000000", &[0; 32].into())
         .expect_err("bug: a non-bootstrap network should fail closed");
     assert!(matches!(
         err,
@@ -219,11 +219,35 @@ fn runtime_identity_rejects_non_bootstrap_network() {
 }
 
 #[test]
+fn configured_network_hash_reaches_bootstrap_and_readiness_validation() {
+    for hash in [[0; 32], [0xab; 32]] {
+        let network_hash = groundhog_json_rpc_types::NetworkHashHex::from(hash);
+        let config = HogdDevConfig::default().with_init_network_hash(network_hash.clone());
+        let file = write_bootstrap_manifest(&config, &network_hash, fixture_public_key(0)).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(file.path()).unwrap()).unwrap();
+        assert_eq!(value["networkHash"], network_hash.as_str());
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
+        let mut readiness = parse_readiness_line("hogd-dev", &line).unwrap();
+        readiness.network_hash = network_hash.clone();
+        validate_runtime_identity(&readiness, "hogp/test00000000000", &network_hash).unwrap();
+        assert!(matches!(
+            validate_runtime_identity(&readiness, "hogp/test00000000000", &[0xff; 32].into()),
+            Err(NodeSupervisorError::RuntimeNetworkHashMismatch { .. })
+        ));
+        assert!(matches!(
+            validate_runtime_identity(&readiness, "hogp/expected0000000", &network_hash),
+            Err(NodeSupervisorError::RuntimeProtocolMismatch { .. })
+        ));
+    }
+}
+
+#[test]
 fn runtime_identity_rejects_protocol_mismatch() {
     let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
     let readiness = parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
 
-    let err = validate_runtime_identity(&readiness, "hogp/expected0000000")
+    let err = validate_runtime_identity(&readiness, "hogp/expected0000000", &[0; 32].into())
         .expect_err("bug: a protocol mismatch should fail closed");
     assert!(matches!(
         err,
@@ -792,7 +816,8 @@ fn explicit_allocations_validate_native_identity_roles_and_amounts() {
         &serde_json::to_string(&accounts).unwrap(),
     );
     let readiness = parse_readiness_line("hogd-dev", &line).unwrap();
-    validate_bootstrap_accounts(&readiness, &config, fixture_public_key(0)).unwrap();
+    validate_bootstrap_accounts(&readiness, &config, &[0; 32].into(), fixture_public_key(0))
+        .unwrap();
     for recovered in [false, true] {
         for field in [
             "role",
@@ -823,7 +848,13 @@ fn explicit_allocations_validate_native_identity_roles_and_amounts() {
                 }
             }
             assert!(
-                validate_bootstrap_accounts(&invalid, &config, fixture_public_key(0)).is_err(),
+                validate_bootstrap_accounts(
+                    &invalid,
+                    &config,
+                    &[0; 32].into(),
+                    fixture_public_key(0)
+                )
+                .is_err(),
                 "{field}"
             );
         }
@@ -835,8 +866,13 @@ fn explicit_allocations_validate_native_identity_roles_and_amounts() {
 fn legacy_readiness_without_manifest_is_rejected_by_supervisor_validation() {
     let readiness = parse_readiness_line("hogd-dev", V1_READY).unwrap();
     assert!(
-        validate_bootstrap_accounts(&readiness, &HogdDevConfig::default(), fixture_public_key(0))
-            .is_err()
+        validate_bootstrap_accounts(
+            &readiness,
+            &HogdDevConfig::default(),
+            &[0; 32].into(),
+            fixture_public_key(0)
+        )
+        .is_err()
     );
 }
 
@@ -1252,7 +1288,8 @@ async fn inherited_lease_survives_leader_exit_until_descendant_is_killed() {
     let config = HogdDevConfig::default()
         .with_startup_timeout(Duration::from_secs(2))
         .with_shutdown_grace(Duration::from_millis(150));
-    let bootstrap = write_bootstrap_manifest(&config, fixture_public_key(0)).unwrap();
+    let bootstrap =
+        write_bootstrap_manifest(&config, &[0; 32].into(), fixture_public_key(0)).unwrap();
     let spec = build_hogd_dev_spec_with_bootstrap_manifest(
         fake_hogd_dev_binary(),
         &config,
@@ -1291,8 +1328,9 @@ async fn start_fake_hogd_dev(
     config: &HogdDevConfig,
     mode: &str,
 ) -> Result<HogdDevProcess, NodeSupervisorError> {
-    let bootstrap_manifest = write_bootstrap_manifest(config, fixture_public_key(0))
-        .expect("bug: bootstrap manifest file should be written");
+    let bootstrap_manifest =
+        write_bootstrap_manifest(config, &[0; 32].into(), fixture_public_key(0))
+            .expect("bug: bootstrap manifest file should be written");
     let spec = build_hogd_dev_spec_with_bootstrap_manifest(
         fake_hogd_dev_binary(),
         config,
@@ -1308,8 +1346,9 @@ async fn start_fake_hogd_dev_with_env(
     key: &str,
     value: &std::ffi::OsStr,
 ) -> Result<HogdDevProcess, NodeSupervisorError> {
-    let bootstrap_manifest = write_bootstrap_manifest(config, fixture_public_key(0))
-        .expect("bug: bootstrap manifest file should be written");
+    let bootstrap_manifest =
+        write_bootstrap_manifest(config, &[0; 32].into(), fixture_public_key(0))
+            .expect("bug: bootstrap manifest file should be written");
     let spec = build_hogd_dev_spec_with_bootstrap_manifest(
         fake_hogd_dev_binary(),
         config,

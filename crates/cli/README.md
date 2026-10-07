@@ -755,6 +755,47 @@ Recovered directories keep their persisted allocation; changing it requires a
 fresh directory. `dev-N` names are ordinary stored names with no implicit signer.
 Old local state requires its previous runtime and CLI; startup does not reset it.
 
+Two listeners on different ports still share a signing domain unless their
+network hashes differ. With a stored `alice` key, start these in separate terminals:
+
+```bash
+groundhog node --key alice --port 9545 --data-dir .groundhog/a \
+  --init-network-hash aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+groundhog node --key alice --port 9546 --data-dir .groundhog/b \
+  --init-network-hash 0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+```
+
+`--init-network-hash` accepts exactly 64 lowercase hexadecimal digits with an optional
+lowercase `0x` prefix, using the same parser as profile `network-hash`. Manifests
+store the unprefixed value; RPC bytes retain their `0x` prefix. For a new chain,
+omission and an explicit zero hash both select the all-zero development domain.
+No identity is generated automatically. A profile's signing hash does not change a node's chain.
+
+For Rust embeddings, set `LocalNodeOptions.init_network_hash` or
+`HogdDevConfig::with_init_network_hash` when creating a new chain.
+
+Restart a persistent directory without the initialization flag; the saved identity
+is recovered. Initialized directories reject the flag even when the hash matches.
+If the first launch is interrupted after saving its identity, retry without the flag.
+An ephemeral node always creates a new chain, so the flag applies to each launch.
+
+```bash
+groundhog node --port 9545 --data-dir .groundhog/a
+groundhog node --port 9546 --data-dir .groundhog/b
+```
+
+Use each node's emitted runtime manifest for signing and funding. For example,
+with `alice` selected as the signing key and a funded recipient `bob` on B:
+
+```bash
+groundhog transfer bob 1 --rpc-url http://127.0.0.1:9546 \
+  --runtime-manifest .groundhog/b/runtime/runtime-manifest.json
+```
+
+The startup JSON reports the actual manifest path. Profile `runtime_manifest`
+settings or `GROUNDHOG_RUNTIME_MANIFEST` can also select it. Keep the RPC endpoint
+and manifest paired; distinct identities do not require a new RPC method.
+
 The local-only `groundhog_fundAccount` accepts an exact positive raw amount,
 recipient, caller nonce and public faucet address. Persist the request before
 sending. After a timeout, retry that request; changing the amount or nonce can

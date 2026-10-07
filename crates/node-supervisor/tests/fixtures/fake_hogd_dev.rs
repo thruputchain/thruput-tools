@@ -73,6 +73,7 @@ static TERMINATED: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone)]
 struct FakeStartupConfig {
     accounts: Vec<Value>,
+    network_hash: groundhog_json_rpc_types::NetworkHashHex,
 }
 
 impl FakeStartupConfig {
@@ -85,6 +86,7 @@ impl FakeStartupConfig {
             // Process-lifecycle tests launch this fixture without chain configuration.
             return Self {
                 accounts: Vec::new(),
+                network_hash: [0; 32].into(),
             };
         };
         let path = &pair[1];
@@ -107,7 +109,10 @@ impl FakeStartupConfig {
                 })
             })
             .collect();
-        Self { accounts }
+        Self {
+            accounts,
+            network_hash: manifest.network_hash,
+        }
     }
 }
 
@@ -648,7 +653,7 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
         "schemaVersion": 4,
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
-        "networkHash": "00".repeat(32),
+        "networkHash": config.network_hash,
         "protocol": protocol_text(&PROTOCOL_VERSION),
         "producer": Value::Object(producer),
         "endpoints": endpoints,
@@ -838,6 +843,7 @@ impl FakeSchedulerMode {
 
 #[derive(Debug, Clone)]
 struct FakeScheduler {
+    network_hash: [u8; 32],
     tip: Arc<Mutex<Option<DbTip>>>,
     pending_submits: Arc<AtomicU64>,
     commit_in_progress: Arc<AtomicBool>,
@@ -850,6 +856,12 @@ struct FakeScheduler {
 impl FakeScheduler {
     fn new(mode: FakeSchedulerMode) -> Self {
         let scheduler = Self {
+            network_hash: FakeStartupConfig::from_args()
+                .network_hash
+                .to_network_hash()
+                .as_ref()
+                .try_into()
+                .unwrap(),
             tip: Arc::new(Mutex::new(None)),
             pending_submits: Arc::new(AtomicU64::new(0)),
             commit_in_progress: Arc::new(AtomicBool::new(false)),
@@ -869,7 +881,7 @@ impl FakeScheduler {
         let network_hash = if self.mode == FakeSchedulerMode::NetworkHashMismatch {
             [0xff; 32]
         } else {
-            [0; 32]
+            self.network_hash
         };
         DbTip {
             id: 0,
@@ -959,14 +971,6 @@ impl FakeScheduler {
         }
         Ok(())
     }
-}
-
-fn fake_proposal_header(
-    height: i64,
-    proposer: ValidatorID,
-    block_timepoint: TimePoint,
-) -> ProposalHeader {
-    fake_proposal_header_with_network_hash(height, proposer, block_timepoint, [0; 32])
 }
 
 fn fake_proposal_header_with_network_hash(
@@ -1077,10 +1081,11 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         if self.mode == FakeSchedulerMode::AutomineMalformedProposal {
             transactions.hash.segment_tokens.0.pop();
         }
-        let header = fake_proposal_header(
+        let header = fake_proposal_header_with_network_hash(
             next_height,
             proposal_context.proposer,
             proposal_context.block_timepoint,
+            self.network_hash,
         );
         if self.mode != FakeSchedulerMode::AutomineMalformedProposal {
             let expected = ConsensusValue {

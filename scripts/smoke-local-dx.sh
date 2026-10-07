@@ -19,6 +19,7 @@
 #   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
 #   SMOKE_PROTOCOL_RS_PATH=/path/to/protocol-rs  # defaults to sdk_rs sibling
 #   CARGO_TARGET_DIR=/absolute/path/to/build-output
+#   SMOKE_NETWORK_HASH=<64 lowercase hex digits, optionally 0x-prefixed>
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
@@ -81,6 +82,24 @@ for part in path:
         break
     value = value.get(part) if isinstance(value, dict) else value[int(part)]
 print(len(value) if value is not None else 0)
+PY
+}
+
+assert_rpc_network_identity() {
+    python3 - "$1" "$EXPECTED_NETWORK_HASH" <<'PY'
+import json
+import sys
+import urllib.request
+
+endpoint, expected = sys.argv[1:]
+request = urllib.request.Request(
+    endpoint,
+    data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "groundhog_networkInfo", "params": []}).encode(),
+    headers={"Content-Type": "application/json"},
+)
+with urllib.request.urlopen(request, timeout=10) as response:
+    payload = json.load(response)
+assert payload["result"]["networkHash"] == "0x" + expected, payload
 PY
 }
 
@@ -590,7 +609,7 @@ WORK="$(mktemp -d)"
 export XDG_CONFIG_HOME="$WORK/config"
 export XDG_CACHE_HOME="$WORK/cache"
 NODE_DATA_DIR="$WORK/node-data"
-NODE_ARGS=(
+NODE_BASE_ARGS=(
     --json node
     --port 0
     --bootstrap-accounts "$WORK/bootstrap-accounts.json"
@@ -598,8 +617,14 @@ NODE_ARGS=(
     --data-dir "$NODE_DATA_DIR"
 )
 if [[ -n "$HOGD_PROTOCOL" ]]; then
-    NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
+    NODE_BASE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"
+fi
+EXPECTED_NETWORK_HASH="${SMOKE_NETWORK_HASH:-0000000000000000000000000000000000000000000000000000000000000000}"
+EXPECTED_NETWORK_HASH="${EXPECTED_NETWORK_HASH#0x}"
+NODE_INIT_ARGS=("${NODE_BASE_ARGS[@]}")
+if [[ -n "${SMOKE_NETWORK_HASH:-}" ]]; then
+    NODE_INIT_ARGS+=(--init-network-hash "$SMOKE_NETWORK_HASH")
 fi
 NODE_PID=""
 NODE_DESCENDANTS=""
@@ -681,7 +706,7 @@ allocations = [
 ALLOCATIONS
 
 log "Starting local node"
-"$CLI" "${NODE_ARGS[@]}" \
+"$CLI" "${NODE_INIT_ARGS[@]}" \
     > "$WORK/node.json" 2> "$WORK/node.err" &
 NODE_PID=$!
 if ! wait_for_node_json "$WORK/node.json"; then
@@ -706,6 +731,11 @@ log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
     || die "groundhog node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
 RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
+[[ "$(json_field networkHash "$RUNTIME_JSON")" == "$EXPECTED_NETWORK_HASH" ]] \
+    || die "runtime identity differs from selected network hash"
+[[ "$(json_field data.chain "$NODE_JSON")" == "$EXPECTED_NETWORK_HASH" ]] \
+    || die "startup identity differs from selected network hash"
+assert_rpc_network_identity "$RPC_URL"
 python3 - "$RUNTIME_MANIFEST" <<'MANIFEST'
 import json, sys
 m = json.load(open(sys.argv[1]))
@@ -904,6 +934,7 @@ if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
         cat "$WORK/gateway.err" >&2 || true
         die "standalone gateway did not answer groundhog_version"
     fi
+    assert_rpc_network_identity "$GATEWAY_RPC_URL"
 fi
 
 DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy --force --fund 10)"
@@ -1198,7 +1229,7 @@ CHAIN_RESTORE_JSON="$(run_json "chain restore" "$CLI" --json chain restore --for
 log "Restarting persistent local node with the original allocation"
 : > "$WORK/node.json"
 : > "$WORK/node.err"
-"$CLI" "${NODE_ARGS[@]}" \
+"$CLI" "${NODE_BASE_ARGS[@]}" \
     > "$WORK/node.json" 2> "$WORK/node.err" &
 NODE_PID=$!
 if ! wait_for_node_json "$WORK/node.json"; then
@@ -1216,6 +1247,9 @@ REPORTED_DATA_DIR="$(json_field data.data_dir "$NODE_JSON")"
 [[ "$CHAIN_STATE" == "recovered" ]] \
     || die "restarted node chain_state was $CHAIN_STATE, expected recovered"
 RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
+[[ "$(json_field networkHash "$RUNTIME_JSON")" == "$EXPECTED_NETWORK_HASH" ]] \
+    || die "restarted runtime identity differs from selected network hash"
+assert_rpc_network_identity "$RPC_URL"
 [[ "$(json_field bootstrapAccounts.0.initialStorageTokens "$RUNTIME_JSON")" == "$FIXED_FAUCET_RAW" ]] \
     || die "restarted runtime manifest faucet did not retain its fixed allocation"
 [[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_ACCOUNT_RAW" ]] \

@@ -1115,6 +1115,31 @@ async fn start_rejects_scheduler_gateway_from_a_different_network() {
 
 #[tokio::test]
 #[serial]
+async fn custom_network_preserves_independent_scheduler_and_gateway_checks() {
+    for mode in [
+        "scheduler-network-hash-mismatch",
+        "scheduler-gateway-network-hash-mismatch",
+    ] {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, mode);
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(
+                HogdDevConfig::default()
+                    .with_binary_path(fake_hogd_dev_binary())
+                    .with_init_network_hash([0xab; 32].into())
+                    .with_startup_timeout(Duration::from_secs(5)),
+            );
+        let error = NodeSupervisorHandle::start(config).await.unwrap_err();
+        assert!(
+            matches!(error, NodeSupervisorError::SchedulerNetworkHashMismatch { expected, .. }
+            if expected == groundhog_json_rpc_types::NetworkHashHex::from([0xab; 32])),
+            "{mode}"
+        );
+    }
+}
+
+#[tokio::test]
+#[serial]
 async fn start_rejects_incoherent_scheduler_plane_tips() {
     let err = start_fake_supervisor_expect_error("scheduler-gateway-tip-mismatch").await;
 

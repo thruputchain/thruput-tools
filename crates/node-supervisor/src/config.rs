@@ -398,6 +398,11 @@ pub struct HogdDevConfig {
     /// of the ones stock genesis states. The child still rejects a value
     /// outside the ceilings its build was compiled with.
     pub network_config_overrides: BTreeMap<ConfigParamName, u32>,
+    /// Signing domain for a new chain. Omission initializes the zero development domain.
+    ///
+    /// An initialized directory rejects this option, even if the value matches.
+    /// Leave it unset on restart to load the persisted identity.
+    pub init_network_hash: Option<NetworkHashHex>,
     /// PID file used to detect and clean up orphaned hogd-dev children.
     pub pid_file: Option<PathBuf>,
 }
@@ -415,12 +420,20 @@ impl Default for HogdDevConfig {
             bootstrap_accounts: Vec::new(),
             ramdb_bytes: None,
             network_config_overrides: BTreeMap::new(),
+            init_network_hash: None,
             pid_file: None,
         }
     }
 }
 
 impl HogdDevConfig {
+    /// Select a new chain's signing domain. Initialized directories reject this option.
+    #[must_use]
+    pub fn with_init_network_hash(mut self, network_hash: NetworkHashHex) -> Self {
+        self.init_network_hash = Some(network_hash);
+        self
+    }
+
     /// Return a copy with genesis network parameter overrides.
     #[must_use]
     pub fn with_network_config_overrides(

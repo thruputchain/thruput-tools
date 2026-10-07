@@ -67,7 +67,7 @@ impl FundingJournal {
 
     pub(crate) fn open(
         dir: &Path,
-        network_hash: NetworkHashHex,
+        init_network_hash: Option<NetworkHashHex>,
         faucet: ContractAddress,
         fresh: bool,
         signer: &std::sync::Arc<groundhog_signing::LocalSigner>,
@@ -75,7 +75,8 @@ impl FundingJournal {
         let path = dir.join(LOCAL_FUNDING_ATTEMPTS_FILE);
         match fs::symlink_metadata(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && fresh => {
-                let mut journal = Self::memory(network_hash, faucet);
+                let mut journal =
+                    Self::memory(init_network_hash.unwrap_or_else(|| [0; 32].into()), faucet);
                 let bytes = serde_json::to_vec(&journal.data).map_err(|e| state_error(&path, e))?;
                 atomic_private_write(&path, &bytes, false).map_err(|e| state_error(&path, e))?;
                 journal.path = Some(path);
@@ -83,6 +84,9 @@ impl FundingJournal {
             }
             Err(error) => Err(state_error(&path, error)),
             Ok(_) => {
+                if init_network_hash.is_some() {
+                    return Err(crate::local_state::already_initialized(&path));
+                }
                 let file = private_file(&path)?;
                 let mut bytes = Vec::new();
                 file.take((MAX_JOURNAL_BYTES + 1) as u64)
@@ -93,10 +97,7 @@ impl FundingJournal {
                 }
                 let data: JournalData =
                     serde_json::from_slice(&bytes).map_err(|e| state_error(&path, e))?;
-                if data.schema_version != 1
-                    || data.network_hash != network_hash
-                    || data.faucet != faucet
-                {
+                if data.schema_version != 1 || data.faucet != faucet {
                     return Err(state_error(
                         &path,
                         "funding journal belongs to a different chain",
@@ -123,7 +124,7 @@ impl FundingJournal {
                         crate::airdrop::validate_retained_funding(
                             request,
                             signed,
-                            network_hash.to_network_hash(),
+                            data.network_hash.to_network_hash(),
                             signer.clone(),
                         )
                         .map_err(|reason| state_error(&path, reason))?;
@@ -137,6 +138,10 @@ impl FundingJournal {
                 })
             }
         }
+    }
+
+    pub(crate) fn network_hash(&self) -> &NetworkHashHex {
+        &self.data.network_hash
     }
 
     pub(crate) fn records(&self) -> &[FundingRecord] {

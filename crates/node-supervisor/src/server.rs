@@ -189,7 +189,11 @@ impl NodeSupervisorHandle {
             .as_deref()
             .unwrap_or(&default_protocol);
 
-        match validate_runtime_identity(hogd.readiness(), protocol_version) {
+        match validate_runtime_identity(
+            hogd.readiness(),
+            protocol_version,
+            hogd.expected_network_hash(),
+        ) {
             Ok(()) => {}
             Err(error) => {
                 if let Err(stop_err) = hogd.stop().await {
