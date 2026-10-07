@@ -6,7 +6,10 @@ use groundhog_json_rpc_types::{
     airdrop::ClientNonce,
     block::ChainTip,
     hex::{Hex0x, HexBytes},
-    transaction::{ConflictCode, ConflictDiagnostic, TransactionStatus},
+    receipt::TransactionReceipt,
+    transaction::{
+        ConflictCode, ConflictDiagnostic, SchedulerTransactionErrorSource, TransactionStatus,
+    },
 };
 
 use super::*;
@@ -35,7 +38,7 @@ struct TestBackend {
     submit_results: Mutex<VecDeque<Result<(), RpcServerError>>>,
     status_results: Mutex<VecDeque<Result<TransactionStatus, RpcServerError>>>,
     submissions: Mutex<Vec<Vec<u8>>>,
-    receipt: Mutex<Option<groundhog_json_rpc_types::receipt::TransactionReceipt>>,
+    receipt: Mutex<Option<TransactionReceipt>>,
     submit_delay: Duration,
     submit_gate: Option<Arc<Semaphore>>,
     contexts: Mutex<Vec<RpcRequestContext>>,
@@ -104,7 +107,7 @@ impl AirdropBackend for TestBackend {
         &self,
         _context: RpcRequestContext,
         _tx_hash: TxHash,
-    ) -> Result<Option<groundhog_json_rpc_types::receipt::TransactionReceipt>, RpcServerError> {
+    ) -> Result<Option<TransactionReceipt>, RpcServerError> {
         Ok(self.receipt.lock().unwrap().clone())
     }
 
@@ -638,48 +641,56 @@ async fn recent_failure_retry_resubmits_exact_signed_bytes() {
 }
 
 fn scheduler_failure() -> SchedulerTransactionError {
-    SchedulerTransactionError::new(
-        groundhog_json_rpc_types::transaction::SchedulerTransactionErrorSource::Executor,
-        -7,
-    )
+    SchedulerTransactionError::new(SchedulerTransactionErrorSource::Executor, -7)
 }
 
 #[tokio::test]
-async fn retry_outcome_resubmits_same_airdrop_and_dropped_is_terminal() {
-    for status in [
+async fn retry_outcome_resubmits_same_airdrop() {
+    let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(
         TransactionStatus::Retry {
             error: scheduler_failure(),
         },
+    )]));
+    let builder = Arc::new(CountingBuilder {
+        constructions: AtomicUsize::new(0),
+        bytes: vec![5, 4, 3],
+    });
+    let rpc = test_rpc(backend.clone(), builder.clone(), 8, 4);
+    let request = test_request(10, 10);
+    let first = rpc.request(request.clone()).await;
+    let second = rpc.request(request).await;
+
+    assert_eq!(builder.constructions.load(Ordering::SeqCst), 1);
+    assert!(matches!(first, Ok(AirdropAttemptResponse::Pending { .. })));
+    assert!(matches!(second, Ok(AirdropAttemptResponse::Pending { .. })));
+    assert_eq!(*backend.submissions.lock().unwrap(), vec![vec![5, 4, 3]; 2]);
+}
+
+#[tokio::test]
+async fn dropped_airdrop_is_terminal() {
+    let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(
         TransactionStatus::Dropped {
             error: scheduler_failure(),
         },
-    ] {
-        let retryable = matches!(status, TransactionStatus::Retry { .. });
-        let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(status)]));
-        let builder = Arc::new(CountingBuilder {
-            constructions: AtomicUsize::new(0),
-            bytes: vec![5, 4, 3],
-        });
-        let rpc = test_rpc(backend.clone(), builder.clone(), 8, 4);
-        let request = test_request(10, 10);
-        let first = rpc.request(request.clone()).await;
-        let second = rpc.request(request).await;
-        assert_eq!(builder.constructions.load(Ordering::SeqCst), 1);
-        if retryable {
-            assert!(matches!(first, Ok(AirdropAttemptResponse::Pending { .. })));
-            assert!(matches!(second, Ok(AirdropAttemptResponse::Pending { .. })));
-            assert_eq!(*backend.submissions.lock().unwrap(), vec![vec![5, 4, 3]; 2]);
-        } else {
-            assert!(
-                matches!(first, Err(RpcServerError::TxRejected(ref reason)) if reason.contains("Executor code -7"))
-            );
-            assert_eq!(
-                first.unwrap_err().to_string(),
-                second.unwrap_err().to_string()
-            );
-            assert_eq!(*backend.submissions.lock().unwrap(), vec![vec![5, 4, 3]]);
-        }
-    }
+    )]));
+    let builder = Arc::new(CountingBuilder {
+        constructions: AtomicUsize::new(0),
+        bytes: vec![5, 4, 3],
+    });
+    let rpc = test_rpc(backend.clone(), builder.clone(), 8, 4);
+    let request = test_request(10, 10);
+    let first = rpc.request(request.clone()).await;
+    let second = rpc.request(request).await;
+
+    assert_eq!(builder.constructions.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(first, Err(RpcServerError::TxRejected(ref reason)) if reason.contains("Executor code -7"))
+    );
+    assert_eq!(
+        first.unwrap_err().to_string(),
+        second.unwrap_err().to_string()
+    );
+    assert_eq!(*backend.submissions.lock().unwrap(), vec![vec![5, 4, 3]]);
 }
 
 #[tokio::test]
@@ -919,81 +930,154 @@ async fn lost_admission_response_reuses_exact_retained_bytes_after_restart() {
 }
 
 #[tokio::test]
-async fn retained_funding_retry_reuses_bytes_and_dropped_never_resubmits() {
-    for status in [
+async fn retained_funding_retry_reuses_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
+    let request = funding_request("42");
+    let original = rpc.fund(request.clone()).await.unwrap();
+    drop(rpc);
+    let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(
         TransactionStatus::Retry {
             error: scheduler_failure(),
         },
-        TransactionStatus::Dropped {
-            error: scheduler_failure(),
-        },
-    ] {
-        let retryable = matches!(status, TransactionStatus::Retry { .. });
-        let dir = tempfile::tempdir().unwrap();
-        let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
-        let request = funding_request("42");
-        let original = rpc.fund(request.clone()).await.unwrap();
-        drop(rpc);
-        let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(status)]));
-        let restarted = durable_rpc(dir.path(), false, backend.clone());
-        let result = restarted.fund(request).await;
-        if retryable {
-            assert_eq!(result.unwrap(), original);
-            assert_eq!(
-                *backend.submissions.lock().unwrap(),
-                vec![original.signed_transaction.0]
-            );
-        } else {
-            let error = result.unwrap_err();
-            assert!(error.to_string().contains("Executor code -7"));
-            let object: jsonrpsee::types::ErrorObjectOwned = error.into();
-            let evidence: LocalFundingErrorData =
-                serde_json::from_str(object.data().unwrap().get()).unwrap();
-            assert_eq!(evidence.tx_hash, original.tx_hash);
-            assert_eq!(evidence.signed_transaction, original.signed_transaction);
-            assert!(backend.submissions.lock().unwrap().is_empty());
-        }
-    }
+    )]));
+    let restarted = durable_rpc(dir.path(), false, backend.clone());
+    let result = restarted.fund(request).await;
+
+    assert_eq!(result.unwrap(), original);
+    assert_eq!(
+        *backend.submissions.lock().unwrap(),
+        vec![original.signed_transaction.0]
+    );
 }
 
 #[tokio::test]
-async fn restored_airdrop_outcome_retries_same_bytes_or_stops_on_dropped() {
-    for status in [
-        TransactionStatus::Retry {
-            error: scheduler_failure(),
-        },
+async fn retained_dropped_funding_never_resubmits() {
+    let dir = tempfile::tempdir().unwrap();
+    let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
+    let request = funding_request("42");
+    let original = rpc.fund(request.clone()).await.unwrap();
+    drop(rpc);
+    let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(
         TransactionStatus::Dropped {
             error: scheduler_failure(),
         },
-    ] {
-        let retryable = matches!(status, TransactionStatus::Retry { .. });
-        let dir = tempfile::tempdir().unwrap();
-        let original_backend = Arc::new(TestBackend::new(vec![]));
-        let rpc = durable_rpc(dir.path(), true, original_backend.clone());
-        let request = test_request(0x44, 9);
-        assert!(matches!(
-            rpc.request(request.clone()).await,
-            Ok(AirdropAttemptResponse::Pending { .. })
-        ));
-        let bytes = original_backend.submissions.lock().unwrap()[0].clone();
-        drop(rpc);
-        let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(status)]));
-        let restarted = durable_rpc(dir.path(), false, backend.clone());
-        for _ in 0..2 {
-            let result = restarted.request(request.clone()).await;
-            if retryable {
-                assert!(matches!(result, Ok(AirdropAttemptResponse::Pending { .. })));
-            } else {
-                assert!(
-                    matches!(result, Err(RpcServerError::TxRejected(ref reason)) if reason.contains("Executor code -7"))
-                );
-            }
-        }
-        assert_eq!(
-            *backend.submissions.lock().unwrap(),
-            if retryable { vec![bytes] } else { vec![] }
+    )]));
+    let restarted = durable_rpc(dir.path(), false, backend.clone());
+    let error = restarted.fund(request).await.unwrap_err();
+
+    assert!(error.to_string().contains("Executor code -7"));
+    let object: jsonrpsee::types::ErrorObjectOwned = error.into();
+    let evidence: LocalFundingErrorData =
+        serde_json::from_str(object.data().unwrap().get()).unwrap();
+    assert_eq!(evidence.tx_hash, original.tx_hash);
+    assert_eq!(evidence.signed_transaction, original.signed_transaction);
+    assert!(backend.submissions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn restored_airdrop_retry_reuses_same_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let original_backend = Arc::new(TestBackend::new(vec![]));
+    let rpc = durable_rpc(dir.path(), true, original_backend.clone());
+    let request = test_request(0x44, 9);
+    assert!(matches!(
+        rpc.request(request.clone()).await,
+        Ok(AirdropAttemptResponse::Pending { .. })
+    ));
+    let bytes = original_backend.submissions.lock().unwrap()[0].clone();
+    drop(rpc);
+    let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(
+        TransactionStatus::Retry {
+            error: scheduler_failure(),
+        },
+    )]));
+    let restarted = durable_rpc(dir.path(), false, backend.clone());
+    for _ in 0..2 {
+        let result = restarted.request(request.clone()).await;
+        assert!(matches!(result, Ok(AirdropAttemptResponse::Pending { .. })));
+    }
+    assert_eq!(*backend.submissions.lock().unwrap(), vec![bytes]);
+}
+
+#[tokio::test]
+async fn restored_dropped_airdrop_is_terminal_without_resubmitting() {
+    let dir = tempfile::tempdir().unwrap();
+    let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
+    let request = test_request(0x44, 9);
+    assert!(matches!(
+        rpc.request(request.clone()).await,
+        Ok(AirdropAttemptResponse::Pending { .. })
+    ));
+    drop(rpc);
+    let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(
+        TransactionStatus::Dropped {
+            error: scheduler_failure(),
+        },
+    )]));
+    let restarted = durable_rpc(dir.path(), false, backend.clone());
+    for _ in 0..2 {
+        let result = restarted.request(request.clone()).await;
+        assert!(
+            matches!(result, Err(RpcServerError::TxRejected(ref reason)) if reason.contains("Executor code -7"))
         );
     }
+    assert!(backend.submissions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn restored_airdrop_repeated_retry_resubmits_after_accepted_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let original_backend = Arc::new(TestBackend::new(vec![]));
+    let rpc = durable_rpc(dir.path(), true, original_backend.clone());
+    let request = test_request(0x44, 9);
+    assert!(matches!(
+        rpc.request(request.clone()).await,
+        Ok(AirdropAttemptResponse::Pending { .. })
+    ));
+    let bytes = original_backend.submissions.lock().unwrap()[0].clone();
+    drop(rpc);
+    let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![
+        Ok(TransactionStatus::Retry {
+            error: scheduler_failure(),
+        }),
+        Ok(TransactionStatus::Pending),
+        Ok(TransactionStatus::Retry {
+            error: scheduler_failure(),
+        }),
+        Ok(TransactionStatus::Retry {
+            error: scheduler_failure(),
+        }),
+        Ok(TransactionStatus::Retry {
+            error: scheduler_failure(),
+        }),
+        Ok(TransactionStatus::Pending),
+    ]));
+    let restarted = durable_rpc(dir.path(), false, backend.clone());
+    let first = restarted.request(request.clone()).await;
+    assert!(matches!(first, Ok(AirdropAttemptResponse::Pending { .. })));
+    let attempt = restarted
+        .attempts
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    assert!(attempt.restored);
+    assert!(attempt.is_submitted().unwrap());
+    assert_eq!(*backend.submissions.lock().unwrap(), vec![bytes.clone()]);
+
+    let second = restarted.request(request.clone()).await;
+    assert!(matches!(second, Ok(AirdropAttemptResponse::Pending { .. })));
+    assert!(!attempt.is_submitted().unwrap());
+    assert_eq!(*backend.submissions.lock().unwrap(), vec![bytes.clone()]);
+
+    let third = restarted.request(request).await;
+    assert!(matches!(third, Ok(AirdropAttemptResponse::Pending { .. })));
+    assert!(attempt.is_submitted().unwrap());
+    assert_eq!(*backend.submissions.lock().unwrap(), vec![bytes; 2]);
+    assert!(backend.status_results.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1008,22 +1092,23 @@ async fn committed_receipt_wins_over_retained_dropped_funding_status() {
             error: scheduler_failure(),
         },
     )]));
-    *backend.receipt.lock().unwrap() =
-        Some(groundhog_json_rpc_types::receipt::TransactionReceipt {
-            tx_hash: original.tx_hash,
-            height: BlockHeight::from(9),
-            status: ExecStatus::Ok,
-            events: vec![],
-            return_data: None,
-            abort_data: None,
-            gas_used: 1,
-        });
+    *backend.receipt.lock().unwrap() = Some(TransactionReceipt {
+        tx_hash: original.tx_hash,
+        height: BlockHeight::from(9),
+        status: ExecStatus::Ok,
+        events: vec![],
+        return_data: None,
+        abort_data: None,
+        gas_used: 1,
+    });
     let restarted = durable_rpc(dir.path(), false, backend.clone());
     assert_eq!(restarted.fund(request.clone()).await.unwrap(), original);
-    assert!(matches!(restarted.request(AirdropRequest {
+    let resumed_request = AirdropRequest {
         recipient: request.recipient,
         client_nonce: request.client_nonce,
-    }).await, Ok(AirdropAttemptResponse::Succeeded { height, .. }) if *height == 9));
+    };
+    let result = restarted.request(resumed_request).await;
+    assert!(matches!(result, Ok(AirdropAttemptResponse::Succeeded { height, .. }) if *height == 9));
     assert!(backend.submissions.lock().unwrap().is_empty());
     assert_eq!(backend.status_results.lock().unwrap().len(), 1);
 }
