@@ -10,7 +10,9 @@ use groundhog_signing::{
 use groundhog_testkit::rpc_types::{
     hex::{Hex0x, HexBytes},
     receipt::{ExecStatus, TransactionReceipt},
-    transaction::{TransactionStatus, TxHash},
+    transaction::{
+        SchedulerTransactionError, SchedulerTransactionErrorSource, TransactionStatus, TxHash,
+    },
 };
 use groundhog_testkit::xdr::{
     contract::ContractEntrypointID, transaction::SignedTransaction, types::SHA256Hash,
@@ -34,9 +36,11 @@ enum Outcome {
     WrongAddress,
     MissingAddress,
     Pending,
+    Retry,
+    Dropped,
 }
 struct State {
-    outcome: Outcome,
+    outcome: Mutex<Outcome>,
     submitted: Mutex<Vec<SignedTransaction>>,
 }
 struct Fixture {
@@ -59,7 +63,7 @@ type DeployCalldata = (
 impl Fixture {
     async fn new(outcome: Outcome) -> Self {
         let state = Arc::new(State {
-            outcome,
+            outcome: Mutex::new(outcome),
             submitted: Mutex::new(vec![]),
         });
         let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
@@ -73,7 +77,7 @@ impl Fixture {
                         .unwrap();
                 let hash = TxHash(Hex0x(transaction_hash(&signed.tx).unwrap()));
                 state.submitted.lock().unwrap().push(signed);
-                match state.outcome {
+                match *state.outcome.lock().unwrap() {
                     Outcome::SendError => Err(ErrorObjectOwned::owned(
                         -32000,
                         "ambiguous submission",
@@ -85,14 +89,23 @@ impl Fixture {
             })
             .unwrap();
         module
-            .register_method("groundhog_getTransactionStatus", |_, _, _| {
-                Ok::<_, ErrorObjectOwned>(TransactionStatus::Unknown)
+            .register_method("groundhog_getTransactionStatus", |_, state, _| {
+                let error =
+                    SchedulerTransactionError::new(SchedulerTransactionErrorSource::Executor, 7);
+                Ok::<_, ErrorObjectOwned>(match *state.outcome.lock().unwrap() {
+                    Outcome::Retry => TransactionStatus::Retry { error },
+                    Outcome::Dropped => TransactionStatus::Dropped { error },
+                    _ => TransactionStatus::Unknown,
+                })
             })
             .unwrap();
         module
             .register_method("groundhog_getTransactionReceipt", |params, state, _| {
                 let (hash,): (TxHash,) = params.parse()?;
-                if matches!(state.outcome, Outcome::SendError | Outcome::Pending) {
+                if matches!(
+                    *state.outcome.lock().unwrap(),
+                    Outcome::SendError | Outcome::Pending | Outcome::Retry | Outcome::Dropped
+                ) {
                     return Ok::<_, ErrorObjectOwned>(None);
                 }
                 let submitted = state.submitted.lock().unwrap();
@@ -107,7 +120,7 @@ impl Fixture {
                     let address =
                         derive_deploy_address(&tx.invocation.invoked_address, &nonce, &code_hash)
                             .unwrap();
-                    match state.outcome {
+                    match *state.outcome.lock().unwrap() {
                         Outcome::MissingAddress => None,
                         Outcome::WrongAddress => Some(HexBytes(vec![8; 32])),
                         _ => Some(HexBytes(address.as_ref().to_vec())),
@@ -118,7 +131,7 @@ impl Fixture {
                     ))
                 };
                 Ok(Some(TransactionReceipt {
-                    tx_hash: if matches!(state.outcome, Outcome::ReceiptHash) {
+                    tx_hash: if matches!(*state.outcome.lock().unwrap(), Outcome::ReceiptHash) {
                         TxHash(Hex0x([9; 32].into()))
                     } else {
                         hash
@@ -464,4 +477,105 @@ async fn high_level_raw_deploy_preserves_unverified_attempt() {
             .unwrap();
         assert_eq!(fixture.state.submitted.lock().unwrap().len(), 1);
     }
+}
+
+#[tokio::test]
+async fn registration_retries_reuse_signed_bytes_and_receipts_finish_recovery() {
+    let fixture = Fixture::new(Outcome::Retry).await;
+    let state = fixture.state.clone();
+    fixture
+        .scenario(false)
+        .await
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
+            let first = ctx
+                .submit_deploy_artifact("counter", DeployOptions::funded(123))
+                .await?;
+            for _ in 0..2 {
+                let retry = ctx
+                    .submit_deploy_artifact("counter", DeployOptions::funded(123))
+                    .await?;
+                assert_eq!(retry.tx_hash(), first.tx_hash());
+                assert_eq!(retry.signed_transaction(), first.signed_transaction());
+                assert_eq!(retry.address(), first.address());
+            }
+            *state.outcome.lock().unwrap() = Outcome::Success;
+            let recovered = ctx
+                .submit_deploy_artifact("counter", DeployOptions::funded(123))
+                .await?;
+            assert_eq!(recovered.tx_hash(), first.tx_hash());
+            recovered.await_receipt().await?;
+            assert!(ctx.is_registered("counter")?);
+            Ok(())
+        })])
+        .await
+        .unwrap();
+    let submitted = fixture.state.submitted.lock().unwrap();
+    assert_eq!(submitted.len(), 3);
+    for tx in &submitted[1..] {
+        assert_eq!(
+            xdrs::txs::encode(tx).unwrap(),
+            xdrs::txs::encode(&submitted[0]).unwrap()
+        );
+    }
+}
+
+#[tokio::test]
+async fn dropped_registration_releases_the_attempt_without_replaying_it() {
+    let fixture = Fixture::new(Outcome::Dropped).await;
+    fixture.scenario(false).await.run_agents([Agent::new("alice", |mut ctx| async move {
+        let first = ctx.submit_register_artifact("counter", DeployOptions::funded(123)).await?;
+        let error = ctx.submit_register_artifact("counter", DeployOptions::funded(123)).await.unwrap_err();
+        assert!(matches!(error, TestkitError::Deploy { ref detail } if detail.contains("dropped: Executor code 7")));
+        assert!(!ctx.is_registered("counter")?);
+        let next = ctx.submit_register_artifact("counter", DeployOptions::funded(124)).await?;
+        assert_ne!(next.tx_hash(), first.tx_hash());
+        Ok(())
+    })]).await.unwrap();
+    assert_eq!(fixture.state.submitted.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_later_run_retries_registration_without_taking_the_original_deployment() {
+    let fixture = Fixture::new(Outcome::Retry).await;
+    let scenario = fixture.scenario(false).await;
+    scenario
+        .run_agents([Agent::new("alice", |mut ctx| async move {
+            let _submitted = ctx
+                .submit_deploy_artifact("counter", DeployOptions::funded(123))
+                .await?;
+            Ok(())
+        })])
+        .await
+        .unwrap();
+    let state = fixture.state.clone();
+    scenario
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
+            let error = ctx
+                .submit_deploy_artifact("counter", DeployOptions::funded(124))
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                TestkitError::ArtifactRegistrationPending { .. }
+            ));
+            *state.outcome.lock().unwrap() = Outcome::Success;
+            let deployed = ctx
+                .deploy_artifact("counter", DeployOptions::funded(124))
+                .await?;
+            assert!(!deployed.registered);
+            Ok(())
+        })])
+        .await
+        .unwrap();
+    let submitted = fixture.state.submitted.lock().unwrap();
+    assert_eq!(submitted.len(), 3);
+    assert_eq!(
+        xdrs::txs::encode(&submitted[0]).unwrap(),
+        xdrs::txs::encode(&submitted[1]).unwrap()
+    );
+    assert_ne!(
+        transaction_hash(&submitted[0].tx).unwrap(),
+        transaction_hash(&submitted[2].tx).unwrap()
+    );
+    assert!(submitted[2].tx.contracts_to_deploy.is_empty());
 }

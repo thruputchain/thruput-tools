@@ -636,6 +636,12 @@ fn describe_status(status: &TransactionStatus) -> String {
             format!("committed at height {height:?}, but the receipt was not yet indexed")
         }
         TransactionStatus::Invalid { reason } => format!("rejected by the scheduler: {reason}"),
+        TransactionStatus::Retry { error } => {
+            format!("retry required: {:?} code {}", error.source, error.code)
+        }
+        TransactionStatus::Dropped { error } => {
+            format!("dropped: {:?} code {}", error.source, error.code)
+        }
         TransactionStatus::RecentFailure {
             attempt_height,
             cause,

@@ -102,6 +102,21 @@ pub(crate) struct PreparedDeploy {
 }
 
 impl PreparedDeploy {
+    pub(crate) fn from_registration(
+        network: Network,
+        attempt: &ArtifactPendingRegistration,
+    ) -> Self {
+        Self {
+            network,
+            owner: attempt.owner,
+            address: attempt.address,
+            tx_hash: attempt.tx_hash,
+            registered: true,
+            tx_hex: attempt.tx_hex.clone(),
+            effects: attempt.effects.clone(),
+        }
+    }
+
     pub(crate) fn pending_registration(&self) -> ArtifactPendingRegistration {
         ArtifactPendingRegistration {
             tx_hash: self.tx_hash,

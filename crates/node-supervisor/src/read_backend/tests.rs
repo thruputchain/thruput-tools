@@ -1259,7 +1259,7 @@ async fn transaction_status_recent_failure_returns_diagnostic() {
     // nondeterministic-failure diagnostic for the hash.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched, lookups) =
-        start_counting_fake_scheduler(FakeSchedulerMode::AllPending).await;
+        start_counting_fake_scheduler(FakeSchedulerMode::NoPending).await;
     let backend = make_read_backend(idx_addr, sched_addr).await;
     let tx_hash = canned_tx_hash(CANNED_TX_HASH_FAILED);
 
@@ -1269,7 +1269,7 @@ async fn transaction_status_recent_failure_returns_diagnostic() {
         .await
         .expect("bug: status check should succeed");
 
-    assert_eq!(lookups.load(Ordering::SeqCst), 0);
+    assert_eq!(lookups.load(Ordering::SeqCst), 1);
 
     // Assert
     match status {
