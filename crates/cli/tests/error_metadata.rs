@@ -30,6 +30,26 @@ const SHARED_CODES: &[(&str, &str)] = &[
 ];
 
 #[test]
+fn unavailable_scaffold_client_has_a_version_specific_hint() {
+    let error = CliError::CargoFailedWithOutput {
+        code: 101,
+        stdout: String::new(),
+        stderr: "error: failed to select a version for the requirement `groundhog-json-rpc-client = \"^0.24.0\"`".into(),
+    };
+    let hint = error.hint().unwrap();
+    assert!(hint.contains("unavailable in the configured registry"));
+    assert!(hint.contains("matching local RPC client source"));
+
+    let unrelated = CliError::CargoFailedWithOutput {
+        code: 101,
+        stdout: String::new(),
+        stderr: "error: failed to select a version for the requirement `another-crate = \"^1\"`"
+            .into(),
+    };
+    assert!(!unrelated.hint().unwrap().contains("unpublished CLI"));
+}
+
+#[test]
 fn metadata_matches_snapshot() {
     let actual = render_metadata();
     let path = snapshot_path();

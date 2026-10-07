@@ -118,6 +118,11 @@ impl From<NodeBlockDriverArg> for groundhog_cli::node::LocalNodeBlockDriverMode 
 enum Command {
     /// Create a new Groundhog contract project
     New(NewArgs),
+    /// Discover embedded project templates
+    Templates {
+        #[command(subcommand)]
+        command: TemplatesCommand,
+    },
     /// Serve the bundled developer documentation on localhost
     Docs(DocsArgs),
     /// Install, update, or read Groundhog coding-agent guidance
@@ -272,6 +277,12 @@ impl Command {
     fn command_name(&self) -> &'static str {
         match self {
             Self::New(..) => "new",
+            Self::Templates {
+                command: TemplatesCommand::List,
+            } => "templates.list",
+            Self::Templates {
+                command: TemplatesCommand::Show { .. },
+            } => "templates.show",
             Self::Init(..) => "init",
             Self::Status(..) => "status",
             Self::Build(..) => "build",
@@ -307,6 +318,12 @@ impl Command {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         match self {
             Self::New(args) => args.run(ctx),
+            Self::Templates {
+                command: TemplatesCommand::List,
+            } => groundhog_cli::templates::list(ctx.cmd_name, &ctx.print),
+            Self::Templates {
+                command: TemplatesCommand::Show { id },
+            } => groundhog_cli::templates::show(&id, ctx.cmd_name, &ctx.print),
             Self::Docs(args) => args.run(ctx),
             Self::Skill { command } => command.run(ctx),
             Self::Init(args) => args.run(ctx),
@@ -338,20 +355,33 @@ impl Command {
 #[derive(Args)]
 struct NewArgs {
     /// Project name: lowercase letters, digits, and single hyphens, starting with a letter
-    name: String,
-    /// Project template
-    #[arg(
-        long,
-        default_value = "counter",
-        value_parser = ["counter", "stub"]
-    )]
-    template: String,
+    name: Option<String>,
+    /// Project directory (relative, absolute, or ~/path); parent must exist, destination must be empty
+    #[arg(long)]
+    path: Option<PathBuf>,
+    /// Named template from `templates list`; omit for a minimal contract
+    #[arg(long)]
+    template: Option<String>,
 }
 
 impl NewArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        groundhog_cli::new::run(&self.name, &self.template, ctx.cmd_name, &ctx.print)
+        groundhog_cli::new::run(
+            self.name,
+            self.path,
+            self.template,
+            ctx.cmd_name,
+            &ctx.print,
+        )
     }
+}
+
+#[derive(Subcommand)]
+enum TemplatesCommand {
+    /// List available project templates
+    List,
+    /// Show contents, prerequisites, and next steps
+    Show { id: String },
 }
 
 #[derive(Args)]

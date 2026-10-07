@@ -50,7 +50,7 @@ in generated projects).
 groundhog init
 
 # Create a new contract project (counter template)
-groundhog new my-counter && cd my-counter
+groundhog new my-counter --template counter && cd my-counter
 
 # Build the RV32 contract artifact
 groundhog build
@@ -237,14 +237,38 @@ groundhog status --quiet      # exit code only (for CI)
 groundhog status --profile p  # check a specific profile
 ```
 
-### `groundhog new <name>`
+### `groundhog new [name]`
 
-Create a new contract project in a subdirectory.
+Create a minimal contract project. Omit the name in an interactive terminal for
+a short name, destination, and template flow. Creating files requires neither
+`groundhog init` nor a running node.
 
 ```bash
-groundhog new my-counter                    # counter template (default)
-groundhog new my-contract --template stub   # minimal template
+groundhog new my-contract                   # minimal contract (default)
+groundhog new my-counter --template counter # counter example
+groundhog new my-app --template counter-app # React + Vite counter application
+groundhog new my-contract --path .          # current directory must be empty
+groundhog templates list                    # offline template discovery
+groundhog templates show counter            # contents, prerequisites, next steps
 ```
+
+Explicit names skip prompts. `--path` and the destination prompt accept relative
+paths, absolute paths, and `~/` paths. The destination is the project directory,
+not its parent: use `~/Work/my-contract`, not `~/Work`. Its parent must exist;
+existing destinations must be empty and files are never overwritten.
+`--template stub` now explains how
+to use the minimal default. Creation JSON uses `data.schemaVersion = 2` and
+`template: null` for the minimal scaffold. Template discovery JSON uses schema v1.
+
+The counter app requires Node.js 22.12+, npm access to the Groundhog packages,
+and the normal Rust/CLI prerequisites. Run `groundhog init` once and keep
+`groundhog node` running in another terminal. In the app directory, run
+`npm install`, `npm run contract:deploy`, then `npm run dev`. Deployment builds the
+contract/bindings and saves a fresh counter's address. The dev server reuses that
+deployment across restarts. The browser creates and funds an in-memory native
+wallet and signs directly through the TypeScript client. Reloading changes the
+wallet; explicit redeployment changes the contract. After redeploying, reload the
+browser. See the generated README for configuration and build instructions.
 
 ### `groundhog build`
 

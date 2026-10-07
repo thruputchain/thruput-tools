@@ -176,7 +176,7 @@ fn scaffold_commented_alias_key_matches_the_name_deploy_saves() {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join(name);
         fs::create_dir(&dir).unwrap();
-        groundhog_cli::scaffold::generate(&dir, name, "counter").unwrap();
+        groundhog_cli::scaffold::generate(&dir, name, Some("counter")).unwrap();
 
         let cargo = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
         let package_name = cargo
@@ -201,7 +201,7 @@ fn scaffold_counter_creates_expected_files() {
     let dir = tmp.path().join("my-counter");
     fs::create_dir(&dir).unwrap();
 
-    groundhog_cli::scaffold::generate(&dir, "my-counter", "counter").unwrap();
+    groundhog_cli::scaffold::generate(&dir, "my-counter", Some("counter")).unwrap();
 
     assert!(dir.join("Cargo.toml").exists());
     assert!(dir.join("build.rs").exists());
@@ -308,12 +308,12 @@ fn scaffold_counter_creates_expected_files() {
 }
 
 #[test]
-fn scaffold_stub_has_empty_contract() {
+fn scaffold_default_has_empty_contract() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("my-stub");
     fs::create_dir(&dir).unwrap();
 
-    groundhog_cli::scaffold::generate(&dir, "my-stub", "stub").unwrap();
+    groundhog_cli::scaffold::generate(&dir, "my-stub", None).unwrap();
 
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));
@@ -322,7 +322,7 @@ fn scaffold_stub_has_empty_contract() {
     let imp = fs::read_to_string(dir.join("src/implementation.rs")).unwrap();
     assert!(imp.contains("pub struct Contract"));
     assert!(!imp.contains("increment"));
-    assert!(imp.contains("#[contract_exception]"));
+    assert!(!imp.contains("#[contract_exception]"));
 
     assert_rv32_only_test_scaffold(&dir);
     // The stub renders its own tests/test.rs; keep it on the same
@@ -344,35 +344,35 @@ fn scaffold_stub_has_empty_contract() {
 fn scaffold_unknown_template_errors() {
     let tmp = TempDir::new().unwrap();
 
-    let result = groundhog_cli::scaffold::generate(tmp.path(), "my-project", "nope");
+    let result = groundhog_cli::scaffold::generate(tmp.path(), "my-project", Some("nope"));
     assert!(result.is_err());
 }
 
 #[test]
 fn scaffold_rejects_empty_name() {
     let tmp = TempDir::new().unwrap();
-    let result = groundhog_cli::scaffold::generate(tmp.path(), "", "counter");
+    let result = groundhog_cli::scaffold::generate(tmp.path(), "", Some("counter"));
     assert!(result.is_err());
 }
 
 #[test]
 fn scaffold_rejects_uppercase_name() {
     let tmp = TempDir::new().unwrap();
-    let result = groundhog_cli::scaffold::generate(tmp.path(), "MyProject", "counter");
+    let result = groundhog_cli::scaffold::generate(tmp.path(), "MyProject", Some("counter"));
     assert!(result.is_err());
 }
 
 #[test]
 fn scaffold_rejects_name_starting_with_digit() {
     let tmp = TempDir::new().unwrap();
-    let result = groundhog_cli::scaffold::generate(tmp.path(), "1foo", "counter");
+    let result = groundhog_cli::scaffold::generate(tmp.path(), "1foo", Some("counter"));
     assert!(result.is_err());
 }
 
 #[test]
 fn scaffold_rejects_name_with_underscore() {
     let tmp = TempDir::new().unwrap();
-    let result = groundhog_cli::scaffold::generate(tmp.path(), "my_project", "counter");
+    let result = groundhog_cli::scaffold::generate(tmp.path(), "my_project", Some("counter"));
     assert!(result.is_err());
 }
 
@@ -381,21 +381,21 @@ fn scaffold_accepts_valid_name_with_hyphens() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("my-project-2");
     fs::create_dir(&dir).unwrap();
-    let result = groundhog_cli::scaffold::generate(&dir, "my-project-2", "counter");
+    let result = groundhog_cli::scaffold::generate(&dir, "my-project-2", Some("counter"));
     assert!(result.is_ok());
 }
 
 #[test]
 fn scaffold_rejects_trailing_hyphen() {
     let tmp = TempDir::new().unwrap();
-    let result = groundhog_cli::scaffold::generate(tmp.path(), "my-project-", "counter");
+    let result = groundhog_cli::scaffold::generate(tmp.path(), "my-project-", Some("counter"));
     assert!(result.is_err());
 }
 
 #[test]
 fn scaffold_rejects_consecutive_hyphens() {
     let tmp = TempDir::new().unwrap();
-    let result = groundhog_cli::scaffold::generate(tmp.path(), "my--project", "counter");
+    let result = groundhog_cli::scaffold::generate(tmp.path(), "my--project", Some("counter"));
     assert!(result.is_err());
 }
 
@@ -448,7 +448,7 @@ const RESERVED_NAME_CASES: &[(&str, &str)] = &[
 fn scaffold_rejects_reserved_names() {
     for (name, expected_reason) in RESERVED_NAME_CASES {
         let tmp = TempDir::new().unwrap();
-        let err = groundhog_cli::scaffold::generate(tmp.path(), name, "counter")
+        let err = groundhog_cli::scaffold::generate(tmp.path(), name, Some("counter"))
             .expect_err(&format!("`{name}` must be rejected"));
         let message = err.to_string();
         assert!(
@@ -476,7 +476,7 @@ fn scaffold_accepts_names_that_merely_resemble_reserved_ones() {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("project");
         fs::create_dir(&dir).unwrap();
-        groundhog_cli::scaffold::generate(&dir, name, "counter")
+        groundhog_cli::scaffold::generate(&dir, name, Some("counter"))
             .unwrap_or_else(|e| panic!("`{name}` must be accepted: {e}"));
     }
 }
@@ -518,7 +518,7 @@ fn every_scaffold_dependency_name_is_reserved() {
 fn assert_reserved_dependency(name: &str) {
     let tmp = TempDir::new().unwrap();
     assert!(
-        groundhog_cli::scaffold::generate(tmp.path(), name, "counter").is_err(),
+        groundhog_cli::scaffold::generate(tmp.path(), name, Some("counter")).is_err(),
         "template dependency `{name}` is not a reserved project name"
     );
 }

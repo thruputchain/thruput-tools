@@ -250,8 +250,8 @@ fn scaffolds_and_ready_init_use_shared_cards() {
     let fixture = Fixture::new();
     fixture.populate();
     for args in [
-        vec!["new", "counter-example"],
-        vec!["new", "stub-example", "--template", "stub"],
+        vec!["new", "counter-example", "--template", "counter"],
+        vec!["new", "minimal-example"],
         vec!["init"],
     ] {
         let output = terminal_capture(fixture.command(&args), 40, true);

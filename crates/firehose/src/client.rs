@@ -5,7 +5,76 @@ use groundhog_indexer::{
     EventIndexerPullResult, IndexerProgress,
 };
 use groundhog_xdr::network::ProtocolCommit;
-use std::time::Duration;
+use std::{future::Future, net::SocketAddr, time::Duration};
+use tokio::time::Instant;
+
+/// Resolve an endpoint and share the remaining deadline across connection attempts.
+pub async fn connect_endpoint<C, F, Fut>(
+    endpoint: &str,
+    deadline: Instant,
+    connect: F,
+) -> Result<C, Error>
+where
+    F: FnMut(SocketAddr) -> Fut,
+    Fut: Future<Output = Result<C, groundhog_x23_transport::ConnectError>>,
+{
+    connect_addresses(
+        endpoint,
+        tokio::net::lookup_host(endpoint).await?,
+        deadline,
+        connect,
+    )
+    .await
+}
+
+/// Try resolved addresses, sharing the remaining deadline across untried addresses.
+pub async fn connect_addresses<C, F, Fut>(
+    endpoint: &str,
+    addresses: impl IntoIterator<Item = SocketAddr>,
+    deadline: Instant,
+    mut connect: F,
+) -> Result<C, Error>
+where
+    F: FnMut(SocketAddr) -> Fut,
+    Fut: Future<Output = Result<C, groundhog_x23_transport::ConnectError>>,
+{
+    let mut attempts = Vec::new();
+    let addresses: Vec<_> = addresses.into_iter().collect();
+    for (index, address) in addresses.iter().copied().enumerate() {
+        let remaining = u32::try_from(addresses.len() - index).unwrap_or(u32::MAX);
+        let budget = deadline.saturating_duration_since(Instant::now()) / remaining;
+        match tokio::time::timeout(budget, connect(address)).await {
+            Ok(Ok(client)) => return Ok(client),
+            Ok(Err(error)) => attempts.push(error),
+            Err(_) => attempts.push(groundhog_x23_transport::ConnectError::ConnectFailed {
+                service: "endpoint",
+                addr: address.to_string(),
+                source: rpc_driver::RpcError::ConnectFailed,
+            }),
+        }
+    }
+    if attempts.is_empty() {
+        return Err(crate::invalid("endpoint resolved to no addresses"));
+    }
+    Err(Error::AllAddressesFailed {
+        endpoint: endpoint.to_owned(),
+        attempts,
+    })
+}
+
+async fn connect_event_indexer(
+    address: SocketAddr,
+) -> Result<Client, groundhog_x23_transport::ConnectError> {
+    groundhog_x23_transport::connect_with_config(
+        "event_indexer",
+        &address.to_string(),
+        1,
+        rpc_driver::ConnectionConfig::new(Some(0x7fff_ffff), rpc_driver::ServiceMap::new()),
+        EventIndexer_EventIndexer1_Client::new,
+    )
+    .await
+    .map(Client)
+}
 
 /// The complete classified result space, including forward-incompatible values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,20 +136,12 @@ impl Client {
     /// Resolve an explicit address and connect with the protocol's 31-bit ceiling.
     #[tracing::instrument(skip_all, fields(endpoint))]
     pub async fn connect(endpoint: &str) -> Result<Self, Error> {
-        let addr = tokio::net::lookup_host(endpoint)
-            .await?
-            .next()
-            .ok_or_else(|| crate::invalid("endpoint resolved to no addresses"))?;
-        Ok(Self(
-            groundhog_x23_transport::connect_with_config(
-                "event_indexer",
-                &addr.to_string(),
-                1,
-                rpc_driver::ConnectionConfig::new(Some(0x7fff_ffff), rpc_driver::ServiceMap::new()),
-                EventIndexer_EventIndexer1_Client::new,
-            )
-            .await?,
-        ))
+        connect_endpoint(
+            endpoint,
+            Instant::now() + Duration::from_secs(3),
+            connect_event_indexer,
+        )
+        .await
     }
 
     /// Pull one block or park. Never impose a request deadline on a parked pull.
@@ -131,6 +192,140 @@ mod tests {
 
     struct RecordingSender {
         procedures: Mutex<Vec<u32>>,
+    }
+
+    struct NotReadyServer;
+
+    #[async_trait::async_trait]
+    impl rpc_driver::handler::RpcHandler for NotReadyServer {
+        fn prog_vers(&self) -> ProgVers {
+            ProgVers::new(0x4321_aaac, 1)
+        }
+
+        async fn dispatch(&self, procedure: u32, data: &[u8]) -> Result<Vec<u8>, RpcError> {
+            assert_eq!(procedure, 10);
+            let request: EventIndexerPullRequest = xdrs::txs::decode(data).unwrap();
+            assert_eq!(request.progress.state().0, 0);
+            Ok(xdrs::txs::encode(&EventIndexerPullResult::Default {
+                outcome: 2,
+                diagnostic: "not ready".try_into().unwrap(),
+            })
+            .unwrap())
+        }
+    }
+
+    // Keep the port reserved without listening, so connection refusal cannot race
+    // another test acquiring an ephemeral port that was just released.
+    fn dead_socket() -> tokio::net::TcpSocket {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        socket
+    }
+
+    #[tokio::test]
+    async fn later_address_serves_after_connection_refused() {
+        let dead = dead_socket();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let live = listener.local_addr().unwrap();
+        let mut services = rpc_driver::ServiceMap::new();
+        services.add_service(Box::new(NotReadyServer));
+        let server = rpc_driver::RpcServer::new(listener, services).start().await;
+        let mut attempted = Vec::new();
+
+        let client = connect_addresses(
+            "test.invalid:1234",
+            [dead.local_addr().unwrap(), live, dead.local_addr().unwrap()],
+            Instant::now() + Duration::from_secs(3),
+            |address| {
+                attempted.push(address);
+                connect_event_indexer(address)
+            },
+        )
+        .await
+        .unwrap();
+        let result = client
+            .pull(
+                groundhog_xdr::PROTOCOL_VERSION,
+                IndexerProgress::Default { state: 0 },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome(&result), Outcome::NotReady);
+        assert_eq!(attempted, [dead.local_addr().unwrap(), live]);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn all_failed_addresses_are_reported_together() {
+        let dead = [dead_socket(), dead_socket()];
+        let addresses = dead.each_ref().map(|socket| socket.local_addr().unwrap());
+        let error = connect_addresses(
+            "test.invalid:1234",
+            addresses,
+            Instant::now() + Duration::from_secs(3),
+            connect_event_indexer,
+        )
+        .await
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("all 2 resolved addresses failed for test.invalid:1234"));
+        for address in addresses {
+            assert!(message.contains(&address.to_string()), "{message}");
+        }
+        assert!(matches!(error, Error::AllAddressesFailed { attempts, .. } if attempts.len() == 2));
+    }
+
+    #[tokio::test]
+    async fn hung_attempts_share_budget_and_report_every_address() {
+        let addresses = [
+            "127.0.0.1:1".parse().unwrap(),
+            "127.0.0.1:2".parse().unwrap(),
+        ];
+        let start = Instant::now();
+        let error = tokio::time::timeout(
+            Duration::from_millis(200),
+            connect_addresses::<(), _, _>(
+                "test.invalid:1234",
+                addresses,
+                start + Duration::from_millis(100),
+                |_| std::future::pending(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        let Error::AllAddressesFailed { ref attempts, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(attempts.len(), 2);
+        let details = attempts
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert_eq!(
+            error.to_string(),
+            format!("all 2 resolved addresses failed for test.invalid:1234: {details}")
+        );
+        for address in addresses {
+            assert!(error.to_string().contains(&address.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_resolution_is_distinct_from_connection_failure() {
+        let error = connect_addresses(
+            "test.invalid:1234",
+            [],
+            Instant::now() + Duration::from_secs(3),
+            connect_event_indexer,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, Error::Invalid(message)
+                if message == "endpoint resolved to no addresses"));
     }
 
     #[async_trait::async_trait]

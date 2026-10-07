@@ -133,7 +133,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        template: [counter, stub]
+        template: [counter, minimal]
     steps:
       - name: Checkout
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
@@ -153,7 +153,12 @@ jobs:
       # config rather than inheriting the workspace.
       - name: Scaffold project (groundhog new)
         working-directory: ${{ runner.temp }}
-        run: groundhog new my-${{ matrix.template }} --template ${{ matrix.template }}
+        run: |
+          if [ '${{ matrix.template }}' = minimal ]; then
+            groundhog new my-minimal
+          else
+            groundhog new my-${{ matrix.template }} --template ${{ matrix.template }}
+          fi
 
       # A release PR advances the scaffold to a client version that does not
       # exist in the registry until after merge. Exercise that exact source
@@ -243,6 +248,40 @@ jobs:
             cat guard.log
             exit 1
           fi
+
+  scaffold-app:
+    needs: dependency-policy
+    name: Counter app (generated project + real-node browser smoke)
+    runs-on: namespace-profile-hogd-linux-2604
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
+      - name: Configure Namespace Cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        with:
+          cache: rust
+      - name: Set up Node.js and package authentication
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          registry-url: https://npm.pkg.github.com
+          scope: '@groundhogchain'
+      - name: Build CLI and install selected runtime
+        run: |
+          cargo build --locked -p groundhog-cli
+          ./target/debug/groundhog toolchain install --non-interactive
+      - name: Install browser test dependencies
+        run: |
+          npm ci --prefix scripts/scaffold-app
+          npx --prefix scripts/scaffold-app playwright install --with-deps chromium
+      - name: Test generated counter app
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm test --prefix scripts/scaffold-app
 
   # Codegen tests assert on generated text. This job runs the real CLI over the
   # checked-in spec artifacts, then type-checks and runs what it generates.

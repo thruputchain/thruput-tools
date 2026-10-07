@@ -38,6 +38,10 @@ pub struct Config {
     /// Maximum simultaneous subscribers across all connections.
     #[arg(long, default_value_t = 64)]
     pub max_subscribers: u32,
+    /// Maximum subscriptions per connection (default: 1 with --allow-remote,
+    /// otherwise --max-subscribers).
+    #[arg(long)]
+    pub max_subscriptions_per_connection: Option<u32>,
     /// Maximum queued records per live subscriber.
     #[arg(long, default_value_t = 8)]
     pub subscriber_queue: usize,
@@ -59,9 +63,20 @@ pub struct Config {
 }
 
 impl Config {
+    /// Resolve the exposure-aware default, preserving explicit operator overrides.
+    pub fn subscription_limit_per_connection(&self) -> u32 {
+        self.max_subscriptions_per_connection
+            .unwrap_or(if self.allow_remote {
+                1
+            } else {
+                self.max_subscribers
+            })
+    }
+
     /// Reject invalid bounds and accidental public exposure before binding.
     pub fn validate(&self, metrics_address: SocketAddr) -> Result<(), crate::Error> {
         if self.max_subscribers == 0
+            || self.subscription_limit_per_connection() == 0
             || self.subscriber_queue == 0
             || self.subscriber_queue_bytes == 0
             || self.max_record_bytes == 0
@@ -377,7 +392,7 @@ impl Hub {
             .ws_only()
             .enable_ws_ping(PingConfig::new())
             .max_connections(self.config.max_subscribers)
-            .max_subscriptions_per_connection(self.config.max_subscribers)
+            .max_subscriptions_per_connection(self.config.subscription_limit_per_connection())
             .set_message_buffer_capacity(2)
             .max_request_body_size(4096)
             .max_response_body_size(self.config.max_record_bytes * 2 + 4096)
@@ -396,6 +411,11 @@ impl Hub {
             .build(self.config.ws_listen)
             .await?;
         let address = server.local_addr()?;
+        if self.config.allow_remote && self.config.max_subscriptions_per_connection.is_none() {
+            tracing::info!(
+                "--allow-remote defaults --max-subscriptions-per-connection to 1; set it explicitly to override"
+            );
+        }
         Ok((address, server.start(self.clone().into_rpc())))
     }
 

@@ -46,6 +46,7 @@ pub mod scaffold;
 pub mod skill;
 pub mod status;
 pub mod storage;
+pub mod templates;
 pub(crate) mod terminal;
 pub mod test_cmd;
 pub mod test_json;

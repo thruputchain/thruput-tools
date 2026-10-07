@@ -18,6 +18,10 @@ subscribe/ack/resume, bounded queues, limits and metrics, and
 [Brief 09 measurements](subscription-measurement-2026-09-18.md) for fanout evidence.
 Both listeners default to loopback. Non-loopback binding requires
 `--allow-remote` and emits an unauthenticated-service startup warning.
+It also defaults to one subscription per connection and logs that choice;
+`--max-subscriptions-per-connection` explicitly overrides the limit. Local use
+without `--allow-remote` retains the global subscriber cap as its per-connection
+default. Pass `--allow-remote` for public proxy deployments even on loopback.
 
 `run` is the same service without block summaries. `tail` emits height, emitted
 event count, transaction count, XDR payload bytes, and elapsed time since the

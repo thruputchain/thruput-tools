@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::init_json::{INIT_JSON_SCHEMA_VERSION, InitReport, InitRequirement};
-use crate::print::StepState;
+use crate::print::{StepState, Wizard};
 use crate::result::{CommandError, CommandResult};
 use crate::{CliError, Print};
 
@@ -153,7 +153,7 @@ fn finish_setup(
         )?;
     } else {
         ui.finish_view()?;
-        if ui.view_active {
+        if ui.wizard.is_active() {
             ui.print.outcome_findings(
                 crate::print::Outcome::Partial,
                 "Setup Incomplete",
@@ -275,7 +275,7 @@ fn handle_scaffold_step(
         } else {
             let dir = project_start.join(name);
             ui.warnings.extend(crate::new::run_in_with_warnings(
-                &dir, name, "counter", "new", ui.print,
+                &dir, name, None, "new", ui.print,
             )?);
             ui.finish_step(InitStep::Project, StepState::Done);
             Some(ProjectContext {
@@ -343,8 +343,7 @@ impl InitStep {
 
 struct InitUi<'a> {
     print: &'a Print,
-    steps: [StepState; INIT_STEPS],
-    view_active: bool,
+    wizard: Wizard<'a, INIT_STEPS>,
     warnings: Vec<crate::checks::Finding>,
 }
 
@@ -352,55 +351,22 @@ impl<'a> InitUi<'a> {
     fn new(print: &'a Print) -> Self {
         Self {
             print,
-            steps: [StepState::Pending; INIT_STEPS],
-            view_active: false,
+            wizard: Wizard::new(
+                print,
+                "Groundhog Setup",
+                "Set up your local development environment.",
+                InitStep::ALL.map(InitStep::label),
+            ),
             warnings: Vec::new(),
         }
     }
 
-    fn render_intro(&mut self) {
-        if self.print.is_quiet() {
-            return;
-        }
-
-        self.print.summary_card(
-            "Groundhog Setup",
-            &[(
-                String::new(),
-                "Set up your local development environment.".into(),
-            )],
-        );
-    }
-
     fn begin_step(&mut self, step: InitStep) -> Result<(), CliError> {
-        self.steps[step.index()] = StepState::Current;
-        let steps = InitStep::ALL.map(|step| (step.label(), self.steps[step.index()]));
-        let refreshed = self.print.wizard_view(
-            "Groundhog Setup",
-            "Set up your local development environment.",
-            &steps,
-        )?;
-        self.view_active |= refreshed;
-        if !refreshed {
-            if step.index() == 0 {
-                self.render_intro();
-            }
-            self.print.status(format_args!(
-                "[{}/{}] {}",
-                step.index() + 1,
-                INIT_STEPS,
-                step.label()
-            ));
-        }
-        Ok(())
+        self.wizard.begin_step(step.index())
     }
 
     fn finish_step(&mut self, step: InitStep, state: StepState) {
-        self.steps[step.index()] = state;
-        if state == StepState::Skipped {
-            self.print
-                .note(format_args!("{}: {}", step.label(), state.label()));
-        }
+        self.wizard.finish_step(step.index(), state);
     }
 
     fn success(&self, msg: impl std::fmt::Display) {
@@ -412,10 +378,7 @@ impl<'a> InitUi<'a> {
     }
 
     fn finish_view(&self) -> Result<(), CliError> {
-        if self.view_active {
-            self.print.clear_guided_view()?;
-        }
-        Ok(())
+        self.wizard.finish_view()
     }
 
     fn completion_review(
@@ -428,7 +391,7 @@ impl<'a> InitUi<'a> {
             return Ok(());
         }
         self.finish_view()?;
-        if self.view_active {
+        if self.wizard.is_active() {
             self.print
                 .outcome_findings(crate::print::Outcome::Ready, title, items, &self.warnings);
         } else {
