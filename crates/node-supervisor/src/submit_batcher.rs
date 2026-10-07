@@ -7,11 +7,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use groundhog_hogd_backend::{scheduler as shared_scheduler, submit as shared_submit};
+use groundhog_hogd_backend::scheduler as shared_scheduler;
+use groundhog_hogd_backend::submit::{self as shared_submit, SubmitBatch};
 use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
 use groundhog_scheduler::{
-    SchedGatewaySubmitOutcomeBatch, parallel::ParallelSignedTransactionBatch,
-    sched_gateway::SchedGateway_SchedGateway1_Client,
+    SchedGatewaySubmitOutcomeBatch, sched_gateway::SchedGateway_SchedGateway1_Client,
 };
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
@@ -36,7 +36,7 @@ const MAX_DEADLINE_SKEW: Duration = Duration::from_secs(1);
 trait SubmitSink: Send + Sync + 'static {
     async fn submit(
         &self,
-        batch: ParallelSignedTransactionBatch,
+        batch: SubmitBatch<Vec<u8>>,
     ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError>;
 }
 
@@ -48,7 +48,7 @@ struct SchedulerSink {
 impl SubmitSink for SchedulerSink {
     async fn submit(
         &self,
-        batch: ParallelSignedTransactionBatch,
+        batch: SubmitBatch<Vec<u8>>,
     ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
         self.scheduler
             .schedgateway_submit_tx_batch(&batch)
@@ -265,7 +265,7 @@ async fn run(
         for cohort in
             shared_submit::deadline_cohorts(live, MAX_DEADLINE_SKEW, |item| item.backend_deadline)
         {
-            let cohort = live_items(cohort, Instant::now());
+            let mut cohort = live_items(cohort, Instant::now());
             if cohort.is_empty() {
                 continue;
             }
@@ -276,11 +276,15 @@ async fn run(
                 batch_size = cohort.len(),
                 "submitting dev-node transaction batch"
             );
-            let result =
-                match shared_submit::pack(cohort.iter().map(|item| item.tx_bytes.as_slice())) {
-                    Ok(batch) => submit_before(&sink, batch, deadline).await,
-                    Err(error) => Err(error),
-                };
+            // Move the bytes into the batch; the items keep their replies.
+            let transactions = cohort
+                .iter_mut()
+                .map(|item| std::mem::take(&mut item.tx_bytes))
+                .collect();
+            let result = match shared_submit::pack(transactions) {
+                Ok(batch) => submit_before(&sink, batch, deadline).await,
+                Err(error) => Err(error),
+            };
             let results = match result {
                 Ok(outcomes) if outcomes.0.len() == cohort.len() => outcomes
                     .0
@@ -314,7 +318,7 @@ async fn run(
 
 async fn submit_before(
     sink: &Arc<dyn SubmitSink>,
-    batch: ParallelSignedTransactionBatch,
+    batch: SubmitBatch<Vec<u8>>,
     deadline: Instant,
 ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
     let submit = sink.submit(batch);

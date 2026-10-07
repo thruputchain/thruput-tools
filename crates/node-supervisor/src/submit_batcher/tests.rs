@@ -15,14 +15,14 @@ fn cohorts(items: Vec<Item>) -> Vec<Vec<Item>> {
     shared_submit::deadline_cohorts(items, MAX_DEADLINE_SKEW, |item| item.backend_deadline)
 }
 
-/// Pack items the way the worker does.
-fn pack(items: &[Item]) -> ParallelSignedTransactionBatch {
-    shared_submit::pack(items.iter().map(|item| item.tx_bytes.as_slice()))
+/// Pack copies of the items' bytes the way the worker packs them.
+fn pack(items: &[Item]) -> SubmitBatch<Vec<u8>> {
+    shared_submit::pack(items.iter().map(|item| item.tx_bytes.clone()).collect())
         .expect("bug: test transactions should pack")
 }
 
 struct GatedSink {
-    batches: Mutex<Vec<ParallelSignedTransactionBatch>>,
+    batches: Mutex<Vec<SubmitBatch<Vec<u8>>>>,
     called: Notify,
     permits: Semaphore,
 }
@@ -39,14 +39,14 @@ impl GatedSink {
 
 #[derive(Default)]
 struct RecordingSink {
-    batches: Mutex<Vec<ParallelSignedTransactionBatch>>,
+    batches: Mutex<Vec<SubmitBatch<Vec<u8>>>>,
 }
 
 #[async_trait]
 impl SubmitSink for RecordingSink {
     async fn submit(
         &self,
-        batch: ParallelSignedTransactionBatch,
+        batch: SubmitBatch<Vec<u8>>,
     ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
         let count = batch.segment_tokens.0.len();
         self.batches
@@ -63,7 +63,7 @@ impl SubmitSink for RecordingSink {
 impl SubmitSink for GatedSink {
     async fn submit(
         &self,
-        batch: ParallelSignedTransactionBatch,
+        batch: SubmitBatch<Vec<u8>>,
     ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
         let count = batch.segment_tokens.0.len();
         self.batches
@@ -121,7 +121,7 @@ fn pack_preserves_transaction_segments_and_bytes() {
 
     assert_eq!(batch.segment_tokens.0, vec![1, 1]);
     assert_eq!(batch.segment_bytes.0, vec![2, 3]);
-    assert_eq!(batch.xdr.0, vec![1, 2, 3, 4, 5]);
+    assert_eq!(batch.xdr.0, vec![vec![1, 2], vec![3, 4, 5]]);
 }
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn count_limit_splits_drained_items_without_reordering() {
         .lock()
         .expect("bug: test batch lock should be available")
         .iter()
-        .map(|batch| batch.xdr.0.clone())
+        .map(|batch| batch.xdr.0.concat())
         .collect();
     assert_eq!(batches, vec![vec![1, 2], vec![3]]);
     assert!(
@@ -183,7 +183,7 @@ async fn byte_limit_splits_drained_items_without_reordering() {
         .lock()
         .expect("bug: test batch lock should be available")
         .iter()
-        .map(|batch| batch.xdr.0.clone())
+        .map(|batch| batch.xdr.0.concat())
         .collect();
     assert_eq!(batches, vec![vec![1, 1, 1], vec![2, 2, 3, 3]]);
     assert!(
@@ -251,7 +251,7 @@ fn expired_item_in_later_cohort_does_not_discard_live_item() {
         live_reply.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
     ));
-    assert_eq!(pack(&tightest).xdr.0, vec![3]);
+    assert_eq!(pack(&tightest).xdr.0.concat(), vec![3]);
 }
 
 #[tokio::test]
@@ -492,7 +492,7 @@ async fn scheduler_timeout_does_not_wedge_later_submissions() {
     impl SubmitSink for SlowFirstSink {
         async fn submit(
             &self,
-            batch: ParallelSignedTransactionBatch,
+            batch: SubmitBatch<Vec<u8>>,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
             let count = batch.segment_tokens.0.len();
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -559,7 +559,7 @@ async fn scheduler_failure_is_returned_to_every_batched_request() {
     impl SubmitSink for FailingSink {
         async fn submit(
             &self,
-            _batch: ParallelSignedTransactionBatch,
+            _batch: SubmitBatch<Vec<u8>>,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
             Err(RpcServerError::BackendUnavailable("test failure".into()))
         }
@@ -614,7 +614,7 @@ struct OutcomeSink(Vec<SchedGatewaySubmitOutcome>);
 impl SubmitSink for OutcomeSink {
     async fn submit(
         &self,
-        _batch: ParallelSignedTransactionBatch,
+        _batch: SubmitBatch<Vec<u8>>,
     ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
         Ok(VecM(self.0.clone()))
     }
