@@ -1,7 +1,13 @@
 //! Opt-in service heap profiles. Dump requests are serialized; concurrent requests get 429.
 
 mod convert;
-pub use convert::jemalloc_to_pprof;
+pub use convert::{Frame, Symbolize, jemalloc_to_pprof};
+
+/// Capture a symbolized heap profile from the current process.
+#[cfg(all(target_os = "linux", feature = "jemalloc"))]
+pub fn dump_pprof() -> io::Result<Vec<u8>> {
+    linux::dump()
+}
 
 use axum::Router;
 use std::io;
@@ -12,21 +18,21 @@ pub async fn initialize() -> io::Result<bool> {
     if std::env::var_os("GROUNDHOG_HEAP_PROFILING").as_deref() != Some(std::ffi::OsStr::new("1")) {
         return Ok(false);
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "jemalloc"))]
     {
         linux::activate()?;
         Ok(true)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(all(target_os = "linux", feature = "jemalloc")))]
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "GROUNDHOG_HEAP_PROFILING requires Linux",
+        "GROUNDHOG_HEAP_PROFILING needs a Linux build with the heap-profiling feature",
     ))
 }
 
 /// Expose the endpoint only when initialization enabled profiling.
 pub fn routes<S: Clone + Send + Sync + 'static>(enabled: bool) -> Router<S> {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "jemalloc"))]
     if enabled {
         return Router::new().route("/debug/pprof/heap", axum::routing::get(heap));
     }
@@ -34,7 +40,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>(enabled: bool) -> Router<S> {
     Router::new()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "jemalloc"))]
 #[tracing::instrument(skip_all)]
 async fn heap() -> axum::response::Response {
     static BUSY: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
@@ -43,7 +49,7 @@ async fn heap() -> axum::response::Response {
     run_dump(gate.clone(), linux::dump).await
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(all(target_os = "linux", feature = "jemalloc"), test))]
 async fn run_dump<F>(
     gate: std::sync::Arc<tokio::sync::Semaphore>,
     dump: F,
@@ -115,16 +121,58 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "jemalloc"))]
 mod linux {
-    use super::{io, jemalloc_to_pprof};
+    use super::{Frame, Symbolize, io, jemalloc_to_pprof};
     use std::{
+        collections::BTreeMap,
         ffi::{CStr, CString},
         fs::{File, OpenOptions},
         os::unix::{ffi::OsStrExt, fs::OpenOptionsExt},
         path::PathBuf,
         ptr,
     };
+
+    #[derive(Default)]
+    struct LinuxSymbolizer {
+        build_ids: BTreeMap<String, Option<String>>,
+    }
+
+    impl Symbolize for LinuxSymbolizer {
+        fn frames(&mut self, pc: u64) -> Vec<Frame> {
+            let mut frames = Vec::new();
+            backtrace::resolve(pc as *mut std::ffi::c_void, |symbol| {
+                if let Some(name) = symbol.name() {
+                    frames.push(Frame {
+                        name: format!("{name:#}"),
+                        system_name: String::from_utf8_lossy(name.as_bytes()).into_owned(),
+                        file: symbol.filename().map(|path| path.display().to_string()),
+                        line: symbol.lineno(),
+                    });
+                }
+            });
+            frames
+        }
+
+        fn build_id(&mut self, path: &str) -> Option<String> {
+            self.build_ids
+                .entry(path.to_owned())
+                .or_insert_with(|| {
+                    use object::Object;
+                    use std::fmt::Write;
+                    let data = std::fs::read(path).ok()?;
+                    let elf =
+                        object::read::elf::ElfFile64::<object::Endianness>::parse(&*data).ok()?;
+                    let bytes = elf.build_id().ok()??;
+                    let mut id = String::new();
+                    for byte in bytes {
+                        write!(&mut id, "{byte:02x}").ok()?;
+                    }
+                    Some(id)
+                })
+                .clone()
+        }
+    }
 
     fn result(code: i32) -> io::Result<()> {
         if code == 0 {
@@ -216,6 +264,6 @@ mod linux {
         })?;
         let dump = std::fs::read_to_string(&file.0)?;
         let maps = std::fs::read_to_string("/proc/self/maps")?;
-        jemalloc_to_pprof(&dump, &maps)
+        jemalloc_to_pprof(&dump, &maps, &mut LinuxSymbolizer::default())
     }
 }

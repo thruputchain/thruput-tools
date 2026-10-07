@@ -48,9 +48,11 @@ Heap profiling is opt-in on the existing private observability listener:
 - Dump and conversion run on a blocking worker; a concurrent dump request returns HTTP 429.
 - Dumps require a writable temporary directory. Private dump files use mode 0600
   and are removed after each request.
-- The switch is supported only on Linux; requesting it elsewhere fails at startup.
-  Linux builds use jemalloc even with profiling inactive, and compile in profiling
-  support with a 512 KiB average allocation sampling interval.
+- Build on Linux with `--features heap-profiling` to use jemalloc profiling with
+  a 512 KiB average allocation sampling interval. Default builds keep the system
+  allocator and fail startup if `GROUNDHOG_HEAP_PROFILING=1`.
+- Profiles are symbolized in process with function names, plus file and line when
+  debuginfo is present. Mappings carry GNU build IDs.
 
 - [Health and metrics](../../../docs/gateway/observability-smoke-test.md)
 - [Local benchmark scenarios](../../../docs/gateway/bench-scenarios.md)

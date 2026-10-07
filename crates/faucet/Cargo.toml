@@ -52,5 +52,9 @@ serial_test = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true, features = ["util"] }
 
+[features]
+# Linux jemalloc allocator plus opt-in heap profiles. Off until load numbers qualify it.
+heap-profiling = ["groundhog-heap-profiling/jemalloc", "dep:tikv-jemallocator"]
+
 [target.'cfg(target_os = "linux")'.dependencies]
-tikv-jemallocator = { workspace = true }
+tikv-jemallocator = { workspace = true, optional = true }

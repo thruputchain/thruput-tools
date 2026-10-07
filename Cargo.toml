@@ -155,6 +155,9 @@ vt100 = "0.16"
 
 # --- Observability ---
 tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+tikv-jemalloc-sys = { version = "0.7", features = ["profiling"] }
+backtrace = "0.3"
+object = { version = "0.37", default-features = false, features = ["read_core", "elf", "std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 prometheus = { version = "0.14", default-features = false }

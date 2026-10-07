@@ -56,6 +56,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Clippy (heap-profiling feature)
+        run: cargo clippy --locked -p groundhog-heap-profiling -p groundhog-json-rpc-gateway -p groundhog-faucet --all-targets --features groundhog-heap-profiling/jemalloc,groundhog-json-rpc-gateway/heap-profiling,groundhog-faucet/heap-profiling -- -D warnings
+
   test:
     needs: dependency-policy # Check deps before building anything
     name: Test
@@ -84,6 +87,11 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      - name: Test (heap-profiling feature)
+        run: |
+          cargo test --locked -p groundhog-heap-profiling --features jemalloc
+          cargo test --locked -p groundhog-heap-profiling --features jemalloc --release
 
       - name: Verify component version and source reporting
         run: |

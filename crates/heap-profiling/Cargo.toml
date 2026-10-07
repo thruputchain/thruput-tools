@@ -20,5 +20,14 @@ axum = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
+[features]
+# Linux jemalloc profile control, dump conversion, and in-process symbolization.
+jemalloc = ["dep:tikv-jemalloc-sys", "dep:backtrace", "dep:object"]
+
 [target.'cfg(target_os = "linux")'.dependencies]
-tikv-jemalloc-sys = { version = "0.7", features = ["profiling"] }
+tikv-jemalloc-sys = { workspace = true, optional = true }
+backtrace = { workspace = true, optional = true }
+object = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tikv-jemallocator = { workspace = true }
