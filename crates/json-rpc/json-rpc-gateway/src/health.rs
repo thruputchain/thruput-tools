@@ -1782,6 +1782,69 @@ mod tests {
     }
 
     #[test]
+    fn db_snapshot_preserves_tip_effective_limits_and_exact_prices() {
+        use groundhog_db_gateway::DbGatewayConfigResult;
+        use groundhog_hogd_backend::db_gateway::tip_reading;
+        use groundhog_xdr::network_config::{ConfigParam, NetworkConfigV0};
+
+        let DbGatewayConfigResult::kRPCNone { mut config } = test_db_config() else {
+            panic!("expected fixture configuration");
+        };
+        config.effective_config = NetworkConfig::_0 {
+            v0: NetworkConfigV0 {
+                params: vec![ConfigParam::kConfigParamMaxSHA256Buffers {
+                    max_sha256_buffers: 17,
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        };
+        config.storage_cost_model.base_data_item_cost = u64::MAX;
+        let expected_tip = shared_scheduler::chain_tip("test", &config.tip.value).unwrap();
+        let stated = config.tip.network_config.clone();
+        let reading = tip_reading(
+            "test",
+            DbGatewayConfigResult::kRPCNone { config },
+            Some(&NetworkHashHex::from([0x41; 32])),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&reading.tip).unwrap(),
+            serde_json::to_value(&expected_tip).unwrap()
+        );
+        assert_eq!(reading.network_config, stated);
+        let execution = reading.execution.unwrap();
+        assert_eq!(
+            serde_json::to_value(&execution.observed_tip).unwrap(),
+            serde_json::to_value(&expected_tip).unwrap()
+        );
+        assert_eq!(execution.effective_limits.max_sha256_buffers, Some(17));
+        assert_eq!(
+            execution.storage_costs.base_data_item_cost,
+            u64::MAX.to_string()
+        );
+    }
+
+    #[test]
+    fn db_snapshot_rejects_wrong_network_and_uncommitted_tip() {
+        use groundhog_db_gateway::DbGatewayConfigResult;
+        use groundhog_hogd_backend::db_gateway::tip_reading;
+        assert!(
+            tip_reading(
+                "test",
+                test_db_config(),
+                Some(&NetworkHashHex::from([0x42; 32]))
+            )
+            .is_err()
+        );
+        let DbGatewayConfigResult::kRPCNone { mut config } = test_db_config() else {
+            panic!("expected fixture configuration");
+        };
+        config.tip.value.proposal_header.block_height = (-1).into();
+        assert!(tip_reading("test", DbGatewayConfigResult::kRPCNone { config }, None).is_err());
+    }
+
+    #[test]
     fn scheduler_network_hash_matching_pin_is_healthy() {
         let expected = NetworkHashHex::from([0x41; 32]);
         let mut state = SchedulerProbeState::with_expected_network_hash(Some(expected.clone()));

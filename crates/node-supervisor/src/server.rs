@@ -95,31 +95,31 @@ pub struct BackendPlanes {
 }
 
 impl BackendPlanes {
-    /// Current hogd-dev v1 wiring: scheduler-backed submit/chain with stubbed reads.
+    /// Scheduler-backed submission without DB or execution read endpoints.
     pub const fn hogd_dev_scheduler_only() -> Self {
         Self {
             submit: PlaneStatus::Scheduler,
-            chain: PlaneStatus::Scheduler,
+            chain: PlaneStatus::Stub,
             read: PlaneStatus::Stub,
             view: PlaneStatus::Stub,
         }
     }
 
-    /// All three planes backed by hogd-dev's scheduler and indexer x23 endpoints.
+    /// Scheduler submission, DB chain metadata, and indexed state reads.
     pub const fn hogd_dev_full(view: PlaneStatus) -> Self {
         Self {
             submit: PlaneStatus::Scheduler,
-            chain: PlaneStatus::Scheduler,
+            chain: PlaneStatus::DbGateway,
             read: PlaneStatus::Indexer,
             view,
         }
     }
 
-    /// Scheduler-backed submit/chain with DbGateway-backed latest storage reads.
+    /// Scheduler submission with DB-backed chain metadata and storage reads.
     pub const fn hogd_dev_storage_only(view: PlaneStatus) -> Self {
         Self {
             submit: PlaneStatus::Scheduler,
-            chain: PlaneStatus::Scheduler,
+            chain: PlaneStatus::DbGateway,
             read: PlaneStatus::DbGateway,
             view,
         }
@@ -406,38 +406,41 @@ async fn start_rpc_server(
             readiness.protocol.as_deref(),
         )
         .await?;
-        let scheduler_backend = scheduler_backend.with_db_gateway(
-            read.db_gateway_client().cloned(),
-            readiness.network_hash.clone(),
-        );
         start_rpc_server_with_read(
             listen_address,
-            scheduler_backend,
+            scheduler_backend.with_db_gateway(
+                read.db_gateway_client().cloned(),
+                readiness.network_hash.clone(),
+            ),
             read,
             view,
             rpc_server_options(
                 config,
                 network_info,
                 Some(local_airdrop),
-                BackendPlanes::hogd_dev_full(view_status),
+                BackendPlanes {
+                    chain: readiness
+                        .endpoints
+                        .db_gateway
+                        .map_or(PlaneStatus::Stub, |_| PlaneStatus::DbGateway),
+                    ..BackendPlanes::hogd_dev_full(view_status)
+                },
             ),
         )
         .await
     } else if let Some(db_gateway_addr) = readiness.endpoints.db_gateway {
-        tracing::debug!(%db_gateway_addr, "connecting to hogd-dev DbGateway for storage reads");
         let read = HogdDevStorageReadBackend::connect(
             db_gateway_addr,
             protocol_version,
             readiness.protocol.as_deref(),
         )
         .await?;
-        let scheduler_backend = scheduler_backend.with_db_gateway(
-            Some(read.db_gateway_client().clone()),
-            readiness.network_hash.clone(),
-        );
         start_rpc_server_with_read(
             listen_address,
-            scheduler_backend,
+            scheduler_backend.with_db_gateway(
+                Some(read.db_gateway_client().clone()),
+                readiness.network_hash.clone(),
+            ),
             read,
             view,
             rpc_server_options(

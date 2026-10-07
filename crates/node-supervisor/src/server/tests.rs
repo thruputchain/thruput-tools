@@ -233,7 +233,7 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         .expect("bug: supervisor should start against fake hogd-dev");
     assert_eq!(
         handle.backend_planes(),
-        BackendPlanes::hogd_dev_scheduler_only()
+        BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub)
     );
 
     let url = format!("http://{}", handle.rpc_addr());
@@ -1374,7 +1374,7 @@ fn plane_status_read_predicates_match_known_planes() {
 fn backend_planes_hogd_dev_full_constructor() {
     let planes = BackendPlanes::hogd_dev_full(PlaneStatus::ViewGateway);
     assert_eq!(planes.submit, PlaneStatus::Scheduler);
-    assert_eq!(planes.chain, PlaneStatus::Scheduler);
+    assert_eq!(planes.chain, PlaneStatus::DbGateway);
     assert_eq!(planes.read, PlaneStatus::Indexer);
     assert_eq!(planes.view, PlaneStatus::ViewGateway);
 }
@@ -1385,7 +1385,7 @@ fn backend_planes_hogd_dev_full_serializes_correctly() {
     let json = serde_json::to_value(planes).expect("bug: BackendPlanes serializes");
     let expected = serde_json::json!({
         "submit": "scheduler",
-        "chain": "scheduler",
+        "chain": "db_gateway",
         "read": "indexer",
         "view": "view_gateway"
     });
@@ -1396,7 +1396,7 @@ fn backend_planes_hogd_dev_full_serializes_correctly() {
 fn backend_planes_hogd_dev_storage_only_constructor() {
     let planes = BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub);
     assert_eq!(planes.submit, PlaneStatus::Scheduler);
-    assert_eq!(planes.chain, PlaneStatus::Scheduler);
+    assert_eq!(planes.chain, PlaneStatus::DbGateway);
     assert_eq!(planes.read, PlaneStatus::DbGateway);
     assert_eq!(planes.view, PlaneStatus::Stub);
 }
@@ -1467,7 +1467,7 @@ fn backend_planes_hogd_dev_storage_only_serializes_correctly() {
     let json = serde_json::to_value(planes).expect("bug: BackendPlanes serializes");
     let expected = serde_json::json!({
         "submit": "scheduler",
-        "chain": "scheduler",
+        "chain": "db_gateway",
         "read": "db_gateway",
         "view": "stub"
     });

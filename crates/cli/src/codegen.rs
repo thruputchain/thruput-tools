@@ -2474,6 +2474,7 @@ mod tests {
         use groundhog_contract_spec::ContractSignedTokenPreimage;
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("authorize"),
                 args: vec![ContractField {
                     name: spec_string("message"),
@@ -2610,6 +2611,7 @@ mod tests {
         use groundhog_contract_spec::ContractSignedTokenPreimage;
         let mut spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("authorize"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::SignedToken {
@@ -3055,12 +3057,14 @@ export type Result =
         let spec = counter_spec_with_methods(
             vec![
                 ContractSpecMethod {
+                    effect: None,
                     name: spec_string("get_balance"),
                     args: vec![].try_into().unwrap(),
                     return_type: ContractType::U64,
                     effect: None,
                 },
                 ContractSpecMethod {
+                    effect: None,
                     name: spec_string("getBalance"),
                     args: vec![].try_into().unwrap(),
                     return_type: ContractType::U64,
@@ -3083,6 +3087,7 @@ export type Result =
                     vers: spec_string("0.1.0"),
                     throws: vec![].try_into().unwrap(),
                     methods: vec![ContractSpecMethod {
+                        effect: None,
                         name: spec_string("initialize"),
                         args: vec![ContractField {
                             name: spec_string("administrator"),
@@ -3101,6 +3106,7 @@ export type Result =
                     vers: spec_string("0.1.0"),
                     throws: vec![].try_into().unwrap(),
                     methods: vec![ContractSpecMethod {
+                        effect: None,
                         name: spec_string("initialize"),
                         args: vec![ContractField {
                             name: spec_string("name"),
@@ -3138,6 +3144,7 @@ export type Result =
             vers: spec_string(vers),
             throws: vec![].try_into().unwrap(),
             methods: vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string(method),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::U64,
@@ -3232,6 +3239,7 @@ export type Result =
     fn method_names_sharing_a_stem_error() {
         let mut iface = interface("Token", "1.0.0", "balance");
         iface.methods.0.push(ContractSpecMethod {
+            effect: None,
             name: spec_string("Balance"),
             args: vec![].try_into().unwrap(),
             return_type: ContractType::U64,
@@ -3288,6 +3296,7 @@ export type Result =
     fn method_arg_name_public_collision_errors() {
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("set_owner"),
                 args: vec![
                     ContractField {
@@ -3316,6 +3325,7 @@ export type Result =
         let spec = counter_spec_with_interface_name(
             "fromHex",
             vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("get"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::U64,
@@ -3863,6 +3873,7 @@ export type Result =
     fn reserved_property_names_are_allowed_for_methods_and_arguments() {
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("symbol"),
                 args: vec![ContractField {
                     name: spec_string("return"),
@@ -3886,6 +3897,7 @@ export type Result =
     fn invalid_method_name_errors() {
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("transfer-from"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,
@@ -3902,6 +3914,7 @@ export type Result =
     fn proto_method_name_errors() {
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("__proto__"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,
@@ -3918,6 +3931,7 @@ export type Result =
     fn invalid_method_arg_name_errors() {
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("set_owner"),
                 args: vec![ContractField {
                     name: spec_string("owner-id"),
@@ -3969,12 +3983,14 @@ export type Result =
     fn counter_spec_methods() -> Vec<ContractSpecMethod> {
         vec![
             ContractSpecMethod {
+                effect: None,
                 name: spec_string("get"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::U64,
                 effect: None,
             },
             ContractSpecMethod {
+                effect: None,
                 name: spec_string("increment"),
                 args: vec![ContractField {
                     name: spec_string("amount"),
@@ -4082,6 +4098,7 @@ export type Result =
                 .unwrap(),
                 methods: vec![
                     ContractSpecMethod {
+                        effect: None,
                         name: spec_string("transfer"),
                         args: vec![
                             ContractField {
@@ -4099,12 +4116,14 @@ export type Result =
                         effect: None,
                     },
                     ContractSpecMethod {
+                        effect: None,
                         name: spec_string("get_balance"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U128,
                         effect: None,
                     },
                     ContractSpecMethod {
+                        effect: None,
                         name: spec_string("get_balance_of"),
                         args: vec![ContractField {
                             name: spec_string("account_id"),
@@ -4267,6 +4286,7 @@ export type Result =
                 vers: spec_string("0.1.0"),
                 throws: vec![].try_into().unwrap(),
                 methods: vec![ContractSpecMethod {
+                    effect: None,
                     name: spec_string("depth"),
                     args: vec![ContractField {
                         name: spec_string("tree"),
@@ -4672,6 +4692,7 @@ export type Result =
     fn unresolved_named_type_reports_method_context() {
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("set"),
                 args: vec![ContractField {
                     name: spec_string("value"),
@@ -4765,6 +4786,7 @@ export type Result =
                 .unwrap(),
                 methods: vec![
                     ContractSpecMethod {
+                        effect: None,
                         name: spec_string("get_values"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::Tuple {
@@ -4775,6 +4797,7 @@ export type Result =
                         effect: None,
                     },
                     ContractSpecMethod {
+                        effect: None,
                         name: spec_string("update"),
                         args: vec![
                             ContractField {
@@ -4880,6 +4903,7 @@ export type Result =
                 vers: spec_string("0.1.0"),
                 throws: vec![].try_into().unwrap(),
                 methods: vec![ContractSpecMethod {
+                    effect: None,
                     name: spec_string("authorize"),
                     args: vec![ContractField {
                         name: spec_string("holder"),
@@ -5074,6 +5098,7 @@ export type Result =
             vers: spec_string(vers),
             throws: vec![].try_into().unwrap(),
             methods: vec![ContractSpecMethod {
+                effect: None,
                 name: spec_string("balance"),
                 args: args.try_into().unwrap(),
                 return_type,
@@ -5094,6 +5119,7 @@ export type Result =
                     .try_into()
                     .unwrap(),
                     methods: vec![ContractSpecMethod {
+                        effect: None,
                         name: spec_string("get"),
                         args: vec![].try_into().unwrap(),
                         return_type: kind(),

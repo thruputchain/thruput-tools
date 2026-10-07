@@ -1945,7 +1945,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     assert_eq!(payload["data"]["backend"]["stability"], "supported");
     assert!(payload["data"]["backend"].get("limitations").is_none());
     assert_eq!(payload["data"]["backend"]["planes"]["submit"], "scheduler");
-    assert_eq!(payload["data"]["backend"]["planes"]["chain"], "scheduler");
+    assert_eq!(payload["data"]["backend"]["planes"]["chain"], "db_gateway");
     assert_eq!(payload["data"]["backend"]["planes"]["read"], "indexer");
     assert_eq!(payload["data"]["backend"]["planes"]["view"], "stub");
     assert_eq!(payload["data"]["local_runtime_state"]["ok"], true);
@@ -4912,12 +4912,12 @@ fn deploy_workspace_root_accepts_long_package_option() {
         .output()
         .unwrap();
 
-    rpc_server.join().unwrap();
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    rpc_server.join().unwrap();
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         std::fs::canonicalize(stdout["data"]["artifactPath"].as_str().unwrap()).unwrap(),
@@ -10414,6 +10414,7 @@ fn write_counter_with_exception_spec(project: &std::path::Path, selector: u64) {
             .try_into()
             .unwrap(),
             methods: vec![ContractSpecMethod {
+                effect: None,
                 name: "get".try_into().unwrap(),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::U64,

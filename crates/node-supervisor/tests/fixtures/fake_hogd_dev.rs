@@ -271,9 +271,10 @@ fn run_ready_with_scheduler(mode: FakeSchedulerMode) {
     install_sigterm_handler();
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(mode);
+    let db_gateway = start_fake_db_gateway(FakeDbGatewayMode::Normal, scheduler.tip.clone());
     println!(
         "{}",
-        readiness_scheduler_only(scheduler.addr, scheduler.gateway_addr)
+        readiness_with_gateway(scheduler.addr, scheduler.gateway_addr, db_gateway.addr)
     );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
@@ -1024,12 +1025,6 @@ fn hash_xdr<T: xdrs::WriteXDR>(value: &T) -> SHA256Hash {
 
 #[async_trait]
 impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
-    async fn schedcoord_lookup_transaction_outcomes(
-        &self,
-        _hashes: groundhog_xdr::transaction::TransactionHashBatch,
-    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
-        Err(ProgramError::msg("not implemented in fake hogd-dev"))
-    }
     async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
         Ok(())
     }
