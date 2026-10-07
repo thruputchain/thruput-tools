@@ -1,11 +1,56 @@
 /// Default gas budget for backend `groundhog_view` execution.
 pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 10_000_000;
 
+/// Operator policy for one shared-snapshot request, not consensus parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ViewBatchConfig {
+    /// Maximum number of independent calls in a group.
+    pub max_calls: u32,
+    /// Sum of calldata bytes across calls.
+    pub max_calldata_bytes: u32,
+    /// Sum of declared gas limits in each attempt.
+    pub max_gas: u64,
+    /// Encoded backend response, including events; the JSON response cap also applies.
+    pub max_response_bytes: u32,
+}
+
+impl Default for ViewBatchConfig {
+    fn default() -> Self {
+        Self {
+            max_calls: 16,
+            max_calldata_bytes: 65_536,
+            max_gas: 160_000_000,
+            max_response_bytes: 1_048_576,
+        }
+    }
+}
+
+impl ViewBatchConfig {
+    /// Describe the policy advertised by the public endpoint.
+    pub const fn server_limits(
+        self,
+        timeout_ms: u64,
+    ) -> groundhog_json_rpc_types::server_limits::ViewBatchLimits {
+        groundhog_json_rpc_types::server_limits::ViewBatchLimits {
+            max_calls: self.max_calls,
+            max_calldata_bytes: self.max_calldata_bytes,
+            max_gas: self.max_gas,
+            max_response_bytes: self.max_response_bytes,
+            timeout_ms,
+        }
+    }
+}
+
 /// Server-wide bounds on JSON-RPC requests.  The shared dispatcher
 /// rejects requests that exceed these before they reach a backend.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RpcServerConfig {
+    /// Aggregate view-batch policy. Per-call view limits also apply.
+    pub view_batch: ViewBatchConfig,
+    /// Maximum shared-snapshot response wait, measured from request start.
+    pub view_timeout_ms: u64,
     /// Optional end-to-end deadline for one public JSON-RPC method.
     ///
     /// The deadline starts before shared validation and is passed explicitly to
@@ -63,6 +108,8 @@ pub struct RpcServerConfig {
 impl Default for RpcServerConfig {
     fn default() -> Self {
         Self {
+            view_batch: ViewBatchConfig::default(),
+            view_timeout_ms: 30_000,
             request_timeout_ms: None,
             max_events_per_page: 200,
             max_transactions_per_page: 200,
@@ -77,6 +124,18 @@ impl Default for RpcServerConfig {
 }
 
 impl RpcServerConfig {
+    /// Set the endpoint's aggregate shared-read policy.
+    #[must_use]
+    pub const fn with_view_batch(mut self, limits: ViewBatchConfig) -> Self {
+        self.view_batch = limits;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_view_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.view_timeout_ms = timeout_ms;
+        self
+    }
     /// Set an end-to-end timeout for every public JSON-RPC request.
     #[must_use]
     pub fn with_request_timeout_ms(mut self, timeout_ms: u64) -> Self {

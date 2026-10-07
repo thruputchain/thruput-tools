@@ -27,10 +27,9 @@ pub fn view_batch_query(
     request: groundhog_json_rpc_types::view::ViewBatchRequest,
     gas_limit: u64,
     remaining: std::time::Duration,
+    limits: groundhog_json_rpc_server::ViewBatchConfig,
 ) -> Result<groundhog_view::ViewGatewayBatchQuery, RpcServerError> {
-    let millis = remaining
-        .as_millis()
-        .min(u128::from(groundhog_view::kMaxViewBatchBudgetMillis));
+    let millis = remaining.as_millis().min(u128::from(u32::MAX));
     let budget_millis = u32::try_from(millis).map_err(|_| RpcServerError::BackendTimeout)?;
     if budget_millis == 0 {
         return Err(RpcServerError::BackendTimeout);
@@ -48,6 +47,8 @@ pub fn view_batch_query(
         ),
         min_height: request.min_height,
         budget_millis,
+        max_gas: limits.max_gas,
+        max_response_bytes: limits.max_response_bytes,
     })
 }
 
@@ -119,7 +120,8 @@ pub fn view_batch_response(
             if outcome == Outcome::ViewGatewayBatchResponseTooLarge.0 =>
         {
             Err(RpcServerError::InvalidParam(
-                "viewBatch response exceeds 1 MiB; request fewer calls or events".into(),
+                "viewBatch response exceeds the endpoint limit; request fewer calls or events"
+                    .into(),
             ))
         }
         other => Err(RpcServerError::BackendUnavailable(format!(
@@ -268,6 +270,7 @@ mod batch_tests {
             },
             10_000_000,
             Duration::from_millis(999),
+            groundhog_json_rpc_server::ViewBatchConfig::default(),
         )
         .unwrap()
     }
@@ -294,6 +297,8 @@ mod batch_tests {
     fn batch_preserves_caller_budget_and_fault_as_a_result() {
         let query = query();
         assert_eq!(query.budget_millis, 999);
+        assert_eq!(query.max_gas, 160_000_000);
+        assert_eq!(query.max_response_bytes, 1_048_576);
         assert_eq!(query.calls.0[0].invocation.gas_limit, 123);
         assert_eq!(
             query.calls.0[0].parent_address.as_ref().unwrap().as_ref(),
@@ -325,6 +330,27 @@ mod batch_tests {
                 Err(RpcServerError::BackendUnavailable(_))
             ));
         }
+    }
+
+    #[test]
+    fn batch_propagates_operator_budgets_without_a_protocol_timeout_cap() {
+        let request = ViewBatchRequest {
+            calls: vec![],
+            min_height: None,
+        };
+        let limits = groundhog_json_rpc_server::ViewBatchConfig {
+            max_gas: 999,
+            max_response_bytes: 321,
+            ..Default::default()
+        };
+        let query = view_batch_query(request.clone(), 123, Duration::from_mins(1), limits).unwrap();
+        assert_eq!(query.budget_millis, 60_000);
+        assert_eq!(query.max_gas, 999);
+        assert_eq!(query.max_response_bytes, 321);
+        assert!(matches!(
+            view_batch_query(request, 123, Duration::ZERO, limits),
+            Err(RpcServerError::BackendTimeout)
+        ));
     }
 
     #[test]

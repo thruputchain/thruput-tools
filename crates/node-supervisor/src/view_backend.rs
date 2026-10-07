@@ -98,6 +98,7 @@ impl ViewPlane for HogdDevViewBackend {
         context: RpcRequestContext,
         request: groundhog_json_rpc_types::view::ViewBatchRequest,
         gas_limit: u64,
+        limits: groundhog_json_rpc_server::ViewBatchConfig,
     ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
         let Self::Gateway {
             client,
@@ -106,15 +107,12 @@ impl ViewPlane for HogdDevViewBackend {
         else {
             return Err(RpcServerError::NotImplemented("viewBatch".into()));
         };
-        let context = context
-            .capped(*request_timeout)
-            .capped_from_start(Duration::from_millis(u64::from(
-                groundhog_view::kMaxViewBatchBudgetMillis,
-            )));
+        let context = context.capped(*request_timeout);
         let query = shared_view::view_batch_query(
             request,
             gas_limit,
             context.remaining().ok_or(RpcServerError::BackendTimeout)?,
+            limits,
         )?;
         let result = within_request_deadline(context, async {
             client
@@ -215,11 +213,14 @@ mod tests {
             use groundhog_view::{
                 ViewGatewayBatchPayload, ViewGatewayBatchResult, ViewGatewayHeightUnavailable,
             };
-            assert!((1..=30_000).contains(&query.budget_millis));
+            assert!(query.budget_millis > 0);
             if self.mode != FakeViewGatewayMode::Batch {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
             }
+            assert!(query.budget_millis > 30_000);
+            assert_eq!(query.max_gas, 1_000);
+            assert_eq!(query.max_response_bytes, 256);
             if let Some(requested) = query.min_height.filter(|height| **height > 42) {
                 return Ok(ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
                     height_unavailable: ViewGatewayHeightUnavailable {
@@ -474,6 +475,7 @@ mod tests {
                     min_height: None,
                 },
                 10_000_000,
+                groundhog_json_rpc_server::ViewBatchConfig::default(),
             )
             .await;
         assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
@@ -532,7 +534,7 @@ mod tests {
             Some(addr),
             &protocol_text(&PROTOCOL_VERSION),
             None,
-            Duration::from_secs(30),
+            Duration::from_mins(1),
         )
         .await
         .unwrap();
@@ -542,7 +544,13 @@ mod tests {
             StubBackend,
             backend,
             NetworkInfo::new(NetworkHash::from(SHA256Hash::from([0; 32]))),
-            RpcServerConfig::default(),
+            RpcServerConfig::default()
+                .with_view_timeout_ms(60_000)
+                .with_view_batch(groundhog_json_rpc_server::ViewBatchConfig {
+                    max_gas: 1_000,
+                    max_response_bytes: 256,
+                    ..Default::default()
+                }),
             BuildInfo::new("test", None),
         )
         .into_rpc();

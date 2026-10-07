@@ -345,6 +345,8 @@ pub struct GatewayConfig {
 
     /// Maximum time to wait for one `ViewGateway` execution RPC.
     pub view_timeout_ms: u64,
+    /// Aggregate limits shared with the embedded JSON-RPC server.
+    pub view_batch: groundhog_json_rpc_server::ViewBatchConfig,
 
     /// Optional protocol string used for hogd intro handshakes.
     ///
@@ -407,6 +409,7 @@ impl Default for GatewayConfig {
             db_gateway_address: None,
             view_gateway_address: None,
             view_timeout_ms: 30_000,
+            view_batch: groundhog_json_rpc_server::ViewBatchConfig::default(),
             hogd_protocol_override: None,
             max_view_calldata_bytes: 64 * 1024,
             view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
@@ -610,6 +613,29 @@ pub enum RuntimeManifestConfigError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn batch_policy_is_operator_configurable_with_shared_defaults() {
+        let config: super::GatewayConfig = toml::from_str(
+            "view_timeout_ms = 60000\n[view_batch]\nmax_calls = 32\nmax_calldata_bytes = 131072\nmax_gas = 320000000\nmax_response_bytes = 2097152\n",
+        ).unwrap();
+        assert_eq!(config.view_timeout_ms, 60_000);
+        assert_eq!(
+            config.view_batch,
+            groundhog_json_rpc_server::ViewBatchConfig {
+                max_calls: 32,
+                max_calldata_bytes: 131_072,
+                max_gas: 320_000_000,
+                max_response_bytes: 2_097_152,
+            }
+        );
+        let partial: super::GatewayConfig = toml::from_str("[view_batch]\nmax_calls = 4").unwrap();
+        assert_eq!(partial.view_batch.max_calls, 4);
+        assert_eq!(
+            partial.view_batch.max_gas,
+            groundhog_json_rpc_server::ViewBatchConfig::default().max_gas
+        );
+        assert!(toml::from_str::<super::GatewayConfig>("[view_batch]\nmax_call = 4").is_err());
+    }
     use std::time::Duration;
 
     use groundhog_json_rpc_types::{NetworkHashHex, hex::Hex0x, runtime_manifest::RuntimeManifest};

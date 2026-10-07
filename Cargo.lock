@@ -1858,7 +1858,6 @@ dependencies = [
  "groundhog-json-rpc-types",
  "groundhog-tx-validation",
  "groundhog-xdr",
- "groundhog_view",
  "hex",
  "jsonrpsee",
  "serde",

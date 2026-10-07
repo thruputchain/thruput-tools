@@ -23,10 +23,8 @@ pub async fn view_batch(
     context: RpcRequestContext,
     request: groundhog_json_rpc_types::view::ViewBatchRequest,
     gas_limit: u64,
+    limits: groundhog_json_rpc_server::ViewBatchConfig,
 ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
-    let context = context.capped_from_start(Duration::from_millis(u64::from(
-        groundhog_view::kMaxViewBatchBudgetMillis,
-    )));
     let timeout =
         Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
     let deadline = backend_deadline(context, timeout)?;
@@ -41,6 +39,7 @@ pub async fn view_batch(
         request,
         gas_limit,
         deadline.saturating_duration_since(Instant::now()),
+        limits,
     )?;
     let result = timed_backend_call(
         &ctx.metrics,
@@ -182,7 +181,9 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
             }
-            assert!((1..=30_000).contains(&query.budget_millis));
+            assert!(query.budget_millis > 30_000);
+            assert_eq!(query.max_gas, 1_000);
+            assert_eq!(query.max_response_bytes, 256);
             if let Some(requested) = query.min_height.filter(|height| **height > 42) {
                 return Ok(ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
                     height_unavailable: ViewGatewayHeightUnavailable {
@@ -333,13 +334,23 @@ mod tests {
                 client,
             )))),
             Arc::new(RwLock::new(None)),
-            Arc::new(GatewayConfig::default()),
+            Arc::new(GatewayConfig {
+                view_timeout_ms: 60_000,
+                request_timeout_ms: 90_000,
+                ..Default::default()
+            }),
             GatewayMetrics::for_tests(),
         ));
         let module = GroundhogRpcServer::unified(
             GatewayBackend::new(context),
             NetworkInfo::new(NetworkHash::from(SHA256Hash::from([0; 32]))),
-            RpcServerConfig::default(),
+            RpcServerConfig::default()
+                .with_view_timeout_ms(60_000)
+                .with_view_batch(groundhog_json_rpc_server::ViewBatchConfig {
+                    max_gas: 1_000,
+                    max_response_bytes: 256,
+                    ..Default::default()
+                }),
             BuildInfo::new("test", None),
         )
         .into_rpc();

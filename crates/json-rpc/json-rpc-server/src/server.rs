@@ -551,6 +551,13 @@ where
             self.config.max_events_per_page,
             self.config.max_transactions_per_page,
             self.config.max_cursor_bytes as u64,
+        )
+        .with_view_batch(
+            self.config.view_batch.server_limits(
+                self.config
+                    .view_timeout_ms
+                    .min(self.config.request_timeout_ms.unwrap_or(u64::MAX)),
+            ),
         ))
     }
 
@@ -739,14 +746,17 @@ where
     ) -> RpcResult<groundhog_json_rpc_types::view::ViewBatchResponse> {
         let context = self
             .request_context()
-            .capped_from_start(std::time::Duration::from_millis(u64::from(
-                groundhog_view::kMaxViewBatchBudgetMillis,
-            )));
+            .capped_from_start(Duration::from_millis(self.config.view_timeout_ms));
         self.within_request_deadline(context, async {
             validate_view_batch(&request, &self.config)?;
             Ok(self
                 .view
-                .view_batch(context, request, self.config.view_gas_limit)
+                .view_batch(
+                    context,
+                    request,
+                    self.config.view_gas_limit,
+                    self.config.view_batch,
+                )
                 .await?)
         })
         .await
@@ -791,10 +801,11 @@ fn validate_view_batch(
     request: &groundhog_json_rpc_types::view::ViewBatchRequest,
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
-    use groundhog_view::{kMaxViewBatchCalldataBytes, kMaxViewBatchCalls, kMaxViewBatchGas};
     let invalid = |message: &str| RpcServerError::InvalidParam(message.into());
-    if request.calls.is_empty() || request.calls.len() > kMaxViewBatchCalls as usize {
-        return Err(invalid("viewBatch must contain between 1 and 16 calls"));
+    if request.calls.is_empty() || request.calls.len() > config.view_batch.max_calls as usize {
+        return Err(invalid(
+            "viewBatch call count exceeds the endpoint limit or is empty",
+        ));
     }
     if request
         .min_height
@@ -803,8 +814,8 @@ fn validate_view_batch(
     {
         return Err(invalid("minHeight must be non-negative"));
     }
-    let mut remaining_gas = kMaxViewBatchGas;
-    let mut remaining = kMaxViewBatchCalldataBytes as usize;
+    let mut remaining_gas = config.view_batch.max_gas;
+    let mut remaining = config.view_batch.max_calldata_bytes as usize;
     for call in &request.calls {
         let gas = view_gas_limit(call.gas_limit, config.view_gas_limit)?;
         if gas > remaining_gas {
@@ -827,6 +838,36 @@ fn validate_view_batch(
 mod view_batch_validation_tests {
     use super::*;
     use groundhog_json_rpc_types::{hex::HexBytes, view::ViewBatchRequest};
+
+    #[test]
+    fn operator_limits_can_exceed_defaults_and_still_bound_aggregate_work() {
+        let call = ViewRequest {
+            contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
+            entrypoint: HexBytes(vec![0; 8]),
+            calldata: HexBytes(vec![0; 4096]),
+            caller: None,
+            gas_limit: None,
+        };
+        let mut config = RpcServerConfig::default().with_view_batch(crate::ViewBatchConfig {
+            max_calls: 17,
+            max_calldata_bytes: 17 * 4096,
+            max_gas: 170_000_000,
+            max_response_bytes: 2_097_152,
+        });
+        let request = ViewBatchRequest {
+            calls: vec![call; 17],
+            min_height: None,
+        };
+        assert!(validate_view_batch(&request, &config).is_ok());
+        config.view_batch.max_gas -= 1;
+        assert!(validate_view_batch(&request, &config).is_err());
+        config.view_batch.max_gas += 1;
+        config.view_batch.max_calldata_bytes -= 1;
+        assert!(validate_view_batch(&request, &config).is_err());
+        config.view_batch.max_calldata_bytes += 1;
+        config.view_batch.max_calls -= 1;
+        assert!(validate_view_batch(&request, &config).is_err());
+    }
 
     #[test]
     fn validates_call_count_calldata_gas_and_height_bounds() {
@@ -2414,11 +2455,20 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     #[tokio::test]
     async fn server_limits_report_the_configured_bounds_without_backend_dispatch() {
         let mock = Arc::new(MockBackend::default());
+        let batch = crate::ViewBatchConfig {
+            max_calls: 5,
+            max_calldata_bytes: 1024,
+            max_gas: 200_000,
+            max_response_bytes: 8192,
+        };
         let server = GroundhogRpcServer::unified(
             mock.clone(),
             test_network_info(),
             RpcServerConfig::default()
                 .with_view_gas_limit(42_000)
+                .with_view_batch(batch)
+                .with_view_timeout_ms(60_000)
+                .with_request_timeout_ms(45_000)
                 .with_max_view_calldata_bytes(512)
                 .with_max_events_per_page(17)
                 .with_max_transactions_per_page(19)
@@ -2431,7 +2481,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .await
             .expect("bug: server limits should be infallible");
 
-        assert_eq!(limits, ServerLimits::new(42_000, 512, 17, 19, 64));
+        assert_eq!(
+            limits,
+            ServerLimits::new(42_000, 512, 17, 19, 64).with_view_batch(batch.server_limits(45_000))
+        );
         assert!(mock.submitted.lock().await.is_empty());
         assert_eq!(*mock.event_calls.lock().await, 0);
     }

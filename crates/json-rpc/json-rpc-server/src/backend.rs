@@ -300,6 +300,7 @@ pub trait ViewPlane: Send + Sync + 'static {
         _context: RpcRequestContext,
         _request: groundhog_json_rpc_types::view::ViewBatchRequest,
         _gas_limit: u64,
+        _limits: crate::ViewBatchConfig,
     ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
         Err(RpcServerError::NotImplemented("viewBatch".into()))
     }

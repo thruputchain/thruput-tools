@@ -175,13 +175,14 @@ pub trait GroundhogApi {
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
 
-    /// Simulate up to 16 independent calls against one committed snapshot.
+    /// Simulate independent calls against one committed snapshot.
     /// Results preserve input order and include return, abort, or fault with events.
     /// Calls do not observe each other's writes. Abandoned snapshots retry the whole
     /// group, up to three attempts. There is no partial success or automatic chunking.
-    /// Aggregate limits: 64 KiB calldata, 160M gas per attempt, 1 MiB XDR result
-    /// including events. The response deadline is at most 30 seconds; running backend
-    /// work may outlive it. The returned height is committed H, with execution context H+1.
+    /// Operator limits are advertised by `serverLimits`. The response deadline is
+    /// strict, but running backend work may outlive it. The minimum height is a
+    /// freshness floor, not a wait or refresh request. The returned height is
+    /// committed H, with execution context H+1.
     #[method(name = "viewBatch")]
     async fn view_batch(&self, request: ViewBatchRequest) -> RpcResult<ViewBatchResponse>;
 

@@ -87,7 +87,7 @@ pub const ERROR_INFOS: &[RpcErrorInfo] = &[
         name: "ViewHeightUnavailable",
         code: codes::VIEW_HEIGHT_UNAVAILABLE,
         message: "View height unavailable",
-        description: "The committed snapshot remains below minHeight after one refresh. Data contains requested and observed heights. No future block is awaited.",
+        description: "The selected committed snapshot is below minHeight. Data contains requested and observed heights. The request does not wait or force a snapshot refresh.",
     },
     RpcErrorInfo {
         name: "InvalidParams",

@@ -18,6 +18,6 @@ pub use backend::{
     ChainPlane, ReadPlane, RpcRequestContext, SubmitPlane, TipReading, ValidatedTransaction,
     ViewPlane,
 };
-pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig};
+pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig, ViewBatchConfig};
 pub use error::RpcServerError;
 pub use server::{BuildInfo, GroundhogRpcServer};

@@ -14,7 +14,7 @@ pub enum RpcServerError {
         /// Signed evidence, independent of admission or execution status.
         evidence: LocalFundingErrorData,
     },
-    /// No sufficiently recent committed snapshot was available after one refresh.
+    /// The selected committed snapshot did not meet the freshness floor.
     #[error("view height unavailable: requested {}, observed {}", *.0.requested, *.0.observed)]
     ViewHeightUnavailable(groundhog_json_rpc_types::view::ViewHeightUnavailable),
     /// Transaction was malformed.
