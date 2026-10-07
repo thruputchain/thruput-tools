@@ -958,23 +958,31 @@ groundhog skill update --yes --non-interactive --json
 `--non-interactive` alone does not grant consent. Installer diagnostics go to
 stderr; JSON results go to stdout. `--offline` rejects installation and updates.
 
-The CLI also carries a selected skill snapshot for offline reading:
+Read the installed skill without running Node/npm or accessing the network:
 
 ```sh
 groundhog skill list
 groundhog skill show
 groundhog skill show contracts
-groundhog skill show --all
+groundhog skill show references/contracts.md
+groundhog skill show --global
 ```
 
-`show` prints Markdown and exits. `list` and `show` also support `--json`, which
-includes the source revision, content digest, and CLI version. The skill has
-one entry point with focused topic references. `skill show --all` prints the
-complete guide.
-Reading requires no Node/npm, network, project setup, or installation.
+`show` prints the installed `SKILL.md` unchanged. A topic such as `contracts`,
+`contracts.md`, or `references/contracts.md` selects that reference file.
+`list` prints the available reference names in sorted order. Both commands
+support `--json`, which reports the installation scope, file or directory path,
+reference names for `list`, and file content for `show`.
 
-The CLI snapshot can differ from the latest installed skill. Use installed
-command help and project dependency versions when examples differ.
+Reads prefer `.agents/skills/groundhog` in the current directory, then
+`$HOME/.agents/skills/groundhog`. Use `--global` to select only the latter.
+If neither is installed, the command fails and asks you to run
+`groundhog skill install`. A missing reference or damaged project installation
+is an error, not a reason to read a different installation.
+
+The CLI contains no skill copy. Updates to the installed files take effect
+immediately. Use installed command help and project dependency versions when
+examples differ.
 
 ## Local documentation
 

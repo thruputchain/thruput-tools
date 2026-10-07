@@ -72,6 +72,7 @@ jobs:
 
       - name: Verify bundled documentation
         run: |
+          python3 scripts/test_import_docs_snapshot.py
           python3 scripts/import-docs-snapshot.py
           cargo package -p groundhog-cli --list --allow-dirty --locked > /tmp/cli-package-files.txt
           grep -Fx 'assets/docs/snapshot.tar.gz' /tmp/cli-package-files.txt

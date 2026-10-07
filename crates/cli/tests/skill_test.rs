@@ -1,4 +1,8 @@
-use std::process::{Command, Output};
+use std::{
+    fs,
+    path::PathBuf,
+    process::{Command, Output},
+};
 
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_groundhog"))
@@ -7,27 +11,238 @@ fn cli(args: &[&str]) -> Output {
         .unwrap()
 }
 
-#[test]
-fn skill_topics_and_complete_output_are_available_offline() {
-    let list = cli(&["skill", "list", "--offline", "--json"]);
-    assert!(list.status.success());
-    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
-    assert_eq!(list["data"]["schemaVersion"], 1);
-    for topic in list["data"]["topics"].as_array().unwrap() {
-        let result = cli(&["skill", "show", topic.as_str().unwrap(), "--offline"]);
-        assert!(result.status.success());
-        assert!(result.stderr.is_empty());
-        let text = String::from_utf8(result.stdout).unwrap();
-        assert!(text.contains("groundhog-cli-version:"));
-        assert!(text.contains("skill-source:"));
+struct ReadFixture(tempfile::TempDir);
+
+impl ReadFixture {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("home")).unwrap();
+        fs::create_dir(root.path().join("project")).unwrap();
+        Self(root)
     }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        command
+            .current_dir(self.0.path().join("project"))
+            .env("HOME", self.0.path().join("home"))
+            .env("XDG_CONFIG_HOME", self.0.path().join("config"))
+            .env("PATH", "")
+            .args(["skill"]);
+        command
+    }
+
+    fn install(&self, scope: &str, content: &str) -> PathBuf {
+        let root = self.0.path().join(scope).join(".agents/skills/groundhog");
+        fs::create_dir_all(root.join("references")).unwrap();
+        fs::write(root.join("SKILL.md"), content).unwrap();
+        root
+    }
+}
+
+#[test]
+fn reads_installed_files_verbatim_offline_and_sees_updates() {
+    let fixture = ReadFixture::new();
+    let entry = "---\nname: groundhog\n---\n\nInstalled entry\n";
+    let root = fixture.install("project", entry);
+    fs::write(
+        root.join("references/contracts.md"),
+        "# Custom contracts\r\nNo final newline",
+    )
+    .unwrap();
+    for topic in [
+        None,
+        Some("SKILL.md"),
+        Some("contracts"),
+        Some("contracts.md"),
+        Some("references/contracts.md"),
+    ] {
+        let mut command = fixture.command();
+        command.args(["show", "--offline"]);
+        if let Some(topic) = topic {
+            command.arg(topic);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        let expected = if topic.is_none() || topic == Some("SKILL.md") {
+            entry
+        } else {
+            "# Custom contracts\r\nNo final newline"
+        };
+        assert_eq!(output.stdout, expected.as_bytes());
+    }
+    fs::write(root.join("references/contracts.md"), "Updated on disk").unwrap();
+    let output = fixture
+        .command()
+        .args(["show", "contracts", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["data"]["schemaVersion"], 1);
+    assert_eq!(report["data"]["content"], "Updated on disk");
+    assert_eq!(report["data"]["scope"], "project");
     assert_eq!(
-        cli(&["skill", "show", "--all"]).stdout,
-        groundhog_cli::skill::render().as_bytes()
+        report["data"]["path"],
+        root.join("references/contracts.md")
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
     );
-    let entry = cli(&["skill", "show"]);
-    assert!(entry.stdout.starts_with(b"---\nname: groundhog\n"));
-    assert!(entry.stdout.len() < 6 * 1024);
+    assert!(report["data"].get("provenance").is_none());
+}
+
+#[test]
+fn lists_installed_references_in_sorted_order() {
+    let fixture = ReadFixture::new();
+    let root = fixture.install("project", "entry");
+    for name in ["typescript.md", "contracts.md", "cli.md", "notes.txt"] {
+        fs::write(root.join("references").join(name), "reference").unwrap();
+    }
+    let output = fixture
+        .command()
+        .args(["list", "--offline"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"cli\ncontracts\ntypescript\n");
+    let output = fixture.command().args(["list", "--json"]).output().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["data"]["topics"],
+        serde_json::json!(["cli", "contracts", "typescript"])
+    );
+}
+
+#[test]
+fn reads_project_before_global_and_supports_explicit_global_scope() {
+    let fixture = ReadFixture::new();
+    fixture.install("home", "global entry");
+    let output = fixture
+        .command()
+        .args(["show", "--offline"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"global entry");
+    fixture.install("project", "project entry");
+    let output = fixture.command().arg("show").output().unwrap();
+    assert_eq!(output.stdout, b"project entry");
+    let output = fixture
+        .command()
+        .args(["show", "--global"])
+        .output()
+        .unwrap();
+    assert_eq!(output.stdout, b"global entry");
+}
+
+#[test]
+fn missing_installation_requires_install_without_executing_tools() {
+    let fixture = ReadFixture::new();
+    for action in ["show", "list"] {
+        let plain = fixture
+            .command()
+            .args([action, "--offline"])
+            .output()
+            .unwrap();
+        assert!(!plain.status.success());
+        assert!(plain.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&plain.stderr).contains("groundhog skill install"));
+        let json = fixture.command().args([action, "--json"]).output().unwrap();
+        assert!(!json.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["error"]["code"], "skill_error");
+        assert_eq!(report["data"]["path"], serde_json::Value::Null);
+    }
+    fixture.install("project", "project only");
+    assert!(
+        !fixture
+            .command()
+            .args(["show", "--global"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn missing_or_invalid_project_files_do_not_fall_back_to_global() {
+    let fixture = ReadFixture::new();
+    let global = fixture.install("home", "global entry");
+    fs::write(global.join("references/contracts.md"), "global contracts").unwrap();
+    let project = fixture.install("project", "project entry");
+    assert!(
+        !fixture
+            .command()
+            .args(["show", "contracts"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    fs::write(project.join("references/contracts.md"), [0xff]).unwrap();
+    assert!(
+        !fixture
+            .command()
+            .args(["show", "contracts"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    fs::remove_file(project.join("SKILL.md")).unwrap();
+    let output = fixture.command().arg("show").output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn reference_names_cannot_escape_the_installation() {
+    let fixture = ReadFixture::new();
+    fixture.install("project", "entry");
+    for topic in [
+        "../SKILL",
+        "references/../SKILL.md",
+        "/etc/passwd",
+        "..\\SKILL",
+        ".",
+        "",
+    ] {
+        let output = fixture
+            .command()
+            .args(["show", topic, "--json"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{topic}: {output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["ok"], false);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_installations_work_but_references_cannot_link_outside() {
+    use std::os::unix::fs::symlink;
+    let fixture = ReadFixture::new();
+    let root = fixture.install("home", "linked entry");
+    let project_skills = fixture.0.path().join("project/.agents/skills");
+    fs::create_dir_all(&project_skills).unwrap();
+    symlink(&root, project_skills.join("groundhog")).unwrap();
+    let output = fixture.command().arg("show").output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"linked entry");
+    let outside = fixture.0.path().join("outside.md");
+    fs::write(&outside, "outside content").unwrap();
+    symlink(outside, root.join("references/contracts.md")).unwrap();
+    for args in [vec!["show", "contracts"], vec!["list"]] {
+        let output = fixture.command().args(args).output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
 }
 
 #[test]

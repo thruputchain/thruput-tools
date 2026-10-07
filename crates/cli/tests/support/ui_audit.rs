@@ -240,12 +240,18 @@ fn framework_payloads_stay_raw_and_all_completion_shells_match_json() {
         );
         assert!(!plain.stdout.contains(&0x1b));
     }
+    let temp = TempDir::new().unwrap();
+    let installed = temp.path().join(".agents/skills/groundhog");
+    std::fs::create_dir_all(&installed).unwrap();
+    let entry = "---\nname: groundhog\n---\n\nInstalled guidance\n";
+    std::fs::write(installed.join("SKILL.md"), entry).unwrap();
     let skill = groundhog()
-        .args(["skill", "show", "--all"])
+        .current_dir(temp.path())
+        .args(["skill", "show"])
         .output()
         .unwrap();
     assert!(skill.status.success() && skill.stderr.is_empty());
-    assert!(skill.stdout.starts_with(b"---\nname: groundhog\n"));
+    assert_eq!(skill.stdout, entry.as_bytes());
 }
 
 #[test]

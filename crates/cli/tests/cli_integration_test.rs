@@ -589,10 +589,16 @@ fn help_shows_subcommands() {
 }
 
 #[test]
-fn skill_show_prints_release_matched_markdown_outside_a_project() {
+fn skill_show_reads_global_installation_outside_a_project() {
     let directory = TempDir::new().unwrap();
+    let installed = directory.path().join("home/.agents/skills/groundhog");
+    std::fs::create_dir_all(&installed).unwrap();
+    let content = "---\nname: groundhog\n---\n\nUser-installed guidance\n";
+    std::fs::write(installed.join("SKILL.md"), content).unwrap();
     let output = groundhog()
-        .args(["skill", "show", "--all"])
+        .args(["skill", "show", "--offline"])
+        .env("HOME", directory.path().join("home"))
+        .env("PATH", "")
         .current_dir(directory.path())
         .output()
         .unwrap();
@@ -600,15 +606,7 @@ fn skill_show_prints_release_matched_markdown_outside_a_project() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
 
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("---\nname: groundhog\n"));
-    assert!(stdout.contains(&format!(
-        "<!-- groundhog-cli-version: {} -->",
-        env!("CARGO_PKG_VERSION")
-    )));
-    assert!(!stdout.contains("{{GROUNDHOG_CLI_VERSION}}"));
-    assert!(stdout.ends_with('\n'));
-    assert!(!stdout.ends_with("\n\n"));
+    assert_eq!(output.stdout, content.as_bytes());
 }
 
 #[test]

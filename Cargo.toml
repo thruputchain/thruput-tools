@@ -14,7 +14,6 @@ members = [
     "crates/json-rpc/open-rpc-spec",
     "crates/x23/x23-transport",
     "crates/x23/hogd-backend",
-    "crates/agent-knowledge",
     "crates/toolchain",
     "crates/cli",
     "crates/cli-macros",

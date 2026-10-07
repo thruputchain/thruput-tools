@@ -1,4 +1,4 @@
-//! Embedded, release-matched instructions for coding agents.
+//! Read the installed Groundhog skill and manage it through the maintained installer.
 
 use crate::{
     CliError, Print,
@@ -7,11 +7,12 @@ use crate::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    fs, io,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
-const SOURCE: &str = include_str!("../assets/groundhog/knowledge/skill-source.json");
+const SKILL_DIRECTORY: &str = ".agents/skills/groundhog";
 const SKILLS_PACKAGE: &str = "skills@1.7.0";
 const REPOSITORY: &str = "groundhogchain/agent-skills";
 
@@ -20,8 +21,20 @@ const REPOSITORY: &str = "groundhogchain/agent-skills";
 pub enum SkillError {
     #[error("unknown skill topic `{0}`; run `groundhog skill list`")]
     Topic(String),
-    #[error("invalid bundled skill: {0}; reinstall the CLI")]
-    Bundle(serde_json::Error),
+    #[error(
+        "Groundhog skill files are not installed; run `groundhog skill install` in this directory or `groundhog skill install --global`"
+    )]
+    MissingInstallation,
+    #[error(
+        "cannot read installed skill file {path}: {source}; check the installation or run `groundhog skill install` again"
+    )]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("skill reference must be a Markdown file inside the installed skill: {0}")]
+    InvalidReference(PathBuf),
     #[error("{0} is not on PATH; install Node.js 22.20 or newer with npm, and Git")]
     MissingTool(&'static str),
     #[error("Node.js 22.20 or newer is required; installed version is {0}")]
@@ -50,75 +63,72 @@ pub enum SkillError {
     Failed(Option<i32>),
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct Provenance {
-    repository: String,
-    revision: Option<String>,
-    dirty: bool,
-    sha256: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Bundle {
-    #[serde(flatten)]
-    provenance: Provenance,
-    files: BTreeMap<String, String>,
-}
-
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ReadReport {
     schema_version: u32,
-    cli_version: &'static str,
-    provenance: Provenance,
+    scope: Option<&'static str>,
+    path: Option<PathBuf>,
     topics: Vec<String>,
     content: Option<String>,
 }
 
-/// Print the bundled entry, a topic, all guidance, or the topic index.
+/// Print an installed skill file unchanged, or list its reference names.
+/// Reads the current directory's installation before the user's global installation;
+/// `global` selects only the latter. Reading never invokes the installer or the network.
 pub fn show(
     topic: Option<&str>,
-    all: bool,
+    global: bool,
     list: bool,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let bundle: Bundle = serde_json::from_str(SOURCE).map_err(SkillError::Bundle)?;
-    let topics: Vec<_> = bundle
-        .files
-        .keys()
-        .filter_map(|path| {
-            path.strip_prefix("references/")?
-                .strip_suffix(".md")
-                .map(str::to_owned)
-        })
-        .collect();
-    let result = if list {
-        Ok(None)
-    } else if all {
-        Ok(Some(render()))
-    } else {
-        let path = topic.map_or_else(
-            || "SKILL.md".into(),
-            |topic| format!("references/{topic}.md"),
-        );
-        bundle
-            .files
-            .get(&path)
-            .map(|content| Some(with_provenance(content, &bundle.provenance)))
-            .ok_or_else(|| CliError::from(SkillError::Topic(topic.unwrap_or("entry").into())))
-    };
     let mut report = ReadReport {
         schema_version: 1,
-        cli_version: env!("CARGO_PKG_VERSION"),
-        provenance: bundle.provenance,
-        topics,
+        scope: None,
+        path: None,
+        topics: Vec::new(),
         content: None,
     };
+    let result = (|| -> Result<(), CliError> {
+        let (root, scope) = installed_directory(global)?;
+        report.scope = Some(scope);
+        report.path = Some(root.clone());
+        if list {
+            report.topics = reference_names(&root)?;
+        } else {
+            let relative = match topic {
+                None | Some("SKILL.md") => PathBuf::from("SKILL.md"),
+                Some(topic) => {
+                    let name = topic.strip_prefix("references/").unwrap_or(topic);
+                    let name = name.strip_suffix(".md").unwrap_or(name);
+                    if !valid_reference_name(name) {
+                        return Err(SkillError::Topic(topic.into()).into());
+                    }
+                    PathBuf::from(format!("references/{name}.md"))
+                }
+            };
+            let path = match installed_file(&root, &relative) {
+                Err(CliError::Skill(SkillError::Read { source, .. }))
+                    if topic.is_some() && source.kind() == io::ErrorKind::NotFound =>
+                {
+                    return Err(SkillError::Topic(topic.unwrap_or_default().into()).into());
+                }
+                result => result?,
+            };
+            report.content =
+                Some(
+                    fs::read_to_string(&path).map_err(|source| SkillError::Read {
+                        path: path.clone(),
+                        source,
+                    })?,
+                );
+            report.path = Some(path);
+        }
+        Ok(())
+    })();
     match result {
-        Ok(content) => {
-            report.content = content;
+        Ok(()) => {
             if print.is_json() {
                 print.json(&CommandResult::new(cmd, report))?;
             } else if let Some(content) = &report.content {
@@ -132,23 +142,72 @@ pub fn show(
     }
 }
 
-fn with_provenance(content: &str, source: &Provenance) -> String {
-    let identity = format!(
-        "<!-- groundhog-cli-version: {} -->\n<!-- skill-source: {}; revision: {}; sha256: {}; dirty: {} -->\n\n",
-        env!("CARGO_PKG_VERSION"),
-        source.repository,
-        source.revision.as_deref().unwrap_or("uncommitted"),
-        source.sha256,
-        source.dirty
-    );
-    if let Some((frontmatter, body)) = content
-        .strip_prefix("---\n")
-        .and_then(|text| text.split_once("\n---\n"))
-    {
-        format!("---\n{frontmatter}\n---\n\n{identity}{}", body.trim_start())
-    } else {
-        format!("{identity}{content}")
+fn installed_directory(global: bool) -> Result<(PathBuf, &'static str), CliError> {
+    let mut candidates = Vec::new();
+    if !global {
+        candidates.push((std::env::current_dir()?.join(SKILL_DIRECTORY), "project"));
     }
+    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        candidates.push((PathBuf::from(home).join(SKILL_DIRECTORY), "global"));
+    }
+    for (path, scope) in candidates {
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(source) => return Err(SkillError::Read { path, source }.into()),
+            Ok(_) => {}
+        }
+        let root = path
+            .canonicalize()
+            .map_err(|source| SkillError::Read { path, source })?;
+        installed_file(&root, Path::new("SKILL.md"))?;
+        return Ok((root, scope));
+    }
+    Err(SkillError::MissingInstallation.into())
+}
+
+fn installed_file(root: &Path, relative: &Path) -> Result<PathBuf, CliError> {
+    let path = root.join(relative);
+    let resolved = path.canonicalize().map_err(|source| SkillError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    if !resolved.starts_with(root) || !resolved.is_file() {
+        return Err(SkillError::InvalidReference(path).into());
+    }
+    Ok(resolved)
+}
+
+fn valid_reference_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn reference_names(root: &Path) -> Result<Vec<String>, CliError> {
+    let path = root.join("references");
+    let entries = match fs::read_dir(&path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(SkillError::Read { path, source }.into()),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| SkillError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str().and_then(|name| name.strip_suffix(".md")) else {
+            continue;
+        };
+        if valid_reference_name(name) {
+            installed_file(root, &Path::new("references").join(entry.file_name()))?;
+            names.push(name.to_owned());
+        }
+    }
+    names.sort();
+    Ok(names)
 }
 
 /// Installation scope and explicit consent passed to the maintained skills CLI.
@@ -387,63 +446,4 @@ fn require_installed(global: bool) -> Result<(), CliError> {
         return Err(SkillError::NotInstalled.into());
     }
     Ok(())
-}
-
-const CLI_VERSION_PLACEHOLDER: &str = "{{GROUNDHOG_CLI_VERSION}}";
-const SKILL_TEMPLATE: &str = include_str!("../assets/groundhog/knowledge/generated/SKILL.md");
-
-/// Render the skill bundled with this CLI build.
-#[must_use]
-pub fn render() -> String {
-    SKILL_TEMPLATE.replace(CLI_VERSION_PLACEHOLDER, env!("CARGO_PKG_VERSION"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rendered_skill_has_valid_identity_and_bounded_size() {
-        let skill = render();
-
-        assert!(skill.starts_with("---\nname: groundhog\n"));
-        assert!(skill.contains(&format!(
-            "<!-- groundhog-cli-version: {} -->",
-            env!("CARGO_PKG_VERSION")
-        )));
-        assert!(!skill.contains(CLI_VERSION_PLACEHOLDER));
-        assert!(skill.ends_with('\n'));
-        assert!(!skill.ends_with("\n\n"));
-        assert!(
-            skill.len() <= 64 * 1024,
-            "complete skill is {} bytes",
-            skill.len()
-        );
-        let bundle: Bundle = serde_json::from_str(SOURCE).unwrap();
-        assert!(bundle.files["SKILL.md"].len() < 5 * 1024);
-    }
-
-    #[test]
-    fn rendered_skill_preserves_high_risk_guidance() {
-        let skill = render();
-
-        assert!(skill.contains("`Balance` is the practical starting point"));
-        assert!(skill.contains("Do not use raw `NNInt` for a balance"));
-        assert!(skill.contains("`Balance` is the ordinary type for balances"));
-        assert!(skill.contains("`NNInt` is the lower-level integer type for counters"));
-        assert!(skill.contains("`RCQ<T>` is the SDK's retrocausal queue"));
-        assert!(
-            skill.contains("uses `try_decrease`; the recipient credit uses `try_lazy_increase`")
-        );
-        assert!(skill.contains("A generated TypeScript binding describes a contract"));
-        assert!(skill.contains("Generated event descriptors provide `filter`, `decode`"));
-        assert!(skill.contains("Inspect\n   `node_modules`, Cargo registry source"));
-        assert!(skill.contains("Never print, log, or paste private signing material"));
-        assert!(skill.contains("Schema-4 local manifests contain public allocations"));
-        assert!(skill.contains("`dev-1` are ordinary key names"));
-        assert!(skill.contains("SDK 0.44.2, standard interfaces 0.1.47"));
-        assert!(skill.contains("Current RPC wire format 10"));
-        assert!(skill.contains("`committed` status can omit height"));
-        assert!(skill.contains("`dropped` requires changing the transaction"));
-    }
 }

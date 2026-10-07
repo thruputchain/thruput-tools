@@ -4,6 +4,7 @@
   "sourceDirty": false,
   "agentGuideCliVersion": "0.19.0",
   "archive": "snapshot.tar.gz",
-  "archiveBytes": 2817500,
-  "sha256": "4f2e1f87ab5ea8aa09e3be0226147ccc1ce52b8cdddbe469de18c7cce484f336"
+  "archiveBytes": 2804864,
+  "sha256": "b5c90042162efa092f2821f981e4975ffc136b38406e3d49b664e8aa436e6a5b",
+  "sourceArchiveSha256": "4f2e1f87ab5ea8aa09e3be0226147ccc1ce52b8cdddbe469de18c7cce484f336"
 }

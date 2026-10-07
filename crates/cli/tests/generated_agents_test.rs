@@ -28,6 +28,24 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
         );
         let project = temp.path().join(&name);
         let guide = fs::read_to_string(project.join("AGENTS.md")).unwrap();
+        assert!(guide.contains("groundhog skill install"));
+        let missing = groundhog(temp.path(), &project)
+            .env("PATH", "")
+            .args(["skill", "show", "--offline"])
+            .output()
+            .unwrap();
+        assert!(!missing.status.success());
+        assert!(String::from_utf8_lossy(&missing.stderr).contains("groundhog skill install"));
+        let installed = project.join(".agents/skills/groundhog");
+        fs::create_dir_all(installed.join("references")).unwrap();
+        fs::write(installed.join("SKILL.md"), "Installed entry\n").unwrap();
+        for topic in ["contracts", "cli", "typescript"] {
+            fs::write(
+                installed.join(format!("references/{topic}.md")),
+                "Installed reference\n",
+            )
+            .unwrap();
+        }
         assert!(guide.contains(&format!(
             "Scaffolded with Groundhog {}, template `{template}`",
             env!("CARGO_PKG_VERSION")
@@ -46,8 +64,7 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
                 args.push(topic);
             }
             assert!(guide.contains(&format!("groundhog {}", args.join(" "))));
-            // Reading the bundled skill must work without Node, Git, Cargo, or
-            // an installed external skill, even from a fresh project.
+            // Reading an installed skill needs no Node, Git, Cargo, or network.
             let output = groundhog(temp.path(), &project)
                 .env("PATH", "")
                 .args(&args)
@@ -60,7 +77,12 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
                 String::from_utf8_lossy(&output.stderr)
             );
             assert!(output.stderr.is_empty());
-            assert!(String::from_utf8_lossy(&output.stdout).contains("groundhog-cli-version:"));
+            let expected = if topic.is_some() {
+                "Installed reference\n"
+            } else {
+                "Installed entry\n"
+            };
+            assert_eq!(output.stdout, expected.as_bytes());
         }
         assert!(!guide.contains("groundhog --skill"));
         assert!(!guide.contains("{{"));

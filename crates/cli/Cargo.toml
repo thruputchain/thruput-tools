@@ -13,10 +13,6 @@ categories.workspace = true
 description = "Groundhog smart contract development tools"
 
 exclude = [
-    "assets/groundhog/knowledge/README.md",
-    "assets/groundhog/knowledge/generated/manifest.json",
-    "assets/groundhog/knowledge/generated/agent-guide.md",
-    "assets/groundhog/knowledge/generated/records.jsonl",
     "/docs/",
     "tests/",
 ]

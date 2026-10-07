@@ -411,15 +411,19 @@ enum SkillCommand {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Print release-matched bundled Markdown without network access
+    /// Print an installed skill reference without network access
     Show {
         topic: Option<String>,
-        /// Print the entry and every reference
-        #[arg(long, conflicts_with = "topic")]
-        all: bool,
+        /// Read only the user-wide installation
+        #[arg(long)]
+        global: bool,
     },
-    /// List topics bundled with this CLI
-    List,
+    /// List references in the installed skill
+    List {
+        /// Read only the user-wide installation
+        #[arg(long)]
+        global: bool,
+    },
 }
 
 impl SkillCommand {
@@ -428,17 +432,17 @@ impl SkillCommand {
             Self::Install { .. } => "skill install",
             Self::Update { .. } => "skill update",
             Self::Show { .. } => "skill show",
-            Self::List => "skill list",
+            Self::List { .. } => "skill list",
         }
     }
 
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         use groundhog_cli::skill::{self, InstallOptions};
         match self {
-            Self::Show { topic, all } => {
-                skill::show(topic.as_deref(), all, false, ctx.cmd_name, &ctx.print)
+            Self::Show { topic, global } => {
+                skill::show(topic.as_deref(), global, false, ctx.cmd_name, &ctx.print)
             }
-            Self::List => skill::show(None, false, true, ctx.cmd_name, &ctx.print),
+            Self::List { global } => skill::show(None, global, true, ctx.cmd_name, &ctx.print),
             Self::Install { global, agent, yes } => skill::install(
                 false,
                 &InstallOptions {

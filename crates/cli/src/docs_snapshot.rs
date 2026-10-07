@@ -66,6 +66,9 @@ fn decode(archive: &[u8], pin: &Pin) -> Result<Files, CliError> {
             .to_str()
             .ok_or_else(|| invalid("non-UTF-8 archive path"))?
             .to_owned();
+        if name == "agent-guide.md" || name.starts_with("agents/") {
+            return Err(invalid("skill content must not be bundled").into());
+        }
         if !entry.header().entry_type().is_file()
             || name
                 .split('/')
@@ -103,7 +106,6 @@ fn decode(archive: &[u8], pin: &Pin) -> Result<Files, CliError> {
         || snapshot.agent_guide_cli_version.is_empty()
         || !paths.contains("index.html")
         || !paths.contains("start/index.html")
-        || !paths.contains("agent-guide.md")
         || !paths.contains("markdown/index.md")
         || !paths.contains("markdown/full.md")
         || !paths.contains("llms.txt")
@@ -238,7 +240,6 @@ mod tests {
         for (name, content) in [
             ("index.html", ""),
             ("start/index.html", ""),
-            ("agent-guide.md", ""),
             ("markdown/index.md", ""),
             ("markdown/full.md", ""),
             ("llms.txt", ""),
@@ -307,6 +308,19 @@ mod tests {
                 .to_string()
                 .contains("unsupported")
         );
+    }
+
+    #[test]
+    fn rejects_archived_skill_copies() {
+        for name in ["agent-guide.md", "agents/0.19.0/agent-guide.md"] {
+            let (bytes, pin) = entry_archive(name, tar::EntryType::Regular);
+            assert!(
+                decode(&bytes, &pin)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("skill content must not be bundled")
+            );
+        }
     }
 
     #[cfg(unix)]

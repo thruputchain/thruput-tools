@@ -10,7 +10,8 @@ Read `README.md` if present, the project manifests and lockfiles, and any
 current dependencies and workflow; the scaffold version above is historical.
 Preserve dependency and toolchain pins unless the task includes a migration.
 
-Read the CLI's bundled entry point:
+Install the maintained skill with `groundhog skill install` if it is absent,
+then read its entry point:
 
 ```console
 groundhog skill show
@@ -22,7 +23,7 @@ Then load only the guidance needed for the task:
 - Profiles, keys, deployment, or local nodes: `groundhog skill show cli`.
 - Generated bindings or client calls: `groundhog skill show typescript`.
 
-These commands read offline guidance; they do not install or update skills.
+These commands read the installed files offline; they do not install or update skills.
 Use APIs supported by the project's resolved SDK version. If an instruction
 does not match the CLI, check `groundhog --version` and the command's `--help`.
 
