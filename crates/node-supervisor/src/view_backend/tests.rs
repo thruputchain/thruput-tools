@@ -79,7 +79,6 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
             return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
         }
         assert!(query.budget_millis > 30_000);
-        assert_eq!(query.max_gas, 1_000);
         assert_eq!(query.max_response_bytes, 256);
         if let Some(requested) = query.min_height.filter(|height| **height > 42) {
             return Ok(ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {

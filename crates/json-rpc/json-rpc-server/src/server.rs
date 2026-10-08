@@ -859,6 +859,41 @@ mod view_batch_validation_tests {
     };
 
     #[test]
+    fn aggregate_cap_counts_declared_and_default_limits_without_overflow() {
+        let call = ViewCall {
+            contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
+            entrypoint: HexBytes(vec![0; 8]),
+            calldata: HexBytes(vec![]),
+            caller: None,
+            gas_limit: Some(10),
+        };
+        let mut config = RpcServerConfig::default()
+            .with_view_gas_limit(10)
+            .with_view_batch(crate::ViewBatchConfig {
+                max_gas: 15,
+                ..Default::default()
+            });
+        let mut request = ViewBatchRequest {
+            calls: vec![call.clone(), call],
+            min_height: None,
+        };
+        request.calls[1].gas_limit = Some(5);
+        assert!(validate_view_batch(&request, &config).is_ok());
+        request.calls[1].gas_limit = Some(6);
+        assert!(validate_view_batch(&request, &config).is_err());
+        request.calls[1].gas_limit = None;
+        assert!(validate_view_batch(&request, &config).is_err());
+        request.calls[0].gas_limit = Some(5);
+        assert!(validate_view_batch(&request, &config).is_ok());
+
+        config.view_gas_limit = u64::MAX;
+        config.view_batch.max_gas = u64::MAX;
+        request.calls[0].gas_limit = Some(u64::MAX);
+        request.calls[1].gas_limit = Some(1);
+        assert!(validate_view_batch(&request, &config).is_err());
+    }
+
+    #[test]
     fn operator_limits_can_exceed_defaults_and_still_bound_aggregate_work() {
         let call = ViewCall {
             contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),

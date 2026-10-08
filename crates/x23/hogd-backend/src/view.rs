@@ -47,7 +47,6 @@ pub fn view_batch_query(
         ),
         min_height: request.min_height,
         budget_millis,
-        max_gas: limits.max_gas,
         max_response_bytes: limits.max_response_bytes,
     })
 }
@@ -298,7 +297,6 @@ mod batch_tests {
     fn batch_preserves_caller_budget_and_fault_as_a_result() {
         let query = query();
         assert_eq!(query.budget_millis, 999);
-        assert_eq!(query.max_gas, 160_000_000);
         assert_eq!(query.max_response_bytes, 1_048_576);
         assert_eq!(query.calls.0[0].invocation.gas_limit, 123);
         assert_eq!(
@@ -340,13 +338,11 @@ mod batch_tests {
             min_height: None,
         };
         let limits = groundhog_json_rpc_server::ViewBatchConfig {
-            max_gas: 999,
             max_response_bytes: 321,
             ..Default::default()
         };
         let query = view_batch_query(request.clone(), 123, Duration::from_mins(1), limits).unwrap();
         assert_eq!(query.budget_millis, 60_000);
-        assert_eq!(query.max_gas, 999);
         assert_eq!(query.max_response_bytes, 321);
         assert!(matches!(
             view_batch_query(request, 123, Duration::ZERO, limits),

@@ -63,8 +63,9 @@ max_response_bytes = 1048576
 ```
 
 The shared server validates call count, aggregate calldata, and declared gas.
-Per-call view limits also apply. Hogd receives the aggregate gas budget, remaining
-time, and encoded response-size budget, and checks them during execution. The
+Per-call view limits also apply. The aggregate gas cap is checked in RPC before
+dispatch; hogd enforces each call's gas limit. Hogd also receives the remaining
+time and encoded response-size budget, and checks them during execution. The
 response-size budget includes events and measures XDR bytes; the public JSON
 response and transport message caps still apply. Timeout settings bound the
 public response wait, not cancellation of running VM work or database I/O.
