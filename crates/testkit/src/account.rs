@@ -148,7 +148,7 @@ impl SubmittedDeploy {
             return Err(TestkitError::TransactionNotPending {
                 tx_hash: format!("{:?}", self.tx_hash),
                 status: groundhog_json_rpc_types::transaction::TransactionStatus::Committed {
-                    height: Some(receipt.height.clone()),
+                    height: receipt.height.clone(),
                 },
             });
         }
@@ -510,7 +510,7 @@ mod tests {
             TestkitError::TransactionNotPending {
                 status: TransactionStatus::Committed { height },
                 ..
-            } if height == Some(BlockHeight::from(7))
+            } if height == BlockHeight::from(7)
         ));
     }
 }

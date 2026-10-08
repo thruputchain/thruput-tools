@@ -65,9 +65,9 @@ pub fn transaction_outcome(
     let status = match outcome.status {
         Status::SchedulerTransactionNotFound => return Ok(None),
         Status::SchedulerTransactionPending => TransactionStatus::Pending,
-        // Keep scheduler-derived heights absent until support is added explicitly.
-        // Indexer-derived heights continue to follow the existing mapping.
-        Status::SchedulerTransactionSucceeded => TransactionStatus::Committed { height: None },
+        Status::SchedulerTransactionSucceeded => TransactionStatus::Committed {
+            height: outcome.height.clone(),
+        },
         Status::SchedulerTransactionRetry | Status::SchedulerTransactionDropped => {
             let source = match outcome.error_source {
                 Source::SchedulerTransactionErrorAuth => SchedulerTransactionErrorSource::Auth,

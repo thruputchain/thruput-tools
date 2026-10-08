@@ -7,7 +7,7 @@ use groundhog_json_rpc_types::{BlockHeight, ContractAddress, Ed25519PublicKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 2;
+pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 3;
 
 /// Stable JSON fields shared by every native HOG transfer outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -194,7 +194,7 @@ mod tests {
 
         let value = serde_json::to_value(report).expect("bug: report should serialize");
 
-        assert_eq!(value["schemaVersion"], 2);
+        assert_eq!(value["schemaVersion"], TRANSFER_JSON_SCHEMA_VERSION);
         assert_eq!(value["dryRun"], true);
         assert_eq!(value["submitted"], false);
         assert_eq!(value["senderWallet"], "alice");

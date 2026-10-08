@@ -30,14 +30,10 @@ pub enum TransactionStatus {
     /// No `block_hash`: SCP instant finality means no forks/reorgs,
     /// so height alone is sufficient for confirmation.
     Committed {
-        /// Committed block height, omitted until an indexed record supplies it.
-        #[serde(
-            default,
-            with = "crate::decimal::option",
-            skip_serializing_if = "Option::is_none"
-        )]
-        #[schemars(with = "Option<crate::decimal::Decimal<BlockHeight>>")]
-        height: Option<BlockHeight>,
+        /// Committed block height supplied by the scheduler or indexer.
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+        height: BlockHeight,
     },
 
     /// Scheduler rejected the transaction.

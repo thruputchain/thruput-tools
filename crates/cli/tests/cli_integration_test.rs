@@ -6729,7 +6729,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "transfer");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(data["schemaVersion"], 2);
+    assert_eq!(data["schemaVersion"], 3);
     assert_eq!(data["profile"], "default");
     assert_eq!(data["rpcUrl"], rpc_url);
     assert_eq!(data["dryRun"], true);
@@ -7911,7 +7911,7 @@ fn assert_transfer_live_common(
     local_hash: &str,
     sender_wallet: Option<&str>,
 ) {
-    assert_eq!(data["schemaVersion"], 2);
+    assert_eq!(data["schemaVersion"], 3);
     assert_eq!(data["profile"], "default");
     assert!(
         data["rpcUrl"]
@@ -11274,7 +11274,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "tx.show");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["schemaVersion"], 4);
     assert_eq!(stdout["data"]["profile"], "devnet");
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["txHash"], hash);
@@ -11285,7 +11285,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
 }
 
 #[test]
-fn tx_show_committed_without_height_handles_indexer_catching_up() {
+fn tx_show_committed_height_handles_indexer_catching_up() {
     let hash = format!("0x{}", "ab".repeat(32));
     for json_output in [false, true] {
         for receipt_available in [false, true] {
@@ -11303,7 +11303,9 @@ fn tx_show_committed_without_height_handles_indexer_catching_up() {
             };
             let (rpc_url, rpc_server) = spawn_tx_show_rpc(
                 &hash,
-                TxShowRpcResponse::Result(serde_json::json!({"status": "committed"})),
+                TxShowRpcResponse::Result(
+                    serde_json::json!({"status": "committed", "height": "42"}),
+                ),
                 Some(TxShowRpcResponse::Result(receipt.clone())),
             );
             let mut command = groundhog();
@@ -11325,13 +11327,13 @@ fn tx_show_committed_without_height_handles_indexer_catching_up() {
                 let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
                 assert_eq!(
                     stdout["data"]["status"],
-                    serde_json::json!({"status": "committed"})
+                    serde_json::json!({"status": "committed", "height": "42"})
                 );
                 assert_eq!(stdout["data"]["receipt"], receipt);
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(stderr.contains("status: committed"));
-                assert!(!stderr.contains("height: 0"));
+                assert!(stderr.contains("height: 42"));
                 if receipt_available {
                     assert!(stderr.contains("receipt height: 42"));
                 } else {
@@ -11511,7 +11513,7 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
     assert_eq!(
         stdout["data"],
         serde_json::json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "profile": "default",
             "rpcUrl": rpc_url,
             "txHash": hash,

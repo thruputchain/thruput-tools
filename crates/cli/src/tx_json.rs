@@ -4,7 +4,7 @@ use groundhog_json_rpc_types::{BlockHeight, ContractAddress, events::PaginationC
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const TX_SHOW_JSON_SCHEMA_VERSION: u32 = 3;
+pub const TX_SHOW_JSON_SCHEMA_VERSION: u32 = 4;
 pub const TX_LIST_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Stable JSON data for a one-shot public transaction lookup.

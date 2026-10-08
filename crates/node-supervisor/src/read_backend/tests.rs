@@ -1187,7 +1187,7 @@ async fn transaction_status_committed_not_pending_returns_committed() {
 
     // Assert
     assert!(
-        matches!(status, TransactionStatus::Committed { height: Some(ref height) } if **height == CANNED_HEIGHT_A),
+        matches!(status, TransactionStatus::Committed { ref height } if **height == CANNED_HEIGHT_A),
         "expected Committed({CANNED_HEIGHT_A}), got {status:?}",
     );
 }
@@ -1219,7 +1219,10 @@ async fn transaction_status_scheduler_retained_outcomes() {
         let value = serde_json::to_value(status).unwrap();
         assert_eq!(value["status"], tag);
         if tag == "committed" {
-            assert_eq!(value, serde_json::json!({"status": "committed"}));
+            assert_eq!(
+                value,
+                serde_json::json!({"status": "committed", "height": "42"})
+            );
         } else {
             assert_eq!(
                 value["error"],
@@ -1324,7 +1327,7 @@ async fn transaction_status_scheduler_rpc_fail_still_returns_committed_from_inde
 
     // Assert: scheduler failure is non-fatal; we still get the indexer answer.
     assert!(
-        matches!(status, TransactionStatus::Committed { height: Some(ref height) } if **height == CANNED_HEIGHT_B),
+        matches!(status, TransactionStatus::Committed { ref height } if **height == CANNED_HEIGHT_B),
         "expected Committed({CANNED_HEIGHT_B}) despite scheduler failure, got {status:?}",
     );
 }

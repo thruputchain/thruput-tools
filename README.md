@@ -87,7 +87,7 @@ The public API uses JSON-RPC methods named `groundhog_*`. Start with the
 for methods, types, and errors. Its wire-format version is independent of the
 Rust workspace version and is reported by `groundhog_version` as `wireFormat`.
 
-Wire format 10 encodes every 64-bit-or-wider integer as a canonical decimal string,
+Wire format 11 encodes every 64-bit-or-wider integer as a canonical decimal string,
 including small values such as `"0"`. This applies to requests and responses;
 JSON numbers are rejected for these fields. Smaller bounded integers remain JSON
 numbers. The TypeScript client exposes wide integers as `bigint`. CLI JSON reports
