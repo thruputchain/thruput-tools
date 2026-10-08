@@ -255,6 +255,39 @@
         "message": "Transaction rejected",
         "x-description": "The submitted transaction is well-formed but was rejected by the scheduler or execution backend.",
         "x-name": "TxRejected"
+      },
+      "ViewHeightUnavailable": {
+        "code": -32011,
+        "message": "View height unavailable",
+        "x-data-schema": {
+          "$defs": {
+            "DecimalBlockHeight": {
+              "description": "Canonical decimal integer in the inclusive range -9223372036854775808 to 9223372036854775807.",
+              "maxLength": 20,
+              "pattern": "^(0|-?[1-9][0-9]*)(?![\\s\\S])",
+              "type": "string",
+              "x-integer-maximum": "9223372036854775807",
+              "x-integer-minimum": "-9223372036854775808"
+            }
+          },
+          "description": "Requested minimum height and the committed height of the selected snapshot.",
+          "properties": {
+            "observed": {
+              "$ref": "#/$defs/DecimalBlockHeight"
+            },
+            "requested": {
+              "$ref": "#/$defs/DecimalBlockHeight"
+            }
+          },
+          "required": [
+            "requested",
+            "observed"
+          ],
+          "title": "ViewHeightUnavailable",
+          "type": "object"
+        },
+        "x-description": "The selected committed snapshot is below minHeight. Data contains requested and observed heights. The request does not wait or force a snapshot refresh.",
+        "x-name": "ViewHeightUnavailable"
       }
     },
     "schemas": {
@@ -1393,6 +1426,17 @@
           "maxViewGas": {
             "$ref": "#/components/schemas/DecimalU64",
             "description": "Largest `gasLimit` a `view` request may ask for, and the budget a view\nruns under when it names none."
+          },
+          "viewBatch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ViewBatchLimits"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent on servers that do not advertise shared-read limits."
           }
         },
         "required": [
@@ -1920,6 +1964,156 @@
         ],
         "type": "object"
       },
+      "ViewBatchLimits": {
+        "description": "Endpoint limits for one shared-snapshot read. Per-call view limits also apply.",
+        "properties": {
+          "maxCalldataBytes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxCalls": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxGas": {
+            "$ref": "#/components/schemas/DecimalU64"
+          },
+          "maxResponseBytes": {
+            "description": "Maximum encoded backend result including events, before JSON encoding.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timeoutMs": {
+            "$ref": "#/components/schemas/DecimalU64",
+            "description": "Upper bound on the response wait; transport and backend limits also apply."
+          }
+        },
+        "required": [
+          "maxCalls",
+          "maxCalldataBytes",
+          "maxGas",
+          "maxResponseBytes",
+          "timeoutMs"
+        ],
+        "type": "object"
+      },
+      "ViewBatchRequest": {
+        "additionalProperties": false,
+        "description": "Independent simulations against one committed snapshot, in request order.",
+        "properties": {
+          "calls": {
+            "description": "Nonempty calls bounded by the endpoint's advertised batch limits.",
+            "items": {
+              "$ref": "#/components/schemas/ViewCall"
+            },
+            "type": "array"
+          },
+          "minHeight": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecimalBlockHeight"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Freshness floor on the selected snapshot. Does not wait or request a refresh."
+          }
+        },
+        "required": [
+          "calls"
+        ],
+        "type": "object"
+      },
+      "ViewBatchResponse": {
+        "description": "Ordered simulation results from a single committed snapshot.",
+        "properties": {
+          "height": {
+            "$ref": "#/components/schemas/DecimalBlockHeight"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ViewCallResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "height",
+          "results"
+        ],
+        "type": "object"
+      },
+      "ViewCall": {
+        "additionalProperties": false,
+        "description": "One batch entry. Freshness belongs to the group, never to an individual call.",
+        "properties": {
+          "calldata": {
+            "$ref": "#/components/schemas/HexBytes"
+          },
+          "caller": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hex0x_ContractAddress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contract": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+          },
+          "entrypoint": {
+            "$ref": "#/components/schemas/HexBytes",
+            "description": "Contract entrypoint id. Must be exactly 8 bytes."
+          },
+          "gasLimit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecimalU64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional per-call gas budget. The endpoint's per-call and aggregate limits apply."
+          }
+        },
+        "required": [
+          "contract",
+          "entrypoint",
+          "calldata"
+        ],
+        "type": "object"
+      },
+      "ViewCallResult": {
+        "description": "One independent simulation's output and events; writes never reach another call.",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EmittedEvent"
+            },
+            "type": "array"
+          },
+          "gasUsed": {
+            "$ref": "#/components/schemas/DecimalU64",
+            "description": "Gas consumed by this independent simulation."
+          },
+          "output": {
+            "$ref": "#/components/schemas/RootInvocationOutput"
+          }
+        },
+        "required": [
+          "output",
+          "events",
+          "gasUsed"
+        ],
+        "type": "object"
+      },
       "ViewRequest": {
         "additionalProperties": false,
         "description": "Request for sandboxed contract simulation against the latest committed state.",
@@ -1957,6 +2151,17 @@
               }
             ],
             "description": "Optional gas budget for the root invocation. Absent selects the\nserver's `maxViewGas` (see `serverLimits`); a value above it, or zero,\nis rejected as an invalid parameter. No gas is charged for a view."
+          },
+          "minHeight": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecimalBlockHeight"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Minimum committed snapshot height. Does not wait or force a refresh."
           }
         },
         "required": [
@@ -2001,7 +2206,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "11.0.1"
+    "version": "11.1.0"
   },
   "methods": [
     {
@@ -2539,6 +2744,9 @@
           "$ref": "#/components/errors/InvalidParams"
         },
         {
+          "$ref": "#/components/errors/ViewHeightUnavailable"
+        },
+        {
           "$ref": "#/components/errors/BackendUnavailable"
         },
         {
@@ -2567,7 +2775,51 @@
           "$ref": "#/components/schemas/ViewResponse"
         }
       },
-      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against. `gasLimit` is optional: absent runs under the endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is rejected as an invalid parameter.",
+      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against. `gasLimit` is optional: absent runs under the endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is rejected as an invalid parameter. Optional `minHeight` requires that execution snapshot to be at least the requested committed height. An older result returns `ViewHeightUnavailable`. This is a freshness floor, not a historical selector, wait, or refresh request.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/ViewHeightUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_viewBatch",
+      "params": [
+        {
+          "name": "request",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ViewBatchRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "ViewBatchResponse",
+        "schema": {
+          "$ref": "#/components/schemas/ViewBatchResponse"
+        }
+      },
+      "summary": "Simulate independent calls against one committed snapshot. Results preserve input order and include return, abort, or fault with events. Calls do not observe each other's writes. Abandoned snapshots retry the whole group, up to three attempts. There is no partial success or automatic chunking. Operator limits are advertised by `serverLimits`. The response deadline is strict, but running backend work may outlive it. The minimum height is a freshness floor, not a wait or refresh request. The returned height is committed H, with execution context H+1.",
       "tags": [
         {
           "name": "Core API"
