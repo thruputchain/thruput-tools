@@ -603,6 +603,7 @@ mod tests {
                         error_source:
                             SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
                         error_code: 0,
+                        height: 42.into(),
                     })
                     .collect(),
             ))
@@ -1328,6 +1329,7 @@ mod tests {
                 status,
                 error_source: Source::SchedulerTransactionErrorScheduler,
                 error_code: 3,
+                height: 42.into(),
             };
             let (scheduler_addr, _scheduler) =
                 start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;

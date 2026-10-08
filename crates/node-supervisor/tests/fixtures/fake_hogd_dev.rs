@@ -1244,6 +1244,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
                     status: SchedulerTransactionStatus::SchedulerTransactionNotFound,
                     error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
                     error_code: 0,
+                    height: 42.into(),
                 })
                 .collect(),
         ))
@@ -1330,6 +1331,7 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
                     },
                     error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
                     error_code: 0,
+                    height: 42.into(),
                 })
                 .collect(),
         ))

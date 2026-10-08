@@ -220,6 +220,7 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
                     },
                     error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
                     error_code: 0,
+                    height: 42.into(),
                 })
                 .collect(),
         ))
@@ -1207,6 +1208,7 @@ async fn transaction_status_scheduler_retained_outcomes() {
             status,
             error_source: Source::SchedulerTransactionErrorExecutor,
             error_code: -4,
+            height: 42.into(),
         };
         let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
         let backend = make_read_backend(idx_addr, sched_addr).await;

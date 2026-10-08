@@ -1870,6 +1870,7 @@ mod tests {
                         error_source:
                             SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
                         error_code: 0,
+                        height: 42.into(),
                     })
                     .collect(),
             ))
