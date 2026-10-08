@@ -18,12 +18,16 @@
 #   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hog-gateway
 #   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
 #   SMOKE_PROTOCOL_RS_PATH=/path/to/protocol-rs  # defaults to sdk_rs sibling
+#   CARGO_TARGET_DIR=/absolute/path/to/build-output
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$REPO_ROOT/target/debug/groundhog"
-GATEWAY="$REPO_ROOT/target/debug/hog-gateway"
+BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+[[ "$BUILD_TARGET_DIR" = /* ]] || BUILD_TARGET_DIR="$REPO_ROOT/$BUILD_TARGET_DIR"
+export CARGO_TARGET_DIR="$BUILD_TARGET_DIR"
+CLI="$BUILD_TARGET_DIR/debug/groundhog"
+GATEWAY="$BUILD_TARGET_DIR/debug/hog-gateway"
 PROJECT_NAME="smoke-counter"
 SMOKE_PROFILE="local"
 INITIAL_VALUE=7
