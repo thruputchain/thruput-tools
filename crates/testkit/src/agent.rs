@@ -11,7 +11,7 @@ use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 
 use crate::account::{
-    Account, DeployOptions, Deployed, SubmittedDeploy, verify_deployment_receipt,
+    Account, DeployOptions, Deployed, PreparedDeploy, SubmittedDeploy, verify_deployment_receipt,
 };
 use crate::artifact::{
     ArtifactEntry, ArtifactKind, PendingRegistration, RegistrationOwner, Registry,
@@ -183,6 +183,8 @@ impl AgentContext {
     /// is registering the same artifact. The error carries that transaction's
     /// hash so a manual scenario can produce its block and await its receipt
     /// before retrying this deployment.
+    /// A scheduler `Retry` replays the retained registration's signed bytes;
+    /// a `Dropped` outcome clears that attempt and returns its failure.
     pub async fn submit_deploy_artifact(
         &mut self,
         name: &str,
@@ -499,7 +501,7 @@ impl AgentContext {
 async fn reconcile_pending_registration(
     network: &Network,
     name: &str,
-    entry: &ArtifactEntry,
+    entry: &Arc<ArtifactEntry>,
     pending: &mut Option<PendingRegistration>,
     caller: RegistrationOwner,
     options: DeployOptions<'_>,
@@ -522,6 +524,29 @@ async fn reconcile_pending_registration(
     let tx_hash = attempt.tx_hash;
     let Some(receipt) = network.receipt(tx_hash).await? else {
         return match network.transaction_status(tx_hash).await? {
+            TransactionStatus::Retry { .. } => {
+                let submitted = PreparedDeploy::from_registration(network.clone(), &attempt)
+                    .submit()
+                    .await?
+                    .with_registration(Arc::clone(entry));
+                if attempt.owner == caller {
+                    Ok(RegistrationResolution::Recovered(Box::new(submitted)))
+                } else {
+                    Err(TestkitError::ArtifactRegistrationPending {
+                        name: name.to_owned(),
+                        tx_hash,
+                    })
+                }
+            }
+            TransactionStatus::Dropped { error } => {
+                *pending = None;
+                Err(TestkitError::Deploy {
+                    detail: format!(
+                        "retained registration dropped: {:?} code {}",
+                        error.source, error.code
+                    ),
+                })
+            }
             TransactionStatus::Invalid { reason } => {
                 *pending = None;
                 Err(TestkitError::Deploy {

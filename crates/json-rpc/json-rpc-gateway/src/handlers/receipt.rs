@@ -1393,10 +1393,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn indexer_diagnostic_skips_scheduler_lookup() {
-        let gate = LookupGate::new();
-        let (scheduler_addr, _scheduler) =
-            start_fake_scheduler(FakeSchedulerMode::GatedMiss(gate.clone())).await;
+    async fn scheduler_pending_overrides_indexer_diagnostic() {
+        let (scheduler_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::Pending).await;
         let (indexer_addr, _indexer) = start_fake_indexer(
             TxInfoResult::TxInfoRecentFailure {
                 recent_failure: recent_diagnostic(),
@@ -1413,9 +1411,8 @@ mod tests {
             ))
             .await
             .unwrap(),
-            TransactionStatus::RecentFailure { .. }
+            TransactionStatus::Pending
         ));
-        assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -1520,20 +1517,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_indexer_answers_survive_full_lookup_admission() {
-        let committed = committed_result();
-        let diagnostic = recent_diagnostic();
-        let recent_status = TransactionStatus::from(&diagnostic);
-        for (result, expected) in [
-            (
-                committed,
-                TransactionStatus::Committed { height: 42.into() },
-            ),
+    async fn only_commitment_bypasses_full_scheduler_lookup_admission() {
+        for (result, committed) in [
+            (committed_result(), true),
             (
                 TxInfoResult::TxInfoRecentFailure {
-                    recent_failure: diagnostic,
+                    recent_failure: recent_diagnostic(),
                 },
-                recent_status,
+                false,
             ),
         ] {
             let (scheduler_addr, _scheduler) =
@@ -1547,22 +1538,20 @@ mod tests {
                 .acquire_many_owned(SCHEDULER_LOOKUP_MAX_OUTSTANDING.try_into().unwrap())
                 .await
                 .unwrap();
-            let status = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
-                .await
-                .unwrap();
-            assert_eq!(
-                serde_json::to_value(status).unwrap(),
-                serde_json::to_value(expected).unwrap()
-            );
+            let status =
+                get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()).await;
+            if committed {
+                assert!(
+                    matches!(status.unwrap(), TransactionStatus::Committed { height } if *height == 42)
+                );
+            } else {
+                assert!(matches!(status, Err(RpcServerError::Overloaded(_))));
+            }
             assert!(ctx.scheduler.read().await.is_some());
             let metrics = gathered_metrics(&ctx).await;
             assert_lookup_gauges(&metrics, 0, 0);
-            assert_lookup_admission(&metrics, "full", 0);
+            assert_lookup_admission(&metrics, "full", usize::from(!committed));
             assert_lookup_admission(&metrics, "accepted", 0);
-            assert!(!metrics.contains(concat!(
-                "groundhog_gateway_backend_requests_total{backend=\"scheduler\",",
-                "operation=\"schedgateway_lookup_transaction_outcomes\",outcome=\"rejected\"} 1",
-            )));
         }
     }
 

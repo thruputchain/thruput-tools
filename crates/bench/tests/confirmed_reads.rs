@@ -17,6 +17,7 @@ struct State {
     statuses: AtomicUsize,
     receipts: AtomicUsize,
     invalid: bool,
+    missing_receipts: usize,
     delay: Duration,
 }
 
@@ -58,7 +59,11 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
         "groundhog_getTransactionReceipt" => {
             assert_eq!(request["params"], json!([HASH]));
             let count = state.receipts.fetch_add(1, Ordering::SeqCst);
-            json!({"txHash":if count > 0 && state.invalid {NETWORK} else {HASH},"height":"7","status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":"1500"})
+            if count < state.missing_receipts {
+                Value::Null
+            } else {
+                json!({"txHash":if count > 0 && state.invalid {NETWORK} else {HASH},"height":"7","status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":"1500"})
+            }
         }
         _ => panic!("unexpected method {method}"),
     };
@@ -88,6 +93,16 @@ async fn benchmark(
     delay: Duration,
     extra: &[&str],
 ) -> (std::process::Output, Arc<State>) {
+    benchmark_with_receipt_lag(method, invalid, delay, extra, 0).await
+}
+
+async fn benchmark_with_receipt_lag(
+    method: &str,
+    invalid: bool,
+    delay: Duration,
+    extra: &[&str],
+    missing_receipts: usize,
+) -> (std::process::Output, Arc<State>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let state = Arc::new(State {
@@ -96,6 +111,7 @@ async fn benchmark(
         statuses: AtomicUsize::new(0),
         receipts: AtomicUsize::new(0),
         invalid,
+        missing_receipts,
         delay,
     });
     let server_state = state.clone();
@@ -324,4 +340,33 @@ async fn existing_load_modes_keep_their_per_worker_cap() {
             assert_eq!(state.peak.load(Ordering::SeqCst), 8);
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn committed_corpus_waits_for_indexing_after_height_is_known() {
+    let (output, state) =
+        benchmark_with_receipt_lag("getTransactionReceipt", false, Duration::ZERO, &[], 2).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(state.receipts.load(Ordering::SeqCst) > 2);
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["corpus"]["count"], 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn missing_committed_receipt_still_obeys_setup_deadline() {
+    let (output, _) = benchmark_with_receipt_lag(
+        "getTransactionReceipt",
+        false,
+        Duration::ZERO,
+        &["--setup-timeout-secs", "1"],
+        usize::MAX,
+    )
+    .await;
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("deadline exceeded"));
 }

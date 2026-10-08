@@ -139,21 +139,31 @@ async fn unknown_requires_both_backends_to_have_missed() {
 }
 
 #[tokio::test]
-async fn a_diagnostic_answers_without_asking_the_scheduler() {
-    let probe = Scripted::new(vec![Ok(Some(recent_failure()))], vec![]);
+async fn a_diagnostic_answers_after_a_scheduler_miss() {
+    let probe = Scripted::new(vec![Ok(Some(recent_failure()))], vec![Ok(None)]);
     assert!(matches!(
         transaction_status(&probe, hash()).await.unwrap(),
         TransactionStatus::RecentFailure { .. }
     ));
-    assert_eq!(probe.asked(), ["indexer"]);
+    assert_eq!(probe.asked(), ["indexer", "mempool"]);
 }
 
 #[tokio::test]
-async fn scheduler_retained_outcomes_answer_after_an_indexer_miss() {
+async fn a_diagnostic_does_not_hide_a_scheduler_error() {
+    let probe = Scripted::new(vec![Ok(Some(recent_failure()))], vec![Err(mempool_down())]);
+    assert_eq!(
+        transaction_status(&probe, hash()).await.unwrap_err(),
+        mempool_down()
+    );
+}
+
+#[tokio::test]
+async fn scheduler_outcomes_override_advisory_indexer_failures() {
     use groundhog_json_rpc_types::transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource,
     };
     for status in [
+        TransactionStatus::Pending,
         TransactionStatus::Committed { height: 42.into() },
         TransactionStatus::Retry {
             error: SchedulerTransactionError::new(SchedulerTransactionErrorSource::Scheduler, 1),
@@ -163,11 +173,13 @@ async fn scheduler_retained_outcomes_answer_after_an_indexer_miss() {
         },
     ] {
         let expected = serde_json::to_value(&status).unwrap();
-        let probe = Scripted::new(vec![Ok(None)], vec![Ok(Some(status))]);
-        assert_eq!(
-            serde_json::to_value(transaction_status(&probe, hash()).await.unwrap()).unwrap(),
-            expected
-        );
-        assert_eq!(probe.asked(), ["indexer", "mempool"]);
+        for indexed in [Ok(None), Ok(Some(recent_failure())), Err(indexer_down())] {
+            let probe = Scripted::new(vec![indexed], vec![Ok(Some(status.clone()))]);
+            assert_eq!(
+                serde_json::to_value(transaction_status(&probe, hash()).await.unwrap()).unwrap(),
+                expected
+            );
+            assert_eq!(probe.asked(), ["indexer", "mempool"]);
+        }
     }
 }

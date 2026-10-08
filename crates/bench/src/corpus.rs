@@ -246,8 +246,11 @@ async fn prepare_inner(
                     .await?,
                 )
                 .map_err(|error| BenchError::Setup(format!("invalid receipt: {error}")))?;
-                let receipt = receipt
-                    .ok_or_else(|| BenchError::Setup("committed hash has no receipt".into()))?;
+                let Some(receipt) = receipt else {
+                    *progress = format!("waiting for committed hash {hash:?} to be indexed");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                };
                 if receipt.tx_hash != *hash || receipt.height != height {
                     return Err(BenchError::Setup(
                         "receipt hash/height differs from committed status".into(),
@@ -268,7 +271,10 @@ async fn prepare_inner(
             if cli.hashes_file.is_some()
                 || matches!(
                     status,
-                    TransactionStatus::Invalid { .. } | TransactionStatus::Other
+                    TransactionStatus::Invalid { .. }
+                        | TransactionStatus::Retry { .. }
+                        | TransactionStatus::Dropped { .. }
+                        | TransactionStatus::Other
                 )
             {
                 return Err(BenchError::Setup(format!(

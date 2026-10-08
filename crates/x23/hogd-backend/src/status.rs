@@ -36,24 +36,21 @@ pub trait StatusProbe: Sync {
     ) -> impl Future<Output = Result<Option<TransactionStatus>, RpcServerError>> + Send;
 }
 
-/// Use any indexer record without consulting the scheduler. On an indexer miss
-/// or failure, consult the scheduler; a known scheduler outcome can still answer
-/// during indexer unavailability. `Unknown` requires successful misses from both.
+/// Indexed commitment wins. Otherwise prefer the scheduler's current outcome
+/// over an advisory indexer diagnostic. A diagnostic answers only after a
+/// scheduler miss; `Unknown` requires successful misses from both backends.
 #[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn transaction_status<P: StatusProbe + ?Sized>(
     probe: &P,
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, RpcServerError> {
     let indexed = probe.indexed_status(tx_hash).await;
-    if let Ok(Some(status)) = indexed {
+    if let Ok(Some(status @ TransactionStatus::Committed { .. })) = indexed {
         return Ok(status);
     }
     match probe.scheduler_status(tx_hash).await {
         Ok(Some(status)) => Ok(status),
-        Ok(None) => {
-            indexed?;
-            Ok(TransactionStatus::Unknown)
-        }
+        Ok(None) => Ok(indexed?.unwrap_or(TransactionStatus::Unknown)),
         Err(error) => {
             indexed?;
             Err(error)
