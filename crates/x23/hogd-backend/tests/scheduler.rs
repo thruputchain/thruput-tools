@@ -54,7 +54,7 @@ fn scheduler_outcomes_preserve_processing_results() {
     ));
     assert!(matches!(
         decode(Status::SchedulerTransactionSucceeded),
-        Some(TransactionStatus::Committed { height: None })
+        Some(TransactionStatus::Committed { height: Some(height) }) if height == 42.into()
     ));
     for (source, expected) in [
         (
@@ -94,6 +94,25 @@ fn scheduler_outcomes_preserve_processing_results() {
             assert_eq!(error.source, expected);
             assert_eq!(error.code, -7);
         }
+    }
+}
+
+#[test]
+fn scheduler_commitment_heights_preserve_zero_and_wide_values() {
+    for height in [0, 42, (1_i64 << 53) + 1, i64::MAX] {
+        let mut result = outcome(
+            Status::SchedulerTransactionSucceeded,
+            Source::SchedulerTransactionErrorNone,
+            0,
+        );
+        result.height = height.into();
+        let status = transaction_outcome("scheduler", &VecM(vec![result]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({"status": "committed", "height": height.to_string()})
+        );
     }
 }
 

@@ -1762,7 +1762,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "Committed block height, omitted until an indexed record supplies it."
+                "description": "Committed block height supplied by the scheduler or indexer.\nMay be omitted by older servers."
               },
               "status": {
                 "const": "committed",
@@ -2007,7 +2007,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "10.1.0"
+    "version": "10.1.1"
   },
   "methods": [
     {
@@ -2145,7 +2145,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check. Any indexer record takes priority and skips the scheduler lookup. Otherwise, return the scheduler's pending, committed, retry, or dropped outcome. Scheduler commitments omit `height`; indexed commitments include the actual block height, including block zero. `unknown` requires successful misses from both backends; failed lookups must not be interpreted as absence.",
+      "summary": "Lightweight status check. Any indexer record takes priority and skips the scheduler lookup. Otherwise, return the scheduler's pending, committed, retry, or dropped outcome. Scheduler and indexed commitments include the actual block height, including block zero. `unknown` requires successful misses from both backends; failed lookups must not be interpreted as absence.",
       "tags": [
         {
           "name": "Core API"

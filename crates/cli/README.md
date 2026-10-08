@@ -459,9 +459,10 @@ groundhog tx list alice --cursor 0x0123...
 ```
 
 `tx show` performs one status lookup and fetches a receipt only for a committed
-transaction; it does not wait. A scheduler-confirmed committed status omits the
-height until the indexer supplies it. A receipt always includes its actual height,
-which can become available between the status and receipt lookups.
+transaction; it does not wait. A scheduler-confirmed committed status includes the
+committed block height before the indexer supplies a receipt. Older servers may
+omit the status height. A receipt always includes its actual height, which must
+match the status height when both are available.
 Scheduler `retry` outcomes mean the transaction
 may be resubmitted; the mempool will not retry it automatically. `dropped`
 outcomes require modifying the transaction before resubmission. Both retain

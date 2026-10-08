@@ -1345,7 +1345,10 @@ mod tests {
             let value = serde_json::to_value(status).unwrap();
             assert_eq!(value["status"], tag);
             if tag == "committed" {
-                assert_eq!(value, serde_json::json!({"status": "committed"}));
+                assert_eq!(
+                    value,
+                    serde_json::json!({"status": "committed", "height": "42"})
+                );
             } else {
                 assert_eq!(
                     value["error"],
@@ -1353,6 +1356,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn scheduler_commitment_height_survives_indexer_unavailability() {
+        use groundhog_scheduler::{
+            SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
+            SchedulerTransactionStatus as Status,
+        };
+        let outcome = SchedulerTransactionOutcome {
+            status: Status::SchedulerTransactionSucceeded,
+            error_source: Source::SchedulerTransactionErrorNone,
+            error_code: 0,
+            height: 0.into(),
+        };
+        let (scheduler_addr, _scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (indexer_addr, _indexer) = start_scripted_indexer(vec![None], calls.clone()).await;
+        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+        for disconnected in [false, true] {
+            if disconnected {
+                *ctx.indexer.write().await = None;
+            }
+            let status = watchdog(get_transaction_status(
+                &ctx,
+                RpcRequestContext::unbounded(),
+                test_hash(),
+            ))
+            .await
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                serde_json::json!({"status": "committed", "height": "0"})
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

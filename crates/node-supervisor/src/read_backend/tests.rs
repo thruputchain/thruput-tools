@@ -1219,7 +1219,10 @@ async fn transaction_status_scheduler_retained_outcomes() {
         let value = serde_json::to_value(status).unwrap();
         assert_eq!(value["status"], tag);
         if tag == "committed" {
-            assert_eq!(value, serde_json::json!({"status": "committed"}));
+            assert_eq!(
+                value,
+                serde_json::json!({"status": "committed", "height": "42"})
+            );
         } else {
             assert_eq!(
                 value["error"],
