@@ -15,7 +15,7 @@ pub(crate) struct FaucetErrorBody {
 #[serde(rename_all = "camelCase")]
 struct FaucetErrorDetail {
     code: &'static str,
-    message: &'static str,
+    message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "groundhog_json_rpc_types::decimal::option")]
     retry_after_seconds: Option<u64>,
@@ -24,7 +24,7 @@ struct FaucetErrorDetail {
 pub(crate) fn error_response(
     status: StatusCode,
     code: &'static str,
-    message: &'static str,
+    message: impl Into<String>,
 ) -> Response {
     error_response_with_retry_after(status, code, message, None)
 }
@@ -32,7 +32,7 @@ pub(crate) fn error_response(
 pub(crate) fn error_response_with_retry_after(
     status: StatusCode,
     code: &'static str,
-    message: &'static str,
+    message: impl Into<String>,
     retry_after_seconds: Option<u64>,
 ) -> Response {
     (
@@ -40,7 +40,7 @@ pub(crate) fn error_response_with_retry_after(
         Json(FaucetErrorBody {
             error: FaucetErrorDetail {
                 code,
-                message,
+                message: message.into(),
                 retry_after_seconds,
             },
         }),
