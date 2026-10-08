@@ -595,9 +595,7 @@ mod tests {
             PendingStatusClassification::Terminal
         );
         assert_eq!(
-            classify_pending_status(&TransactionStatus::Committed {
-                height: Some(2.into())
-            }),
+            classify_pending_status(&TransactionStatus::Committed { height: 2.into() }),
             PendingStatusClassification::Terminal
         );
         assert_eq!(
@@ -634,13 +632,8 @@ fn describe_status(status: &TransactionStatus) -> String {
         TransactionStatus::Pending => {
             "still pending; never committed within the polling budget".to_owned()
         }
-        TransactionStatus::Committed {
-            height: Some(height),
-        } => {
+        TransactionStatus::Committed { height } => {
             format!("committed at height {height:?}, but the receipt was not yet indexed")
-        }
-        TransactionStatus::Committed { height: None } => {
-            "committed, but the height and receipt were not yet indexed".to_owned()
         }
         TransactionStatus::Invalid { reason } => format!("rejected by the scheduler: {reason}"),
         TransactionStatus::RecentFailure {

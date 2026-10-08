@@ -31,14 +31,9 @@ pub enum TransactionStatus {
     /// so height alone is sufficient for confirmation.
     Committed {
         /// Committed block height supplied by the scheduler or indexer.
-        /// May be omitted by older servers.
-        #[serde(
-            default,
-            with = "crate::decimal::option",
-            skip_serializing_if = "Option::is_none"
-        )]
-        #[schemars(with = "Option<crate::decimal::Decimal<BlockHeight>>")]
-        height: Option<BlockHeight>,
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+        height: BlockHeight,
     },
 
     /// Scheduler rejected the transaction.

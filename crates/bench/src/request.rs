@@ -69,7 +69,7 @@ impl ExpectedResult {
         match self {
             Self::Any => true,
             Self::Committed { height: expected } => {
-                matches!(TransactionStatus::deserialize(value), Ok(TransactionStatus::Committed { height: Some(height) }) if *height == expected)
+                matches!(TransactionStatus::deserialize(value), Ok(TransactionStatus::Committed { height }) if *height == expected)
             }
             Self::Receipt { hash, height } => {
                 matches!(TransactionReceipt::deserialize(value), Ok(receipt) if receipt.tx_hash == hash && *receipt.height == height)

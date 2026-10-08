@@ -66,7 +66,7 @@ pub fn transaction_outcome(
         Status::SchedulerTransactionNotFound => return Ok(None),
         Status::SchedulerTransactionPending => TransactionStatus::Pending,
         Status::SchedulerTransactionSucceeded => TransactionStatus::Committed {
-            height: Some(outcome.height.clone()),
+            height: outcome.height.clone(),
         },
         Status::SchedulerTransactionRetry | Status::SchedulerTransactionDropped => {
             let source = match outcome.error_source {

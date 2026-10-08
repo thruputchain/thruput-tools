@@ -1754,15 +1754,8 @@
             "description": "Included in a committed block. SCP finality = done.\nNo `block_hash`: SCP instant finality means no forks/reorgs,\nso height alone is sufficient for confirmation.",
             "properties": {
               "height": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/DecimalBlockHeight"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "Committed block height supplied by the scheduler or indexer.\nMay be omitted by older servers."
+                "$ref": "#/components/schemas/DecimalBlockHeight",
+                "description": "Committed block height supplied by the scheduler or indexer."
               },
               "status": {
                 "const": "committed",
@@ -1770,7 +1763,8 @@
               }
             },
             "required": [
-              "status"
+              "status",
+              "height"
             ],
             "type": "object"
           },
@@ -2007,7 +2001,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "10.1.1"
+    "version": "11.0.0"
   },
   "methods": [
     {

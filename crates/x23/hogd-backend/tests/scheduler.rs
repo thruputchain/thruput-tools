@@ -54,7 +54,7 @@ fn scheduler_outcomes_preserve_processing_results() {
     ));
     assert!(matches!(
         decode(Status::SchedulerTransactionSucceeded),
-        Some(TransactionStatus::Committed { height: Some(height) }) if height == 42.into()
+        Some(TransactionStatus::Committed { height }) if height == 42.into()
     ));
     for (source, expected) in [
         (

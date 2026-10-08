@@ -1307,9 +1307,7 @@ mod tests {
         ))
         .await
         .unwrap();
-        assert!(
-            matches!(status, TransactionStatus::Committed { height } if height == Some(42.into()))
-        );
+        assert!(matches!(status, TransactionStatus::Committed { height } if height == 42.into()));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
     }
@@ -1529,9 +1527,7 @@ mod tests {
         for (result, expected) in [
             (
                 committed,
-                TransactionStatus::Committed {
-                    height: Some(42.into()),
-                },
+                TransactionStatus::Committed { height: 42.into() },
             ),
             (
                 TxInfoResult::TxInfoRecentFailure {

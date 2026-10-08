@@ -74,7 +74,7 @@ shared probe looks up pending and retained scheduler outcomes. Scheduler retry
 and dropped outcomes preserve their error source and protocol error code.
 Scheduler success reports `Committed` with its committed block height, even before
 the indexer has a record. Indexed records also supply the actual height, including
-block zero. The height remains optional for compatibility with older servers.
+block zero. Every committed status includes its height.
 `Unknown` requires successful misses from both backends. Backend unavailability
 cannot establish absence. These rules prevent an unavailable scheduler from
 making a pending transaction appear to have disappeared.
