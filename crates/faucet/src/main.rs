@@ -25,6 +25,10 @@ struct Cli {
     /// Private heap profile listen address (Linux; requires `GROUNDHOG_HEAP_PROFILING=1`).
     #[arg(long)]
     pprof_listen: Option<String>,
+
+    /// Serve heap profiles on a non-loopback `--pprof-listen` address (unauthenticated).
+    #[arg(long)]
+    pprof_allow_remote: bool,
 }
 
 /// Log filter from `RUST_LOG`, defaulting to `info` when unset so operators
@@ -82,7 +86,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.cors_allowed_origins = parts.cors_allowed_origins;
     config.policy_config = parts.policy;
 
-    let listener = pprof_listener(cli.pprof_listen.as_deref()).await?;
+    let allow_remote = cli.pprof_allow_remote || heap_profiling::allow_remote_env();
+    let listener = pprof_listener(cli.pprof_listen.as_deref(), allow_remote).await?;
     if let Some(listener) = listener {
         tracing::info!(listen = %listener.local_addr()?, "faucet heap profile server listening");
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -104,9 +109,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn pprof_listener(address: Option<&str>) -> std::io::Result<Option<tokio::net::TcpListener>> {
+async fn pprof_listener(
+    address: Option<&str>,
+    allow_remote: bool,
+) -> std::io::Result<Option<tokio::net::TcpListener>> {
     match address {
-        Some(address) => tokio::net::TcpListener::bind(address).await.map(Some),
+        Some(address) => {
+            let listener = tokio::net::TcpListener::bind(address).await?;
+            heap_profiling::check_dedicated_listener(listener.local_addr()?, allow_remote)?;
+            Ok(Some(listener))
+        }
         None => Ok(None),
     }
 }
@@ -124,7 +136,7 @@ mod tests {
             super::Cli::try_parse_from(["groundhog-faucet", "--config", "unused.toml"]).unwrap();
         assert!(cli.pprof_listen.is_none());
         assert!(
-            super::pprof_listener(cli.pprof_listen.as_deref())
+            super::pprof_listener(cli.pprof_listen.as_deref(), false)
                 .await
                 .unwrap()
                 .is_none()
@@ -137,11 +149,43 @@ mod tests {
             "127.0.0.1:0",
         ])
         .unwrap();
-        let listener = super::pprof_listener(cli.pprof_listen.as_deref())
+        let listener = super::pprof_listener(cli.pprof_listen.as_deref(), false)
             .await
             .unwrap()
             .unwrap();
         assert!(listener.local_addr().unwrap().port() > 0);
+    }
+
+    #[tokio::test]
+    async fn pprof_listener_requires_remote_opt_in() {
+        let error = super::pprof_listener(Some("0.0.0.0:0"), false)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        for (address, allow_remote) in [
+            ("0.0.0.0:0", true),
+            ("127.0.0.1:0", false),
+            ("localhost:0", false),
+        ] {
+            assert!(
+                super::pprof_listener(Some(address), allow_remote)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn pprof_allow_remote_flag_parses() {
+        let cli = super::Cli::try_parse_from([
+            "groundhog-faucet",
+            "--config",
+            "unused.toml",
+            "--pprof-allow-remote",
+        ])
+        .unwrap();
+        assert!(cli.pprof_allow_remote);
     }
 
     #[test]

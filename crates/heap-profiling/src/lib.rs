@@ -10,7 +10,56 @@ pub fn dump_pprof() -> io::Result<Vec<u8>> {
 }
 
 use axum::Router;
-use std::io;
+use std::{io, net::SocketAddr};
+
+/// Environment switch permitting unauthenticated profiles beyond loopback.
+pub const ALLOW_REMOTE_ENV: &str = "GROUNDHOG_PPROF_ALLOW_REMOTE";
+
+/// Permit remote profiles only for the exact environment value `1`.
+pub fn allow_remote_env() -> bool {
+    std::env::var_os(ALLOW_REMOTE_ENV).as_deref() == Some(std::ffi::OsStr::new("1"))
+}
+
+/// Classify loopback IPs, including IPv4-mapped IPv6 addresses.
+pub fn is_loopback(addr: SocketAddr) -> bool {
+    addr.ip().to_canonical().is_loopback()
+}
+
+/// Refuse a dedicated non-loopback listener unless remote profiles are permitted.
+pub fn check_dedicated_listener(local: SocketAddr, allow_remote: bool) -> io::Result<()> {
+    if !is_loopback(local) {
+        if !allow_remote {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "heap profile listener {local} is not loopback; pass --pprof-allow-remote or set GROUNDHOG_PPROF_ALLOW_REMOTE=1 to serve unauthenticated heap profiles beyond loopback"
+                ),
+            ));
+        }
+        tracing::warn!(%local, "unauthenticated heap profiles are served beyond loopback");
+    }
+    Ok(())
+}
+
+fn serve_route(enabled: bool, local: SocketAddr, allow_remote: bool) -> bool {
+    enabled && (is_loopback(local) || allow_remote)
+}
+
+/// Expose profiles on a shared listener only when enabled and permitted for its address.
+pub fn routes_for_listener<S: Clone + Send + Sync + 'static>(
+    enabled: bool,
+    local: SocketAddr,
+    allow_remote: bool,
+) -> Router<S> {
+    if enabled && !is_loopback(local) {
+        if allow_remote {
+            tracing::warn!(%local, "unauthenticated heap profiles are served beyond loopback");
+        } else {
+            tracing::warn!(%local, "heap profile route is disabled on a non-loopback listener; pass --pprof-allow-remote or set GROUNDHOG_PPROF_ALLOW_REMOTE=1 to serve unauthenticated heap profiles beyond loopback");
+        }
+    }
+    routes(serve_route(enabled, local, allow_remote))
+}
 
 /// Activate profiling only for the exact environment value `1`.
 #[allow(clippy::unused_async)]
@@ -84,6 +133,56 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loopback_classification() {
+        for (ip, expected) in [
+            ("127.0.0.1", true),
+            ("127.0.0.2", true),
+            ("::1", true),
+            ("::ffff:127.0.0.1", true),
+            ("0.0.0.0", false),
+            ("::", false),
+            ("10.0.0.5", false),
+            ("192.168.1.1", false),
+            ("::ffff:10.0.0.5", false),
+        ] {
+            let addr = SocketAddr::new(ip.parse().unwrap(), 0);
+            assert_eq!(is_loopback(addr), expected, "{addr}");
+        }
+    }
+
+    #[test]
+    fn dedicated_listener_policy() {
+        let remote = "0.0.0.0:1234".parse().unwrap();
+        let error = check_dedicated_listener(remote, false).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            error.to_string(),
+            "heap profile listener 0.0.0.0:1234 is not loopback; pass --pprof-allow-remote or set GROUNDHOG_PPROF_ALLOW_REMOTE=1 to serve unauthenticated heap profiles beyond loopback"
+        );
+        assert!(check_dedicated_listener(remote, true).is_ok());
+        assert!(check_dedicated_listener("127.0.0.1:0".parse().unwrap(), false).is_ok());
+    }
+
+    #[test]
+    fn shared_listener_route_policy() {
+        let loopback: SocketAddr = "127.0.0.1:9646".parse().unwrap();
+        let remote: SocketAddr = "10.0.0.5:9646".parse().unwrap();
+        for (enabled, local, allow_remote, expected) in [
+            (false, loopback, false, false),
+            (false, remote, true, false),
+            (true, loopback, false, true),
+            (true, remote, false, false),
+            (true, remote, true, true),
+        ] {
+            assert_eq!(
+                serve_route(enabled, local, allow_remote),
+                expected,
+                "{enabled} {local} {allow_remote}"
+            );
+        }
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn blocking_dump_does_not_block_runtime_and_cancellation_retains_permit() {

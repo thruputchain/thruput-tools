@@ -1,5 +1,5 @@
 //! Binary allocator setup; profile control and conversion are shared.
-pub use groundhog_heap_profiling::{initialize, routes};
+pub use groundhog_heap_profiling::{allow_remote_env, initialize, routes_for_listener};
 
 #[cfg(all(target_os = "linux", feature = "heap-profiling"))]
 #[global_allocator]

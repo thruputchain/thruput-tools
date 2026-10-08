@@ -43,6 +43,9 @@ Heap profiling is opt-in on the existing private observability listener:
 
 - Set `GROUNDHOG_HEAP_PROFILING=1` to activate profiling. The path returns 404
   when the switch is unset. `--dump-effective-config` bypasses profiling initialization.
+- On a non-loopback `--observability-listen` address, the heap route stays 404
+  unless `--pprof-allow-remote` or `GROUNDHOG_PPROF_ALLOW_REMOTE=1` is set.
+  Metrics and health are unaffected; startup logs why the heap route is disabled.
 - `GET /debug/pprof/heap` returns an uncompressed pprof protobuf with
   `Content-Type: application/octet-stream`.
 - Dump and conversion run on a blocking worker; a concurrent dump request returns HTTP 429.

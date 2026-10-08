@@ -79,6 +79,10 @@ struct Cli {
     #[arg(long)]
     observability_listen: Option<String>,
 
+    /// Serve heap profiles on a non-loopback observability listener (unauthenticated).
+    #[arg(long)]
+    pprof_allow_remote: bool,
+
     /// Comma-separated backends required for readiness
     #[arg(long, value_delimiter = ',')]
     health_required_backends: Option<Vec<HealthBackend>>,
@@ -183,6 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let dump_effective_config = cli.dump_effective_config;
+    let allow_remote = cli.pprof_allow_remote || heap_profiling::allow_remote_env();
     apply_cli_overrides(&mut config, cli);
     let network_info = config.network_info()?;
     if dump_effective_config {
@@ -244,6 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics.clone(),
         observability_shutdown_rx,
         heap_profiling_enabled,
+        allow_remote,
     )
     .await?;
 
@@ -509,6 +515,12 @@ async fn read_runtime_manifest(path: &Path) -> Result<Vec<u8>, Box<dyn std::erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pprof_allow_remote_flag_parses() {
+        let cli = Cli::try_parse_from(["hog-gateway", "--pprof-allow-remote"]).unwrap();
+        assert!(cli.pprof_allow_remote);
+    }
 
     #[test]
     fn x23_multiplex_connections_defaults_and_cli_override() {

@@ -35,6 +35,7 @@ pub async fn spawn_observability_server(
     metrics: GatewayMetrics,
     shutdown: oneshot::Receiver<()>,
     enabled: bool,
+    allow_remote: bool,
 ) -> Result<ObservabilityServer, std::io::Error> {
     let listener = TcpListener::bind(listen_address).await?;
     let local_addr = listener.local_addr()?;
@@ -44,7 +45,11 @@ pub async fn spawn_observability_server(
         .route("/readyz", get(readyz))
         .route("/health", get(healthz))
         .route("/metrics", get(metrics_endpoint))
-        .merge(crate::heap_profiling::routes(enabled))
+        .merge(crate::heap_profiling::routes_for_listener(
+            enabled,
+            local_addr,
+            allow_remote,
+        ))
         .fallback(unknown_endpoint)
         .method_not_allowed_fallback(method_not_allowed_endpoint)
         .with_state(state);
@@ -179,9 +184,10 @@ mod tests {
         let metrics =
             GatewayMetrics::new(build_version, None).expect("bug: metrics should register");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx, false)
-            .await
-            .expect("observability server should bind");
+        let server =
+            spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx, false, false)
+                .await
+                .expect("observability server should bind");
 
         let livez = request(server.local_addr, "/livez").await;
         assert!(livez.starts_with("HTTP/1.1 200 OK"), "{livez}");
@@ -267,9 +273,10 @@ mod tests {
 
         let metrics = GatewayMetrics::for_tests();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx, false)
-            .await
-            .expect("observability server should bind");
+        let server =
+            spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx, false, false)
+                .await
+                .expect("observability server should bind");
 
         let readyz = request(server.local_addr, "/readyz").await;
         assert!(
@@ -291,6 +298,30 @@ mod tests {
             .await
             .expect("observability task should join")
             .expect("observability server should stop cleanly");
+    }
+
+    #[tokio::test]
+    async fn non_loopback_listener_preserves_metrics() {
+        let config = GatewayConfig::default();
+        let health = GatewayHealth::new(&config, BuildVersion::new("test", None), None);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = spawn_observability_server(
+            "0.0.0.0:0",
+            health,
+            GatewayMetrics::for_tests(),
+            shutdown_rx,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        let addr = SocketAddr::from(([127, 0, 0, 1], server.local_addr.port()));
+        let metrics = request(addr, "/metrics").await;
+        assert!(metrics.starts_with("HTTP/1.1 200 OK"), "{metrics}");
+        let heap = request(addr, "/debug/pprof/heap").await;
+        assert!(heap.starts_with("HTTP/1.1 404 Not Found"), "{heap}");
+        let _ = shutdown_tx.send(());
+        server.handle.await.unwrap().unwrap();
     }
 
     async fn request(addr: SocketAddr, path: &str) -> String {

@@ -2987,6 +2987,7 @@ mod tests {
             metrics,
             observability_shutdown_rx,
             false,
+            false,
         )
         .await
         .expect("observability server should start");
@@ -3714,6 +3715,7 @@ mod tests {
             health.clone(),
             metrics.clone(),
             observability_shutdown_rx,
+            false,
             false,
         )
         .await

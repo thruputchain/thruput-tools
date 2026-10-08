@@ -32,6 +32,9 @@ Heap profiling is opt-in on a separate private listener:
 - Set `GROUNDHOG_HEAP_PROFILING=1` and pass `--pprof-listen 127.0.0.1:9647`.
   Use a private address. Without the listen option no profile listener is opened;
   without the environment switch the path returns 404.
+- A non-loopback `--pprof-listen` address (including `0.0.0.0`/`::` or a hostname
+  resolving elsewhere) fails startup unless `--pprof-allow-remote` or
+  `GROUNDHOG_PPROF_ALLOW_REMOTE=1` is set. Allowed remote profiles log a warning.
 - `GET /debug/pprof/heap` returns an uncompressed pprof protobuf with
   `Content-Type: application/octet-stream`.
 - Dump and conversion run on a blocking worker; a concurrent dump request returns HTTP 429.
