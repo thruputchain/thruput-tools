@@ -261,7 +261,7 @@ async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_retur
     let scenario = fixture.scenario(false).await;
     assert!(fixture.state.submitted.lock().unwrap().is_empty());
     scenario
-        .run_agents([Agent::new("alice", |mut ctx| async move {
+        .run_agents([Agent::new("alice", |ctx| async move {
             let signer = derive_dev_account_signer("thruput-testkit:native-test", 0);
             assert_eq!(
                 ctx.address(),
@@ -270,9 +270,7 @@ async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_retur
             ctx.fund(12345).await?;
             let contract = Contract::new([3; 32].into(), "Counter", "0.1.0");
             assert_eq!(
-                contract
-                    .call_returning::<_, u64>(&mut ctx, "get", &())
-                    .await?,
+                contract.call_returning::<_, u64>(&ctx, "get", &()).await?,
                 42
             );
             Ok(())
@@ -301,7 +299,7 @@ async fn deployment_has_exact_effects_and_registers_once() {
     let fixture = Fixture::new(Outcome::Success).await;
     let scenario = fixture.scenario(false).await;
     scenario
-        .run_agents([Agent::new("alice", |mut ctx| async move {
+        .run_agents([Agent::new("alice", |ctx| async move {
             let options = DeployOptions {
                 amount: 123,
                 initializer: Some(WalletInitCall {
@@ -336,7 +334,7 @@ async fn funded_bootstrap_accounts_deploy_through_native_wallet() {
     let fixture = Fixture::new(Outcome::Success).await;
     let scenario = fixture.scenario(true).await;
     scenario
-        .run_agents([Agent::new("alice", |mut ctx| async move {
+        .run_agents([Agent::new("alice", |ctx| async move {
             let signer = derive_dev_account_signer("groundhog-dev-accounts", 1);
             assert_eq!(
                 ctx.address(),
@@ -362,7 +360,7 @@ async fn ambiguous_submissions_keep_signed_identity_and_reserve_nonce() {
         let fixture = Fixture::new(outcome).await;
         let scenario = fixture.scenario(false).await;
         scenario
-            .run_agents([Agent::new("alice", |mut ctx| async move {
+            .run_agents([Agent::new("alice", |ctx| async move {
                 for _ in 0..2 {
                     let error = ctx
                         .submit_deploy(&[1, 2, 3], ArtifactKind::Rv32, DeployOptions::funded(0))
@@ -406,7 +404,7 @@ async fn registry_never_accepts_unverified_receipts_or_resubmits_pending_attempt
         let fixture = Fixture::new(outcome).await;
         let scenario = fixture.scenario(false).await;
         scenario
-            .run_agents([Agent::new("alice", move |mut ctx| async move {
+            .run_agents([Agent::new("alice", move |ctx| async move {
                 let submitted = ctx
                     .submit_deploy_artifact("counter", DeployOptions::funded(123))
                     .await?;
@@ -445,7 +443,7 @@ async fn high_level_raw_deploy_preserves_unverified_attempt() {
         let fixture = Fixture::new(outcome).await;
         let scenario = fixture.scenario(false).await;
         scenario
-            .run_agents([Agent::new("alice", |mut ctx| async move {
+            .run_agents([Agent::new("alice", |ctx| async move {
                 let error = ctx
                     .deploy(&[1, 2, 3], ArtifactKind::Rv32, DeployOptions::funded(123))
                     .await

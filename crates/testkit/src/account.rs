@@ -1,6 +1,7 @@
 //! Per-agent account and the chain-writing operations it performs.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use sha2::{Digest, Sha256};
 use thruput_json_rpc_types::hex::Hex0x;
@@ -237,19 +238,22 @@ impl SubmittedDeploy {
 }
 
 /// An account assigned to one agent, tracking its own nonce sequence.
-#[derive(Debug)]
+///
+/// Clones share the signer and the sequence, so every clone draws distinct
+/// nonces.
+#[derive(Debug, Clone)]
 pub(crate) struct Account {
-    dev: TestAccount,
+    dev: Arc<TestAccount>,
     namespace: NonceNamespace,
-    next_sequence: u32,
+    next_sequence: Arc<AtomicU32>,
 }
 
 impl Account {
     pub(crate) fn new(dev: TestAccount, namespace: NonceNamespace) -> Self {
         Self {
-            dev,
+            dev: Arc::new(dev),
             namespace,
-            next_sequence: 0,
+            next_sequence: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -268,56 +272,73 @@ impl Account {
         }
     }
 
-    fn next_nonce(&self) -> u64 {
-        self.namespace.make_nonce(self.next_sequence)
-    }
-
-    fn advance(&mut self) -> Result<()> {
-        self.next_sequence =
-            self.next_sequence
-                .checked_add(1)
-                .ok_or(TestkitError::NonceExhausted {
-                    index: self.dev.index,
-                })?;
-        Ok(())
+    /// Claim the next nonce in this account's sequence.
+    ///
+    /// A nonce is consumed even if the transaction using it then fails to
+    /// build or submit; nonces need only be unique, not contiguous.
+    fn reserve_nonce(&self) -> Result<u64> {
+        let sequence = self
+            .next_sequence
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |seq| {
+                seq.checked_add(1)
+            })
+            .map_err(|_| TestkitError::NonceExhausted {
+                index: self.dev.index,
+            })?;
+        Ok(self.namespace.make_nonce(sequence))
     }
 
     pub(crate) async fn submit_deploy(
-        &mut self,
+        &self,
         network: &Network,
         artifact: &[u8],
         options: DeployOptions<'_>,
     ) -> Result<SubmittedDeploy> {
         let contract = contract_from_bytes(artifact.to_vec());
         let hash = contract_hash(&contract)?;
-        let prepared = self.build_deploy(network, hash, Some(contract), options)?;
-        self.advance()?;
+        let prepared = self.build_deploy(
+            network,
+            hash,
+            Some(contract),
+            self.reserve_nonce()?,
+            options,
+        )?;
         prepared.submit().await
     }
 
     pub(crate) async fn submit_deploy_entry(
-        &mut self,
+        &self,
         network: &Network,
         entry: &ArtifactEntry,
         include_binary: bool,
         options: DeployOptions<'_>,
     ) -> Result<SubmittedDeploy> {
         let contract = include_binary.then(|| entry.contract());
-        let prepared = self.build_deploy(network, entry.hash(), contract, options)?;
-        self.advance()?;
+        let prepared = self.build_deploy(
+            network,
+            entry.hash(),
+            contract,
+            self.reserve_nonce()?,
+            options,
+        )?;
         prepared.submit().await
     }
 
     pub(crate) fn prepare_deploy_entry(
-        &mut self,
+        &self,
         network: &Network,
         entry: &ArtifactEntry,
         include_binary: bool,
         options: DeployOptions<'_>,
     ) -> Result<PreparedDeploy> {
         let contract = include_binary.then(|| entry.contract());
-        let prepared = self.build_deploy(network, entry.hash(), contract, options)?;
-        self.advance()?;
+        let prepared = self.build_deploy(
+            network,
+            entry.hash(),
+            contract,
+            self.reserve_nonce()?,
+            options,
+        )?;
         Ok(prepared)
     }
 
@@ -328,9 +349,9 @@ impl Account {
         network: &Network,
         hash: SHA256Hash,
         contract: Option<Contract>,
+        tx_nonce: u64,
         options: DeployOptions<'_>,
     ) -> Result<PreparedDeploy> {
-        let tx_nonce = self.next_nonce();
         let deploy_nonce =
             SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(tx_nonce.to_le_bytes())));
         let address = derive_deploy_address(&self.dev.wallet_address, &deploy_nonce, &hash)
@@ -380,15 +401,19 @@ impl Account {
     }
 
     pub(crate) async fn submit_call(
-        &mut self,
+        &self,
         network: &Network,
         target: ContractAddress,
         entrypoint: ContractEntrypointID,
         calldata: &[u8],
     ) -> Result<SubmittedTransaction> {
-        let (tx_hash, tx_hex) =
-            prepare_call(&self.dev, target, entrypoint, calldata, self.next_nonce())?;
-        self.advance()?;
+        let (tx_hash, tx_hex) = prepare_call(
+            &self.dev,
+            target,
+            entrypoint,
+            calldata,
+            self.reserve_nonce()?,
+        )?;
         submit_signed(network, tx_hash, &tx_hex).await?;
         Ok(SubmittedTransaction::new(network.clone(), tx_hash, tx_hex))
     }
@@ -483,10 +508,11 @@ mod tests {
 
     use crate::artifact::{PendingRegistration, RegistrationOwner};
     use crate::error::TestkitError;
+    use crate::manifest::derive_native_accounts;
     use crate::network::Network;
     use crate::nonce::NonceNamespace;
 
-    use super::SubmittedDeploy;
+    use super::{Account, SubmittedDeploy};
 
     #[tokio::test]
     async fn recovered_committed_deploy_does_not_satisfy_pending_barrier() {
@@ -526,6 +552,32 @@ mod tests {
                 status: TransactionStatus::Committed { height },
                 ..
             } if height == BlockHeight::from(7)
+        ));
+    }
+
+    #[test]
+    fn clones_share_one_nonce_sequence() {
+        let namespace = NonceNamespace::for_run("seed", 0);
+        let dev = derive_native_accounts(1, "seed", None).remove(0);
+        let account = Account::new(dev, namespace);
+        let clone = account.clone();
+
+        assert_eq!(account.reserve_nonce().unwrap(), namespace.make_nonce(0));
+        assert_eq!(clone.reserve_nonce().unwrap(), namespace.make_nonce(1));
+        assert_eq!(account.reserve_nonce().unwrap(), namespace.make_nonce(2));
+    }
+
+    #[test]
+    fn exhausted_sequence_is_an_error() {
+        let dev = derive_native_accounts(1, "seed", None).remove(0);
+        let account = Account::new(dev, NonceNamespace::for_run("seed", 0));
+        account
+            .next_sequence
+            .store(u32::MAX, std::sync::atomic::Ordering::Relaxed);
+
+        assert!(matches!(
+            account.reserve_nonce(),
+            Err(TestkitError::NonceExhausted { index: 0 })
         ));
     }
 }

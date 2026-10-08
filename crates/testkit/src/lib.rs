@@ -24,6 +24,7 @@
 mod account;
 pub mod agent;
 mod artifact;
+pub mod caller;
 pub mod clock;
 pub mod contract;
 pub mod error;
@@ -38,9 +39,11 @@ pub mod scenario;
 pub use account::{DeployOptions, Deployed, SubmittedDeploy};
 pub use agent::{Agent, AgentContext, AgentId};
 pub use artifact::ArtifactKind;
+pub use caller::Caller;
 pub use clock::Clock;
 pub use contract::{
-    Contract, ContractEntrypointID, SubmittedContractCall, entrypoint_id, try_entrypoint_id,
+    Contract, ContractCall, ContractEntrypointID, SubmittedContractCall, entrypoint_id,
+    try_entrypoint_id,
 };
 pub use error::{AgentFailure, AgentFailures, Result, TestkitError};
 pub use logging::init_tracing;

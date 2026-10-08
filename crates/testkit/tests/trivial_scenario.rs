@@ -77,7 +77,7 @@ async fn offline_chain_verbs_report_offline() {
         .expect("offline scenario builds");
 
     scenario
-        .run_agents([Agent::new("solo", |mut ctx| async move {
+        .run_agents([Agent::new("solo", |ctx| async move {
             let err = ctx
                 .deploy(
                     b"not-a-real-artifact",
@@ -253,7 +253,7 @@ async fn registry_exposes_hash_and_registration_state() {
         .expect("offline scenario builds with a registered artifact");
 
     scenario
-        .run_agents([Agent::new("solo", |mut ctx| async move {
+        .run_agents([Agent::new("solo", |ctx| async move {
             // The contract hash is available before any deploy; nothing is
             // registered on-network yet.
             ctx.contract_hash("counter")?;
