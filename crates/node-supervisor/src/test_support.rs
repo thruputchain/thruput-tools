@@ -26,6 +26,8 @@ fn build_fake_hogd_dev_binary() -> PathBuf {
             "fake_hogd_dev",
         ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
+        // PATH-resolution tests hide the toolchain while other tests build this helper.
+        .env("PATH", env!("PATH"))
         .stderr(Stdio::inherit())
         .output()
         .unwrap_or_else(|err| {
