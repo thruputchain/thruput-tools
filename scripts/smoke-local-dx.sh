@@ -576,10 +576,10 @@ HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     log "Building CLI and standalone gateway"
-    cargo build -p groundhog-cli -p groundhog-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --locked -p groundhog-cli -p groundhog-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
 else
     log "Building CLI"
-    cargo build -p groundhog-cli --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --locked -p groundhog-cli --manifest-path "$REPO_ROOT/Cargo.toml"
 fi
 
 WORK="$(mktemp -d)"
