@@ -10414,7 +10414,6 @@ fn write_counter_with_exception_spec(project: &std::path::Path, selector: u64) {
             .try_into()
             .unwrap(),
             methods: vec![ContractSpecMethod {
-                effect: None,
                 name: "get".try_into().unwrap(),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::U64,

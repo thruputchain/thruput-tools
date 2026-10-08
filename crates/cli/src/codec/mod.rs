@@ -120,7 +120,6 @@ mod tests {
             interface_name: "Counter".into(),
             version: "0.1.0".into(),
             method: groundhog_contract_spec::ContractSpecMethod {
-                effect: None,
                 name: "increment".try_into().unwrap(),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,

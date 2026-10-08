@@ -471,14 +471,12 @@ mod tests {
                 throws: vec![].try_into().unwrap(),
                 methods: vec![
                     ContractSpecMethod {
-                        effect: None,
                         name: spec_string_bytes("get"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U64,
                         effect: None,
                     },
                     ContractSpecMethod {
-                        effect: None,
                         name: spec_string_bytes("increment"),
                         args: vec![ContractField {
                             name: spec_string_bytes("amount"),
@@ -536,7 +534,6 @@ mod tests {
                     vers: spec_string_bytes("0.1.0"),
                     throws: vec![].try_into().unwrap(),
                     methods: vec![ContractSpecMethod {
-                        effect: None,
                         name: spec_string_bytes("get"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U64,
@@ -550,7 +547,6 @@ mod tests {
                     vers: spec_string_bytes("0.1.0"),
                     throws: vec![].try_into().unwrap(),
                     methods: vec![ContractSpecMethod {
-                        effect: None,
                         name: spec_string_bytes("get"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U64,
