@@ -2692,6 +2692,64 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn default_readiness_requires_db_gateway() {
+        assert_db_gateway_readiness(GatewayConfig::default(), 503).await;
+    }
+
+    #[tokio::test]
+    async fn explicit_partial_service_policy_allows_db_gateway_outage() {
+        let config = GatewayConfig {
+            health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
+            ..GatewayConfig::default()
+        };
+        assert_db_gateway_readiness(config, 200).await;
+    }
+
+    async fn assert_db_gateway_readiness(mut config: GatewayConfig, unavailable_status: u16) {
+        config.indexer_address = Some("127.0.0.1:1".into());
+        config.db_gateway_address = Some("127.0.0.1:2".into());
+        config.view_gateway_address = None;
+        let health = GatewayHealth::new(&config, BuildVersion::new("test", None), None);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = spawn_observability_server(
+            "127.0.0.1:0",
+            health.clone(),
+            GatewayMetrics::for_tests(),
+            shutdown_rx,
+        )
+        .await
+        .expect("observability server should start");
+
+        for (db_up, expected_status) in [(false, unavailable_status), (true, 200)] {
+            let mut snapshot =
+                HealthSnapshot::starting(&config, BuildVersion::new("test", None), None);
+            for backend in [
+                HealthBackend::Scheduler,
+                HealthBackend::Indexer,
+                HealthBackend::DbGateway,
+            ] {
+                let state = snapshot.backends.get_mut(backend.as_str()).unwrap();
+                state.up = backend != HealthBackend::DbGateway || db_up;
+                state.scheduler_identity = SchedulerIdentityStatus::Validated;
+            }
+            // A prior fresh tip must not hide a currently unavailable required DB.
+            snapshot.chain_tip = ChainTipHealth {
+                height: Some(42.into()),
+                age_ms: Some(0),
+            };
+            snapshot.status = readiness_status(&config, &snapshot.backends, &snapshot.chain_tip);
+            health.update_for_test(snapshot).await;
+            assert_eq!(
+                http_status(server.local_addr, "/readyz").await,
+                expected_status
+            );
+        }
+
+        shutdown_tx.send(()).unwrap();
+        server.handle.await.unwrap().unwrap();
+    }
+
     #[test]
     fn optional_configured_backend_down_is_degraded() {
         let config = GatewayConfig {
