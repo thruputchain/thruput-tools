@@ -157,21 +157,27 @@ mod linux {
         fn build_id(&mut self, path: &str) -> Option<String> {
             self.build_ids
                 .entry(path.to_owned())
-                .or_insert_with(|| {
-                    use object::Object;
-                    use std::fmt::Write;
-                    let data = std::fs::read(path).ok()?;
-                    let elf =
-                        object::read::elf::ElfFile64::<object::Endianness>::parse(&*data).ok()?;
-                    let bytes = elf.build_id().ok()??;
-                    let mut id = String::new();
-                    for byte in bytes {
-                        write!(&mut id, "{byte:02x}").ok()?;
-                    }
-                    Some(id)
-                })
+                .or_insert_with(|| read_build_id(path))
                 .clone()
         }
+    }
+
+    fn read_build_id(path: &str) -> Option<String> {
+        use object::Object;
+        use std::fmt::Write;
+        let file = std::fs::File::open(path).ok()?;
+        if !file.metadata().ok()?.is_file() {
+            return None;
+        }
+        // Read only the headers and note, not the whole file.
+        let data = object::ReadCache::new(file);
+        let elf = object::read::elf::ElfFile64::<object::Endianness, _>::parse(&data).ok()?;
+        let bytes = elf.build_id().ok()??;
+        let mut id = String::new();
+        for byte in bytes {
+            write!(&mut id, "{byte:02x}").ok()?;
+        }
+        Some(id)
     }
 
     fn result(code: i32) -> io::Result<()> {
@@ -264,6 +270,35 @@ mod linux {
         })?;
         let dump = std::fs::read_to_string(&file.0)?;
         let maps = std::fs::read_to_string("/proc/self/maps")?;
-        jemalloc_to_pprof(&dump, &maps, &mut LinuxSymbolizer::default())
+        let result = jemalloc_to_pprof(&dump, &maps, &mut LinuxSymbolizer::default());
+        // Drop parsed debuginfo so it neither stays resident nor appears in later profiles.
+        backtrace::clear_symbol_cache();
+        result
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::read_build_id;
+        use object::Object;
+        use std::fmt::Write;
+
+        #[test]
+        fn lazy_build_id_matches_full_file_read_and_rejects_directory() {
+            let path = std::env::current_exe().unwrap();
+            let lazy_id = read_build_id(path.to_str().unwrap());
+            let bytes = std::fs::read(&path).unwrap();
+            let elf = object::read::elf::ElfFile64::<object::Endianness>::parse(&*bytes).unwrap();
+            let full_id = elf.build_id().unwrap().map(|bytes| {
+                let mut id = String::new();
+                for byte in bytes {
+                    write!(&mut id, "{byte:02x}").unwrap();
+                }
+                id
+            });
+            assert!(lazy_id.is_some());
+            assert!(full_id.is_some());
+            assert_eq!(lazy_id, full_id);
+            assert_eq!(read_build_id("/proc/self"), None);
+        }
     }
 }
