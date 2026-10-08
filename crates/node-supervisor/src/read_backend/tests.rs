@@ -220,6 +220,7 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
                     },
                     error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
                     error_code: 0,
+                    height: 42.into(),
                 })
                 .collect(),
         ))
@@ -548,6 +549,14 @@ struct FakeDbGateway {
 
 #[async_trait]
 impl DbGateway_DbGateway1 for FakeDbGateway {
+    async fn dbgateway_get_config(
+        &self,
+    ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, ProgramError> {
+        Err(ProgramError::msg(
+            "configuration RPC is not supported by this test server",
+        ))
+    }
+
     async fn dbgateway_intro(
         &self,
         _arg0: Protocol,
@@ -1199,6 +1208,7 @@ async fn transaction_status_scheduler_retained_outcomes() {
             status,
             error_source: Source::SchedulerTransactionErrorExecutor,
             error_code: -4,
+            height: 42.into(),
         };
         let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
         let backend = make_read_backend(idx_addr, sched_addr).await;

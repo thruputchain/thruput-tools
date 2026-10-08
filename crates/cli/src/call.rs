@@ -2148,6 +2148,7 @@ mod tests {
                     name: spec_string_bytes("get"),
                     args: vec![].try_into().unwrap(),
                     return_type: ContractType::U64,
+                    effect: None,
                 }]
                 .try_into()
                 .unwrap(),
@@ -2181,11 +2182,13 @@ mod tests {
                         .try_into()
                         .unwrap(),
                         return_type: ContractType::Void,
+                        effect: None,
                     },
                     ContractSpecMethod {
                         name: spec_string_bytes("total_supply"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U128,
+                        effect: None,
                     },
                 ]
                 .try_into()
@@ -2209,6 +2212,7 @@ mod tests {
                         name: spec_string_bytes("get"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U64,
+                        effect: None,
                     }]
                     .try_into()
                     .unwrap(),
@@ -2221,6 +2225,7 @@ mod tests {
                         name: spec_string_bytes("get"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U64,
+                        effect: None,
                     }]
                     .try_into()
                     .unwrap(),
@@ -2244,6 +2249,7 @@ mod tests {
                 name: spec_string_bytes("call"),
                 args: args.try_into().unwrap(),
                 return_type,
+                effect: None,
             },
             type_defs: vec![
                 ContractTypeDef::TypeDefStruct {
@@ -2332,6 +2338,7 @@ mod tests {
                     .try_into()
                     .unwrap(),
                 return_type,
+                effect: None,
             },
             type_defs: vec![
                 ContractTypeDef::TypeDefEnum {
@@ -2385,6 +2392,7 @@ mod tests {
                     .try_into()
                     .unwrap(),
                 return_type: arg_type,
+                effect: None,
             },
             type_defs: vec![],
             throws: vec![],

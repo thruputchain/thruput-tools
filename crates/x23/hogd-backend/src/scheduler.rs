@@ -65,8 +65,8 @@ pub fn transaction_outcome(
     let status = match outcome.status {
         Status::SchedulerTransactionNotFound => return Ok(None),
         Status::SchedulerTransactionPending => TransactionStatus::Pending,
-        // Success supplies no block height. Keep it absent until indexing supplies
-        // the actual height; zero is a real height, not a sentinel.
+        // Keep scheduler-derived heights absent until support is added explicitly.
+        // Indexer-derived heights continue to follow the existing mapping.
         Status::SchedulerTransactionSucceeded => TransactionStatus::Committed { height: None },
         Status::SchedulerTransactionRetry | Status::SchedulerTransactionDropped => {
             let source = match outcome.error_source {

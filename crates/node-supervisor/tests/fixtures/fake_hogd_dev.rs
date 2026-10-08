@@ -1244,6 +1244,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
                     status: SchedulerTransactionStatus::SchedulerTransactionNotFound,
                     error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
                     error_code: 0,
+                    height: 42.into(),
                 })
                 .collect(),
         ))
@@ -1330,6 +1331,7 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
                     },
                     error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
                     error_code: 0,
+                    height: 42.into(),
                 })
                 .collect(),
         ))
@@ -1390,6 +1392,14 @@ struct FakeDbGateway {
 
 #[async_trait]
 impl DbGateway_DbGateway1 for FakeDbGateway {
+    async fn dbgateway_get_config(
+        &self,
+    ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, ProgramError> {
+        Err(ProgramError::msg(
+            "configuration RPC is not supported by this test server",
+        ))
+    }
+
     async fn dbgateway_intro(
         &self,
         _arg0: ProtocolCommit,

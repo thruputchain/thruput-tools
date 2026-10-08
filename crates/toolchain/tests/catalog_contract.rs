@@ -7,33 +7,33 @@ const PUBLIC_BASE_URL: &str =
 fn embedded_catalog_pins_the_published_default_matrix() {
     let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
 
-    assert_eq!(catalog.default_version(), "0.1.30-rc.3");
+    assert_eq!(catalog.default_version(), "0.1.30-rc.5");
     assert_eq!(
         catalog.resolve_version(None).expect("bug: default exists"),
-        "0.1.30-rc.3"
+        "0.1.30-rc.5"
     );
 
     let expected = [
         (
             HostTarget::LinuxX86_64,
-            "759e1ee8de68bffacdde828f0a15bdb298697c2825e0510745c68f915fd4b2ff",
-            9_777_959,
+            "fd9932e0f406b4fb19ce29d44ebb1cd0ee858492bc1ebee9fc3061ff9199b63d",
+            9_420_840,
         ),
         (
             HostTarget::LinuxAarch64,
-            "77ed1ed9ec4d3bbf1417dcfe75351c06635dd756cf817a75f3bc94282d53a963",
-            8_965_417,
+            "94821c923ff038cb6af21eaae240e03441030b8b0c387f63fa44317d7da93b5b",
+            8_665_733,
         ),
         (
             HostTarget::MacosAarch64,
-            "b1ec0d1a980f22f35e14c623dc59eaade747fe1bd192ee2a4b37a2f33d7fc9f2",
-            10_640_780,
+            "194d8a8ca9079498ed47ef8d9d08a040ec2f2ae38e6a0c4fe3115935da969d85",
+            10_658_247,
         ),
     ];
 
     for (target, sha256, size) in expected {
         let artifact = catalog
-            .artifact("0.1.30-rc.3", target)
+            .artifact("0.1.30-rc.5", target)
             .expect("bug: default target should exist");
         assert_eq!(artifact.sha256(), sha256);
         assert_eq!(artifact.size(), size);
@@ -52,7 +52,7 @@ fn embedded_catalog_keeps_earlier_releases_selectable() {
     let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
 
     // Users may have saved an earlier default as their selected version.
-    for version in ["0.1.29-rc.5", "0.1.30-rc.1", "0.1.30-rc.2"] {
+    for version in ["0.1.29-rc.5", "0.1.30-rc.1", "0.1.30-rc.2", "0.1.30-rc.3"] {
         assert_eq!(
             catalog
                 .resolve_version(Some(version))
@@ -103,7 +103,7 @@ fn catalog_rejects_unknown_versions_and_targets() {
         Err(CatalogError::UnknownVersion { .. })
     ));
     assert!(matches!(
-        catalog.artifact_for_triple("0.1.30-rc.3", "x86_64-apple-darwin"),
+        catalog.artifact_for_triple("0.1.30-rc.5", "x86_64-apple-darwin"),
         Err(CatalogError::UnsupportedTarget { .. })
     ));
 }
@@ -112,7 +112,7 @@ fn catalog_rejects_unknown_versions_and_targets() {
 fn public_url_uses_the_catalog_object_key() {
     let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
     let artifact = catalog
-        .artifact("0.1.30-rc.3", HostTarget::LinuxX86_64)
+        .artifact("0.1.30-rc.5", HostTarget::LinuxX86_64)
         .expect("bug: default target should exist");
 
     assert_eq!(
@@ -120,7 +120,7 @@ fn public_url_uses_the_catalog_object_key() {
             .public_url(PUBLIC_BASE_URL)
             .expect("bug: base URL should be valid")
             .as_str(),
-        "https://groundhog-public-release-artifacts-017820684264.s3.us-west-2.amazonaws.com/hog-devnode/0.1.30-rc.3/hog-devnode_0.1.30-rc.3_x86_64-unknown-linux-gnu.tar.gz"
+        "https://groundhog-public-release-artifacts-017820684264.s3.us-west-2.amazonaws.com/hog-devnode/0.1.30-rc.5/hog-devnode_0.1.30-rc.5_x86_64-unknown-linux-gnu.tar.gz"
     );
 }
 
@@ -128,7 +128,7 @@ fn public_url_uses_the_catalog_object_key() {
 fn catalog_validation_rejects_a_checksum_change() {
     let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes())
         .expect("bug: embedded catalog should be JSON");
-    value["versions"]["0.1.30-rc.3"]["targets"]["x86_64-unknown-linux-gnu"]["sha256"] =
+    value["versions"]["0.1.30-rc.5"]["targets"]["x86_64-unknown-linux-gnu"]["sha256"] =
         serde_json::Value::String("not-a-sha256".to_string());
     let bytes = serde_json::to_vec(&value).expect("bug: test JSON should serialize");
 
@@ -142,7 +142,7 @@ fn catalog_validation_rejects_a_checksum_change() {
 fn catalog_validation_rejects_an_object_key_change() {
     let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes())
         .expect("bug: embedded catalog should be JSON");
-    value["versions"]["0.1.30-rc.3"]["targets"]["x86_64-unknown-linux-gnu"]["objectKey"] =
+    value["versions"]["0.1.30-rc.5"]["targets"]["x86_64-unknown-linux-gnu"]["objectKey"] =
         serde_json::Value::String("somewhere-else/archive.tar.gz".to_string());
     let bytes = serde_json::to_vec(&value).expect("bug: test JSON should serialize");
 
@@ -156,7 +156,7 @@ fn catalog_validation_rejects_an_object_key_change() {
 fn catalog_validation_rejects_a_missing_required_file() {
     let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes())
         .expect("bug: embedded catalog should be JSON");
-    value["versions"]["0.1.30-rc.3"]["targets"]["x86_64-unknown-linux-gnu"]["files"] =
+    value["versions"]["0.1.30-rc.5"]["targets"]["x86_64-unknown-linux-gnu"]["files"] =
         serde_json::json!([{"kind": "executable", "path": "hog-devnode"}]);
     let bytes = serde_json::to_vec(&value).expect("bug: test JSON should serialize");
 
@@ -170,7 +170,7 @@ fn catalog_validation_rejects_a_missing_required_file() {
 fn catalog_validation_rejects_non_normalized_paths() {
     let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes())
         .expect("bug: embedded catalog should be JSON");
-    value["versions"]["0.1.30-rc.3"]["targets"]["x86_64-unknown-linux-gnu"]["files"][0]["path"] =
+    value["versions"]["0.1.30-rc.5"]["targets"]["x86_64-unknown-linux-gnu"]["files"][0]["path"] =
         serde_json::Value::String("contracts//dev_wallet.rv32a".to_string());
     let bytes = serde_json::to_vec(&value).expect("bug: test JSON should serialize");
 
@@ -184,7 +184,7 @@ fn catalog_validation_rejects_non_normalized_paths() {
 fn public_url_rejects_stateful_or_non_http_sources() {
     let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
     let artifact = catalog
-        .artifact("0.1.30-rc.3", HostTarget::LinuxX86_64)
+        .artifact("0.1.30-rc.5", HostTarget::LinuxX86_64)
         .expect("bug: default target should exist");
 
     assert!(matches!(
@@ -206,7 +206,7 @@ fn catalog_rejects_malformed_runtime_minimums() {
     for minimum in ["", ".", "26.", "2..38", "2.x", "18446744073709551616"] {
         let mut value: serde_json::Value =
             serde_json::from_slice(Catalog::embedded_bytes()).unwrap();
-        value["versions"]["0.1.30-rc.3"]["targets"]["x86_64-unknown-linux-gnu"]["compatibility"]
+        value["versions"]["0.1.30-rc.5"]["targets"]["x86_64-unknown-linux-gnu"]["compatibility"]
             ["minimumVersion"] = minimum.into();
         assert!(matches!(
             Catalog::parse(&serde_json::to_vec(&value).unwrap()),
@@ -219,7 +219,7 @@ fn catalog_rejects_malformed_runtime_minimums() {
 fn artifact_enforces_its_catalog_runtime_minimum_on_the_current_host() {
     let target = HostTarget::current().unwrap();
     let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes()).unwrap();
-    value["versions"]["0.1.30-rc.3"]["targets"][target.triple()]["compatibility"]["minimumVersion"] =
+    value["versions"]["0.1.30-rc.5"]["targets"][target.triple()]["compatibility"]["minimumVersion"] =
         "999999.0".into();
     let catalog = Catalog::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(matches!(
@@ -234,18 +234,18 @@ fn artifact_enforces_its_catalog_runtime_minimum_on_the_current_host() {
 #[test]
 fn native_bundle_requires_genesis_but_no_dev_wallet() {
     let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes()).unwrap();
-    let files = value["versions"]["0.1.30-rc.3"]["targets"]["x86_64-unknown-linux-gnu"]["files"]
+    let files = value["versions"]["0.1.30-rc.5"]["targets"]["x86_64-unknown-linux-gnu"]["files"]
         .as_array_mut()
         .unwrap();
     files.retain(|file| file["path"] != "contracts/dev_wallet.rv32a");
     let catalog = Catalog::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(
         catalog
-            .artifact("0.1.30-rc.3", HostTarget::LinuxX86_64)
+            .artifact("0.1.30-rc.5", HostTarget::LinuxX86_64)
             .unwrap()
             .has_required_bundle_files()
     );
-    let files = value["versions"]["0.1.30-rc.3"]["targets"]["x86_64-unknown-linux-gnu"]["files"]
+    let files = value["versions"]["0.1.30-rc.5"]["targets"]["x86_64-unknown-linux-gnu"]["files"]
         .as_array_mut()
         .unwrap();
     files.retain(|file| file["path"] != "contracts/genesis_root.rv32a");

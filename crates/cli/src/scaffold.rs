@@ -13,14 +13,14 @@ use std::path::Path;
 /// newer nightly. The CI `cli-smoke` job builds and tests a fresh scaffold
 /// against the real registry, so an unpublished or incompatible pin fails
 /// there (and stays red until the pinned SDK is published).
-pub const SCAFFOLD_SDK_VERSION: &str = "0.44.2";
+pub const SCAFFOLD_SDK_VERSION: &str = "0.47.0";
 
 /// `groundhog-json-rpc-client` version pinned into scaffolded projects.
 ///
 /// Published before the matching CLI in the release workflow. Release PR CI
 /// tests the checked-out client until publication. The caret requirement lets
 /// scaffolds pick up newer compatible releases.
-pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = "0.24.0";
+pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = "0.25.0";
 
 /// Toolchain channel pinned into scaffolded projects' `rust-toolchain.toml`.
 ///

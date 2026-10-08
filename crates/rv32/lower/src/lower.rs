@@ -77,7 +77,7 @@ pub const RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
 pub const FINAL_SPEC_SECTION_PREFIX: &str = "groundhogspecv";
 
 /// Name of the finalized contract-spec section this SDK generation writes.
-pub const FINAL_SPEC_SECTION: &str = "groundhogspecv1";
+pub const FINAL_SPEC_SECTION: &str = "groundhogspecv2";
 
 /// The product of lowering: the serialized artifact plus the pieces that went
 /// into it (handy for metadata and tests).

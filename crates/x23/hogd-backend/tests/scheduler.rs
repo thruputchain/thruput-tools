@@ -38,6 +38,7 @@ fn outcome(status: Status, source: Source, code: i32) -> SchedulerTransactionOut
         status,
         error_source: source,
         error_code: code,
+        height: 42.into(),
     }
 }
 
