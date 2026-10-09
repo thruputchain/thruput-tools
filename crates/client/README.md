@@ -30,6 +30,24 @@ not contact the network. Submission is not retried by this library. After an
 ambiguous submission error or receipt timeout, reconcile by the retained hash
 before deciding what to do next.
 
+## Native deployment
+
+`prepare_deploy(DeployRequest, NetworkHash)` builds a `DefaultWallet` deployment
+for a native account. The code is either attached, which registers the binary in
+the same transaction, or an already registered `contract_hash`. The request can
+also fund and initialize the new contract in that transaction. The deployment salt
+is `deployment_nonce(nonce)`, so the new contract's address is known before
+signing: `UnsignedDeploy::address`.
+
+Deployment then follows the same sign, submit and wait phases as calls, through
+`SignedDeploy` and `SubmittedDeploy`. `SubmittedDeploy::verify` requires the
+receipt to match the transaction hash. It also requires a successful deployment
+to return exactly the predicted address. The caller interprets execution status.
+`submit_signed_transaction` resubmits retained signed bytes of a call or
+deployment by their canonical hash; it is for reconciliation, not retry.
+
+## Codec
+
 The `codec` module decodes canonical specs, resolves methods, derives selectors,
 encodes positional arguments and decodes returns/declared aborts. The caller
 loads any files and supplies the metadata. Best-effort return decoding can return

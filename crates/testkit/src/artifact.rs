@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use sha2::{Digest, Sha256};
 use thruput_json_rpc_types::transaction::TxHash;
 use thruput_xdr::contract::{Contract, ContractBlob};
 use thruput_xdr::types::{ContractAddress, SHA256Hash};
@@ -161,8 +160,7 @@ pub(crate) fn contract_from_bytes(bytes: Vec<u8>) -> Contract {
 }
 
 pub(crate) fn contract_hash(contract: &Contract) -> Result<SHA256Hash> {
-    let encoded = xdrs::txs::encode(contract).map_err(TestkitError::encode)?;
-    Ok(SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(&encoded))))
+    thruput_client::contract_hash(contract).map_err(TestkitError::encode)
 }
 
 fn load_entry(spec: ArtifactSpec) -> Result<ArtifactEntry> {

@@ -14,14 +14,13 @@ use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
 use std::pin::Pin;
 
-use thruput_contract_util::{
-    EntrypointSignature, NormalizedMethodSignature, semver::try_major_version_from_string,
-};
+use thruput_contract_util::semver::try_major_version_from_string;
 use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use thruput_json_rpc_types::transaction::TxHash;
 use thruput_json_rpc_types::view::RootInvocationOutput;
-use thruput_xdr::types::ContractAddress;
 use thruput_signing::default_wallet::decode_default_wallet_call_return;
+use thruput_xdr::types::ContractAddress;
+
 use xdrs::{ReadXDR, WriteXDR};
 
 use crate::caller::Caller;
@@ -153,13 +152,7 @@ where
 /// ```
 #[must_use]
 pub fn entrypoint_id(interface: &str, version: &str, method: &str) -> ContractEntrypointID {
-    let sig = EntrypointSignature {
-        interface_name: Some(interface.to_string()),
-        version_str: version.to_string(),
-        method_sig: NormalizedMethodSignature::new(method),
-    };
-
-    sig.id()
+    thruput_client::codec::method_entrypoint_id(interface, version, method)
 }
 
 /// Fallible form of [`entrypoint_id`] for interface identities from untrusted input.
@@ -338,7 +331,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use groundhog_xdr::types::ContractAddress;
+    use thruput_xdr::types::ContractAddress;
 
     use crate::account::Account;
     use crate::caller::Caller;

@@ -69,6 +69,7 @@ impl Fixture {
         let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", server.local_addr().unwrap());
         let mut module = RpcModule::new(state.clone());
+        serve_manifest_network_info(&mut module);
         module
             .register_method("groundhog_sendRawTransaction", |params, state, _| {
                 let (encoded,): (String,) = params.parse()?;
@@ -484,7 +485,7 @@ async fn registration_retries_reuse_signed_bytes_and_receipts_finish_recovery() 
     fixture
         .scenario(false)
         .await
-        .run_agents([Agent::new("alice", move |mut ctx| async move {
+        .run_agents([Agent::new("alice", move |ctx| async move {
             let first = ctx
                 .submit_deploy_artifact("counter", DeployOptions::funded(123))
                 .await?;
@@ -520,7 +521,7 @@ async fn registration_retries_reuse_signed_bytes_and_receipts_finish_recovery() 
 #[tokio::test]
 async fn dropped_registration_releases_the_attempt_without_replaying_it() {
     let fixture = Fixture::new(Outcome::Dropped).await;
-    fixture.scenario(false).await.run_agents([Agent::new("alice", |mut ctx| async move {
+    fixture.scenario(false).await.run_agents([Agent::new("alice", |ctx| async move {
         let first = ctx.submit_register_artifact("counter", DeployOptions::funded(123)).await?;
         let error = ctx.submit_register_artifact("counter", DeployOptions::funded(123)).await.unwrap_err();
         assert!(matches!(error, TestkitError::Deploy { ref detail } if detail.contains("dropped: Executor code 7")));
@@ -537,7 +538,7 @@ async fn a_later_run_retries_registration_without_taking_the_original_deployment
     let fixture = Fixture::new(Outcome::Retry).await;
     let scenario = fixture.scenario(false).await;
     scenario
-        .run_agents([Agent::new("alice", |mut ctx| async move {
+        .run_agents([Agent::new("alice", |ctx| async move {
             let _submitted = ctx
                 .submit_deploy_artifact("counter", DeployOptions::funded(123))
                 .await?;
@@ -547,7 +548,7 @@ async fn a_later_run_retries_registration_without_taking_the_original_deployment
         .unwrap();
     let state = fixture.state.clone();
     scenario
-        .run_agents([Agent::new("alice", move |mut ctx| async move {
+        .run_agents([Agent::new("alice", move |ctx| async move {
             let error = ctx
                 .submit_deploy_artifact("counter", DeployOptions::funded(124))
                 .await
@@ -576,4 +577,17 @@ async fn a_later_run_retries_registration_without_taking_the_original_deployment
         transaction_hash(&submitted[2].tx).unwrap()
     );
     assert!(submitted[2].tx.contracts_to_deploy.is_empty());
+}
+
+/// Serve the network identity named by the runtime manifest fixture (a zero `networkHash`).
+fn serve_manifest_network_info<T: Send + Sync + 'static>(module: &mut RpcModule<T>) {
+    module
+        .register_method("groundhog_networkInfo", |_, _, _| {
+            Ok::<_, ErrorObjectOwned>(thruput_json_rpc_types::network_info::NetworkInfo::new(
+                thruput_json_rpc_types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from(
+                    [0; 32],
+                )),
+            ))
+        })
+        .unwrap();
 }

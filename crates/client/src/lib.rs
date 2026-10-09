@@ -1,9 +1,16 @@
 //! Contract invocation without CLI configuration, terminal output, or runtime ownership.
 //!
 //! Callers resolve addresses, wallet entrypoints, and calldata, verify network identity,
-//! then prepare, inspect, sign, submit, and wait as separate operations.
+//! then prepare, inspect, sign, submit, and wait as separate operations. Calls go through
+//! [`prepare_call`]; native deployments through [`prepare_deploy`].
 
 pub mod codec;
+mod deploy;
+
+pub use deploy::{
+    DeployRequest, DeploymentVerificationError, SignedDeploy, SubmittedDeploy, UnsignedDeploy,
+    contract_hash, deployment_nonce, prepare_deploy,
+};
 pub use jsonrpsee;
 pub use thruput_contract_spec as spec;
 pub use thruput_json_rpc_client as rpc;
@@ -118,25 +125,36 @@ impl UnsignedCall {
     /// Sign this prepared invocation without submitting it or consulting configuration.
     /// Reject a signer whose public key differs from the native account's auth claim.
     pub fn sign(self, signer: &impl Signer) -> Result<SignedCall, SigningError> {
-        if let xdr::auth_claim::AuthClaim::kPubkeySignature { pubkey_preimage } =
-            &self.transaction.auth_claim
-            && pubkey_preimage.pubkey != signer.public_key()
-        {
-            return Err(SigningError::SignerMismatch);
-        }
-        let tx_hash = TxHash(thruput_signing::transaction_hash(&self.transaction)?.into());
-        let tx_hex = thruput_signing::sign_and_encode_transaction_hex(
-            self.transaction,
-            signer,
-            SignTransactionParams::default(),
-            &self.network_hash,
-        )?;
+        let (tx_hash, tx_hex) = sign_transaction(self.transaction, &self.network_hash, signer)?;
         Ok(SignedCall {
             tx_hash,
             tx_hex,
             native_return: self.native_return,
         })
     }
+}
+
+/// Sign a prepared transaction, rejecting a signer whose public key differs from
+/// a native account's auth claim. Returns the canonical hash and signed hex.
+fn sign_transaction(
+    transaction: Transaction,
+    network_hash: &NetworkHash,
+    signer: &impl Signer,
+) -> Result<(TxHash, String), SigningError> {
+    if let xdr::auth_claim::AuthClaim::kPubkeySignature { pubkey_preimage } =
+        &transaction.auth_claim
+        && pubkey_preimage.pubkey != signer.public_key()
+    {
+        return Err(SigningError::SignerMismatch);
+    }
+    let tx_hash = TxHash(thruput_signing::transaction_hash(&transaction)?.into());
+    let tx_hex = thruput_signing::sign_and_encode_transaction_hex(
+        transaction,
+        signer,
+        SignTransactionParams::default(),
+        network_hash,
+    )?;
+    Ok((tx_hash, tx_hex))
 }
 
 /// A signed invocation with its canonical hash available before any network request.
@@ -176,23 +194,29 @@ impl SignedCall {
         &self,
         client: &C,
     ) -> Result<SubmittedCall, SubmitCallError> {
-        let returned =
-            thruput_json_rpc_client::submit_transaction_with_client(client, &self.tx_hex)
-                .await
-                .map_err(|source| SubmitCallError::Rpc {
-                    tx_hash: self.tx_hash,
-                    source,
-                })?;
-        if returned != self.tx_hash {
-            return Err(SubmitCallError::HashMismatch {
-                tx_hash: self.tx_hash,
-                returned,
-            });
-        }
+        submit_signed_transaction(client, self.tx_hash, &self.tx_hex).await?;
         Ok(SubmittedCall {
             tx_hash: self.tx_hash,
         })
     }
+}
+
+/// Submit signed bytes exactly once and require the endpoint to return `tx_hash`.
+///
+/// For replaying signed bytes retained from an earlier [`SignedCall`] or
+/// [`SignedDeploy`] after an ambiguous outcome; `tx_hash` must be their canonical hash.
+pub async fn submit_signed_transaction<C: ClientT + Sync>(
+    client: &C,
+    tx_hash: TxHash,
+    tx_hex: &str,
+) -> Result<(), SubmitCallError> {
+    let returned = thruput_json_rpc_client::submit_transaction_with_client(client, tx_hex)
+        .await
+        .map_err(|source| SubmitCallError::Rpc { tx_hash, source })?;
+    if returned != tx_hash {
+        return Err(SubmitCallError::HashMismatch { tx_hash, returned });
+    }
+    Ok(())
 }
 
 /// Submission failure preserving the signed transaction's canonical identity.

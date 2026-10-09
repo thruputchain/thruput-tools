@@ -3,20 +3,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use sha2::{Digest, Sha256};
-use thruput_json_rpc_types::hex::Hex0x;
+use thruput_client::{CallRequest, DeployRequest, Wallet};
 use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use thruput_json_rpc_types::transaction::TxHash;
-use thruput_signing::default_wallet::{
-    BuildDefaultWalletCallTransaction, BuildDefaultWalletDeployTransaction, DeploymentCode,
-    build_default_wallet_call_transaction, build_default_wallet_deploy_transaction,
-};
-use thruput_signing::{
-    DEFAULT_TX_GAS_LIMIT, SignTransactionParams, derive_deploy_address,
-    sign_and_encode_transaction_hex, transaction_hash,
-};
+use thruput_signing::default_wallet::DeploymentCode;
+use thruput_signing::{DEFAULT_TX_GAS_LIMIT, PubkeyAccount};
 use thruput_xdr::contract::{Contract, ContractEntrypointID};
-use thruput_xdr::types::{ContractAddress, SHA256Hash};
+use thruput_xdr::types::{ContractAddress, NetworkHash, SHA256Hash};
 
 use crate::artifact::{
     ArtifactEntry, PendingRegistration as ArtifactPendingRegistration, RegistrationOwner,
@@ -352,43 +345,27 @@ impl Account {
         tx_nonce: u64,
         options: DeployOptions<'_>,
     ) -> Result<PreparedDeploy> {
-        let deploy_nonce =
-            SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(tx_nonce.to_le_bytes())));
-        let address = derive_deploy_address(&self.dev.wallet_address, &deploy_nonce, &hash)
-            .map_err(TestkitError::signing)?;
-
         let registered = contract.is_some();
-        let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
-            self.dev.signer.verifying_key_bytes(),
-            0,
-        );
+        let account = native_account(&self.dev);
         let gas_limit = DEFAULT_TX_GAS_LIMIT
             .checked_add(options.initializer.map_or(0, |init| init.gas_limit))
             .ok_or_else(|| TestkitError::signing("initializer gas overflows deployment budget"))?;
-        let tx = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
-            account: &account,
-            deployment_nonce: deploy_nonce,
-            code: contract.map_or(DeploymentCode::Registered(hash), DeploymentCode::Attached),
-            amount: options.amount,
-            initializer: options.initializer,
-            gas_limit,
-            block_expiry_height: EXPIRY_HEIGHT,
-            nonce: tx_nonce,
-        })
-        .map_err(TestkitError::signing)?;
-        let tx_hash = TxHash(Hex0x(transaction_hash(&tx).map_err(TestkitError::signing)?));
-        let tx_hex = sign_and_encode_transaction_hex(
-            tx,
-            &self.dev.signer,
-            SignTransactionParams::default(),
-            self.dev
-                .network_hash
-                .as_ref()
-                .ok_or(TestkitError::Offline {
-                    operation: "deploy",
-                })?,
+        let signed = thruput_client::prepare_deploy(
+            DeployRequest {
+                account: &account,
+                code: contract.map_or(DeploymentCode::Registered(hash), DeploymentCode::Attached),
+                amount: options.amount,
+                initializer: options.initializer,
+                gas_limit,
+                block_expiry_height: EXPIRY_HEIGHT,
+                nonce: tx_nonce,
+            },
+            network_hash(&self.dev, "deploy")?,
         )
+        .and_then(|plan| plan.sign(&self.dev.signer))
         .map_err(TestkitError::signing)?;
+        let (address, tx_hash) = (signed.address(), signed.tx_hash());
+        let tx_hex = signed.tx_hex().to_owned();
         Ok(PreparedDeploy {
             network: network.clone(),
             owner: self.registration_owner(),
@@ -419,6 +396,17 @@ impl Account {
     }
 }
 
+/// The account's native nonce-zero `DefaultWallet` identity.
+fn native_account(dev: &TestAccount) -> PubkeyAccount {
+    PubkeyAccount::from_public_key_bytes(dev.signer.verifying_key_bytes(), 0)
+}
+
+fn network_hash(dev: &TestAccount, operation: &'static str) -> Result<NetworkHash> {
+    dev.network_hash
+        .clone()
+        .ok_or(TestkitError::Offline { operation })
+}
+
 pub(crate) fn prepare_call(
     dev: &TestAccount,
     target: ContractAddress,
@@ -426,13 +414,10 @@ pub(crate) fn prepare_call(
     calldata: &[u8],
     nonce: u64,
 ) -> Result<(TxHash, String)> {
-    let tx = {
-        let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
-            dev.signer.verifying_key_bytes(),
-            0,
-        );
-        build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
-            account: &account,
+    let account = native_account(dev);
+    let signed = thruput_client::prepare_call(
+        CallRequest {
+            wallet: Wallet::Native(&account),
             target_address: target,
             target_entrypoint: entrypoint,
             target_calldata: calldata,
@@ -440,34 +425,23 @@ pub(crate) fn prepare_call(
             target_gas_limit: DEFAULT_TX_GAS_LIMIT,
             block_expiry_height: EXPIRY_HEIGHT,
             nonce,
-        })
-    }
-    .map_err(TestkitError::signing)?;
-    let tx_hash = TxHash(Hex0x(transaction_hash(&tx).map_err(TestkitError::signing)?));
-    let tx_hex = sign_and_encode_transaction_hex(
-        tx,
-        &dev.signer,
-        SignTransactionParams::default(),
-        dev.network_hash
-            .as_ref()
-            .ok_or(TestkitError::Offline { operation: "call" })?,
+        },
+        network_hash(dev, "call")?,
     )
+    .and_then(|plan| plan.sign(&dev.signer))
     .map_err(TestkitError::signing)?;
-
-    Ok((tx_hash, tx_hex))
+    Ok((signed.tx_hash(), signed.tx_hex().to_owned()))
 }
 
 pub(crate) async fn submit_signed(network: &Network, tx_hash: TxHash, tx_hex: &str) -> Result<()> {
-    let detail = match network.submit_raw(tx_hex.to_owned()).await {
-        Ok(actual) if actual == tx_hash => return Ok(()),
-        Ok(actual) => format!("returned transaction hash {actual:?}"),
-        Err(error) => error.to_string(),
-    };
-    Err(TestkitError::Submission {
-        tx_hash,
-        signed_transaction: tx_hex.to_owned(),
-        detail,
-    })
+    let client = network.require_client("sendRawTransaction")?;
+    thruput_client::submit_signed_transaction(client, tx_hash, tx_hex)
+        .await
+        .map_err(|error| TestkitError::Submission {
+            tx_hash,
+            signed_transaction: tx_hex.to_owned(),
+            detail: error.to_string(),
+        })
 }
 
 pub(crate) fn verify_deployment_receipt(
@@ -476,26 +450,14 @@ pub(crate) fn verify_deployment_receipt(
     tx_hex: &str,
     receipt: &TransactionReceipt,
 ) -> Result<()> {
-    let unverified = |detail: &str| TestkitError::UnverifiedDeployment {
-        tx_hash,
-        predicted_address: address,
-        signed_transaction: tx_hex.to_owned(),
-        detail: detail.to_owned(),
-    };
-    if receipt.tx_hash != tx_hash {
-        return Err(unverified("receipt hash mismatch"));
-    }
-    if matches!(receipt.status, ExecStatus::Ok)
-        && receipt
-            .return_data
-            .as_ref()
-            .is_none_or(|data| data.as_ref() != address.as_ref())
-    {
-        return Err(unverified(
-            "receipt did not return the exact predicted address",
-        ));
-    }
-    Ok(())
+    thruput_client::SubmittedDeploy { tx_hash, address }
+        .verify(receipt)
+        .map_err(|error| TestkitError::UnverifiedDeployment {
+            tx_hash,
+            predicted_address: address,
+            signed_transaction: tx_hex.to_owned(),
+            detail: error.to_string(),
+        })
 }
 
 #[cfg(test)]
