@@ -23,8 +23,8 @@ first use.
 Install from the registry:
 
 ```sh
-export CARGO_REGISTRIES_GROUNDHOG_INDEX="sparse+https://crates.thruput.network/api/v1/crates/"
-cargo install thruput-cli --registry groundhog --locked
+export CARGO_REGISTRIES_THRUPUT_INDEX="sparse+https://crates.thruput.network/api/v1/crates/"
+cargo install thruput-cli --registry thruput --locked
 thruput --version
 ```
 

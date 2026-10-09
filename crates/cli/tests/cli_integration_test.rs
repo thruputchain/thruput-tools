@@ -591,7 +591,7 @@ fn help_shows_subcommands() {
 #[test]
 fn skill_show_reads_global_installation_outside_a_project() {
     let directory = TempDir::new().unwrap();
-    let installed = directory.path().join("home/.agents/skills/groundhog");
+    let installed = directory.path().join("home/.agents/skills/thruput");
     std::fs::create_dir_all(&installed).unwrap();
     let content = "---\nname: thruput\n---\n\nUser-installed guidance\n";
     std::fs::write(installed.join("SKILL.md"), content).unwrap();
@@ -2448,7 +2448,7 @@ fn new_creates_project() {
     assert!(stderr.contains("Next:"));
     assert!(stderr.contains(&format!("cd '{}'", dir.display())));
     assert!(!stderr.contains("Cargo Registry:"));
-    assert!(!stderr.contains("cargo login --registry groundhog"));
+    assert!(!stderr.contains("cargo login --registry thruput"));
     assert!(stderr.contains("thruput build"));
 }
 

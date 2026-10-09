@@ -13,10 +13,10 @@ on:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  CARGO_REGISTRIES_GROUNDHOG_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+  CARGO_REGISTRIES_THRUPUT_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
   CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
-  CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
-  CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
+  CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
+  CARGO_REGISTRIES_THRUPUT_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
   RELEASE_CRATES: >-
     groundhog-bundle-identity
     thruput-cli
@@ -104,7 +104,7 @@ jobs:
             exit 1
           fi
           for crate in $RELEASE_CRATES; do
-            cargo info "${crate}@${VERSION}" --registry groundhog >/dev/null
+            cargo info "${crate}@${VERSION}" --registry thruput >/dev/null
             echo "OK: ${crate}@${VERSION} exists in the thruput registry"
           done
 

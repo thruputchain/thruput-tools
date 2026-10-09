@@ -188,7 +188,7 @@ For Groundhog programming-model or developer-workflow changes, load the
 installed guidance with `cargo run -p thruput-cli -- skill show`, then read
 the relevant reference with `skill show <topic>`. Install it first with
 `thruput skill install` if absent. If building is unavailable, read the files
-under `.agents/skills/groundhog` in the project or home directory.
+under `.agents/skills/thruput` in the project or home directory.
 Maintain skill content in `groundhogchain/agent-skills`; do not copy it into
 this repository or release artifacts. Skill updates are independent of CLI
 releases. Verify guidance against current APIs and installed dependencies.

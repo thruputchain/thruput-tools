@@ -130,7 +130,7 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
 
 fn assert_counter_manifest(cargo: &str) {
     assert!(cargo.contains(r#"name = "my-counter""#));
-    assert!(cargo.contains("registry = \"groundhog\""));
+    assert!(cargo.contains("registry = \"thruput\""));
     assert!(!cargo.contains("sdk/spec"));
     // The version pins live once, in the `scaffold` constants; here we assert
     // they were substituted (no placeholder survives below) and land on the
@@ -138,11 +138,11 @@ fn assert_counter_manifest(cargo: &str) {
     // `sdk` is declared once per target: plain on the guest, with `std` on
     // the host so `cargo build` / `cargo check` work without `dev`.
     assert!(cargo.contains(&format!(
-        r#"sdk = {{ version = "={}", registry = "groundhog" }}"#,
+        r#"sdk = {{ version = "={}", registry = "thruput" }}"#,
         thruput_cli::scaffold::SCAFFOLD_SDK_VERSION
     )));
     assert!(cargo.contains(&format!(
-        r#"sdk = {{ version = "={}", registry = "groundhog", features = ["std"] }}"#,
+        r#"sdk = {{ version = "={}", registry = "thruput", features = ["std"] }}"#,
         thruput_cli::scaffold::SCAFFOLD_SDK_VERSION
     )));
     assert!(cargo.contains(r#"[target.'cfg(target_arch = "riscv32")'.dependencies]"#));

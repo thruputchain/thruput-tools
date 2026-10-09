@@ -39,7 +39,7 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
             .unwrap();
         assert!(!missing.status.success());
         assert!(String::from_utf8_lossy(&missing.stderr).contains("thruput skill install"));
-        let installed = project.join(".agents/skills/groundhog");
+        let installed = project.join(".agents/skills/thruput");
         fs::create_dir_all(installed.join("references")).unwrap();
         fs::write(installed.join("SKILL.md"), "Installed entry\n").unwrap();
         for topic in ["contracts", "cli", "typescript"] {

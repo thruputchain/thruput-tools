@@ -33,7 +33,7 @@ impl ReadFixture {
     }
 
     fn install(&self, scope: &str, content: &str) -> PathBuf {
-        let root = self.0.path().join(scope).join(".agents/skills/groundhog");
+        let root = self.0.path().join(scope).join(".agents/skills/thruput");
         fs::create_dir_all(root.join("references")).unwrap();
         fs::write(root.join("SKILL.md"), content).unwrap();
         root
@@ -41,9 +41,31 @@ impl ReadFixture {
 }
 
 #[test]
+fn old_skill_directory_is_not_used() {
+    let fixture = ReadFixture::new();
+    for scope in ["project", "home"] {
+        let old = fixture
+            .0
+            .path()
+            .join(scope)
+            .join(".agents/skills/groundhog");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("SKILL.md"), "old skill").unwrap();
+    }
+    let output = fixture.command().args(["show", "--json"]).output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["ok"], false);
+    fixture.install("home", "Thruput skill");
+    let output = fixture.command().arg("show").output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"Thruput skill");
+}
+
+#[test]
 fn reads_installed_files_verbatim_offline_and_sees_updates() {
     let fixture = ReadFixture::new();
-    let entry = "---\nname: groundhog\n---\n\nInstalled entry\n";
+    let entry = "---\nname: thruput\n---\n\nInstalled entry\n";
     let root = fixture.install("project", entry);
     fs::write(
         root.join("references/contracts.md"),
@@ -231,7 +253,7 @@ fn linked_installations_work_but_references_cannot_link_outside() {
     let root = fixture.install("home", "linked entry");
     let project_skills = fixture.0.path().join("project/.agents/skills");
     fs::create_dir_all(&project_skills).unwrap();
-    symlink(&root, project_skills.join("groundhog")).unwrap();
+    symlink(&root, project_skills.join("thruput")).unwrap();
     let output = fixture.command().arg("show").output().unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"linked entry");
@@ -298,7 +320,7 @@ mod installer {
             ("git", "#!/bin/sh\nexit 0\n"),
             (
                 "npx",
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$SKILL_ARGS\"\nif [ \"$3\" = list ]; then\n  printf '%s\\n' '[{\"name\":\"groundhog\",\"source\":\"groundhogchain/agent-skills\"}]'\nelse\n  printf 'installer output\\n'\n  if read -r answer; then exit 99; fi\nfi\nexit \"${SKILL_EXIT:-0}\"\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$SKILL_ARGS\"\nif [ \"$3\" = list ]; then\n  printf '%s\\n' '[{\"name\":\"thruput\",\"source\":\"groundhogchain/agent-skills\"}]'\nelse\n  printf 'installer output\\n'\n  if read -r answer; then exit 99; fi\nfi\nexit \"${SKILL_EXIT:-0}\"\n",
             ),
         ] {
             let path = root.path().join(name);
@@ -343,7 +365,7 @@ mod installer {
         assert!(String::from_utf8_lossy(&result.stderr).contains("installer output"));
         assert_eq!(
             fs::read_to_string(root.path().join("args")).unwrap(),
-            "--yes\nskills@1.7.0\nadd\ngroundhogchain/agent-skills\n--skill\ngroundhog\n--global\n--agent\nopencode\n--json\n--yes\n--yes\nskills@1.7.0\nlist\n--json\n--global\n"
+            "--yes\nskills@1.7.0\nadd\ngroundhogchain/agent-skills\n--skill\nthruput\n--global\n--agent\nopencode\n--json\n--yes\n--yes\nskills@1.7.0\nlist\n--json\n--global\n"
         );
     }
 
@@ -357,7 +379,7 @@ mod installer {
         assert!(result.status.success());
         assert_eq!(
             fs::read_to_string(root.path().join("args")).unwrap(),
-            "--yes\nskills@1.7.0\nlist\n--json\n--yes\nskills@1.7.0\nupdate\ngroundhog\n--project\n--yes\n"
+            "--yes\nskills@1.7.0\nlist\n--json\n--yes\nskills@1.7.0\nupdate\nthruput\n--project\n--yes\n"
         );
         let failure = command(&root)
             .env("SKILL_EXIT", "7")
@@ -378,7 +400,7 @@ mod installer {
 printf '%s\n' "$@" >> "$SKILL_ARGS"
 case "$3" in
   list)
-    printf '%s\n' '[{"name":"groundhog","source":"groundhogchain/agent-skills"}]'
+    printf '%s\n' '[{"name":"thruput","source":"groundhogchain/agent-skills"}]'
     ;;
   update)
     printf 'Failed to check skills\nAll global skills are up to date\n'
@@ -396,7 +418,7 @@ esac
         root
     }
 
-    const REFRESHED: &str = r#"[{"name":"groundhog","status":"installed","source":"groundhogchain/agent-skills","scope":"global"}]"#;
+    const REFRESHED: &str = r#"[{"name":"thruput","status":"installed","source":"groundhogchain/agent-skills","scope":"global"}]"#;
 
     fn global_update(root: &tempfile::TempDir, report: &str) -> Command {
         let mut cmd = command(root);
@@ -424,7 +446,7 @@ esac
             assert_eq!(report["data"]["scope"], "global");
             assert!(String::from_utf8_lossy(&result.stderr).contains("source diagnostics"));
         }
-        let invocation = "--yes\nskills@1.7.0\nlist\n--json\n--global\n--yes\nskills@1.7.0\nadd\ngroundhogchain/agent-skills\n--skill\ngroundhog\n--global\n--yes\n--json\n--yes\nskills@1.7.0\nlist\n--json\n--global\n";
+        let invocation = "--yes\nskills@1.7.0\nlist\n--json\n--global\n--yes\nskills@1.7.0\nadd\ngroundhogchain/agent-skills\n--skill\nthruput\n--global\n--yes\n--json\n--yes\nskills@1.7.0\nlist\n--json\n--global\n";
         assert_eq!(
             fs::read_to_string(root.path().join("args")).unwrap(),
             invocation.repeat(2)
@@ -437,11 +459,11 @@ esac
         for report in [
             "Failed to check skills\nAll global skills are up to date",
             "[]",
-            r#"[{"name":"groundhog","status":"failed","error":"source unavailable"}]"#,
-            r#"[{"name":"groundhog","status":"skipped","reason":"source unavailable"}]"#,
-            r#"[{"name":"groundhog","status":"installed"}]"#,
-            r#"[{"name":"groundhog","status":"installed","source":"other/source","scope":"global"}]"#,
-            r#"[{"name":"groundhog","status":"installed","source":"groundhogchain/agent-skills","scope":"project"}]"#,
+            r#"[{"name":"thruput","status":"failed","error":"source unavailable"}]"#,
+            r#"[{"name":"thruput","status":"skipped","reason":"source unavailable"}]"#,
+            r#"[{"name":"thruput","status":"installed"}]"#,
+            r#"[{"name":"thruput","status":"installed","source":"other/source","scope":"global"}]"#,
+            r#"[{"name":"thruput","status":"installed","source":"groundhogchain/agent-skills","scope":"project"}]"#,
             r#"[{"name":"other","status":"installed","source":"groundhogchain/agent-skills","scope":"global"}]"#,
         ] {
             let result = global_update(&root, report).output().unwrap();
@@ -491,7 +513,7 @@ esac
         let root = fixture();
         for installed in [
             "[]",
-            r#"[{"name":"groundhog","source":"someone/another-skill"}]"#,
+            r#"[{"name":"thruput","source":"someone/another-skill"}]"#,
         ] {
             fs::write(
                 root.path().join("npx"),

@@ -93,7 +93,7 @@ See `hogd/docs/rv32/rv32-author-toolchain.md` for the full design.
 
 It is **published to the private `thruput` registry** and consumable two ways:
 
-- **as a binary** — `cargo install --registry groundhog groundhog-rv32-lower`
+- **as a binary** — `cargo install --registry thruput groundhog-rv32-lower`
   puts `rv32-lower` on `$PATH`; hogd's smoke tests and other scripts can call it
   directly;
 - **as a library** — add `groundhog-rv32-lower` (registry `thruput`) as a

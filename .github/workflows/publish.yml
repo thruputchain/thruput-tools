@@ -5,10 +5,10 @@ on:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  CARGO_REGISTRIES_GROUNDHOG_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+  CARGO_REGISTRIES_THRUPUT_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
   CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
-  CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
-  CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
+  CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
+  CARGO_REGISTRIES_THRUPUT_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
   PUBLISH_PACKAGES: >-
     groundhog-build-info
     groundhog-bundle-identity
@@ -64,7 +64,7 @@ jobs:
           repository: groundhogchain/actions
           persist-credentials: false
           path: actions
-          ref: v1
+          ref: 9cf9c36f567c30f387cbe46578ad8c6de9cb2e91 # configurable dry-run registry
 
       - name: Configure Namespace Cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
@@ -93,6 +93,7 @@ jobs:
       - name: dry run
         uses: ./actions/cargo-publish-dry-run
         with:
+          registry-name: thruput
           packages: ${{ env.PUBLISH_PACKAGES }}
 
       - name: tag commit with version
@@ -106,7 +107,7 @@ jobs:
         with:
           packages: ${{ env.PUBLISH_PACKAGES }}
           git-tag: ${{ steps.publish-tag.outputs.tag }}
-          registry-name: groundhog
+          registry-name: thruput
           registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
           publish-delay-seconds: '10'
 

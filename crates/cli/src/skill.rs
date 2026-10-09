@@ -12,7 +12,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-const SKILL_DIRECTORY: &str = ".agents/skills/groundhog";
+const SKILL_DIRECTORY: &str = ".agents/skills/thruput";
 const SKILLS_PACKAGE: &str = "skills@1.7.0";
 const REPOSITORY: &str = "groundhogchain/agent-skills";
 
@@ -338,9 +338,9 @@ fn run_installer(update: bool, options: &InstallOptions, print: &Print) -> Resul
     let mut child = Command::new("npx");
     child.args(["--yes", SKILLS_PACKAGE]);
     if update {
-        child.args(["update", "groundhog", "--project"]);
+        child.args(["update", "thruput", "--project"]);
     } else {
-        child.args(["add", REPOSITORY, "--skill", "groundhog"]);
+        child.args(["add", REPOSITORY, "--skill", "thruput"]);
         if options.global {
             child.arg("--global");
         }
@@ -394,7 +394,7 @@ fn refresh_global() -> Result<(), CliError> {
         "add",
         REPOSITORY,
         "--skill",
-        "groundhog",
+        "thruput",
         "--global",
         "--yes",
         "--json",
@@ -406,7 +406,7 @@ fn refresh_global() -> Result<(), CliError> {
     let reports: Vec<RefreshReport> =
         serde_json::from_slice(&output.stdout).map_err(SkillError::InstallerReport)?;
     if !matches!(reports.as_slice(), [report]
-        if report.name.as_deref() == Some("groundhog")
+        if report.name.as_deref() == Some("thruput")
             && report.status == "installed"
             && report.source.as_deref() == Some(REPOSITORY)
             && report.scope.as_deref() == Some("global"))
@@ -441,7 +441,7 @@ fn require_installed(global: bool) -> Result<(), CliError> {
         serde_json::from_slice(&output.stdout).map_err(SkillError::InstallerReport)?;
     if !installed
         .iter()
-        .any(|skill| skill.name == "groundhog" && skill.source.as_deref() == Some(REPOSITORY))
+        .any(|skill| skill.name == "thruput" && skill.source.as_deref() == Some(REPOSITORY))
     {
         return Err(SkillError::NotInstalled.into());
     }

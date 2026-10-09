@@ -2,7 +2,7 @@
 # Scaffold smoke test — verify that both templates produce projects
 # that compile and pass tests against the real SDK.
 #
-# Requires: CARGO_REGISTRIES_GROUNDHOG_TOKEN (set in CI env).
+# Requires: CARGO_REGISTRIES_THRUPUT_TOKEN (set in CI env).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

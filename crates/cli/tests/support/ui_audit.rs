@@ -241,7 +241,7 @@ fn framework_payloads_stay_raw_and_all_completion_shells_match_json() {
         assert!(!plain.stdout.contains(&0x1b));
     }
     let temp = TempDir::new().unwrap();
-    let installed = temp.path().join(".agents/skills/groundhog");
+    let installed = temp.path().join(".agents/skills/thruput");
     std::fs::create_dir_all(&installed).unwrap();
     let entry = "---\nname: thruput\n---\n\nInstalled guidance\n";
     std::fs::write(installed.join("SKILL.md"), entry).unwrap();

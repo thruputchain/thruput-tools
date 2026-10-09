@@ -7,7 +7,7 @@ require publishing a release.
 Run the **Release package** GitHub Actions workflow for a normal release.
 
 - [`publish.yml`](../.github/workflows/publish.yml) publishes the Rust crates to the private
-  `groundhog` Cargo registry, creates and pushes the matching `vX.Y.Z` tag, then
+  `thruput` Cargo registry, creates and pushes the matching `vX.Y.Z` tag, then
   dispatches binary packaging.
 - [`release.yml`](../.github/workflows/release.yml) is dispatch-only and internal to
   `publish.yml`. Do not run it directly for normal releases.

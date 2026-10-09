@@ -1543,8 +1543,8 @@ mod raw_spec_format_preflight_tests {
     /// `SpecDep::Absent` means the member reaches no
     /// `groundhog-contract-spec` at all.
     fn workspace_json(selected: SpecDep, unrelated: SpecDep) -> String {
-        const SELECTED_SPEC_ID: &str = "registry+groundhog#groundhog-contract-spec@0.19.0";
-        const UNRELATED_SPEC_ID: &str = "registry+groundhog#groundhog-contract-spec@0.18.2";
+        const SELECTED_SPEC_ID: &str = "registry+thruput#groundhog-contract-spec@0.19.0";
+        const UNRELATED_SPEC_ID: &str = "registry+thruput#groundhog-contract-spec@0.18.2";
 
         let mut packages = vec![
             format!(r#"{{"id":"{SELECTED_ID}","name":"{SELECTED}","metadata":null}}"#),

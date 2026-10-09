@@ -35,15 +35,15 @@ thruput-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 # / `cargo check` (and rust-analyzer) see a buildable crate without `dev`
 # being a default feature, and the rv32 build stays `no_std`.
 [target.'cfg(target_arch = "riscv32")'.dependencies]
-sdk = { version = "={{SDK_VERSION}}", registry = "groundhog" }
+sdk = { version = "={{SDK_VERSION}}", registry = "thruput" }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
-sdk = { version = "={{SDK_VERSION}}", registry = "groundhog", features = ["std"] }
+sdk = { version = "={{SDK_VERSION}}", registry = "thruput", features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies.groundhog-json-rpc-client]
 version = "{{JSON_RPC_CLIENT_VERSION}}"
-registry = "groundhog"
+registry = "thruput"
 optional = true
 
 # The self-dependency is deliberate: it turns the `dev` feature (and so

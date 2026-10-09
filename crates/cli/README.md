@@ -1060,8 +1060,8 @@ thruput skill show --global
 support `--json`, which reports the installation scope, file or directory path,
 reference names for `list`, and file content for `show`.
 
-Reads prefer `.agents/skills/groundhog` in the current directory, then
-`$HOME/.agents/skills/groundhog`. Use `--global` to select only the latter.
+Reads prefer `.agents/skills/thruput` in the current directory, then
+`$HOME/.agents/skills/thruput`. Use `--global` to select only the latter.
 If neither is installed, the command fails and asks you to run
 `thruput skill install`. A missing reference or damaged project installation
 is an error, not a reason to read a different installation.

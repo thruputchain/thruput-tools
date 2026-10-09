@@ -188,7 +188,7 @@ pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliE
     let cargo_config_path = crate::config::cargo_config_path()?;
 
     let registry_configured = match std::fs::read_to_string(&cargo_config_path) {
-        Ok(contents) => contents.contains("[registries.groundhog]"),
+        Ok(contents) => contents.contains("[registries.thruput]"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => return Err(e.into()),
     };
@@ -469,7 +469,7 @@ fn add_environment_findings(
             code: "no_registry",
             message: "global Thruput cargo registry not configured".into(),
             hint: Some(Cow::Borrowed(
-                "new projects include project-local registry config; run `cargo login --registry groundhog` before building if needed; Cargo stores the token globally in CARGO_HOME",
+                "new projects include project-local registry config; run `cargo login --registry thruput` before building if needed; Cargo stores the token globally in CARGO_HOME",
             )),
         });
     }
