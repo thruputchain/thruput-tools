@@ -18,7 +18,7 @@ use groundhog_json_rpc_types::{
     decimal::Decimal,
     events::{EventPage, EventQuery},
     hex::HexBytes,
-    network_config::NetworkConfigParams,
+    network_config::ChainConfig,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     server_limits::ServerLimits,
@@ -32,7 +32,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "11.0.1";
+pub const WIRE_FORMAT_VERSION: &str = "11.1.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -95,12 +95,13 @@ pub trait GroundhogApi {
     #[method(name = "chainTip")]
     async fn chain_tip(&self) -> RpcResult<ChainTip>;
 
-    /// The execution parameters the chain's network config states. Only stated
-    /// parameters are reported; an unstated one is absent. Served from a tip reading
-    /// refreshed at most once per cache window. Fails with `BackendUnavailable` when no
-    /// reading is available or the config version is unreadable.
+    /// Stated execution parameters, plus an authoritative `execution` reading when
+    /// supported. Top-level omissions mean unspecified. `execution` pairs resolved
+    /// limits and storage prices with the committed tip observed during this request;
+    /// it is never served from a stale cache. Stated fields come from the same fresh
+    /// DB reading. Unavailable or unreadable readings fail with `BackendUnavailable`.
     #[method(name = "chainConfig")]
-    async fn chain_config(&self) -> RpcResult<NetworkConfigParams>;
+    async fn chain_config(&self) -> RpcResult<ChainConfig>;
 
     /// Request bounds this endpoint enforces, such as the `view` gas ceiling.
     /// These are local operator settings, not consensus parameters: they can

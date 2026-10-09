@@ -175,7 +175,7 @@ pub trait SubmitPlane: Send + Sync + 'static {
 /// One reading of the committed db tip: the public chain tip together with
 /// the execution parameters in force for the block that follows it.
 ///
-/// hogd returns both in a single `schedgateway_get_tip` reply, and the
+/// hogd returns these in a single `dbgateway_get_config` reply, and the
 /// shared server refreshes its cached network config from every reading it
 /// receives, so a backend never has to serve the config separately.
 #[derive(Debug, Clone)]
@@ -185,6 +185,8 @@ pub struct TipReading {
     pub tip: ChainTip,
     /// Network config the tip carries.
     pub network_config: NetworkConfig,
+    /// Effective limits and storage prices read with this committed tip.
+    pub execution: Option<groundhog_json_rpc_types::network_config::ExecutionConfig>,
 }
 
 impl TipReading {
@@ -193,7 +195,18 @@ impl TipReading {
         Self {
             tip,
             network_config,
+            execution: None,
         }
+    }
+
+    /// Attach the execution rules returned with this tip.
+    #[must_use]
+    pub fn with_execution(
+        mut self,
+        execution: groundhog_json_rpc_types::network_config::ExecutionConfig,
+    ) -> Self {
+        self.execution = Some(execution);
+        self
     }
 }
 

@@ -233,7 +233,7 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         .expect("bug: supervisor should start against fake hogd-dev");
     assert_eq!(
         handle.backend_planes(),
-        BackendPlanes::hogd_dev_scheduler_only()
+        BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub)
     );
 
     let url = format!("http://{}", handle.rpc_addr());
@@ -279,13 +279,13 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         .await
         .expect("bug: chainConfig should dispatch to fake scheduler");
     assert_eq!(
-        chain_config.max_sha256_buffers,
+        chain_config.stated.max_sha256_buffers,
         Some(0),
         "chainConfig should report the parameters the fake scheduler's genesis config states"
     );
-    assert_eq!(chain_config.max_cross_invoke_depth, Some(0));
+    assert_eq!(chain_config.stated.max_cross_invoke_depth, Some(0));
     assert_eq!(
-        chain_config.max_contract_size_bytes, None,
+        chain_config.stated.max_contract_size_bytes, None,
         "a parameter the genesis config does not state is absent, not defaulted"
     );
     assert_eq!(
@@ -1399,7 +1399,7 @@ fn plane_status_read_predicates_match_known_planes() {
 fn backend_planes_hogd_dev_full_constructor() {
     let planes = BackendPlanes::hogd_dev_full(PlaneStatus::ViewGateway);
     assert_eq!(planes.submit, PlaneStatus::Scheduler);
-    assert_eq!(planes.chain, PlaneStatus::Scheduler);
+    assert_eq!(planes.chain, PlaneStatus::DbGateway);
     assert_eq!(planes.read, PlaneStatus::Indexer);
     assert_eq!(planes.view, PlaneStatus::ViewGateway);
 }
@@ -1410,7 +1410,7 @@ fn backend_planes_hogd_dev_full_serializes_correctly() {
     let json = serde_json::to_value(planes).expect("bug: BackendPlanes serializes");
     let expected = serde_json::json!({
         "submit": "scheduler",
-        "chain": "scheduler",
+        "chain": "db_gateway",
         "read": "indexer",
         "view": "view_gateway"
     });
@@ -1421,7 +1421,7 @@ fn backend_planes_hogd_dev_full_serializes_correctly() {
 fn backend_planes_hogd_dev_storage_only_constructor() {
     let planes = BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub);
     assert_eq!(planes.submit, PlaneStatus::Scheduler);
-    assert_eq!(planes.chain, PlaneStatus::Scheduler);
+    assert_eq!(planes.chain, PlaneStatus::DbGateway);
     assert_eq!(planes.read, PlaneStatus::DbGateway);
     assert_eq!(planes.view, PlaneStatus::Stub);
 }
@@ -1492,7 +1492,7 @@ fn backend_planes_hogd_dev_storage_only_serializes_correctly() {
     let json = serde_json::to_value(planes).expect("bug: BackendPlanes serializes");
     let expected = serde_json::json!({
         "submit": "scheduler",
-        "chain": "scheduler",
+        "chain": "db_gateway",
         "read": "db_gateway",
         "view": "stub"
     });

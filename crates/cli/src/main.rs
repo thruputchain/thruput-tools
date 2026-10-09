@@ -735,8 +735,11 @@ impl TestArgs {
 
 #[derive(Args)]
 struct DeployArgs {
-    /// Exact HOG to transfer atomically with native deployment; zero skips funding
-    #[arg(long, value_name = "HOG")]
+    /// Inspect deployment storage funding without signing or submitting
+    #[arg(long, conflicts_with_all = ["dry_run", "fund"])]
+    estimate: bool,
+    /// Exact HOG or "minimum" for deployment collateral; zero skips funding
+    #[arg(long, value_name = "HOG|minimum")]
     fund: Option<String>,
     /// Initialize the new contract atomically using a method name or 0x entrypoint
     #[arg(long, value_name = "METHOD")]
@@ -786,6 +789,7 @@ impl DeployArgs {
         groundhog_cli::deploy::run(
             self.artifact.as_deref(),
             &groundhog_cli::deploy::DeploymentOptions {
+                estimate: self.estimate,
                 fund: self.fund.as_deref(),
                 init_method: self.init.as_deref(),
                 init_args: &self.init_arg,

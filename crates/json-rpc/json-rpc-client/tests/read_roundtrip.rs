@@ -467,11 +467,11 @@ async fn chain_config_roundtrips_stated_parameters_only() {
         .expect("bug: chainConfig should succeed");
 
     assert_eq!(
-        config.max_contract_size_bytes,
+        config.stated.max_contract_size_bytes,
         Some(TIP_MAX_CONTRACT_SIZE_BYTES)
     );
     assert_eq!(
-        config.max_new_contracts_per_tx, None,
+        config.stated.max_new_contracts_per_tx, None,
         "an unstated parameter stays absent across the wire"
     );
 

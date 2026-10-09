@@ -32,9 +32,10 @@ use crate::config::{GatewayConfig, HealthBackend, X23MultiplexConnections};
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 use crate::storage_batcher::{DbGatewaySink, StorageReadBatcher, StorageReadSink};
 use crate::submitter::{BatchSubmitter, SchedulerSink, SubmitSink};
-use crate::tip_coalescer::{SchedulerTipSink, TipCoalescer, TipSink};
+use crate::tip_coalescer::{DbTipSink, TipCoalescer, TipSink};
 
 static NEXT_SCHEDULER_GENERATION: AtomicU64 = AtomicU64::new(1);
+static NEXT_READ_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
 pub(crate) const SCHEDULER_LOOKUP_CONCURRENCY: usize = 4;
@@ -45,6 +46,7 @@ const HEALTH_PROBE_POOL_SIZE: usize = 1;
 pub(crate) struct BackendClient<C> {
     client: C,
     probe_client: C,
+    generation: u64,
 }
 
 impl<C> BackendClient<C> {
@@ -52,11 +54,16 @@ impl<C> BackendClient<C> {
         Self {
             client,
             probe_client,
+            generation: NEXT_READ_GENERATION.fetch_add(1, Ordering::Relaxed),
         }
     }
 
     pub(crate) fn probe_client(&self) -> &C {
         &self.probe_client
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
     }
 }
 
@@ -132,6 +139,19 @@ pub(crate) struct AbortTaskOnDrop {
     handle: AbortHandle,
 }
 
+pub(crate) async fn clear_db_gateway_if_current(
+    db_gateway: &RwLock<Option<DbGatewayClient>>,
+    generation: u64,
+) {
+    let mut current = db_gateway.write().await;
+    if current
+        .as_ref()
+        .is_some_and(|client| client.generation() == generation)
+    {
+        *current = None;
+    }
+}
+
 impl AbortTaskOnDrop {
     pub(crate) fn new<T>(task: &JoinHandle<T>) -> Self {
         Self {
@@ -160,7 +180,7 @@ pub struct GatewayContext {
     pub(crate) protocol: ProtocolCommit,
 
     /// x23 RPC client to hogd scheduler gateway.
-    /// Used for: transaction submission, tip, lookup, and pending count.
+    /// Used for: transaction submission, lookup, and pending count.
     pub scheduler: Arc<RwLock<Option<SchedulerClient>>>,
 
     /// Running plus waiting transaction-status scheduler lookups, shared across callers.
@@ -189,7 +209,7 @@ pub struct GatewayContext {
     /// `dbgateway_get_items` RPC per fired batch.
     pub storage_batcher: StorageReadBatcher,
 
-    /// Request coalescer for `chainTip`. One in-flight `get_tip` RPC
+    /// Request coalescer for `chainTip` and `chainConfig`. One DB configuration RPC
     /// can satisfy many concurrent client requests.
     pub tip_coalescer: TipCoalescer,
 
@@ -346,10 +366,11 @@ impl GatewayContext {
             request_timeout_margin,
         );
 
-        let tip_sink: Arc<dyn TipSink> = Arc::new(SchedulerTipSink::new(
-            scheduler.clone(),
+        let tip_sink: Arc<dyn TipSink> = Arc::new(DbTipSink::new(
+            db_gateway.clone(),
             metrics.clone(),
             backend_request_timeout,
+            config.network_hash.clone(),
         ));
         let tip_coalescer = TipCoalescer::spawn_with_deadlines(
             &config.tip,
@@ -989,12 +1010,11 @@ mod tests {
     impl DbGateway_DbGateway1 for TestDbGateway {
         async fn dbgateway_get_config(
             &self,
-        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, ProgramError> {
-            Err(ProgramError::msg(
-                "configuration RPC is not supported by this test server",
-            ))
+        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+            Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
+                error: groundhog_scheduler::RPCError::kRPCUnimplemented.0,
+            })
         }
-
         async fn dbgateway_intro(
             &self,
             arg0: Protocol,

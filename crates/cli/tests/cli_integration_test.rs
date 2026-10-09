@@ -1952,7 +1952,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     assert_eq!(payload["data"]["backend"]["stability"], "supported");
     assert!(payload["data"]["backend"].get("limitations").is_none());
     assert_eq!(payload["data"]["backend"]["planes"]["submit"], "scheduler");
-    assert_eq!(payload["data"]["backend"]["planes"]["chain"], "scheduler");
+    assert_eq!(payload["data"]["backend"]["planes"]["chain"], "db_gateway");
     assert_eq!(payload["data"]["backend"]["planes"]["read"], "indexer");
     assert_eq!(payload["data"]["backend"]["planes"]["view"], "stub");
     assert_eq!(payload["data"]["local_runtime_state"]["ok"], true);
@@ -4960,12 +4960,12 @@ fn deploy_workspace_root_accepts_long_package_option() {
         .output()
         .unwrap();
 
-    rpc_server.join().unwrap();
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    rpc_server.join().unwrap();
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         std::fs::canonicalize(stdout["data"]["artifactPath"].as_str().unwrap()).unwrap(),
@@ -8088,6 +8088,140 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
         signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
         "rv32"
     );
+}
+
+#[test]
+fn deploy_estimate_needs_no_signer_and_checks_network_rules() {
+    for (available, code_limit, memory_limit, expected_error) in [
+        (true, Some(16), Some(4096), None),
+        (
+            false,
+            None,
+            None,
+            Some("RPC did not supply authoritative execution rules"),
+        ),
+        (
+            true,
+            Some(15),
+            Some(4096),
+            Some("RV32 code is 16 bytes; network limit is 15"),
+        ),
+        (
+            true,
+            Some(16),
+            Some(4095),
+            Some("RV32 memory is 4096 bytes; network limit is 4095"),
+        ),
+        (
+            true,
+            None,
+            Some(4096),
+            Some("runtime did not report the effective RV32 code limit"),
+        ),
+        (
+            true,
+            Some(16),
+            None,
+            Some("runtime did not report the effective RV32 memory limit"),
+        ),
+    ] {
+        assert_deploy_estimate(available, code_limit, memory_limit, expected_error);
+    }
+}
+
+fn assert_deploy_estimate(
+    available: bool,
+    code_limit: Option<u32>,
+    memory_limit: Option<u32>,
+    expected_error: Option<&str>,
+) {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = 'default'\n[profile.default]\n",
+    )
+    .unwrap();
+    let artifact = groundhog_rv32_artifact::build_artifact(&[0; 16], &[], 0, 4096).unwrap();
+    let path = tmp.path().join("estimate.rv32a");
+    std::fs::write(&path, &artifact).unwrap();
+    let listener = MockListener::bind();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, request) = read_jsonrpc_request(
+            &listener,
+            Instant::now() + CLI_ACTION_TIMEOUT,
+            "chainConfig",
+        );
+        assert_eq!(request["method"], "groundhog_chainConfig");
+        let result = if available {
+            serde_json::json!({
+                "execution": {
+                    "observedTip": { "height": "7", "blockHash": format!("0x{}", "11".repeat(32)) },
+                    "configHash": format!("0x{}", "22".repeat(32)),
+                    "effectiveLimits": {
+                        "maxContractSizeBytes": 1_000_000,
+                        "maxRv32CodeBytes": code_limit,
+                        "maxRv32MemoryBytes": memory_limit
+                    },
+                    "storageCosts": {
+                        "baseDataItemCost": "100", "bytestringCostPerByte": "1",
+                        "baseContractDeploymentCost": "200", "contractDeploymentCostPerByte": "2",
+                        "authPerKeyCost": "1", "rcqCostPerEntry": "1", "replayCacheCostPerEntry": "1",
+                        "balanceCost": "30"
+                    }
+                }
+            })
+        } else {
+            serde_json::json!({})
+        };
+        send_jsonrpc_response(stream, &request["id"], result);
+    });
+    let output = groundhog()
+        .args([
+            "--json",
+            "--non-interactive",
+            "deploy",
+            "--estimate",
+            "--artifact",
+        ])
+        .arg(&path)
+        .args(["--rpc-url", &format!("http://{addr}")])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .output()
+        .unwrap();
+    match expected_error {
+        None => {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(json["data"]["schemaVersion"], 1);
+            assert_eq!(json["data"]["artifactBytes"], artifact.len().to_string());
+            assert_eq!(
+                json["data"]["minimumFundingRaw"],
+                (230 + artifact.len() * 2).to_string()
+            );
+            assert_eq!(json["data"]["execution"]["observedTip"]["height"], "7");
+            assert!(json["data"].get("signedTx").is_none());
+            assert!(output.stderr.is_empty());
+        }
+        Some(message) => {
+            assert!(!output.status.success());
+            let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(json["error"]["code"], "deployment_funding");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(message),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+        }
+    }
+    server.join().unwrap();
 }
 
 #[test]

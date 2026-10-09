@@ -63,6 +63,10 @@ impl fmt::Debug for HogdDevReadBackend {
 }
 
 impl HogdDevReadBackend {
+    pub(crate) fn db_gateway_client(&self) -> Option<&DbGateway_DbGateway1_Client> {
+        self.db_gateway.as_ref()
+    }
+
     /// Connect to hogd-dev's `IndexerBlockExplorer` endpoint and wire the
     /// shared `SchedGateway` client for pending-tx probes.
     ///
@@ -179,6 +183,10 @@ impl fmt::Debug for HogdDevStorageReadBackend {
 }
 
 impl HogdDevStorageReadBackend {
+    pub(crate) fn db_gateway_client(&self) -> &DbGateway_DbGateway1_Client {
+        &self.db_gateway
+    }
+
     pub(crate) async fn connect(
         endpoint: SocketAddr,
         protocol_version: &str,

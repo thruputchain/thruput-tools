@@ -29,6 +29,8 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
+mod funding;
+
 /// Current schema version for `deploy --json` data payloads.
 pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 7;
 
@@ -42,6 +44,8 @@ pub(crate) const INTEGRATION_DEPLOY_FUND_HOG: &str = "10";
 /// Explicit native deployment funding and initialization.
 #[derive(Debug, Default)]
 pub struct DeploymentOptions<'a> {
+    /// Inspect deployment collateral without loading a signer or submitting.
+    pub estimate: bool,
     /// Exact HOG transfer, including zero to skip funding.
     pub fund: Option<&'a str>,
     /// Method name from the artifact spec, or an explicit eight-byte selector.
@@ -154,6 +158,35 @@ pub fn run(
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
     let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
+    if options.estimate {
+        let artifact = if let Some(path) = artifact_path {
+            ResolvedArtifact {
+                kind: crate::artifacts::infer_artifact_kind(path)?,
+                path: path.to_path_buf(),
+            }
+        } else {
+            crate::artifacts::resolve_groundhog_artifact(&cwd, artifacts, package)?.artifact
+        };
+        let bytes = std::fs::read(&artifact.path)?;
+        let report = funding::read(
+            resolved.rpc_endpoint()?,
+            &bytes,
+            options.init_method.is_some(),
+        )?;
+        print.group(crate::print::Outcome::DryRun, "Deployment funding", |print| {
+            print.detail("artifact bytes", report.artifact_bytes);
+            print.detail("balance deposit HOG", crate::hog::format_amount(report.balance_deposit()));
+            print.detail("deployment collateral HOG", crate::hog::format_amount(report.deployment_cost()));
+            print.detail("minimum funding HOG", &report.minimum_funding_hog);
+            print.detail("observed height", *report.execution.observed_tip.height);
+            print.note("The minimum leaves no free balance for future storage. Sender storage and gas capacity are separate.");
+            if options.init_method.is_some() {
+                print.note("Initializer storage funding is unknown; choose an explicit total --fund amount.");
+            }
+        });
+        print.json(&CommandResult::new(cmd, report))?;
+        return Ok(());
+    }
     if !dry_run {
         print.require_confirmation_available(force, "deploy a contract")?;
     }
@@ -705,7 +738,17 @@ fn prepare_deploy_transaction_plan(
         Some(sender) => sender,
         None => resolve_transaction_sender(profile, selected_wallet)?,
     };
-    let funding = resolve_native_funding(sender.native_account.is_some(), options.fund)?;
+    let funding = if options.fund == Some("minimum") {
+        if sender.native_account.is_none() {
+            return Err(CliError::NativeDeploymentOptionsForLegacy);
+        }
+        if options.init_method.is_some() {
+            return Err(CliError::DeploymentFunding { message: "--fund minimum cannot determine initializer storage; use --estimate and choose an explicit --fund amount".into() });
+        }
+        Some(funding::read(rpc_url, &artifact_bytes, false)?.minimum_funding())
+    } else {
+        resolve_native_funding(sender.native_account.is_some(), options.fund)?
+    };
 
     if sender.native_account.is_none() && options.init_method.is_some() {
         return Err(CliError::NativeDeploymentOptionsForLegacy);

@@ -11,7 +11,7 @@ use crate::context::GatewayContext;
 /// carries.
 ///
 /// Routes through the per-gateway `TipCoalescer` so that concurrent
-/// client requests share a single in-flight `schedgateway_get_tip` RPC.
+/// client requests share a fresh `dbgateway_get_config` RPC.
 /// See `crate::tip_coalescer` for the linearizable coalescing design.
 #[tracing::instrument(skip_all)]
 pub async fn chain_tip(

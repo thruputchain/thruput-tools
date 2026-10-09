@@ -217,10 +217,10 @@ impl Default for AdaptiveBatchConfig {
     }
 }
 
-/// Request-coalescing config for `chainTip`.
+/// Request-coalescing config for `chainTip` and `chainConfig`.
 ///
-/// A single task serializes backend `schedgateway_get_tip` calls. While
-/// one call is in flight, subsequent `chainTip` requests accumulate in
+/// A single task coordinates backend `dbgateway_get_config` calls. While
+/// one call is in flight, subsequent tip/config requests accumulate in
 /// a waiter list; when the call returns, every waiter receives the
 /// same `BlockTip` via fanout. Linearizable: each waiter's result
 /// comes from an RPC initiated strictly after they arrived.
@@ -279,7 +279,7 @@ pub struct GatewayConfig {
     /// Private health/metrics HTTP listener.
     pub observability_listen: String,
 
-    /// Backends required for readiness status `ok`.
+    /// Backends required for readiness; defaults to scheduler, indexer, and DB gateway.
     pub health_required_backends: Vec<HealthBackend>,
 
     /// Maximum allowed age of the last successful chain-tip probe.
@@ -394,7 +394,11 @@ impl Default for GatewayConfig {
             max_connections: 2000,
             rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
             observability_listen: "127.0.0.1:9646".into(),
-            health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
+            health_required_backends: vec![
+                HealthBackend::Scheduler,
+                HealthBackend::Indexer,
+                HealthBackend::DbGateway,
+            ],
             health_chain_tip_max_age_ms: 30_000,
             health_probe_interval_ms: 5_000,
             backend_connect_timeout_ms: 30_000,
