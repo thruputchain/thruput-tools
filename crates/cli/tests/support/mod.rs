@@ -112,7 +112,6 @@ pub fn contract_spec_raw_for_interface(interface_name: &str) -> Vec<u8> {
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
                 method: groundhog_spec_tool::ContractSpecMethod {
-                    effect: None,
                     name: spec_string("get"),
                     args: vec![].try_into().unwrap(),
                     return_type: groundhog_spec_tool::ContractType::U64,
