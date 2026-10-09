@@ -13,6 +13,8 @@ const __gh_entrypoints = {
     v0_1: {
       getValues: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("58ead8a01a28d35b")),
       update: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("b06037c26b2ec2cd")),
+      calculate: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("a5ae701718bfea67")),
+      undeclared: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("db378f013af38baa")),
     },
   },
 } as const;
@@ -51,6 +53,12 @@ export namespace ExampleContract {
     }
     export type UpdateResult = void;
 
+    export type CalculateArgs = void;
+    export type CalculateResult = bigint;
+
+    export type UndeclaredArgs = void;
+    export type UndeclaredResult = void;
+
     export type DeclaredException =
       {
         kind: "declared";
@@ -76,6 +84,7 @@ export const spec: __gh_client_contract.ContractSpec = {
           args: [
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Tuple, tuple: [{ v: __gh_contract_spec.ContractTypeKind.U128 }, { v: __gh_contract_spec.ContractTypeKind.U128 }, { v: __gh_contract_spec.ContractTypeKind.U64 }] },
+          effect: __gh_client_contract.ContractMethodEffect.EffectReadOnly,
         },
         {
           name: __gh_s("update"),
@@ -84,6 +93,21 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("request_id"), ty: { v: __gh_contract_spec.ContractTypeKind.Option, option_inner: { v: __gh_contract_spec.ContractTypeKind.Array, array: { element: { v: __gh_contract_spec.ContractTypeKind.U8 }, len: 32n } } } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Void },
+          effect: __gh_client_contract.ContractMethodEffect.EffectStateChanging,
+        },
+        {
+          name: __gh_s("calculate"),
+          args: [
+          ],
+          return_type: { v: __gh_contract_spec.ContractTypeKind.U64 },
+          effect: __gh_client_contract.ContractMethodEffect.EffectPure,
+        },
+        {
+          name: __gh_s("undeclared"),
+          args: [
+          ],
+          return_type: { v: __gh_contract_spec.ContractTypeKind.Void },
+          effect: null,
         },
       ],
     },
@@ -129,6 +153,7 @@ const __gh_codecs = __gh_client_contract.createContractCodecContext(spec.type_de
 
 export const ExampleContract = {
   v0_1: {
+    /** Declared effect: readOnly. Author declaration; not compiler/runtime enforced. */
     getValues: __gh_client_contract.defineContractMethod<
       ExampleContract.v0_1.GetValuesArgs,
       ExampleContract.v0_1.GetValuesResult,
@@ -139,6 +164,7 @@ export const ExampleContract = {
       abiName: "get_values",
       publicName: "getValues",
       entrypoint: __gh_entrypoints.ExampleContract.v0_1.getValues,
+      effect: spec.interfaces[0]!.methods[0]!.effect,
       args: [
       ],
       returnType: spec.interfaces[0]!.methods[0]!.return_type,
@@ -151,6 +177,7 @@ export const ExampleContract = {
       ],
       codecs: __gh_codecs,
     }),
+    /** Declared effect: stateChanging. Author declaration; not compiler/runtime enforced. */
     update: __gh_client_contract.defineContractMethod<
       ExampleContract.v0_1.UpdateArgs,
       ExampleContract.v0_1.UpdateResult,
@@ -161,6 +188,7 @@ export const ExampleContract = {
       abiName: "update",
       publicName: "update",
       entrypoint: __gh_entrypoints.ExampleContract.v0_1.update,
+      effect: spec.interfaces[0]!.methods[1]!.effect,
       args: [
         {
           abiName: "value",
@@ -174,6 +202,53 @@ export const ExampleContract = {
         },
       ],
       returnType: spec.interfaces[0]!.methods[1]!.return_type,
+      throws: [
+        {
+          selector: 0x1234n,
+          name: "ExampleError",
+          type: spec.interfaces[0]!.throws[0]!.ty,
+        },
+      ],
+      codecs: __gh_codecs,
+    }),
+    /** Declared effect: pure. Author declaration; not compiler/runtime enforced. */
+    calculate: __gh_client_contract.defineContractMethod<
+      ExampleContract.v0_1.CalculateArgs,
+      ExampleContract.v0_1.CalculateResult,
+      ExampleContract.v0_1.DeclaredException
+    >({
+      interfaceName: "ExampleContract",
+      interfaceVersion: "0.1.0",
+      abiName: "calculate",
+      publicName: "calculate",
+      entrypoint: __gh_entrypoints.ExampleContract.v0_1.calculate,
+      effect: spec.interfaces[0]!.methods[2]!.effect,
+      args: [
+      ],
+      returnType: spec.interfaces[0]!.methods[2]!.return_type,
+      throws: [
+        {
+          selector: 0x1234n,
+          name: "ExampleError",
+          type: spec.interfaces[0]!.throws[0]!.ty,
+        },
+      ],
+      codecs: __gh_codecs,
+    }),
+    undeclared: __gh_client_contract.defineContractMethod<
+      ExampleContract.v0_1.UndeclaredArgs,
+      ExampleContract.v0_1.UndeclaredResult,
+      ExampleContract.v0_1.DeclaredException
+    >({
+      interfaceName: "ExampleContract",
+      interfaceVersion: "0.1.0",
+      abiName: "undeclared",
+      publicName: "undeclared",
+      entrypoint: __gh_entrypoints.ExampleContract.v0_1.undeclared,
+      effect: spec.interfaces[0]!.methods[3]!.effect,
+      args: [
+      ],
+      returnType: spec.interfaces[0]!.methods[3]!.return_type,
       throws: [
         {
           selector: 0x1234n,

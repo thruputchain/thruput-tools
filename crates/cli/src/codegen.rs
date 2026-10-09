@@ -829,6 +829,14 @@ fn emit_spec_method_literal(out: &mut String, method: &ContractSpecMethod) -> Re
     // return_type
     let ret_lit = spec_type_to_ts_literal(&method.return_type)?;
     let _ = writeln!(out, "          return_type: {ret_lit},");
+    if let Some((_, effect)) = method_effect(method)? {
+        let _ = writeln!(
+            out,
+            "          effect: __gh_client_contract.ContractMethodEffect.{effect},"
+        );
+    } else {
+        let _ = writeln!(out, "          effect: null,");
+    }
 
     let _ = writeln!(out, "        }},");
     Ok(())
@@ -1182,6 +1190,22 @@ fn render_interface_types(
     Ok(out)
 }
 
+fn method_effect(
+    method: &ContractSpecMethod,
+) -> Result<Option<(&'static str, &'static str)>, CliError> {
+    use groundhog_contract_spec::ContractMethodEffect as Effect;
+    match method.effect {
+        None => Ok(None),
+        Some(Effect::EffectPure) => Ok(Some(("pure", "EffectPure"))),
+        Some(Effect::EffectReadOnly) => Ok(Some(("readOnly", "EffectReadOnly"))),
+        Some(Effect::EffectStateChanging) => Ok(Some(("stateChanging", "EffectStateChanging"))),
+        Some(effect) => Err(CliError::TsBindingsFailed(format!(
+            "unsupported method effect {}; update the toolchain and rebuild the spec",
+            effect.0
+        ))),
+    }
+}
+
 /// Render one contract method descriptor. `path` is where its interface's
 /// types sit, read from the top level, where only a root can claim a name.
 fn render_interface_method(
@@ -1194,6 +1218,12 @@ fn render_interface_method(
 ) -> Result<String, CliError> {
     let stem = method_type_stem(public_method_name);
     let mut out = String::new();
+    if let Some((effect, _)) = method_effect(method)? {
+        let _ = writeln!(
+            out,
+            "/** Declared effect: {effect}. Author declaration; not compiler/runtime enforced. */"
+        );
+    }
     let _ = writeln!(
         out,
         "{public_method_name}: __gh_client_contract.defineContractMethod<"
@@ -1225,6 +1255,10 @@ fn render_interface_method(
     let _ = writeln!(
         out,
         "  entrypoint: __gh_entrypoints.{path}.{public_method_name},"
+    );
+    let _ = writeln!(
+        out,
+        "  effect: spec.interfaces[{iface_index}]!.methods[{method_index}]!.effect,"
     );
     let _ = writeln!(out, "  args: [");
     for (arg_index, arg) in method.args.iter().enumerate() {
@@ -3172,9 +3206,9 @@ export type Result =
              BalanceArgs = void;",
             "  export namespace v0_4 {\n\n    export type BalanceArgs = void;",
             "  export namespace v1 {\n\n    export type BalanceArgs = void;",
-            "export const Token = {\n  v0_4: {\n    balance: ",
-            "  v1: {\n    balance: ",
-            "  v0_0_7: {\n    balance: ",
+            "export const Token = {\n  v0_4: {\n    balance:",
+            "  v1: {\n    balance:",
+            "  v0_0_7: {\n    balance:",
             "      Token.v1.BalanceResult,",
             "      entrypoint: __gh_entrypoints.Token.v1.balance,",
             "      interfaceVersion: \"1.3.0\",",
@@ -3988,6 +4022,47 @@ export type Result =
         ]
     }
 
+    #[test]
+    fn effects_are_documented_and_preserved_without_changing_entrypoints() {
+        use groundhog_contract_spec::ContractMethodEffect as Effect;
+        let mut spec = counter_spec();
+        let baseline = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
+        let entrypoints = |output: &str| {
+            output
+                .lines()
+                .filter(|line| line.contains("contractEntrypointID("))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        for (effect, label, variant) in [
+            (Effect::EffectPure, "pure", "EffectPure"),
+            (Effect::EffectReadOnly, "readOnly", "EffectReadOnly"),
+            (
+                Effect::EffectStateChanging,
+                "stateChanging",
+                "EffectStateChanging",
+            ),
+        ] {
+            spec.interfaces.0[0].methods.0[0].effect = Some(effect);
+            let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
+            assert!(output.contains(&format!(
+                "Declared effect: {label}. Author declaration; not compiler/runtime enforced."
+            )));
+            assert!(output.contains(&format!("ContractMethodEffect.{variant}")));
+            assert!(output.contains("effect: spec.interfaces[0]!.methods[0]!.effect"));
+            assert_eq!(entrypoints(&output), entrypoints(&baseline));
+        }
+        assert!(baseline.contains("effect: null,"));
+        assert!(!baseline.contains("Declared effect:"));
+        spec.interfaces.0[0].methods.0[0].effect = Some(Effect(99));
+        assert!(
+            generate_ts_bindings(&spec, "counter.spec.xdr")
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported method effect")
+        );
+    }
+
     /// Build a minimal counter contract spec with [`counter_spec_methods`].
     fn counter_spec() -> ContractSpec {
         counter_spec_with_methods(counter_spec_methods(), false)
@@ -4739,6 +4814,8 @@ export type Result =
         reason = "the snapshot fixture keeps its complete ABI shape visible in one place"
     )]
     fn typed_contract_spec() -> ContractSpec {
+        use groundhog_contract_spec::ContractMethodEffect as Effect;
+
         let request_id = ContractType::Array {
             array: ContractArrayType {
                 element: Box::new(ContractType::U8),
@@ -4765,6 +4842,7 @@ export type Result =
                 .unwrap(),
                 methods: vec![
                     ContractSpecMethod {
+                        effect: Some(Effect::EffectReadOnly),
                         name: spec_string("get_values"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::Tuple {
@@ -4772,9 +4850,9 @@ export type Result =
                                 .try_into()
                                 .unwrap(),
                         },
-                        effect: None,
                     },
                     ContractSpecMethod {
+                        effect: Some(Effect::EffectStateChanging),
                         name: spec_string("update"),
                         args: vec![
                             ContractField {
@@ -4791,7 +4869,18 @@ export type Result =
                         .try_into()
                         .unwrap(),
                         return_type: ContractType::Void,
+                    },
+                    ContractSpecMethod {
+                        effect: Some(Effect::EffectPure),
+                        name: spec_string("calculate"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::U64,
+                    },
+                    ContractSpecMethod {
                         effect: None,
+                        name: spec_string("undeclared"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::Void,
                     },
                 ]
                 .try_into()

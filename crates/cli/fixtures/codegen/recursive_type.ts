@@ -52,6 +52,7 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("tree"), ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: __gh_s("demo"), major: __gh_s("1"), module_path: __gh_s("demo"), declared: __gh_s("Tree") } } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U32 },
+          effect: null,
         },
       ],
     },
@@ -87,6 +88,7 @@ export const RecursiveTypeContract = {
       abiName: "depth",
       publicName: "depth",
       entrypoint: __gh_entrypoints.RecursiveTypeContract.v0_1.depth,
+      effect: spec.interfaces[0]!.methods[0]!.effect,
       args: [
         {
           abiName: "tree",

@@ -71,12 +71,14 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("amount"), ty: { v: __gh_contract_spec.ContractTypeKind.U128 } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Void },
+          effect: null,
         },
         {
           name: __gh_s("get_balance"),
           args: [
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U128 },
+          effect: null,
         },
         {
           name: __gh_s("get_balance_of"),
@@ -84,6 +86,7 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("account_id"), ty: { v: __gh_contract_spec.ContractTypeKind.Address } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U128 },
+          effect: null,
         },
       ],
     },
@@ -120,6 +123,7 @@ export const ERC20 = {
       abiName: "transfer",
       publicName: "transfer",
       entrypoint: __gh_entrypoints.ERC20.v0_1.transfer,
+      effect: spec.interfaces[0]!.methods[0]!.effect,
       args: [
         {
           abiName: "to",
@@ -152,6 +156,7 @@ export const ERC20 = {
       abiName: "get_balance",
       publicName: "getBalance",
       entrypoint: __gh_entrypoints.ERC20.v0_1.getBalance,
+      effect: spec.interfaces[0]!.methods[1]!.effect,
       args: [
       ],
       returnType: spec.interfaces[0]!.methods[1]!.return_type,
@@ -174,6 +179,7 @@ export const ERC20 = {
       abiName: "get_balance_of",
       publicName: "getBalanceOf",
       entrypoint: __gh_entrypoints.ERC20.v0_1.getBalanceOf,
+      effect: spec.interfaces[0]!.methods[2]!.effect,
       args: [
         {
           abiName: "account_id",

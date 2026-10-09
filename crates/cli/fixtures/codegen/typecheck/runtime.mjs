@@ -5,6 +5,11 @@ const kinds = new Proxy({}, { get: (_, key) => String(key) });
 export const ContractTypeKind = kinds;
 export const ContractTypeDefKind = kinds;
 export const ContractUnionCaseKind = kinds;
+export const ContractMethodEffect = {
+  EffectPure: 1,
+  EffectReadOnly: 2,
+  EffectStateChanging: 3,
+};
 export const contractSpecString = (value) => value;
 
 export const contractEntrypointID = (bytes) => bytes;

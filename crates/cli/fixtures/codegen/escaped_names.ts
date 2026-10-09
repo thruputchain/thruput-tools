@@ -112,6 +112,7 @@ export const spec: __gh_client_contract.ContractSpec = {
           args: [
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: __gh_s("demo"), major: __gh_s("1"), module_path: __gh_s("demo::default"), declared: __gh_s("Kind") } },
+          effect: null,
         },
       ],
     },
@@ -126,6 +127,7 @@ export const spec: __gh_client_contract.ContractSpec = {
           args: [
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U64 },
+          effect: null,
         },
       ],
     },
@@ -141,6 +143,7 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("of"), ty: { v: __gh_contract_spec.ContractTypeKind.Address } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U128 },
+          effect: null,
         },
       ],
     },
@@ -204,6 +207,7 @@ export const $default = {
       abiName: "get",
       publicName: "get",
       entrypoint: __gh_entrypoints.$default.v0_1.get,
+      effect: spec.interfaces[0]!.methods[0]!.effect,
       args: [
       ],
       returnType: spec.interfaces[0]!.methods[0]!.return_type,
@@ -231,6 +235,7 @@ export const Token = {
       abiName: "balance",
       publicName: "balance",
       entrypoint: __gh_entrypoints.Token.v0_4.balance,
+      effect: spec.interfaces[1]!.methods[0]!.effect,
       args: [
       ],
       returnType: spec.interfaces[1]!.methods[0]!.return_type,
@@ -250,6 +255,7 @@ export const Token = {
       abiName: "balance",
       publicName: "balance",
       entrypoint: __gh_entrypoints.Token.v1.balance,
+      effect: spec.interfaces[2]!.methods[0]!.effect,
       args: [
         {
           abiName: "of",

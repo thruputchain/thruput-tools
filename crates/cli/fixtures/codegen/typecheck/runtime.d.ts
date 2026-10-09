@@ -22,6 +22,12 @@ declare module "@groundhogchain/contract-spec" {
 declare module "@groundhogchain/client/contract" {
   import type { ContractAddress } from "@groundhogchain/protocol";
 
+  export enum ContractMethodEffect {
+    EffectPure = 1,
+    EffectReadOnly = 2,
+    EffectStateChanging = 3,
+  }
+
   /** Shaped enough that the generated spec literal is checked, not just
    *  accepted: the generator indexes into it by these exact field names. */
   export interface ContractSpecId {
@@ -43,6 +49,7 @@ declare module "@groundhogchain/client/contract" {
         name: unknown;
         args: readonly ContractSpecField[];
         return_type: unknown;
+        effect: ContractMethodEffect | null;
       }[];
     }[];
     type_defs: readonly unknown[];
@@ -87,8 +94,8 @@ declare module "@groundhogchain/client/contract" {
   export function createContractCodecContext(typeDefs: unknown): unknown;
 
   export function defineContractMethod<TArgs, TResult, TDeclaredException>(
-    definition: unknown,
-  ): unknown;
+    definition: { effect: ContractMethodEffect | null; [key: string]: unknown },
+  ): { readonly effect: ContractMethodEffect | null };
 
   export function defineContractEvent<
     const TName extends string,
