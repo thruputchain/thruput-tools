@@ -9,7 +9,7 @@ for methods and payloads.
 
 ## Build
 
-From the workspace root, with private Groundhog registry access:
+From the workspace root, with private Thruput registry access:
 
 ```sh
 cargo build --locked -p groundhog-json-rpc-gateway --bin hog-gateway

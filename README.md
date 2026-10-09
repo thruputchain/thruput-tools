@@ -142,7 +142,7 @@ npx --prefix scripts/scaffold-app playwright install chromium
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode npm test --prefix scripts/scaffold-app
 ```
 
-It requires Node.js 22.12+, Groundhog Cargo and npm registry access, and a compatible
+It requires Node.js 22.12+, private Cargo and npm registry access, and a compatible
 runtime. `CHROMIUM_EXECUTABLE` can select an installed Chromium. The harness owns
 its node and uses isolated CLI configuration and dynamically allocated ports;
 the generated app connects to the node without managing it.

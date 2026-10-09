@@ -64,7 +64,7 @@ jobs:
           repository: groundhogchain/actions
           persist-credentials: false
           path: actions
-          ref: 9cf9c36f567c30f387cbe46578ad8c6de9cb2e91 # configurable dry-run registry
+          ref: 446b04deaf59c6a07c1d8087de945058ef07d6f3 # configurable dry-run registry
 
       - name: Configure Namespace Cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
