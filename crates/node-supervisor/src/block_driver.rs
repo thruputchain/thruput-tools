@@ -5,7 +5,11 @@
 //! chuckd for the localhost topology, so the supervisor owns that small piece
 //! of coordination policy for hogd-dev.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use groundhog_scheduler::{
     BlockID, ConsensusValue, ProposalTxsHash, SchedulerCommitOutcome, SchedulerGetTipResult,
@@ -473,7 +477,10 @@ async fn drive_one_block(
     let proposal_context = ProposalContext {
         protocol: Protocol::new(0),
         proposer: ValidatorID::default(),
-        block_timepoint: TimePoint::new(0),
+        block_timepoint: next_block_timepoint(
+            &db_tip.value.proposal_header.block_timepoint,
+            SystemTime::now(),
+        ),
     };
     let proposed = scheduler
         .schedulercoord_propose_block(&db_tip.id, &proposal_context)
@@ -497,6 +504,17 @@ async fn drive_one_block(
     };
 
     commit_proposed_block(scheduler, db_tip.value, proposed_block).await
+}
+
+/// The timepoint for a block following one at `parent`: `now` as Unix
+/// nanoseconds, but never behind `parent`, because hogd refuses to nominate a
+/// block older than its committed tip and a wall-clock step back would
+/// otherwise stall production.
+fn next_block_timepoint(parent: &TimePoint, now: SystemTime) -> TimePoint {
+    let now = now.duration_since(UNIX_EPOCH).map_or(0, |since| {
+        u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+    });
+    TimePoint::new(now.max(**parent))
 }
 
 async fn commit_proposed_block(
@@ -697,6 +715,38 @@ async fn reconcile_commit(
         source,
         reconciliation,
     })
+}
+
+#[cfg(test)]
+mod timepoint_tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use groundhog_xdr::types::TimePoint;
+
+    use super::next_block_timepoint;
+
+    #[test]
+    fn takes_the_wall_clock_in_unix_nanoseconds() {
+        let now = UNIX_EPOCH + Duration::from_nanos(1_760_000_000_123_456_789);
+        assert_eq!(
+            *next_block_timepoint(&TimePoint::new(0), now),
+            1_760_000_000_123_456_789
+        );
+    }
+
+    #[test]
+    fn never_moves_behind_the_parent() {
+        let parent = TimePoint::new(1_760_000_000_000_000_000);
+        let earlier = UNIX_EPOCH + Duration::from_nanos(*parent - 1);
+        assert_eq!(*next_block_timepoint(&parent, earlier), *parent);
+    }
+
+    #[test]
+    fn a_clock_before_the_epoch_keeps_the_parent() {
+        let parent = TimePoint::new(42);
+        let before_epoch = UNIX_EPOCH - Duration::from_secs(1);
+        assert_eq!(*next_block_timepoint(&parent, before_epoch), 42);
+    }
 }
 
 #[cfg(test)]
