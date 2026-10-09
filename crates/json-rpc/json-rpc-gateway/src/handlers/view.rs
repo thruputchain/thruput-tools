@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use groundhog_hogd_backend::view as shared_view;
 use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
 use groundhog_json_rpc_types::view::{ViewRequest, ViewResponse};
-use groundhog_view::ViewGatewayResult;
+use groundhog_view::{ViewGatewayBatchOutcome, ViewGatewayBatchResult, ViewGatewayResult};
 use groundhog_xdr::view::TransactionViewQuery;
 
 use crate::{
@@ -48,11 +48,16 @@ pub async fn view_batch(
         VIEW_GATEWAY,
         deadline,
         client.viewgateway_view_batch(&query),
-        |result| {
-            matches!(
-                result,
-                groundhog_view::ViewGatewayBatchResult::ViewGatewayBatchOk { .. }
-            )
+        // Expected refusals are healthy backend round trips, even though the
+        // public response remains an error for the caller.
+        |result| match result {
+            ViewGatewayBatchResult::ViewGatewayBatchOk { .. }
+            | ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable { .. } => true,
+            ViewGatewayBatchResult::Default { outcome } => {
+                *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchInvalidRequest.0
+                    || *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchResponseTooLarge.0
+            }
+            _ => false,
         },
     )
     .await;
@@ -162,6 +167,7 @@ mod tests {
     enum FakeViewGatewayMode {
         Slow,
         Batch,
+        BatchOutcome(i32),
     }
 
     struct FakeViewGateway {
@@ -177,6 +183,9 @@ mod tests {
             use groundhog_view::{
                 ViewGatewayBatchPayload, ViewGatewayBatchResult, ViewGatewayHeightUnavailable,
             };
+            if let FakeViewGatewayMode::BatchOutcome(outcome) = self.mode {
+                return Ok(ViewGatewayBatchResult::Default { outcome });
+            }
             if self.mode == FakeViewGatewayMode::Slow {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
@@ -404,6 +413,119 @@ mod tests {
             }
         }
         fake.abort();
+    }
+
+    #[tokio::test]
+    async fn batch_metrics_separate_expected_refusals_from_backend_failures() {
+        use crate::{config::GatewayConfig, context::BackendClient};
+        use groundhog_json_rpc_server::ViewBatchConfig;
+        use groundhog_json_rpc_types::{
+            error::codes,
+            view::{ViewBatchRequest, ViewCall},
+        };
+        use groundhog_view::ViewGatewayBatchOutcome as Outcome;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let cases = [
+            (
+                FakeViewGatewayMode::Batch,
+                codes::VIEW_HEIGHT_UNAVAILABLE,
+                "ok",
+            ),
+            (
+                FakeViewGatewayMode::BatchOutcome(Outcome::ViewGatewayBatchInvalidRequest.0),
+                codes::INVALID_PARAMS,
+                "ok",
+            ),
+            (
+                FakeViewGatewayMode::BatchOutcome(Outcome::ViewGatewayBatchResponseTooLarge.0),
+                codes::INVALID_PARAMS,
+                "ok",
+            ),
+            (
+                FakeViewGatewayMode::BatchOutcome(Outcome::ViewGatewayBatchInternalError.0),
+                codes::BACKEND_UNAVAILABLE,
+                "error",
+            ),
+            (
+                FakeViewGatewayMode::BatchOutcome(Outcome::ViewGatewayBatchAbandoned.0),
+                codes::BACKEND_UNAVAILABLE,
+                "error",
+            ),
+            (
+                FakeViewGatewayMode::BatchOutcome(Outcome::ViewGatewayBatchDeadlineExceeded.0),
+                codes::BACKEND_TIMEOUT,
+                "error",
+            ),
+            (
+                FakeViewGatewayMode::BatchOutcome(99),
+                codes::BACKEND_UNAVAILABLE,
+                "error",
+            ),
+        ];
+        for (mode, code, outcome) in cases {
+            let (addr, fake) = start_fake_view_gateway(mode).await;
+            let socket = FixedSerialPool::connect(&addr, 1).await.unwrap();
+            let client = ViewGateway_ViewGateway1_Client::new(Arc::new(socket));
+            let context = GatewayContext::assemble(
+                groundhog_xdr::PROTOCOL_VERSION,
+                Arc::new(RwLock::new(None)),
+                Arc::new(RwLock::new(None)),
+                Arc::new(RwLock::new(Some(BackendClient::new(
+                    client.clone(),
+                    client,
+                )))),
+                Arc::new(RwLock::new(None)),
+                Arc::new(GatewayConfig {
+                    view_timeout_ms: 60_000,
+                    request_timeout_ms: 90_000,
+                    ..Default::default()
+                }),
+                GatewayMetrics::for_tests(),
+            );
+            let error = view_batch(
+                &context,
+                RpcRequestContext::unbounded(),
+                ViewBatchRequest {
+                    calls: vec![ViewCall {
+                        contract: request(None).contract,
+                        entrypoint: HexBytes(vec![8; 8]),
+                        calldata: HexBytes(vec![]),
+                        caller: None,
+                        gas_limit: Some(123),
+                    }],
+                    min_height: Some(43.into()),
+                },
+                1_000,
+                ViewBatchConfig {
+                    max_response_bytes: 256,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+            fake.abort();
+            assert_eq!(error.code(), code, "{mode:?}");
+            assert_batch_metrics(&context.metrics, outcome);
+        }
+    }
+
+    fn assert_batch_metrics(metrics: &GatewayMetrics, outcome: &str) {
+        use crate::health::{GatewayHealthSnapshot, HealthStatus};
+
+        let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
+        let body = metrics.gather(&snapshot).unwrap();
+        assert!(body.contains(&format!(
+            "groundhog_gateway_backend_requests_total{{backend=\"view_gateway\",operation=\"viewgateway_view_batch\",outcome=\"{outcome}\"}} 1"
+        )), "{body}");
+        assert!(body.contains(&format!(
+            "groundhog_gateway_backend_request_duration_seconds_count{{backend=\"view_gateway\",operation=\"viewgateway_view_batch\",result=\"{outcome}\"}} 1"
+        )), "{body}");
+        let other = if outcome == "ok" { "error" } else { "ok" };
+        assert!(!body.contains(&format!(
+            "groundhog_gateway_backend_requests_total{{backend=\"view_gateway\",operation=\"viewgateway_view_batch\",outcome=\"{other}\"}} 1"
+        )), "{body}");
     }
 
     #[test]
