@@ -194,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", serde_json::to_string_pretty(&config)?);
         return Ok(());
     }
-    let heap_profiling_enabled = heap_profiling::initialize().await?;
+    let heap_dump = heap_profiling::initialize().await?;
 
     tracing::info!(
         network_hash = ?network_info.network_hash,
@@ -248,7 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         health,
         metrics.clone(),
         observability_shutdown_rx,
-        heap_profiling_enabled,
+        heap_dump,
         allow_remote,
     )
     .await?;

@@ -1,4 +1,6 @@
 //! Opt-in service heap profiles. Dump requests are serialized; concurrent requests get 429.
+//! DNS-name Hosts are refused because they can rebind to the listener. Remote opt-in
+//! permits direct IP-literal access only.
 
 mod convert;
 pub use convert::{Frame, Symbolize, jemalloc_to_pprof};
@@ -11,6 +13,9 @@ pub fn dump_pprof() -> io::Result<Vec<u8>> {
 
 use axum::Router;
 use std::{io, net::SocketAddr};
+
+/// Capture a heap profile for an HTTP request.
+pub type Dump = fn() -> io::Result<Vec<u8>>;
 
 /// Environment switch permitting unauthenticated profiles beyond loopback.
 pub const ALLOW_REMOTE_ENV: &str = "GROUNDHOG_PPROF_ALLOW_REMOTE";
@@ -41,36 +46,39 @@ pub fn check_dedicated_listener(local: SocketAddr, allow_remote: bool) -> io::Re
     Ok(())
 }
 
-fn serve_route(enabled: bool, local: SocketAddr, allow_remote: bool) -> bool {
-    enabled && (is_loopback(local) || allow_remote)
+fn serve_route(local: SocketAddr, allow_remote: bool) -> bool {
+    is_loopback(local) || allow_remote
 }
 
 /// Expose profiles on a shared listener only when enabled and permitted for its address.
 pub fn routes_for_listener<S: Clone + Send + Sync + 'static>(
-    enabled: bool,
+    dump: Option<Dump>,
     local: SocketAddr,
     allow_remote: bool,
 ) -> Router<S> {
-    if enabled && !is_loopback(local) {
+    if dump.is_some() && !is_loopback(local) {
         if allow_remote {
             tracing::warn!(%local, "unauthenticated heap profiles are served beyond loopback");
         } else {
             tracing::warn!(%local, "heap profile route is disabled on a non-loopback listener; pass --pprof-allow-remote or set GROUNDHOG_PPROF_ALLOW_REMOTE=1 to serve unauthenticated heap profiles beyond loopback");
         }
     }
-    routes(serve_route(enabled, local, allow_remote))
+    routes(
+        dump.filter(|_| serve_route(local, allow_remote)),
+        allow_remote,
+    )
 }
 
 /// Activate profiling only for the exact environment value `1`.
 #[allow(clippy::unused_async)]
-pub async fn initialize() -> io::Result<bool> {
+pub async fn initialize() -> io::Result<Option<Dump>> {
     if std::env::var_os("GROUNDHOG_HEAP_PROFILING").as_deref() != Some(std::ffi::OsStr::new("1")) {
-        return Ok(false);
+        return Ok(None);
     }
     #[cfg(all(target_os = "linux", feature = "jemalloc"))]
     {
         linux::activate()?;
-        Ok(true)
+        Ok(Some(linux::dump))
     }
     #[cfg(not(all(target_os = "linux", feature = "jemalloc")))]
     Err(io::Error::new(
@@ -80,25 +88,128 @@ pub async fn initialize() -> io::Result<bool> {
 }
 
 /// Expose the endpoint only when initialization enabled profiling.
-pub fn routes<S: Clone + Send + Sync + 'static>(enabled: bool) -> Router<S> {
-    #[cfg(all(target_os = "linux", feature = "jemalloc"))]
-    if enabled {
-        return Router::new().route("/debug/pprof/heap", axum::routing::get(heap));
+pub fn routes<S: Clone + Send + Sync + 'static>(
+    dump: Option<Dump>,
+    allow_remote: bool,
+) -> Router<S> {
+    if let Some(dump) = dump {
+        return Router::new()
+            .route(
+                "/debug/pprof/heap",
+                axum::routing::any(move || async move {
+                    static BUSY: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+                        std::sync::OnceLock::new();
+                    let gate =
+                        BUSY.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(1)));
+                    run_dump(gate.clone(), dump).await
+                }),
+            )
+            .route_layer(axum::middleware::from_fn_with_state(allow_remote, guard));
     }
-    let _ = enabled;
     Router::new()
 }
 
-#[cfg(all(target_os = "linux", feature = "jemalloc"))]
-#[tracing::instrument(skip_all)]
-async fn heap() -> axum::response::Response {
-    static BUSY: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-        std::sync::OnceLock::new();
-    let gate = BUSY.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(1)));
-    run_dump(gate.clone(), linux::dump).await
+fn allowed_host(raw: &str, allow_remote: bool) -> bool {
+    fn port(value: &str) -> bool {
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+    }
+    let host = if let Some(bracketed) = raw.strip_prefix('[') {
+        let Some((host, rest)) = bracketed.split_once(']') else {
+            return false;
+        };
+        if !rest.is_empty() && !rest.strip_prefix(':').is_some_and(port) {
+            return false;
+        }
+        return host
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|ip| allow_remote || ip.to_canonical().is_loopback());
+    } else if raw.bytes().filter(|byte| *byte == b':').count() == 1 {
+        let Some((host, value)) = raw.split_once(':') else {
+            return false;
+        };
+        if !port(value) {
+            return false;
+        }
+        host
+    } else {
+        raw
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| allow_remote || ip.to_canonical().is_loopback())
 }
 
-#[cfg(any(all(target_os = "linux", feature = "jemalloc"), test))]
+fn same_host_origin(origin: &str, host: &str) -> bool {
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    let mut bytes = scheme.bytes();
+    if !bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        || !bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+    {
+        return false;
+    }
+    let authority = authority.strip_suffix('/').unwrap_or(authority);
+    !authority.is_empty()
+        && !authority.contains(['/', '?', '#', '@'])
+        && authority.eq_ignore_ascii_case(host)
+}
+
+#[tracing::instrument(skip_all)]
+async fn guard(
+    axum::extract::State(allow_remote): axum::extract::State<bool>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::{
+        http::{Method, StatusCode, header},
+        response::IntoResponse,
+    };
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            [(header::ALLOW, "GET, HEAD")],
+        )
+            .into_response();
+    }
+    let mut hosts = request.headers().get_all(header::HOST).iter();
+    let host = hosts.next().and_then(|value| value.to_str().ok());
+    let Some(host) = host.filter(|host| hosts.next().is_none() && allowed_host(host, allow_remote))
+    else {
+        return (
+            StatusCode::FORBIDDEN,
+            "heap profile requires a loopback or IP-literal Host header",
+        )
+            .into_response();
+    };
+    if request
+        .uri()
+        .authority()
+        .is_some_and(|authority| !authority.as_str().eq_ignore_ascii_case(host))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "heap profile requires a loopback or IP-literal Host header",
+        )
+            .into_response();
+    }
+    let mut origins = request.headers().get_all(header::ORIGIN).iter();
+    if let Some(origin) = origins.next()
+        && (origins.next().is_some()
+            || !origin
+                .to_str()
+                .is_ok_and(|origin| same_host_origin(origin, host)))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "heap profile requires a same-host Origin header",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 async fn run_dump<F>(
     gate: std::sync::Arc<tokio::sync::Semaphore>,
     dump: F,
@@ -135,6 +246,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn host_policy() {
+        for (host, local, remote) in [
+            ("127.0.0.1", true, true),
+            ("127.0.0.1:6060", true, true),
+            ("::1", true, true),
+            ("[::1]", true, true),
+            ("[::1]:6060", true, true),
+            ("localhost:6060", true, true),
+            ("LOCALHOST", true, true),
+            ("[localhost]", false, false),
+            ("[localhost]:6060", false, false),
+            ("[127.0.0.1]", false, false),
+            ("localhost.", false, false),
+            ("evil.example", false, false),
+            ("evil.example:9646", false, false),
+            ("10.0.0.5:9646", false, true),
+            ("10.0.0.5", false, true),
+            ("[2001:db8::1]:6060", false, true),
+            ("2001:db8::1", false, true),
+            ("[::ffff:127.0.0.1]", true, true),
+            ("[::ffff:127.0.0.1]:6060", true, true),
+            ("", false, false),
+            ("127.0.0.1:abc", false, false),
+            ("127.0.0.1:", false, false),
+            ("[::1]:abc", false, false),
+            ("[::1]junk", false, false),
+            ("[::1", false, false),
+            (" localhost", false, false),
+        ] {
+            assert_eq!(allowed_host(host, false), local, "{host}");
+            assert_eq!(allowed_host(host, true), remote, "{host}");
+        }
+    }
+
+    #[test]
+    fn origin_policy() {
+        for (origin, expected) in [
+            ("http://localhost:6060", true),
+            ("https://LOCALHOST:6060/", true),
+            ("http://evil.example", false),
+            ("null", false),
+            ("http://localhost", false),
+            ("http://localhost:6060/path", false),
+            ("http://localhost:6060//", false),
+            ("http://localhost:6060?x", false),
+            ("http://localhost:6060#x", false),
+            ("://localhost:6060", false),
+            ("1http://localhost:6060", false),
+        ] {
+            assert_eq!(
+                same_host_origin(origin, "localhost:6060"),
+                expected,
+                "{origin}"
+            );
+        }
+        assert!(same_host_origin("http://[::1]:6060", "[::1]:6060"));
+    }
+
+    #[test]
     fn loopback_classification() {
         for (ip, expected) in [
             ("127.0.0.1", true),
@@ -169,17 +339,15 @@ mod tests {
     fn shared_listener_route_policy() {
         let loopback: SocketAddr = "127.0.0.1:9646".parse().unwrap();
         let remote: SocketAddr = "10.0.0.5:9646".parse().unwrap();
-        for (enabled, local, allow_remote, expected) in [
-            (false, loopback, false, false),
-            (false, remote, true, false),
-            (true, loopback, false, true),
-            (true, remote, false, false),
-            (true, remote, true, true),
+        for (local, allow_remote, expected) in [
+            (loopback, false, true),
+            (remote, false, false),
+            (remote, true, true),
         ] {
             assert_eq!(
-                serve_route(enabled, local, allow_remote),
+                serve_route(local, allow_remote),
                 expected,
-                "{enabled} {local} {allow_remote}"
+                "{local} {allow_remote}"
             );
         }
     }

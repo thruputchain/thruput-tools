@@ -2733,6 +2733,8 @@ mod tests {
             health.clone(),
             GatewayMetrics::for_tests(),
             shutdown_rx,
+            None,
+            false,
         )
         .await
         .expect("observability server should start");
@@ -2986,7 +2988,7 @@ mod tests {
             health.clone(),
             metrics,
             observability_shutdown_rx,
-            false,
+            None,
             false,
         )
         .await
@@ -3715,7 +3717,7 @@ mod tests {
             health.clone(),
             metrics.clone(),
             observability_shutdown_rx,
-            false,
+            None,
             false,
         )
         .await

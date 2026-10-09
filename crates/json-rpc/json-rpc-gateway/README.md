@@ -46,6 +46,11 @@ Heap profiling is opt-in on the existing private observability listener:
 - On a non-loopback `--observability-listen` address, the heap route stays 404
   unless `--pprof-allow-remote` or `GROUNDHOG_PPROF_ALLOW_REMOTE=1` is set.
   Metrics and health are unaffected; startup logs why the heap route is disabled.
+- The heap route answers only GET/HEAD, and only when the `Host` header is
+  `localhost` or a loopback IP (with the remote opt-in, any IP literal). DNS-name
+  Hosts and cross-origin `Origin` headers get 403 to block DNS rebinding, so remote
+  scrapes must address the listener by IP. `/metrics` and the health routes do not
+  check `Host`, so Prometheus can still scrape by hostname.
 - `GET /debug/pprof/heap` returns an uncompressed pprof protobuf with
   `Content-Type: application/octet-stream`.
 - Dump and conversion run on a blocking worker; a concurrent dump request returns HTTP 429.

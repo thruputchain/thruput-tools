@@ -45,7 +45,12 @@ fn decode(mut input: &[u8]) -> Vec<(u64, u64, &[u8])> {
 async fn heap_dump_has_marker_and_executable_build_id() {
     // SAFETY: this is the only test, and no other thread accesses the environment.
     unsafe { std::env::set_var("GROUNDHOG_HEAP_PROFILING", "1") };
-    assert!(groundhog_heap_profiling::initialize().await.unwrap());
+    assert!(
+        groundhog_heap_profiling::initialize()
+            .await
+            .unwrap()
+            .is_some()
+    );
     let retained = retain_heap_profile_marker();
     let profile = groundhog_heap_profiling::dump_pprof().unwrap();
     std::hint::black_box(&retained);
