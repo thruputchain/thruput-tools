@@ -14,6 +14,9 @@ pub enum RpcServerError {
         /// Signed evidence, independent of admission or execution status.
         evidence: LocalFundingErrorData,
     },
+    /// The selected committed snapshot did not meet the freshness floor.
+    #[error("view height unavailable: requested {}, observed {}", *.0.requested, *.0.observed)]
+    ViewHeightUnavailable(groundhog_json_rpc_types::view::ViewHeightUnavailable),
     /// Transaction was malformed.
     #[error("invalid transaction: {0}")]
     TxInvalid(String),
@@ -62,6 +65,7 @@ impl RpcServerError {
     pub fn code(&self) -> i32 {
         match self {
             Self::LocalFundingUnresolved { .. } => codes::LOCAL_FUNDING_UNRESOLVED,
+            Self::ViewHeightUnavailable(_) => codes::VIEW_HEIGHT_UNAVAILABLE,
             Self::TxInvalid(_) | Self::TxInvalidDetailed(_) => codes::TX_INVALID,
             Self::TxRejected(_) => codes::TX_REJECTED,
             Self::TxNotFound => codes::TX_NOT_FOUND,
@@ -80,6 +84,9 @@ impl From<RpcServerError> for ErrorObjectOwned {
         let code = err.code();
         if let RpcServerError::LocalFundingUnresolved { evidence, .. } = &err {
             return ErrorObjectOwned::owned(code, err.to_string(), Some(evidence));
+        }
+        if let RpcServerError::ViewHeightUnavailable(detail) = &err {
+            return ErrorObjectOwned::owned(code, err.to_string(), Some(detail));
         }
         if let RpcServerError::TxInvalidDetailed(detail) = &err {
             return ErrorObjectOwned::owned(code, err.to_string(), Some(detail));

@@ -5,6 +5,53 @@ use crate::events::EmittedEvent;
 use crate::hex::HexBytes;
 use crate::{BlockHeight, ContractAddress};
 
+/// Independent simulations against one committed snapshot, in request order.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ViewBatchRequest {
+    /// Nonempty calls bounded by the endpoint's advertised batch limits.
+    pub calls: Vec<ViewCall>,
+    /// Freshness floor on the selected snapshot. Does not wait or request a refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::decimal::option")]
+    #[schemars(with = "Option<crate::decimal::Decimal<BlockHeight>>")]
+    pub min_height: Option<BlockHeight>,
+}
+
+/// Ordered simulation results from a single committed snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewBatchResponse {
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+    pub height: BlockHeight,
+    pub results: Vec<ViewCallResult>,
+}
+
+/// One independent simulation's output and events; writes never reach another call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewCallResult {
+    pub output: RootInvocationOutput,
+    pub events: Vec<EmittedEvent>,
+    /// Gas consumed by this independent simulation.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
+    pub gas_used: u64,
+}
+
+/// Requested minimum height and the committed height of the selected snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewHeightUnavailable {
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+    pub requested: BlockHeight,
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+    pub observed: BlockHeight,
+}
+
 /// Request for sandboxed contract simulation against the latest committed state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -29,6 +76,54 @@ pub struct ViewRequest {
     #[serde(with = "crate::decimal::option")]
     #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
     pub gas_limit: Option<u64>,
+    /// Minimum committed snapshot height. Does not wait or force a refresh.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::decimal::option"
+    )]
+    #[schemars(with = "Option<crate::decimal::Decimal<BlockHeight>>")]
+    pub min_height: Option<BlockHeight>,
+}
+
+/// One batch entry. Freshness belongs to the group, never to an individual call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ViewCall {
+    pub contract: ContractAddress,
+    /// Contract entrypoint id. Must be exactly 8 bytes.
+    pub entrypoint: HexBytes,
+    pub calldata: HexBytes,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<ContractAddress>,
+    /// Optional per-call gas budget. The endpoint's per-call and aggregate limits apply.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::decimal::option"
+    )]
+    #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
+    pub gas_limit: Option<u64>,
+}
+
+impl From<ViewCall> for ViewRequest {
+    fn from(call: ViewCall) -> Self {
+        let ViewCall {
+            contract,
+            entrypoint,
+            calldata,
+            caller,
+            gas_limit,
+        } = call;
+        Self {
+            contract,
+            entrypoint,
+            calldata,
+            caller,
+            gas_limit,
+            min_height: None,
+        }
+    }
 }
 
 /// Result of sandboxed contract simulation.

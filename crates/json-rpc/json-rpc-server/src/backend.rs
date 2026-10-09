@@ -307,6 +307,17 @@ pub trait ReadPlane: Send + Sync + 'static {
 /// Backend plane for sandboxed contract simulation.
 #[async_trait]
 pub trait ViewPlane: Send + Sync + 'static {
+    /// Execute independent calls on one retained committed snapshot.
+    async fn view_batch(
+        &self,
+        _context: RpcRequestContext,
+        _request: groundhog_json_rpc_types::view::ViewBatchRequest,
+        _gas_limit: u64,
+        _limits: crate::ViewBatchConfig,
+    ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+        Err(RpcServerError::NotImplemented("viewBatch".into()))
+    }
+
     /// Execute a sandboxed contract simulation.
     ///
     /// `RootInvocationOutput::Abort` and `RootInvocationOutput::Fault`
@@ -317,6 +328,8 @@ pub trait ViewPlane: Send + Sync + 'static {
     /// `gas_limit` is the validated budget to put on the root view
     /// invocation: the request's `gasLimit`, or the server's `view_gas_limit`
     /// when the request names none. No gas is charged.
+    /// The shared server checks `min_height` against the returned execution
+    /// snapshot height. Adapters must not replace it with a later chain-tip sample.
     ///
     /// Backends should override this once they have a stable hogd view
     /// execution service. The default keeps the public method available

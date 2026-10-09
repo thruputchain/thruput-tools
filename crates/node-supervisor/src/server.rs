@@ -514,6 +514,8 @@ fn rpc_server_options(
         local_airdrop,
         backend_planes,
         view_gas_limit: config.view_gas_limit,
+        view_batch: config.view_batch,
+        view_timeout_ms: u64::try_from(config.view_timeout.as_millis()).unwrap_or(u64::MAX),
         block_driver_config: config.block_driver,
         rpc_max_connections: config.rpc_max_connections,
         rpc_batch_concurrency: config.rpc_batch_concurrency,
@@ -536,6 +538,8 @@ fn validated_local_airdrop_context(
 }
 
 struct RpcServerOptions {
+    view_batch: groundhog_json_rpc_server::ViewBatchConfig,
+    view_timeout_ms: u64,
     network_info: NetworkInfo,
     local_airdrop: Option<LocalAirdropContext>,
     backend_planes: BackendPlanes,
@@ -558,6 +562,8 @@ where
     V: groundhog_json_rpc_server::ViewPlane,
 {
     let RpcServerOptions {
+        view_batch,
+        view_timeout_ms,
         network_info,
         local_airdrop,
         backend_planes,
@@ -613,7 +619,10 @@ where
         read,
         view,
         network_info,
-        RpcServerConfig::default().with_view_gas_limit(view_gas_limit),
+        RpcServerConfig::default()
+            .with_view_gas_limit(view_gas_limit)
+            .with_view_timeout_ms(view_timeout_ms)
+            .with_view_batch(view_batch),
         BuildInfo::from_build_version(
             groundhog_json_rpc_server::build_version!(),
             option_env!("GIT_COMMIT"),

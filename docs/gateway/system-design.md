@@ -30,6 +30,51 @@ Backend responsibilities are distinct:
 The [runtime manifest](runtime-manifest.md) connects local tools to those
 services. Production topology comes from gateway configuration.
 
+## Shared-snapshot reads
+
+Single `groundhog_view` calls also accept `minHeight`. The shared RPC server
+checks the height returned by the existing single-view execution path and rejects
+an older result with `ViewHeightUnavailable`. Omitting the option preserves the
+normal single-view behavior. Single views retain their own gas, response, and
+deadline policy; they do not inherit aggregate batch limits.
+
+`groundhog_viewBatch` runs independent calls against one committed snapshot.
+Calls retain input order and do not share simulated writes. A failed snapshot
+attempt discards all partial results; hogd retries the group at most three times.
+
+`minHeight` is a freshness floor. If the selected snapshot is older, the request
+returns `ViewHeightUnavailable` with requested and observed heights. It does not
+wait for a block or request a snapshot refresh. Hogd maintains snapshots through
+its shared refresh worker; callers choose whether and when to retry.
+For a batch, the floor belongs to the group. A `minHeight` field inside a call
+entry is rejected rather than ignored.
+
+Batch limits are operator policy, not consensus parameters. The gateway's TOML
+defaults are:
+
+```toml
+view_timeout_ms = 30000
+
+[view_batch]
+max_calls = 16
+max_calldata_bytes = 65536
+max_gas = 160000000
+max_response_bytes = 1048576
+```
+
+The shared server validates call count, aggregate calldata, and declared gas.
+Per-call view limits also apply. The aggregate gas cap is checked in RPC before
+dispatch; hogd enforces each call's gas limit. Hogd also receives the remaining
+time and encoded response-size budget, and checks them during execution. The
+response-size budget includes events and measures XDR bytes; the public JSON
+response and transport message caps still apply. Timeout settings bound the
+public response wait, not cancellation of running VM work or database I/O.
+
+`serverLimits.viewBatch` advertises the endpoint policy. The embedded supervisor
+uses the same `ViewBatchConfig` and its existing `view_timeout` setting. Limits
+can change between requests; clients must handle rejections and must not split a
+group into separate snapshots automatically.
+
 ## Admission and transaction outcomes
 
 Successful submission means the authoritative mempool admitted the transaction.

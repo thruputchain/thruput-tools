@@ -22,6 +22,114 @@ use xdr_common::{BytesM, VecM};
 
 use crate::event::parse_emitted_events;
 
+/// Build a batch with the remaining caller budget, rounded down to milliseconds.
+pub fn view_batch_query(
+    request: groundhog_json_rpc_types::view::ViewBatchRequest,
+    gas_limit: u64,
+    remaining: std::time::Duration,
+    limits: groundhog_json_rpc_server::ViewBatchConfig,
+) -> Result<groundhog_view::ViewGatewayBatchQuery, RpcServerError> {
+    let millis = remaining.as_millis().min(u128::from(u32::MAX));
+    let budget_millis = u32::try_from(millis).map_err(|_| RpcServerError::BackendTimeout)?;
+    if budget_millis == 0 {
+        return Err(RpcServerError::BackendTimeout);
+    }
+    Ok(groundhog_view::ViewGatewayBatchQuery {
+        calls: VecM(
+            request
+                .calls
+                .into_iter()
+                .map(|call| {
+                    let call_gas = call.gas_limit.unwrap_or(gas_limit);
+                    view_query(call.into(), call_gas)
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+        min_height: request.min_height,
+        budget_millis,
+        max_response_bytes: limits.max_response_bytes,
+    })
+}
+
+/// Decode one complete batch. Malformed, incomplete, or stale results fail the group.
+pub fn view_batch_response(
+    service: &str,
+    query: &groundhog_view::ViewGatewayBatchQuery,
+    result: groundhog_view::ViewGatewayBatchResult,
+) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+    use groundhog_json_rpc_types::view::{
+        ViewBatchResponse, ViewCallResult, ViewHeightUnavailable,
+    };
+    use groundhog_view::{ViewGatewayBatchOutcome as Outcome, ViewGatewayBatchResult};
+    match result {
+        ViewGatewayBatchResult::ViewGatewayBatchOk { payload } => {
+            if payload.results.0.len() != query.calls.0.len()
+                || *payload.height < 0
+                || query
+                    .min_height
+                    .as_ref()
+                    .is_some_and(|min| &payload.height < min)
+            {
+                return Err(RpcServerError::BackendUnavailable(format!(
+                    "{service} returned an incomplete or stale batch"
+                )));
+            }
+            let results = payload
+                .results
+                .0
+                .into_iter()
+                .map(|result| {
+                    let parsed = parse_emitted_events(result.events);
+                    if parsed.dropped != 0 {
+                        return Err(RpcServerError::BackendUnavailable(format!(
+                            "{service} returned malformed batch events"
+                        )));
+                    }
+                    Ok(ViewCallResult {
+                        gas_used: result.gas_consumed,
+                        output: root_output(service, result.output)?,
+                        events: parsed.events,
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(ViewBatchResponse {
+                height: payload.height,
+                results,
+            })
+        }
+        ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable { height_unavailable } => Err(
+            RpcServerError::ViewHeightUnavailable(ViewHeightUnavailable {
+                requested: height_unavailable.requested,
+                observed: height_unavailable.observed,
+            }),
+        ),
+        ViewGatewayBatchResult::Default { outcome }
+            if outcome == Outcome::ViewGatewayBatchDeadlineExceeded.0 =>
+        {
+            Err(RpcServerError::BackendTimeout)
+        }
+        ViewGatewayBatchResult::Default { outcome }
+            if outcome == Outcome::ViewGatewayBatchInvalidRequest.0 =>
+        {
+            Err(RpcServerError::InvalidParam(
+                "viewBatch exceeds backend request limits".into(),
+            ))
+        }
+        ViewGatewayBatchResult::Default { outcome }
+            if outcome == Outcome::ViewGatewayBatchResponseTooLarge.0 =>
+        {
+            Err(RpcServerError::InvalidParam(
+                "viewBatch response exceeds the endpoint limit; request fewer calls or events"
+                    .into(),
+            ))
+        }
+        other => Err(RpcServerError::BackendUnavailable(format!(
+            "{service} batch failed: {:?}",
+            other.outcome()
+        ))),
+    }
+}
+
 /// A decoded view answer and the events it dropped as malformed.
 #[derive(Debug)]
 pub struct ViewOutcome {
@@ -32,6 +140,7 @@ pub struct ViewOutcome {
 }
 
 /// Translate a public view request into hogd's query shape.
+/// The shared RPC server checks minimum height against the execution response.
 pub fn view_query(
     request: ViewRequest,
     gas_limit: u64,
@@ -136,5 +245,125 @@ pub fn view_outcome(
                  client for this protocol"
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use groundhog_json_rpc_types::view::ViewBatchRequest;
+    use groundhog_view::{ViewGatewayBatchPayload, ViewGatewayBatchResult};
+    use groundhog_xdr::view::TransactionViewResult;
+    use std::time::Duration;
+
+    fn query() -> groundhog_view::ViewGatewayBatchQuery {
+        view_batch_query(
+            ViewBatchRequest {
+                calls: vec![groundhog_json_rpc_types::view::ViewCall {
+                    gas_limit: Some(123),
+                    contract: groundhog_xdr::types::ContractAddress::from([7; 32]).into(),
+                    entrypoint: HexBytes(vec![0; 8]),
+                    calldata: HexBytes(vec![1]),
+                    caller: Some(groundhog_xdr::types::ContractAddress::from([8; 32]).into()),
+                }],
+                min_height: Some(42.into()),
+            },
+            10_000_000,
+            Duration::from_millis(999),
+            groundhog_json_rpc_server::ViewBatchConfig::default(),
+        )
+        .unwrap()
+    }
+
+    fn result(height: i64, outputs: Vec<InvocationFrameOutput>) -> ViewGatewayBatchResult {
+        ViewGatewayBatchResult::ViewGatewayBatchOk {
+            payload: ViewGatewayBatchPayload {
+                height: height.into(),
+                results: VecM(
+                    outputs
+                        .into_iter()
+                        .map(|output| TransactionViewResult {
+                            gas_consumed: 12,
+                            output,
+                            events: VecM(vec![]),
+                        })
+                        .collect(),
+                ),
+            },
+        }
+    }
+
+    #[test]
+    fn batch_preserves_caller_budget_and_fault_as_a_result() {
+        let query = query();
+        assert_eq!(query.budget_millis, 999);
+        assert_eq!(query.max_response_bytes, 1_048_576);
+        assert_eq!(query.calls.0[0].invocation.gas_limit, 123);
+        assert_eq!(
+            query.calls.0[0].parent_address.as_ref().unwrap().as_ref(),
+            &[8; 32]
+        );
+        let response = view_batch_response(
+            "test",
+            &query,
+            result(42, vec![InvocationFrameOutput::Fault]),
+        )
+        .unwrap();
+        assert_eq!(*response.height, 42);
+        assert_eq!(response.results[0].gas_used, 12);
+        assert!(matches!(
+            response.results[0].output,
+            RootInvocationOutput::Fault
+        ));
+    }
+
+    #[test]
+    fn batch_rejects_partial_extra_and_stale_results() {
+        for result in [
+            result(42, vec![]),
+            result(41, vec![InvocationFrameOutput::Fault]),
+            result(42, vec![InvocationFrameOutput::Fault; 2]),
+        ] {
+            assert!(matches!(
+                view_batch_response("test", &query(), result),
+                Err(RpcServerError::BackendUnavailable(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn batch_propagates_operator_budgets_without_a_protocol_timeout_cap() {
+        let request = ViewBatchRequest {
+            calls: vec![],
+            min_height: None,
+        };
+        let limits = groundhog_json_rpc_server::ViewBatchConfig {
+            max_response_bytes: 321,
+            ..Default::default()
+        };
+        let query = view_batch_query(request.clone(), 123, Duration::from_mins(1), limits).unwrap();
+        assert_eq!(query.budget_millis, 60_000);
+        assert_eq!(query.max_response_bytes, 321);
+        assert!(matches!(
+            view_batch_query(request, 123, Duration::ZERO, limits),
+            Err(RpcServerError::BackendTimeout)
+        ));
+    }
+
+    #[test]
+    fn batch_failure_maps_height_details_and_deadline() {
+        let result = ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
+            height_unavailable: groundhog_view::ViewGatewayHeightUnavailable {
+                requested: 42.into(),
+                observed: 41.into(),
+            },
+        };
+        let error = view_batch_response("test", &query(), result).unwrap_err();
+        assert!(matches!(error, RpcServerError::ViewHeightUnavailable(_)));
+        let result = ViewGatewayBatchResult::Default { outcome: 4 };
+        assert!(matches!(
+            view_batch_response("test", &query(), result),
+            Err(RpcServerError::BackendTimeout)
+        ));
     }
 }

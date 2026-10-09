@@ -92,6 +92,40 @@ impl HogdDevViewBackend {
 
 #[async_trait]
 impl ViewPlane for HogdDevViewBackend {
+    #[tracing::instrument(skip_all)]
+    async fn view_batch(
+        &self,
+        context: RpcRequestContext,
+        request: groundhog_json_rpc_types::view::ViewBatchRequest,
+        gas_limit: u64,
+        limits: groundhog_json_rpc_server::ViewBatchConfig,
+    ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+        let Self::Gateway {
+            client,
+            request_timeout,
+        } = self
+        else {
+            return Err(RpcServerError::NotImplemented("viewBatch".into()));
+        };
+        let context = context.capped(*request_timeout);
+        let query = shared_view::view_batch_query(
+            request,
+            gas_limit,
+            context.remaining().ok_or(RpcServerError::BackendTimeout)?,
+            limits,
+        )?;
+        let result = within_request_deadline(context, async {
+            client
+                .viewgateway_view_batch(&query)
+                .await
+                .map_err(|source| {
+                    RpcServerError::BackendUnavailable(format!("{VIEW_GATEWAY}: {source}"))
+                })
+        })
+        .await?;
+        shared_view::view_batch_response(VIEW_GATEWAY, &query, result)
+    }
+
     #[tracing::instrument(
         skip_all,
         fields(

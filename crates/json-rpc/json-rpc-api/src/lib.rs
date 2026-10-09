@@ -25,7 +25,7 @@ use groundhog_json_rpc_types::{
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     version::VersionInfo,
-    view::{ViewRequest, ViewResponse},
+    view::{ViewBatchRequest, ViewBatchResponse, ViewRequest, ViewResponse},
 };
 
 /// Wire-format `SemVer` for the JSON-RPC surface.
@@ -173,8 +173,22 @@ pub trait GroundhogApi {
     /// snapshot the view ran against. `gasLimit` is optional: absent runs under the
     /// endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is
     /// rejected as an invalid parameter.
+    /// Optional `minHeight` requires that execution snapshot to be at least the
+    /// requested committed height. An older result returns `ViewHeightUnavailable`.
+    /// This is a freshness floor, not a historical selector, wait, or refresh request.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
+
+    /// Simulate independent calls against one committed snapshot.
+    /// Results preserve input order and include return, abort, or fault with events.
+    /// Calls do not observe each other's writes. Abandoned snapshots retry the whole
+    /// group, up to three attempts. There is no partial success or automatic chunking.
+    /// Operator limits are advertised by `serverLimits`. The response deadline is
+    /// strict, but running backend work may outlive it. The minimum height is a
+    /// freshness floor, not a wait or refresh request. The returned height is
+    /// committed H, with execution context H+1.
+    #[method(name = "viewBatch")]
+    async fn view_batch(&self, request: ViewBatchRequest) -> RpcResult<ViewBatchResponse>;
 
     /// Version dimensions for this JSON-RPC server.
     #[method(name = "version")]

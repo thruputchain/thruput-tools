@@ -663,6 +663,7 @@ async fn view_entrypoint_length_validated_for_all_shapes() {
         for entrypoint_len in [7, 9] {
             let svc = server(backend.clone());
             let request = ViewRequest {
+                min_height: None,
                 contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
                 entrypoint: HexBytes(vec![0u8; entrypoint_len]),
                 calldata: HexBytes(vec![]),
@@ -685,6 +686,7 @@ async fn view_calldata_length_validated_for_all_shapes() {
     for backend in all_shapes() {
         let svc = server(backend);
         let request = ViewRequest {
+            min_height: None,
             contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![0u8; MAX_VIEW_CALLDATA_BYTES + 1]),
@@ -706,6 +708,7 @@ async fn view_returns_not_implemented_until_backend_support_lands_for_all_shapes
     for backend in all_shapes() {
         let svc = server(backend);
         let request = ViewRequest {
+            min_height: None,
             contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
@@ -738,6 +741,7 @@ async fn view_success_outputs_round_trip_for_all_shapes() {
         for output in cases.clone() {
             let svc = server_with_view(backend.clone(), ScriptedViewBackend::new(output.clone()));
             let request = ViewRequest {
+                min_height: None,
                 contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
                 entrypoint: HexBytes(vec![0u8; 8]),
                 calldata: HexBytes(vec![]),

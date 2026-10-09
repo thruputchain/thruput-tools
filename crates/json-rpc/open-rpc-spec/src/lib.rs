@@ -91,6 +91,10 @@ fn error_object(info: &RpcErrorInfo) -> serde_json::Value {
 /// JSON Schema of the structured `data` a documented error may carry.
 fn error_data_schema(code: i32) -> Option<serde_json::Value> {
     let schema = match code {
+        codes::VIEW_HEIGHT_UNAVAILABLE => SchemaSettings::draft2020_12()
+            .with(|settings| settings.meta_schema = None)
+            .into_generator()
+            .into_root_schema_for::<groundhog_json_rpc_api::types::view::ViewHeightUnavailable>(),
         codes::TX_INVALID => SchemaSettings::draft2020_12()
             .with(|settings| settings.meta_schema = None)
             .into_generator()
@@ -106,6 +110,14 @@ fn error_data_schema(code: i32) -> Option<serde_json::Value> {
 
 fn method_error_codes(method: &str) -> &'static [i32] {
     match method {
+        "groundhog_view" | "groundhog_viewBatch" => &[
+            codes::INVALID_PARAMS,
+            codes::VIEW_HEIGHT_UNAVAILABLE,
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+            codes::NOT_IMPLEMENTED,
+        ],
         "groundhog_sendRawTransaction" => &[
             codes::INVALID_PARAMS,
             codes::TX_INVALID,
@@ -135,8 +147,7 @@ fn method_error_codes(method: &str) -> &'static [i32] {
         | "groundhog_getAddressAuthData"
         | "groundhog_getEvents"
         | "groundhog_getTransactionsByAddress"
-        | "groundhog_getStorageAt"
-        | "groundhog_view" => &[
+        | "groundhog_getStorageAt" => &[
             codes::INVALID_PARAMS,
             codes::BACKEND_UNAVAILABLE,
             codes::BACKEND_TIMEOUT,

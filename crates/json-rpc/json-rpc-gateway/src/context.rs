@@ -927,6 +927,12 @@ mod tests {
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for IntroRejectedViewGateway {
+        async fn viewgateway_view_batch(
+            &self,
+            _: groundhog_view::ViewGatewayBatchQuery,
+        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            panic!("batch is not used by this connection test")
+        }
         async fn viewgateway_intro(
             &self,
             _arg0: Protocol,
@@ -1046,6 +1052,12 @@ mod tests {
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for ProtocolCheckingViewGateway {
+        async fn viewgateway_view_batch(
+            &self,
+            _: groundhog_view::ViewGatewayBatchQuery,
+        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            panic!("batch is not used by this connection test")
+        }
         async fn viewgateway_intro(
             &self,
             arg0: Protocol,
@@ -1067,6 +1079,12 @@ mod tests {
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for SlowIntroViewGateway {
+        async fn viewgateway_view_batch(
+            &self,
+            _: groundhog_view::ViewGatewayBatchQuery,
+        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            panic!("batch is not used by this connection test")
+        }
         async fn viewgateway_intro(
             &self,
             _arg0: Protocol,

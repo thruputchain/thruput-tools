@@ -106,6 +106,7 @@ fn every_catalog_code_maps_to_bounded_outcome() {
         "not_implemented",
         "backend_unavailable",
         "backend_timeout",
+        "view_height_unavailable",
         "overloaded",
         "internal_error",
     ];
@@ -147,7 +148,7 @@ fn outcome_mapping_is_exact() {
         // pre-dispatch error is only visible to HTTP transport metrics. The
         // Groundhog application catalog owns -32010 as BlockNotFound.
         (-32010, "not_found"),
-        (-32011, "internal_error"),
+        (codes::VIEW_HEIGHT_UNAVAILABLE, "view_height_unavailable"),
     ];
 
     for (code, outcome) in cases {

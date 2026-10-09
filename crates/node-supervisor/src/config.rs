@@ -123,6 +123,8 @@ pub struct NodeSupervisorConfig {
     pub view_gas_limit: u64,
     /// Maximum time to wait for one hogd-dev `ViewGateway` execution RPC.
     pub view_timeout: Duration,
+    /// Aggregate limits for shared-snapshot reads.
+    pub view_batch: groundhog_json_rpc_server::ViewBatchConfig,
     /// Local block production policy for hogd-dev scheduler coordination.
     pub block_driver: BlockDriverConfig,
     /// Optional local airdrop behavior and resource bounds.
@@ -141,6 +143,7 @@ impl Default for NodeSupervisorConfig {
             hogd_protocol_override: None,
             view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             view_timeout: DEFAULT_HOGD_DEV_VIEW_TIMEOUT,
+            view_batch: groundhog_json_rpc_server::ViewBatchConfig::default(),
             block_driver: BlockDriverConfig::default(),
             local_airdrop: LocalAirdropConfig::default(),
             bundle_identity: None,
@@ -149,6 +152,15 @@ impl Default for NodeSupervisorConfig {
 }
 
 impl NodeSupervisorConfig {
+    /// Set aggregate shared-read limits. Per-call view limits also apply.
+    #[must_use]
+    pub const fn with_view_batch(
+        mut self,
+        limits: groundhog_json_rpc_server::ViewBatchConfig,
+    ) -> Self {
+        self.view_batch = limits;
+        self
+    }
     /// Return a copy with a validated per-array JSON-RPC concurrency limit.
     #[must_use]
     pub const fn with_rpc_batch_concurrency(

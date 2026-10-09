@@ -7,33 +7,33 @@ const PUBLIC_BASE_URL: &str =
 fn embedded_catalog_pins_the_published_default_matrix() {
     let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
 
-    assert_eq!(catalog.default_version(), "0.1.30-rc.5");
+    assert_eq!(catalog.default_version(), "0.1.30-rc.6");
     assert_eq!(
         catalog.resolve_version(None).expect("bug: default exists"),
-        "0.1.30-rc.5"
+        "0.1.30-rc.6"
     );
 
     let expected = [
         (
             HostTarget::LinuxX86_64,
-            "fd9932e0f406b4fb19ce29d44ebb1cd0ee858492bc1ebee9fc3061ff9199b63d",
-            9_420_840,
+            "73e0ebd9b1432787e9d87b92197935ed485bfe584e87d1f4806e6fb94d98abf7",
+            9_445_349,
         ),
         (
             HostTarget::LinuxAarch64,
-            "94821c923ff038cb6af21eaae240e03441030b8b0c387f63fa44317d7da93b5b",
-            8_665_733,
+            "681377ed419ec5bef5528350b0ea0729f7e676532414307321685f1b20681836",
+            8_689_598,
         ),
         (
             HostTarget::MacosAarch64,
-            "194d8a8ca9079498ed47ef8d9d08a040ec2f2ae38e6a0c4fe3115935da969d85",
-            10_658_247,
+            "bac8f09086bfb76f9aef4f5fa2c5d1ac9b66063f2fee73ee9ba5b0267c82bb43",
+            10_685_668,
         ),
     ];
 
     for (target, sha256, size) in expected {
         let artifact = catalog
-            .artifact("0.1.30-rc.5", target)
+            .artifact("0.1.30-rc.6", target)
             .expect("bug: default target should exist");
         assert_eq!(artifact.sha256(), sha256);
         assert_eq!(artifact.size(), size);
@@ -52,7 +52,13 @@ fn embedded_catalog_keeps_earlier_releases_selectable() {
     let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
 
     // Users may have saved an earlier default as their selected version.
-    for version in ["0.1.29-rc.5", "0.1.30-rc.1", "0.1.30-rc.2", "0.1.30-rc.3"] {
+    for version in [
+        "0.1.29-rc.5",
+        "0.1.30-rc.1",
+        "0.1.30-rc.2",
+        "0.1.30-rc.3",
+        "0.1.30-rc.5",
+    ] {
         assert_eq!(
             catalog
                 .resolve_version(Some(version))
@@ -219,7 +225,8 @@ fn catalog_rejects_malformed_runtime_minimums() {
 fn artifact_enforces_its_catalog_runtime_minimum_on_the_current_host() {
     let target = HostTarget::current().unwrap();
     let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes()).unwrap();
-    value["versions"]["0.1.30-rc.5"]["targets"][target.triple()]["compatibility"]["minimumVersion"] =
+    let version = value["defaultVersion"].as_str().unwrap().to_owned();
+    value["versions"][&version]["targets"][target.triple()]["compatibility"]["minimumVersion"] =
         "999999.0".into();
     let catalog = Catalog::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(matches!(

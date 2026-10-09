@@ -468,6 +468,7 @@ impl GatewayMetrics {
             "groundhog_getBalance" => "groundhog_getBalance",
             "groundhog_getAddressAuthData" => "groundhog_getAddressAuthData",
             "groundhog_view" => "groundhog_view",
+            "groundhog_viewBatch" => "groundhog_viewBatch",
             "groundhog_networkInfo" => "groundhog_networkInfo",
             "groundhog_requestAirdrop" => "groundhog_requestAirdrop",
             "groundhog_version" => "groundhog_version",
@@ -854,6 +855,7 @@ mod tests {
             "groundhog_getBalance",
             "groundhog_getAddressAuthData",
             "groundhog_view",
+            "groundhog_viewBatch",
             "groundhog_networkInfo",
             "groundhog_version",
         ] {
