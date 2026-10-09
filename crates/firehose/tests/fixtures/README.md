@@ -25,7 +25,7 @@ These preserve hogd-produced roots as an independent compatibility oracle for
 the Rust verifier. No key material is included; accounts use the public local
 development seed.
 
-To recapture, install the catalog node with `groundhog toolchain install`,
+To recapture, install the catalog node with `thruput toolchain install`,
 start `hog-devnode --dev-accounts 2`, discover its event endpoint, and run
 `hog-firehose tail` into a fresh archive. Capture height 1, run
 `examples/drive_blocks.rs` for 30 empty blocks, submit 100 calls with

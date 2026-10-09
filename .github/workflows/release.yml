@@ -19,7 +19,7 @@ env:
   CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
   RELEASE_CRATES: >-
     groundhog-bundle-identity
-    groundhog-cli
+    thruput-cli
     groundhog-rv32-lower
 
 permissions:
@@ -38,21 +38,21 @@ jobs:
             release_target: x86_64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-2604
             artifact_name: groundhog-rpc-x86_64-release-artifacts
-            release_apps: hog-gateway groundhog rv32-lower hogsim groundhog-faucet
+            release_apps: hog-gateway thruput rv32-lower hogsim groundhog-faucet
           - architecture: arm64
             machine: aarch64
             platform: linux
             release_target: aarch64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-arm64
             artifact_name: groundhog-rpc-arm64-release-artifacts
-            release_apps: hog-gateway groundhog rv32-lower hogsim groundhog-faucet
+            release_apps: hog-gateway thruput rv32-lower hogsim groundhog-faucet
           - architecture: arm64
             machine: arm64
             platform: macos
             release_target: aarch64-apple-darwin
             runner: namespace-profile-hogd-arm64-macos
             artifact_name: groundhog-rpc-macos-arm64-release-artifacts
-            release_apps: groundhog
+            release_apps: thruput
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -70,7 +70,7 @@ jobs:
 
       - name: Read crate version
         run: |
-          crate_id=$(cargo pkgid --locked -p groundhog-cli)
+          crate_id=$(cargo pkgid --locked -p thruput-cli)
           crate_version=${crate_id##*[@#]}
           test -n "$crate_version"
           echo "CRATE_VERSION=$crate_version" >> "$GITHUB_ENV"
@@ -105,7 +105,7 @@ jobs:
           fi
           for crate in $RELEASE_CRATES; do
             cargo info "${crate}@${VERSION}" --registry groundhog >/dev/null
-            echo "OK: ${crate}@${VERSION} exists in the groundhog registry"
+            echo "OK: ${crate}@${VERSION} exists in the thruput registry"
           done
 
       - name: Verify component version and source wiring
@@ -115,15 +115,15 @@ jobs:
           export GROUNDHOG_SOURCE_COMMIT="$source_commit"
           cargo build --locked --release \
             -p groundhog-json-rpc-gateway \
-            -p groundhog-cli \
+            -p thruput-cli \
             -p groundhog-rv32-lower \
             -p groundhog-sim \
             -p groundhog-faucet \
             --bins
 
-          for app in hog-gateway groundhog rv32-lower hogsim groundhog-faucet; do
+          for app in hog-gateway thruput rv32-lower hogsim groundhog-faucet; do
             app_version="$CRATE_VERSION"
-            if [ "$app" = groundhog ] || [ "$app" = hog-gateway ]; then
+            if [ "$app" = thruput ] || [ "$app" = hog-gateway ]; then
               app_version="$CRATE_VERSION (commit ${source_commit:0:8})"
             fi
             test "$(target/release/$app --version)" = "$app $app_version"
@@ -147,7 +147,7 @@ jobs:
           for app in $RELEASE_APPS; do
             case "$app" in
               hog-gateway) package_args+=(-p groundhog-json-rpc-gateway) ;;
-              groundhog) package_args+=(-p groundhog-cli) ;;
+              thruput) package_args+=(-p thruput-cli) ;;
               rv32-lower) package_args+=(-p groundhog-rv32-lower) ;;
               hogsim) package_args+=(-p groundhog-sim) ;;
               groundhog-faucet) package_args+=(-p groundhog-faucet) ;;
@@ -165,16 +165,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          file target/release/groundhog | grep -q 'Mach-O 64-bit executable arm64'
-          codesign --verify --strict --verbose=4 target/release/groundhog
+          file target/release/thruput | grep -q 'Mach-O 64-bit executable arm64'
+          codesign --verify --strict --verbose=4 target/release/thruput
 
           unexpected_deps=$(
-            otool -L target/release/groundhog \
+            otool -L target/release/thruput \
               | tail -n +2 \
               | awk '$1 !~ /^\/System\/Library\// && $1 !~ /^\/usr\/lib\// { print $1 }'
           )
           if [ -n "$unexpected_deps" ]; then
-            echo "groundhog has non-system macOS dependencies:" >&2
+            echo "thruput has non-system macOS dependencies:" >&2
             echo "$unexpected_deps" >&2
             exit 1
           fi
@@ -212,7 +212,7 @@ jobs:
             test -f "$verify_dir/$archive_base/README.md"
             test -f "$verify_dir/$archive_base/LICENSE"
             expected_version=${EXPECTED_BINARY_VERSION}
-            if [ "$app" = groundhog ] || [ "$app" = hog-gateway ]; then
+            if [ "$app" = thruput ] || [ "$app" = hog-gateway ]; then
               expected_version="$CRATE_VERSION (commit ${EXPECTED_SOURCE_COMMIT:0:8})"
             fi
             test "$("$verify_dir/$archive_base/$app" --version)" = "$app $expected_version"

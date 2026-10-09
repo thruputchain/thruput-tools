@@ -55,7 +55,7 @@ impl SubmittedContractCall {
 /// Compute the entrypoint selector for a contract method.
 ///
 /// It is derived from the contract's interface `name`, `version`, and `method`
-/// name exactly as the `groundhog` CLI derives selectors, so tests can name
+/// name exactly as the `thruput` CLI derives selectors, so tests can name
 /// methods instead of pasting raw hex (which drifts whenever a fixture is
 /// rebuilt).
 ///

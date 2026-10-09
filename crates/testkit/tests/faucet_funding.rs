@@ -8,11 +8,11 @@ use groundhog_testkit::rpc_types::hex::Hex0x;
 use groundhog_testkit::{Agent, NetworkConfig, Scenario};
 
 #[tokio::test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY"]
 async fn repeated_existing_scenarios_fund_the_same_native_account() {
     const AMOUNT: u128 = 100_000_000;
     let mut hogd = HogdDevConfig::default();
-    if let Ok(binary) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+    if let Ok(binary) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         hogd = hogd.with_binary_path(binary);
     }
     if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {

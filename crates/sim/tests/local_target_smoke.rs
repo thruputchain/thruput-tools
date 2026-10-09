@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-const DEVNODE_BINARY_ENV: &str = "GROUNDHOG_DEVNODE_BINARY";
-const SIM_GROUNDHOG_BINARY_ENV: &str = "GROUNDHOG_SIM_GROUNDHOG_BINARY";
-const GROUNDHOG_BINARY_ENV: &str = "GROUNDHOG_BINARY";
+const DEVNODE_BINARY_ENV: &str = "THRUPUT_DEVNODE_BINARY";
+const SIM_THRUPUT_BINARY_ENV: &str = "THRUPUT_SIM_CLI_BINARY";
+const THRUPUT_BINARY_ENV: &str = "THRUPUT_BINARY";
 
 const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
     CatalogScenario {
@@ -199,10 +199,10 @@ struct CatalogScenario {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY"]
 fn local_target_chain_tip_smoke() {
     let hogd_dev_binary = hog_devnode_binary_env();
-    let groundhog_binary = groundhog_binary_env();
+    let thruput_binary = thruput_binary_env();
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
@@ -215,8 +215,8 @@ fn local_target_chain_tip_smoke() {
     command
         .arg("run")
         .arg(&scenario)
-        .arg("--groundhog-binary")
-        .arg(groundhog_binary)
+        .arg("--thruput-binary")
+        .arg(thruput_binary)
         .arg("--hog-devnode-binary")
         .arg(hogd_dev_binary);
     add_hogd_protocol_arg(&mut command);
@@ -245,7 +245,7 @@ fn local_target_chain_tip_smoke() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY"]
 fn local_scenario_catalog_smoke() {
     run_catalog(LOCAL_FAST_CATALOG);
     if std::env::var("GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT").is_ok() {
@@ -256,7 +256,7 @@ fn local_scenario_catalog_smoke() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY and GROUNDHOG_SIM_RUN_SOAKS=1"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY and GROUNDHOG_SIM_RUN_SOAKS=1"]
 fn local_scenario_catalog_soak() {
     if std::env::var("GROUNDHOG_SIM_RUN_SOAKS").as_deref() != Ok("1") {
         eprintln!("skipping soak catalog; set GROUNDHOG_SIM_RUN_SOAKS=1 to run it");
@@ -266,10 +266,10 @@ fn local_scenario_catalog_soak() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY"]
 fn local_restart_target_chain_tip_smoke() {
     let hogd_dev_binary = hog_devnode_binary_env();
-    let groundhog_binary = groundhog_binary_env();
+    let thruput_binary = thruput_binary_env();
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
@@ -282,8 +282,8 @@ fn local_restart_target_chain_tip_smoke() {
     command
         .arg("run")
         .arg(&scenario)
-        .arg("--groundhog-binary")
-        .arg(groundhog_binary)
+        .arg("--thruput-binary")
+        .arg(thruput_binary)
         .arg("--hog-devnode-binary")
         .arg(hogd_dev_binary);
     add_hogd_protocol_arg(&mut command);
@@ -370,10 +370,10 @@ fn local_restart_target_chain_tip_smoke() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY"]
 fn local_target_sweep_orphan_smoke() {
     let hogd_dev_binary = hog_devnode_binary_env();
-    let groundhog_binary = groundhog_binary_env();
+    let thruput_binary = thruput_binary_env();
     let root = tempfile::tempdir().expect("temp dir should be created");
     let run_dir = root.path().join("orphan-run");
     let scenario = root.path().join("sweep-orphan.json");
@@ -396,8 +396,8 @@ fn local_target_sweep_orphan_smoke() {
     command
         .arg("run")
         .arg(&scenario)
-        .arg("--groundhog-binary")
-        .arg(groundhog_binary)
+        .arg("--thruput-binary")
+        .arg(thruput_binary)
         .arg("--hog-devnode-binary")
         .arg(hogd_dev_binary);
     add_hogd_protocol_arg(&mut command);
@@ -515,7 +515,7 @@ fn assert_rpc_port_closed(rpc_url: &str) {
 
 fn run_catalog(catalog: &[CatalogScenario]) {
     let hogd_dev_binary = hog_devnode_binary_env();
-    let groundhog_binary = groundhog_binary_env();
+    let thruput_binary = thruput_binary_env();
     let repo_root = repo_root();
     let (root, _temp_guard) = catalog_root();
     eprintln!("catalog root {}", root.display());
@@ -527,8 +527,8 @@ fn run_catalog(catalog: &[CatalogScenario]) {
         command
             .arg("run")
             .arg(&scenario_path)
-            .arg("--groundhog-binary")
-            .arg(&groundhog_binary)
+            .arg("--thruput-binary")
+            .arg(&thruput_binary)
             .arg("--hog-devnode-binary")
             .arg(&hogd_dev_binary);
         if scenario.expect_contract_view
@@ -619,13 +619,13 @@ fn hog_devnode_binary_env() -> String {
         .unwrap_or_else(|| panic!("set {DEVNODE_BINARY_ENV} to a hog-devnode binary"))
 }
 
-fn groundhog_binary_env() -> String {
-    first_non_empty_env(&[SIM_GROUNDHOG_BINARY_ENV, GROUNDHOG_BINARY_ENV]).unwrap_or_else(|| {
-        let local_binary = repo_root().join("target/debug/groundhog");
+fn thruput_binary_env() -> String {
+    first_non_empty_env(&[SIM_THRUPUT_BINARY_ENV, THRUPUT_BINARY_ENV]).unwrap_or_else(|| {
+        let local_binary = repo_root().join("target/debug/thruput");
         if local_binary.is_file() {
             local_binary.display().to_string()
         } else {
-            "groundhog".into()
+            "thruput".into()
         }
     })
 }

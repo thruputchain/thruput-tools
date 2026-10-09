@@ -6,10 +6,10 @@
 # GROUNDHOG_SIM_RUN_SOAKS=1.
 #
 # Required environment:
-#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode
 #
 # Optional environment:
-#   GROUNDHOG_BINARY=/path/to/groundhog
+#   THRUPUT_BINARY=/path/to/thruput
 #   GROUNDHOG_EXAMPLES_ROOT=/path/to/groundhog-examples
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
 #   GROUNDHOG_SIM_RUN_SOAKS=1
@@ -32,7 +32,7 @@ expand_user_path() {
     esac
 }
 
-GROUNDHOG_BINARY="$(expand_user_path "${GROUNDHOG_BINARY:-$REPO_ROOT/target/debug/groundhog}")"
+THRUPUT_BINARY="$(expand_user_path "${THRUPUT_BINARY:-$REPO_ROOT/target/debug/thruput}")"
 
 log() {
     printf '==> %s\n' "$*" >&2
@@ -163,12 +163,12 @@ PY
 }
 
 find_hogd_dev_binary() {
-    if [[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]]; then
-        expand_user_path "$GROUNDHOG_DEVNODE_BINARY"
+    if [[ -n "${THRUPUT_DEVNODE_BINARY:-}" ]]; then
+        expand_user_path "$THRUPUT_DEVNODE_BINARY"
         return
     fi
 
-    die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
+    die "set THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 find_examples_root() {
@@ -208,9 +208,9 @@ if [[ -n "$HOGD_PROTOCOL" ]]; then
     log "using hogd protocol override: $HOGD_PROTOCOL"
 fi
 
-log "building groundhog"
-cargo build -p groundhog-cli
-[[ -x "$GROUNDHOG_BINARY" ]] || die "groundhog binary is not executable: $GROUNDHOG_BINARY"
+log "building thruput"
+cargo build -p thruput-cli
+[[ -x "$THRUPUT_BINARY" ]] || die "thruput binary is not executable: $THRUPUT_BINARY"
 
 EXAMPLES_ROOT="$(find_examples_root)"
 CONTRACT_ARTIFACT_ROOT=""
@@ -219,20 +219,20 @@ if [[ -n "$EXAMPLES_ROOT" ]]; then
     log "building groundhog-examples fibonacci contract"
     (
         cd "$EXAMPLES_ROOT"
-        "$GROUNDHOG_BINARY" build -p fibonacci --target-dir "$EXAMPLES_TARGET"
+        "$THRUPUT_BINARY" build -p fibonacci --target-dir "$EXAMPLES_TARGET"
     )
     # Required by the fast read-after-write smoke scenario. Keep this a hard
     # failure so stale fixture checkouts do not silently skip core smoke coverage.
     log "building groundhog-examples caller-counter simulator fixture"
     (
         cd "$EXAMPLES_ROOT"
-        "$GROUNDHOG_BINARY" build -p caller-counter --target-dir "$EXAMPLES_TARGET"
+        "$THRUPUT_BINARY" build -p caller-counter --target-dir "$EXAMPLES_TARGET"
     )
     if [[ -d "$EXAMPLES_ROOT/sim-fixtures/calldata" ]]; then
         log "building groundhog-examples calldata simulator fixture"
         (
             cd "$EXAMPLES_ROOT"
-            "$GROUNDHOG_BINARY" build -p calldata --target-dir "$EXAMPLES_TARGET"
+            "$THRUPUT_BINARY" build -p calldata --target-dir "$EXAMPLES_TARGET"
         )
     else
         log "skipping groundhog-examples calldata simulator fixture; fixture not present"
@@ -241,20 +241,20 @@ if [[ -n "$EXAMPLES_ROOT" ]]; then
         log "building groundhog-examples nnint-stress simulator fixture"
         (
             cd "$EXAMPLES_ROOT"
-            "$GROUNDHOG_BINARY" build -p nnint-stress --target-dir "$EXAMPLES_TARGET"
+            "$THRUPUT_BINARY" build -p nnint-stress --target-dir "$EXAMPLES_TARGET"
         )
     else
         log "skipping groundhog-examples nnint-stress simulator fixture; fixture not present"
     fi
-    CONTRACT_ARTIFACT_ROOT="$EXAMPLES_TARGET/groundhog"
+    CONTRACT_ARTIFACT_ROOT="$EXAMPLES_TARGET/thruput"
 else
     log "skipping contract scenario; set GROUNDHOG_EXAMPLES_ROOT to groundhog-examples"
 fi
 
 log "running fast local scenario catalog"
 ENV_ARGS=(
-    "GROUNDHOG_DEVNODE_BINARY=$DEVNODE_BINARY"
-    "GROUNDHOG_SIM_GROUNDHOG_BINARY=$GROUNDHOG_BINARY"
+    "THRUPUT_DEVNODE_BINARY=$DEVNODE_BINARY"
+    "THRUPUT_SIM_CLI_BINARY=$THRUPUT_BINARY"
     "GROUNDHOG_SIM_CATALOG_ROOT=$WORKDIR/local-catalog-fast"
 )
 if [[ -n "$CONTRACT_ARTIFACT_ROOT" ]]; then
@@ -266,8 +266,8 @@ env "${ENV_ARGS[@]}" \
 if [[ "${GROUNDHOG_SIM_RUN_SOAKS:-0}" == "1" ]]; then
     log "running gated local scenario soak"
     SOAK_ENV_ARGS=(
-        "GROUNDHOG_DEVNODE_BINARY=$DEVNODE_BINARY"
-        "GROUNDHOG_SIM_GROUNDHOG_BINARY=$GROUNDHOG_BINARY"
+        "THRUPUT_DEVNODE_BINARY=$DEVNODE_BINARY"
+        "THRUPUT_SIM_CLI_BINARY=$THRUPUT_BINARY"
         "GROUNDHOG_SIM_CATALOG_ROOT=$WORKDIR/local-catalog-soak"
         "GROUNDHOG_SIM_RUN_SOAKS=1"
     )
@@ -283,17 +283,17 @@ fi
 NODE_STDOUT="$WORKDIR/groundhog-node.json"
 NODE_STDERR="$WORKDIR/groundhog-node.stderr"
 
-log "starting temporary groundhog node for existing-provider baseline scenario"
+log "starting temporary thruput node for existing-provider baseline scenario"
 NODE_ARGS=(--json node --hog-devnode-binary "$DEVNODE_BINARY" --port 0)
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
 fi
-"$GROUNDHOG_BINARY" "${NODE_ARGS[@]}" >"$NODE_STDOUT" 2>"$NODE_STDERR" &
+"$THRUPUT_BINARY" "${NODE_ARGS[@]}" >"$NODE_STDOUT" 2>"$NODE_STDERR" &
 NODE_PID="$!"
 
 if ! wait_for_node_json "$NODE_STDOUT"; then
     cat "$NODE_STDERR" >&2 || true
-    die "groundhog node did not emit startup JSON"
+    die "thruput node did not emit startup JSON"
 fi
 
 RPC_URL="$(json_field_from_file data.rpc_url "$NODE_STDOUT")"

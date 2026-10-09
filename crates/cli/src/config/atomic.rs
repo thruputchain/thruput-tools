@@ -767,7 +767,7 @@ mod tests {
     #[cfg(unix)]
     fn atomic_write_preserves_existing_project_permissions() {
         let temporary = tempfile::TempDir::new().expect("tempdir should be created");
-        let path = temporary.path().join("groundhog.toml");
+        let path = temporary.path().join("thruput.toml");
         std::fs::write(&path, "value = \"old\"\n").expect("fixture should be written");
         std::fs::set_permissions(&path, Permissions::from_mode(0o640))
             .expect("fixture permissions should be set");

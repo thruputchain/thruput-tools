@@ -8,7 +8,7 @@ import {
 export async function readDeployment() {
   let config;
   try {
-    config = JSON.parse(await readFile(".groundhog/app.json", "utf8"));
+    config = JSON.parse(await readFile(".thruput/app.json", "utf8"));
   } catch (error) {
     if (error.code === "ENOENT")
       throw new Error(
@@ -18,7 +18,7 @@ export async function readDeployment() {
       throw new Error(
         "Invalid saved deployment. Run npm run contract:deploy again.",
       );
-    throw new Error(`Could not read .groundhog/app.json: ${error.message}`);
+    throw new Error(`Could not read .thruput/app.json: ${error.message}`);
   }
   if (
     !config ||
@@ -46,7 +46,7 @@ export async function checkDeployment(config) {
     receipt = await client.getTransactionReceipt(hashFromHex(config.txHash));
   } catch (error) {
     throw new Error(
-      `Could not check the saved deployment: ${error.message}. Run groundhog node in another terminal and check the saved RPC endpoint.`,
+      `Could not check the saved deployment: ${error.message}. Run thruput node in another terminal and check the saved RPC endpoint.`,
     );
   }
   if (!receipt)

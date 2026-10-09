@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Schema version for the `groundhog docs --json` readiness payload.
+/// Schema version for the `thruput docs --json` readiness payload.
 pub const DOCS_JSON_SCHEMA_VERSION: u32 = 1;
 
 /// Documentation server readiness and the identity of the served snapshot.

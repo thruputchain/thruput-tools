@@ -4,7 +4,7 @@ use zeroize::Zeroize;
 
 pub(crate) const KEYS_EXPORT_JSON_SCHEMA_VERSION: u32 = 1;
 
-/// Stable machine-readable result for `groundhog keys export`.
+/// Stable machine-readable result for `thruput keys export`.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KeysExportReport {
@@ -30,7 +30,7 @@ impl Drop for ExportedKey {
 /// First version of the public import result.
 pub(crate) const KEYS_IMPORT_JSON_SCHEMA_VERSION: u32 = 1;
 
-/// Stable machine-readable result for `groundhog keys import`.
+/// Stable machine-readable result for `thruput keys import`.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KeysImportReport {

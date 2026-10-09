@@ -49,7 +49,7 @@ impl Fixture {
         .unwrap();
         fs::write(root.join(".cargo/contract.toml"), "").unwrap();
         fs::write(
-            root.join("groundhog.toml"),
+            root.join("thruput.toml"),
             "default_profile = \"local\"\n[profile.local]\n",
         )
         .unwrap();
@@ -172,7 +172,7 @@ fi
     }
 
     fn command_for(&self, name: &str, mode: &str) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
         command
             .arg(name)
             .current_dir(&self.root)
@@ -181,8 +181,8 @@ fi
             .env("LC_ALL", "C.UTF-8")
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("CARGO_HOME", self.root.join("cargo-home"))
-            .env_remove("GROUNDHOG_PROFILE")
-            .env_remove("GROUNDHOG_BUNDLE_MANIFEST")
+            .env_remove("THRUPUT_PROFILE")
+            .env_remove("THRUPUT_BUNDLE_MANIFEST")
             .env_remove("RUSTFLAGS")
             .env_remove("CARGO_ENCODED_RUSTFLAGS")
             .env_remove("CARGO_TERM_COLOR")
@@ -490,8 +490,8 @@ fn verbose_build_preserves_both_streams_scrollback_and_artifacts() {
     }
     assert!(history.contains("Build complete"));
     assert!(history.contains("Artifact size"));
-    assert!(fixture.root.join("target/groundhog/demo.rv32a").exists());
-    assert!(fixture.root.join("target/groundhog/demo.ts").exists());
+    assert!(fixture.root.join("target/thruput/demo.rv32a").exists());
+    assert!(fixture.root.join("target/thruput/demo.ts").exists());
 }
 
 #[test]
@@ -590,7 +590,7 @@ fn ctrl_c_retains_foreground_signal_behaviour_and_no_success_card() {
         );
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(!fixture.root.join("target/groundhog/demo.rv32a").exists());
+    assert!(!fixture.root.join("target/thruput/demo.rv32a").exists());
 }
 
 #[test]
@@ -740,7 +740,7 @@ fn background_build_does_not_query_terminal_input() {
     let mut shell = Command::new(std::env::current_exe().unwrap());
     shell
         .args(["--exact", "background_process_fixture", "--nocapture"])
-        .env("GROUNDHOG_UI_BACKGROUND_FIXTURE", "1")
+        .env("THRUPUT_UI_BACKGROUND_FIXTURE", "1")
         .current_dir(&fixture.root);
     for (name, value) in base.get_envs() {
         if let Some(value) = value {
@@ -757,10 +757,10 @@ fn background_build_does_not_query_terminal_input() {
 
 #[test]
 fn background_process_fixture() {
-    if std::env::var_os("GROUNDHOG_UI_BACKGROUND_FIXTURE").is_none() {
+    if std::env::var_os("THRUPUT_UI_BACKGROUND_FIXTURE").is_none() {
         return;
     }
-    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
     command.arg("build");
     // Shell job-control behavior differs between Linux and Darwin. Establish a
     // real background group explicitly while this fixture owns the foreground.
@@ -796,7 +796,7 @@ fn background_process_fixture() {
 fn new_guides_name_destination_and_catalog_selection() {
     for (template, no_ui) in [("", false), ("counter", false), ("", true)] {
         let tmp = TempDir::new().unwrap();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
         command
             .arg("new")
             .current_dir(tmp.path())
@@ -812,7 +812,7 @@ fn new_guides_name_destination_and_catalog_selection() {
         pty.resize(100, 40);
         pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Project name:"));
         let screen = pty.parser.screen().contents();
-        assert!(screen.contains("New Groundhog Project"), "{screen}");
+        assert!(screen.contains("New Thruput Project"), "{screen}");
         assert_eq!(screen.contains("Progress"), !no_ui, "{screen}");
         if no_ui {
             assert!(screen.contains("[1/3] Project name"), "{screen}");
@@ -878,7 +878,7 @@ fn new_guides_name_destination_and_catalog_selection() {
 #[test]
 fn new_wizard_preserves_explicit_destination_and_template() {
     let tmp = TempDir::new().unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
     command
         .args(["new", "--path", "chosen-directory", "--template", "counter"])
         .current_dir(tmp.path())
@@ -899,7 +899,7 @@ fn new_wizard_preserves_explicit_destination_and_template() {
 #[test]
 fn guided_setup_keeps_scaffold_warnings_on_the_final_screen() {
     let fixture = Fixture::new();
-    fs::remove_file(fixture.root.join("groundhog.toml")).unwrap();
+    fs::remove_file(fixture.root.join("thruput.toml")).unwrap();
     fs::write(
         fixture.root.join("bin/cargo"),
         "#!/bin/sh\nprintf 'cargo 1.96.0\\n'\n",
@@ -922,15 +922,15 @@ fn guided_setup_keeps_scaffold_warnings_on_the_final_screen() {
         screen.contains("cargo_not_rustup_managed") && screen.contains("Hint"),
         "{screen}"
     );
-    assert!(fixture.root.join("wizard-contract/groundhog.toml").exists());
+    assert!(fixture.root.join("wizard-contract/thruput.toml").exists());
 }
 
 #[test]
 fn confirmation_fixture() {
-    let Ok(mode) = std::env::var("GROUNDHOG_UI_CONFIRM_FIXTURE") else {
+    let Ok(mode) = std::env::var("THRUPUT_UI_CONFIRM_FIXTURE") else {
         return;
     };
-    let print = groundhog_cli::Print::new(false, false).with_no_ui(mode == "plain");
+    let print = thruput_cli::Print::new(false, false).with_no_ui(mode == "plain");
     print.status("KEEP THIS CONTEXT");
     let approved = print
         .confirm_review(
@@ -946,7 +946,7 @@ fn confirmation_fixture() {
         .unwrap();
     if approved {
         print.outcome_card(
-            groundhog_cli::print::Outcome::Success,
+            thruput_cli::print::Outcome::Success,
             "Action complete",
             &[("Result".into(), "done".into())],
         );
@@ -967,7 +967,7 @@ fn confirmation_fallbacks_preserve_output_and_consent() {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
             .args(["--exact", "confirmation_fixture", "--nocapture"])
-            .env("GROUNDHOG_UI_CONFIRM_FIXTURE", mode)
+            .env("THRUPUT_UI_CONFIRM_FIXTURE", mode)
             .env("TERM", "xterm-256color")
             .env("LC_ALL", "C.UTF-8")
             .env_remove("NO_COLOR");
@@ -1010,7 +1010,7 @@ fn approved_preview_disappears_but_warnings_and_prior_output_remain() {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
             .args(["--exact", "confirmation_fixture", "--nocapture"])
-            .env("GROUNDHOG_UI_CONFIRM_FIXTURE", "1")
+            .env("THRUPUT_UI_CONFIRM_FIXTURE", "1")
             .env("TERM", "xterm-256color")
             .env("LC_ALL", "C.UTF-8")
             .env_remove("NO_COLOR");
@@ -1075,23 +1075,23 @@ mod devnode;
 fn node_command(root: &TempDir, binary: &std::path::Path, mode: &str) -> Command {
     let wrapper = root.path().join("hog-devnode");
     std::fs::write(&wrapper, r#"#!/bin/sh
-if [ "$1" = "--version" ]; then exec "$GROUNDHOG_UI_REAL_DEVNODE" "$@"; fi
+if [ "$1" = "--version" ]; then exec "$THRUPUT_UI_REAL_DEVNODE" "$@"; fi
 printf '%s\n' '{"level":"warn","message":"startup warning fixture","timestamp_ms":123,"target":"ramdb","fields":{"file":"fixture.cc","line":43}}' >&2
 sleep 0.5
-exec "$GROUNDHOG_UI_REAL_DEVNODE" "$@"
+exec "$THRUPUT_UI_REAL_DEVNODE" "$@"
 "#).unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
     command
         .args(["node", "--port", "0", "--hog-devnode-binary"])
         .arg(&wrapper)
         .current_dir(root.path())
         .env("XDG_CONFIG_HOME", root.path().join("config"))
         .env("XDG_CACHE_HOME", root.path().join("cache"))
-        .env("GROUNDHOG_UI_REAL_DEVNODE", binary)
-        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
+        .env("THRUPUT_UI_REAL_DEVNODE", binary)
+        .env("THRUPUT_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env(
-            "GROUNDHOG_FAKE_HOGD_DEV_UI_TRIGGER",
+            "THRUPUT_FAKE_HOGD_DEV_UI_TRIGGER",
             root.path().join("log-now"),
         )
         .env("TERM", "xterm-256color")
@@ -1124,7 +1124,7 @@ fn node_phases_keep_warnings_after_results_and_leave_a_short_stop_message() {
                 pty.parser
                     .screen()
                     .contents()
-                    .contains("Starting Groundhog local node")
+                    .contains("Starting Thruput local node")
             });
             assert!(!String::from_utf8_lossy(&pty.raw).contains("startup warning fixture"));
         }
@@ -1158,7 +1158,7 @@ fn node_phases_keep_warnings_after_results_and_leave_a_short_stop_message() {
                     pty.parser
                         .screen()
                         .contents()
-                        .contains("Stopping Groundhog local node")
+                        .contains("Stopping Thruput local node")
                 });
             }
         }
@@ -1179,7 +1179,7 @@ fn node_phases_keep_warnings_after_results_and_leave_a_short_stop_message() {
                     "{history}"
                 );
                 assert!(
-                    !history.contains("Stopping Groundhog local node"),
+                    !history.contains("Stopping Thruput local node"),
                     "{history}"
                 );
                 assert!(
@@ -1187,7 +1187,7 @@ fn node_phases_keep_warnings_after_results_and_leave_a_short_stop_message() {
                     "{history}"
                 );
                 assert!(
-                    !history.contains("Shutting down") && !history.contains("Starting Groundhog"),
+                    !history.contains("Shutting down") && !history.contains("Starting Thruput"),
                     "{history}"
                 );
                 assert!(!history.contains("hogd_timestamp_ms"), "{history}");

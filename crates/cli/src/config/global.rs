@@ -287,7 +287,7 @@ pub(super) fn validate_local_runtime_state(state: &LocalRuntimeState) -> Result<
     }
     if !state.runtime_manifest.is_absolute() {
         return Err(CliError::Other(
-            "runtime_manifest written by groundhog node must be absolute".into(),
+            "runtime_manifest written by thruput node must be absolute".into(),
         ));
     }
     if state
@@ -296,7 +296,7 @@ pub(super) fn validate_local_runtime_state(state: &LocalRuntimeState) -> Result<
         .is_some_and(|path| !path.is_absolute())
     {
         return Err(CliError::Other(
-            "runtime_artifacts_dir written by groundhog node must be absolute".into(),
+            "runtime_artifacts_dir written by thruput node must be absolute".into(),
         ));
     }
     Ok(())

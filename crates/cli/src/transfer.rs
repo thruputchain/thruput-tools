@@ -370,12 +370,12 @@ fn receipt_poll_config() -> (usize, Duration) {
     let mut attempts = groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS;
     let mut interval = groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL;
     if cfg!(debug_assertions) {
-        if let Ok(value) = std::env::var("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS")
+        if let Ok(value) = std::env::var("THRUPUT_TEST_RECEIPT_POLL_ATTEMPTS")
             && let Ok(value) = value.parse::<usize>()
         {
             attempts = value.max(1);
         }
-        if let Ok(value) = std::env::var("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS")
+        if let Ok(value) = std::env::var("THRUPUT_TEST_RECEIPT_POLL_INTERVAL_MS")
             && let Ok(value) = value.parse::<u64>()
         {
             interval = Duration::from_millis(value);
@@ -504,7 +504,7 @@ fn print_unavailable(
         print.detail("tx", &tx_hash);
         print.warn("the transaction may still commit; do not blindly resubmit it");
         let mut next = format!(
-            "groundhog tx show {tx_hash} --profile={}",
+            "thruput tx show {tx_hash} --profile={}",
             render_shell_arg(&prepared.profile),
         );
         if prepared.rpc_url_cli_override {

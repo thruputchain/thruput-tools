@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-pub(crate) const FAKE_HOGD_DEV_MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
+pub(crate) const FAKE_HOGD_DEV_MODE_ENV: &str = "THRUPUT_FAKE_HOGD_DEV_MODE";
 
 /// Builds and returns the `fake_hogd_dev` example binary; `cargo test` builds it
 /// only as a test harness, so a copy on disk may predate a `groundhog-xdr` bump.

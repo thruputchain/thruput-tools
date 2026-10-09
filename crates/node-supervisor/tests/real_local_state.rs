@@ -14,9 +14,9 @@ use groundhog_signing::{LocalSigner, PubkeyAccount};
 use jsonrpsee::http_client::HttpClientBuilder;
 
 #[tokio::test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY pointing to a schema-4 real runtime"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY pointing to a schema-4 real runtime"]
 async fn persistent_funding_manual_production_and_lock_handoff() {
-    let binary = std::env::var_os("GROUNDHOG_DEVNODE_BINARY").expect("runtime binary is required");
+    let binary = std::env::var_os("THRUPUT_DEVNODE_BINARY").expect("runtime binary is required");
     let dir = tempfile::tempdir().unwrap();
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address("127.0.0.1:0")
@@ -93,10 +93,10 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
 }
 
 #[tokio::test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY pointing to a schema-4 real runtime"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY pointing to a schema-4 real runtime"]
 async fn stopped_raw_process_handle_releases_persistent_chain_lock() {
     use groundhog_node_supervisor::HogdDevProcess;
-    let binary = std::env::var_os("GROUNDHOG_DEVNODE_BINARY").expect("runtime binary is required");
+    let binary = std::env::var_os("THRUPUT_DEVNODE_BINARY").expect("runtime binary is required");
     let dir = tempfile::tempdir().unwrap();
     let config = HogdDevConfig::default()
         .with_binary_path(binary)

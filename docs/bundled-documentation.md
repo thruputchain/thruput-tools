@@ -1,6 +1,6 @@
 # Bundled documentation maintenance
 
-The CLI embeds a pinned developer-site snapshot for `groundhog docs`.
+The CLI embeds a pinned developer-site snapshot for `thruput docs`.
 Ordinary source builds use the checked-in snapshot; they do not require a
 `developers-site` checkout. The procedure below is for maintainers selecting a
 new snapshot.
@@ -34,8 +34,8 @@ assets must resolve within this tree when it is copied away from the server.
 Pages should retain their hosted source URL and documentation version context.
 The snapshot's existing `snapshot.json` supplies the source revision.
 
-`groundhog docs` reports the Markdown index when present.
-`groundhog docs export --output <new-directory>` copies that tree and adds
+`thruput docs` reports the Markdown index when present.
+`thruput docs export --output <new-directory>` copies that tree and adds
 `snapshot.json` at the export root. Reserve this filename for snapshot identity.
 Older snapshots remain valid for browser serving but cannot be exported as a
 Markdown set. Do not derive Markdown from their generated HTML in the CLI.
@@ -54,7 +54,7 @@ manifests before reporting or copying the documentation.
 
 The background server records its authenticated control identity in private,
 atomically written `state.json` and `state.backup.json` files under the
-`groundhog/docs-service` cache directory. Status, start, and stop can restore a
+`thruput/docs-service` cache directory. Status, start, and stop can restore a
 missing or invalid primary file from the validated backup. The normal instance
 identity check still runs before reuse or stop; a reused port is not ownership.
 

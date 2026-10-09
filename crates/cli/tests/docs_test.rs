@@ -24,11 +24,11 @@ fn readiness(server: &mut Server) -> serde_json::Value {
     });
     let line = rx.recv_timeout(Duration::from_secs(15)).unwrap();
     let ready: serde_json::Value = serde_json::from_str(&line).unwrap();
-    let report: groundhog_cli::docs_json::DocsReport =
+    let report: thruput_cli::docs_json::DocsReport =
         serde_json::from_value(ready["data"].clone()).unwrap();
     assert_eq!(
         report.schema_version,
-        groundhog_cli::docs_json::DOCS_JSON_SCHEMA_VERSION
+        thruput_cli::docs_json::DOCS_JSON_SCHEMA_VERSION
     );
     assert_eq!(serde_json::to_value(report).unwrap(), ready["data"]);
     ready
@@ -73,7 +73,7 @@ fn request(address: &str, method: &str, path: &str) -> String {
 fn docs_serves_static_snapshot_and_stops_on_signal() {
     let dir = snapshot();
     let mut server = Server(
-        Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        Command::new(env!("CARGO_BIN_EXE_thruput"))
             .args(["docs", "--dir"])
             .arg(dir.path())
             .args(["--port", "0", "--json"])
@@ -139,7 +139,7 @@ fn docs_serves_static_snapshot_and_stops_on_signal() {
 fn managed_docs_stops_if_the_starting_process_disappears_before_handoff() {
     let dir = snapshot();
     let mut server = Server(
-        Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        Command::new(env!("CARGO_BIN_EXE_thruput"))
             .args(["docs", "--managed", "--non-interactive", "--json"])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -171,7 +171,7 @@ fn docs_warns_about_guide_version_only_for_explicit_snapshots() {
     let external = snapshot();
     let cache = tempfile::tempdir().unwrap();
     for use_external in [false, true] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
         command
             .args(["docs", "--port", "0"])
             .env("XDG_CACHE_HOME", cache.path())
@@ -211,7 +211,7 @@ fn docs_rejects_invalid_snapshots_and_reports_busy_port() {
     let dir = snapshot();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let run = |port: u16| {
-        Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        Command::new(env!("CARGO_BIN_EXE_thruput"))
             .args(["docs", "--dir"])
             .arg(dir.path())
             .args(["--json", "--port", &port.to_string()])
@@ -241,7 +241,7 @@ fn docs_defaults_to_bundled_cache_without_network_or_project_setup() {
     let cache = home.path().join("custom-cache");
     let start = || {
         let mut server = Server(
-            Command::new(env!("CARGO_BIN_EXE_groundhog"))
+            Command::new(env!("CARGO_BIN_EXE_thruput"))
                 .args(["docs", "--port", "0", "--json"])
                 .current_dir(home.path())
                 .env("HOME", home.path())
@@ -258,7 +258,7 @@ fn docs_defaults_to_bundled_cache_without_network_or_project_setup() {
     };
     let (first, ready) = start();
     let root = std::path::PathBuf::from(ready["data"]["path"].as_str().unwrap());
-    assert!(root.starts_with(cache.canonicalize().unwrap().join("groundhog/docs")));
+    assert!(root.starts_with(cache.canonicalize().unwrap().join("thruput/docs")));
     assert_eq!(ready["data"]["snapshot"]["sourceDirty"], false);
     let url = ready["data"]["url"].as_str().unwrap();
     let address = url.strip_prefix("http://").unwrap().trim_end_matches('/');
@@ -344,7 +344,7 @@ fn external_markdown_export_rejects_missing_malformed_or_mismatched_identity() {
             }
         }
         let output = source.path().join("export");
-        let result = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        let result = Command::new(env!("CARGO_BIN_EXE_thruput"))
             .args(["docs", "export", "--dir"])
             .arg(source.path())
             .arg("--output")
@@ -363,7 +363,7 @@ fn external_markdown_export_rejects_missing_malformed_or_mismatched_identity() {
 fn bundled_markdown_export_contains_every_page_and_section_without_network_access() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("export");
-    let result = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let result = Command::new(env!("CARGO_BIN_EXE_thruput"))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .env("HTTP_PROXY", "http://127.0.0.1:1")
         .env("HTTPS_PROXY", "http://127.0.0.1:1")
@@ -405,7 +405,7 @@ fn markdown_export_is_portable_and_preserves_existing_destinations() {
     let target = tempfile::tempdir().unwrap();
     let output = target.path().join("export");
     let run = || {
-        Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        Command::new(env!("CARGO_BIN_EXE_thruput"))
             .args(["docs", "export", "--dir"])
             .arg(source.path())
             .arg("--output")
@@ -452,7 +452,7 @@ fn legacy_snapshot_export_reports_missing_markdown_without_creating_output() {
     let source = snapshot();
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("export");
-    let result = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let result = Command::new(env!("CARGO_BIN_EXE_thruput"))
         .args(["docs", "export", "--dir"])
         .arg(source.path())
         .arg("--output")
@@ -477,7 +477,7 @@ struct ServiceCleanup(std::path::PathBuf);
 #[cfg(unix)]
 impl Drop for ServiceCleanup {
     fn drop(&mut self) {
-        let _ = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        let _ = Command::new(env!("CARGO_BIN_EXE_thruput"))
             .env("XDG_CACHE_HOME", &self.0)
             .args(["docs", "stop", "--json"])
             .output();
@@ -492,7 +492,7 @@ fn background_docs_reports_readiness_reuses_and_stops_only_its_instance() {
     let cache = tempfile::tempdir().unwrap();
     let _cleanup = ServiceCleanup(cache.path().to_owned());
     let invoke = |args: &[&str]| {
-        let result = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        let result = Command::new(env!("CARGO_BIN_EXE_thruput"))
             .env("XDG_CACHE_HOME", cache.path())
             .args(args)
             .arg("--json")
@@ -517,14 +517,14 @@ fn background_docs_reports_readiness_reuses_and_stops_only_its_instance() {
     let url = first["data"]["server"]["url"].as_str().unwrap();
     let address = url.strip_prefix("http://").unwrap().trim_end_matches('/');
     assert!(request(address, "GET", "/markdown/index.md").contains("[Contracts]"));
-    assert!(request(address, "POST", "/__groundhog_docs/stop").starts_with("HTTP/1.1 403"));
+    assert!(request(address, "POST", "/__thruput_docs/stop").starts_with("HTTP/1.1 403"));
     assert!(
         first["data"]["server"]["markdownIndex"]
             .as_str()
             .unwrap()
             .ends_with("markdown/index.md")
     );
-    let state = cache.path().join("groundhog/docs-service/state.json");
+    let state = cache.path().join("thruput/docs-service/state.json");
     let mut stale_state: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
     assert_eq!(
@@ -586,14 +586,14 @@ fn background_docs_reports_readiness_reuses_and_stops_only_its_instance() {
 #[test]
 fn background_docs_preserves_unrecoverable_state_without_claiming_it_stopped() {
     let cache = tempfile::tempdir().unwrap();
-    let service = cache.path().join("groundhog/docs-service");
+    let service = cache.path().join("thruput/docs-service");
     std::fs::create_dir_all(&service).unwrap();
     let state = service.join("state.json");
     let backup = service.join("state.backup.json");
     std::fs::write(&state, "{").unwrap();
     std::fs::write(&backup, "{}").unwrap();
     for action in ["status", "stop", "--background"] {
-        let result = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        let result = Command::new(env!("CARGO_BIN_EXE_thruput"))
             .env("XDG_CACHE_HOME", cache.path())
             .args(["docs", action, "--json"])
             .output()
@@ -629,7 +629,7 @@ fn unrelated_http_server() -> (std::net::SocketAddr, std::thread::JoinHandle<boo
         socket
             .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
             .unwrap();
-        request.starts_with("GET /__groundhog_docs/health ")
+        request.starts_with("GET /__thruput_docs/health ")
     });
     (address, peer)
 }
@@ -640,7 +640,7 @@ fn background_start_failure_does_not_leave_running_state() {
     let dir = snapshot();
     let cache = tempfile::tempdir().unwrap();
     let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = Command::new(env!("CARGO_BIN_EXE_thruput"))
         .env("XDG_CACHE_HOME", cache.path())
         .args(["docs", "--background", "--json", "--dir"])
         .arg(dir.path())
@@ -660,11 +660,11 @@ fn background_start_failure_does_not_leave_running_state() {
     assert!(
         !cache
             .path()
-            .join("groundhog/docs-service/state.json")
+            .join("thruput/docs-service/state.json")
             .exists()
     );
     assert!(
-        std::fs::read_to_string(cache.path().join("groundhog/docs-service/server.log"))
+        std::fs::read_to_string(cache.path().join("thruput/docs-service/server.log"))
             .unwrap()
             .contains("cannot listen")
     );

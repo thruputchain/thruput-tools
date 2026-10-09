@@ -17,7 +17,7 @@ impl Fixture {
     fn new() -> Self {
         let root = TempDir::new().unwrap();
         fs::write(
-            root.path().join("groundhog.toml"),
+            root.path().join("thruput.toml"),
             "default_profile = \"local\"\n[profile.local]\n",
         )
         .unwrap();
@@ -25,7 +25,7 @@ impl Fixture {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
         command
             .args(args)
             .current_dir(self.root.path())
@@ -34,7 +34,7 @@ impl Fixture {
             .env("TERM", "xterm-256color")
             .env("LC_ALL", "C.UTF-8")
             .env_remove("NO_COLOR")
-            .env_remove("GROUNDHOG_PROFILE");
+            .env_remove("THRUPUT_PROFILE");
         command
     }
 
@@ -46,7 +46,7 @@ impl Fixture {
                 .status
                 .success()
         );
-        fs::write(self.root.path().join("groundhog.toml"), format!(
+        fs::write(self.root.path().join("thruput.toml"), format!(
             "default_profile = \"local\"\n[profile.local]\ndefault_wallet = \"alice\"\n[profile.local.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"0x{}\"\n[profile.local.wallets.legacy]\naddress = \"0x{}\"\n",
             "ab".repeat(32), "cd".repeat(32), "ef".repeat(32),
         )).unwrap();
@@ -214,10 +214,10 @@ fn codegen_file_result_and_raw_stdout_preserve_the_same_source() {
         ),
     )
     .unwrap();
-    groundhog_cli::contract_spec::finalize_rv32_spec(
+    thruput_cli::contract_spec::finalize_rv32_spec(
         &elf,
         &root.join("contract.rv32a"),
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap();
     let output = terminal_capture(
@@ -276,7 +276,7 @@ fn wallet_selection_and_secret_export_keep_their_output_contracts() {
         .unwrap();
     assert!(generated.status.success());
     let key: serde_json::Value = serde_json::from_slice(&generated.stdout).unwrap();
-    fs::write(fixture.root.path().join("groundhog.toml"), format!("default_profile = \"local\"\n[profile.local]\n[profile.local.wallets.owned]\naddress = \"0x{}\"\nowner_public_key = \"{}\"\n", "ab".repeat(32), key["data"]["key"]["public_key"].as_str().unwrap())).unwrap();
+    fs::write(fixture.root.path().join("thruput.toml"), format!("default_profile = \"local\"\n[profile.local]\n[profile.local.wallets.owned]\naddress = \"0x{}\"\nowner_public_key = \"{}\"\n", "ab".repeat(32), key["data"]["key"]["public_key"].as_str().unwrap())).unwrap();
     let selected = terminal_capture(fixture.command(&["wallet", "use", "owned"]), 80, true);
     assert!(
         selected.status.success() && selected.stdout.is_empty(),
@@ -414,10 +414,10 @@ fn listing_errors_do_not_produce_empty_or_partial_success_reports() {
 #[test]
 fn config_cards_preserve_merged_values_and_field_sources() {
     let fixture = Fixture::new();
-    let config_dir = fixture.root.path().join("config/groundhog");
+    let config_dir = fixture.root.path().join("config/thruput");
     fs::create_dir_all(&config_dir).unwrap();
     fs::write(config_dir.join("config.toml"), "[profile.local]\nnetwork = \"local\"\nrpc_url = \"https://global.example\"\n[profile.local.contracts]\nshared = \"0x1234\"\n").unwrap();
-    fs::write(fixture.root.path().join("groundhog.toml"), "default_profile = \"local\"\n[profile.local]\nrpc_url = \"https://project.example/long/path\"\n").unwrap();
+    fs::write(fixture.root.path().join("thruput.toml"), "default_profile = \"local\"\n[profile.local]\nrpc_url = \"https://project.example/long/path\"\n").unwrap();
     for columns in [24, 80] {
         for args in [vec!["config", "get"], vec!["config", "get", "--sources"]] {
             let output = terminal_output(fixture.command(&args), columns);
@@ -451,11 +451,11 @@ fn config_cards_preserve_merged_values_and_field_sources() {
 #[test]
 fn config_profiles_keep_invalid_and_missing_rows_with_findings_below() {
     let fixture = Fixture::new();
-    fs::write(fixture.root.path().join("groundhog.toml"), "default_profile = \"local\"\n[profile.local]\nnetwork = \"local\"\n[profile.broken]\nnetwork = \"not-a-network\"\n").unwrap();
+    fs::write(fixture.root.path().join("thruput.toml"), "default_profile = \"local\"\n[profile.local]\nnetwork = \"local\"\n[profile.broken]\nnetwork = \"not-a-network\"\n").unwrap();
     for missing in [false, true] {
         let mut command = fixture.command(&["config", "profiles"]);
         if missing {
-            command.env("GROUNDHOG_PROFILE", "missing");
+            command.env("THRUPUT_PROFILE", "missing");
         }
         let output = terminal_output(command, 100);
         let text = visible(&output, 100);
@@ -500,7 +500,7 @@ fn config_plain_modes_retain_the_same_stdout_and_json_payloads() {
             }
         }
     }
-    fs::write(fixture.root.path().join("groundhog.toml"), "").unwrap();
+    fs::write(fixture.root.path().join("thruput.toml"), "").unwrap();
     let args = ["config", "profiles"];
     let output = terminal_output(fixture.command(&args), 80);
     assert!(visible(&output, 80).contains("No profiles configured."));

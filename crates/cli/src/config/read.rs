@@ -14,7 +14,7 @@ use crate::CliError;
 pub const CONFIG_GET_JSON_SCHEMA_VERSION: u32 = 2;
 pub const CONFIG_PROFILES_JSON_SCHEMA_VERSION: u32 = 1;
 
-/// A scalar profile field managed by `groundhog config`.
+/// A scalar profile field managed by `thruput config`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConfigField {
@@ -213,7 +213,7 @@ pub enum ConfigScope {
     Project,
 }
 
-/// Stable JSON data for `groundhog config get`.
+/// Stable JSON data for `thruput config get`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigGetReport {
@@ -275,7 +275,7 @@ pub struct ConfigProfileRow {
     pub invalid_reason: Option<String>,
 }
 
-/// Stable JSON data for `groundhog config profiles`.
+/// Stable JSON data for `thruput config profiles`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigProfilesReport {
@@ -300,7 +300,7 @@ impl PersistedConfig {
             }));
         }
 
-        if let Some(name) = std::env::var("GROUNDHOG_PROFILE")
+        if let Some(name) = std::env::var("THRUPUT_PROFILE")
             .ok()
             .filter(|name| !name.trim().is_empty())
         {
@@ -309,7 +309,7 @@ impl PersistedConfig {
                 source: ConfigSource {
                     kind: ConfigSourceKind::Environment,
                     path: None,
-                    name: Some("GROUNDHOG_PROFILE".into()),
+                    name: Some("THRUPUT_PROFILE".into()),
                 },
             }));
         }

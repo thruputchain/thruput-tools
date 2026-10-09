@@ -1,4 +1,4 @@
-//! `groundhog node` — start the hog-devnode local node.
+//! `thruput node` — start the hog-devnode local node.
 
 use crate::{CliError, Print};
 
@@ -224,7 +224,7 @@ pub struct LocalNodeOptions {
     /// states. Whether hog-devnode's build accepts a value is its own call.
     pub network_config_overrides: Vec<(ConfigParamName, u32)>,
     /// Validated release identity supplied by an embedding client process.
-    /// When absent, the `groundhog` client identity is discovered while building the config.
+    /// When absent, the `thruput` client identity is discovered while building the config.
     pub bundle_identity: Option<groundhog_bundle_identity::BundleIdentity>,
 }
 
@@ -398,9 +398,9 @@ async fn run_hogd_dev(
         }
     };
     let runtime_artifacts_dir = local_node_runtime_artifacts_dir(&options);
-    let startup = logs.map(|logs| logs.start("Starting Groundhog local node"));
+    let startup = logs.map(|logs| logs.start("Starting Thruput local node"));
     if startup.is_none() {
-        print.phase("Starting Groundhog local node");
+        print.phase("Starting Thruput local node");
     }
     let started = start_resolved_local_node(options, lease).await?;
     let local_runtime_state_path = match write_started_local_runtime_state(
@@ -465,7 +465,7 @@ async fn run_hogd_dev(
             .map_err(|source| NodeSupervisorError::StopSignal { source })?;
         if !print.is_json() {
             print.status("");
-            shutdown = logs.map(|logs| logs.start("Stopping Groundhog local node"));
+            shutdown = logs.map(|logs| logs.start("Stopping Thruput local node"));
             if shutdown.is_none() {
                 print.note("Shutting down");
             }
@@ -571,7 +571,7 @@ fn local_funding_hint(recipient: &str, rpc_url: &str, manifest: Option<&Path>) -
         )
     });
     format!(
-        "Select a profile with network = local, then run `groundhog airdrop {} --rpc-url {}{} --amount 100`.",
+        "Select a profile with network = local, then run `thruput airdrop {} --rpc-url {}{} --amount 100`.",
         crate::terminal::render_shell_arg(recipient),
         crate::terminal::render_shell_arg(rpc_url),
         target
@@ -640,7 +640,7 @@ fn startup_setup_hint(started: &StartedLocalNode) -> Option<String> {
             !m.bootstrap_accounts.iter().any(|a| a.role ==
                 groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
         }))
-    .then(|| format!("No key selected. Run `groundhog init` or `groundhog keys generate NAME` and `groundhog keys use NAME`. {}",
+    .then(|| format!("No key selected. Run `thruput init` or `thruput keys generate NAME` and `thruput keys use NAME`. {}",
         local_funding_hint("NAME", &started.rpc_url(), started.readiness().manifest_path.as_deref())))
 }
 
@@ -650,7 +650,7 @@ fn print_started_local_node(
     print: &Print,
 ) {
     print.group(crate::print::Outcome::Ready, "Local node", |print| {
-        print.success("Groundhog local node ready");
+        print.success("Thruput local node ready");
         print.detail("chain", &started.readiness().network_hash);
         if let Some(chain_state) = started.readiness().chain_state {
             print.detail("chain state", chain_state);
@@ -728,7 +728,7 @@ fn print_started_local_node(
             print.detail(
                 "account manifest",
                 format_args!(
-                    "export GROUNDHOG_RUNTIME_MANIFEST={}",
+                    "export THRUPUT_RUNTIME_MANIFEST={}",
                     crate::terminal::render_shell_arg(&path.to_string_lossy()),
                 ),
             );
@@ -1025,7 +1025,7 @@ pub(crate) fn runtime_artifacts_dir_for_binary(binary: &Path) -> Option<PathBuf>
     let mut candidates = vec![binary_dir.to_path_buf()];
 
     if let Some(prefix) = binary_dir.parent() {
-        candidates.push(prefix.join("share/groundhog"));
+        candidates.push(prefix.join("share/thruput"));
     }
     candidates.extend(
         binary_dir
@@ -1735,7 +1735,7 @@ mod tests {
         fs::create_dir_all(&binary_dir).expect("bug: binary dir should be created");
         let binary = binary_dir.join("hog-devnode");
         fs::write(&binary, []).expect("bug: binary fixture should be written");
-        let artifacts_root = tmp.path().join("usr/share/groundhog");
+        let artifacts_root = tmp.path().join("usr/share/thruput");
         let contracts = artifacts_root.join("contracts");
         fs::create_dir_all(&contracts).expect("bug: contracts fixture should be created");
         fs::write(contracts.join("genesis_root.rv32a"), [])
@@ -1772,7 +1772,7 @@ mod tests {
                 .expect("bug: binary fixture should be executable");
         }
 
-        let contracts = tmp.path().join("usr/share/groundhog/contracts");
+        let contracts = tmp.path().join("usr/share/thruput/contracts");
         fs::create_dir_all(&contracts).expect("bug: contracts fixture should be created");
         fs::write(contracts.join("genesis_root.rv32a"), [])
             .expect("bug: artifact fixture should be written");
@@ -1917,7 +1917,7 @@ mod tests {
             cli_error
                 .hint()
                 .expect("intro rejection should have a specific hint"),
-            "pass `--hogd-protocol=hogp/expected0000000` to override, or rebuild groundhog node \
+            "pass `--hogd-protocol=hogp/expected0000000` to override, or rebuild thruput node \
              against a matching groundhog-xdr"
         );
     }

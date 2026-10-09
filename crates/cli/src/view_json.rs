@@ -3,13 +3,13 @@ use groundhog_json_rpc_types::{
 };
 use serde::Serialize;
 
-/// Schema version for the `groundhog view --json` payload.
+/// Schema version for the `thruput view --json` payload.
 ///
 /// Bump this when the shape or semantics of `ViewJsonPayload` change in a
 /// way that could break existing machine consumers.
 pub const VIEW_JSON_SCHEMA_VERSION: u32 = 2;
 
-/// Structured machine-readable report for `groundhog view --json`.
+/// Structured machine-readable report for `thruput view --json`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewJsonPayload<'a> {

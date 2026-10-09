@@ -29,7 +29,7 @@ env:
     groundhog-rv32-lower
     groundhog-toolchain
     groundhog-cli-macros
-    groundhog-cli
+    thruput-cli
     groundhog-testkit
 
 permissions:

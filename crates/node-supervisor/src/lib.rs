@@ -1,6 +1,6 @@
 //! Supervisor facade for the future hogd-backed local node.
 //!
-//! This crate owns Rust-side lifecycle concerns for `groundhog node`: process
+//! This crate owns Rust-side lifecycle concerns for `thruput node`: process
 //! supervision, eventual hogd-dev readiness wiring, and the JSON-RPC facade.
 //! It intentionally starts small so the process contract can be settled before
 //! hogd-specific command construction lands.

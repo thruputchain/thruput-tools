@@ -1008,7 +1008,7 @@ fn resolve_airdrop_recipient(
                 .into(),
         )),
         Err(CliError::UnknownAddressTarget { .. }) => Err(CliError::Other(format!(
-            "unknown wallet `{}`; run `groundhog wallet create --key={}` or pass a C StrKey or 0x-prefixed wallet address",
+            "unknown wallet `{}`; run `thruput wallet create --key={}` or pass a C StrKey or 0x-prefixed wallet address",
             crate::terminal::terminal_safe(recipient),
             crate::terminal::render_shell_arg(recipient),
         ))),
@@ -1142,8 +1142,8 @@ mod tests {
     use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
     use crate::remote_attempt::write_attempt;
 
-    const ATTEMPT_LOCK_TEST_PATH: &str = "GROUNDHOG_ATTEMPT_LOCK_TEST_PATH";
-    const ATTEMPT_LOCK_TEST_MODE: &str = "GROUNDHOG_ATTEMPT_LOCK_TEST_MODE";
+    const ATTEMPT_LOCK_TEST_PATH: &str = "THRUPUT_ATTEMPT_LOCK_TEST_PATH";
+    const ATTEMPT_LOCK_TEST_MODE: &str = "THRUPUT_ATTEMPT_LOCK_TEST_MODE";
 
     struct EnvGuard {
         key: &'static str,
@@ -1376,8 +1376,7 @@ mod tests {
         assert!(!message.contains('\n'));
         assert!(!message.contains('\u{1b}'));
         assert!(
-            message
-                .contains(r"groundhog wallet create --key='alice; touch /tmp/pwned\n\u{1b}[31m'")
+            message.contains(r"thruput wallet create --key='alice; touch /tmp/pwned\n\u{1b}[31m'")
         );
     }
 
@@ -1469,7 +1468,7 @@ mod tests {
     #[test]
     #[serial]
     fn airdrop_devnet_missing_faucet_reports_devnet_error() {
-        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
         let mut profile = test_profile(BTreeMap::new());
         profile.name = "devnet".into();
         profile.network = Some(Network::Devnet);
@@ -1486,7 +1485,7 @@ mod tests {
     #[test]
     #[serial]
     fn airdrop_devnet_missing_rpc_reports_devnet_error() {
-        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
         let mut profile = test_profile(BTreeMap::new());
         profile.name = "devnet".into();
         profile.network = Some(Network::Devnet);
@@ -1505,7 +1504,7 @@ mod tests {
     #[test]
     #[serial]
     fn airdrop_devnet_with_urls_uses_remote_faucet() {
-        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
         let mut profile = test_profile(BTreeMap::new());
         profile.name = "devnet".into();
         profile.network = Some(Network::Devnet);
@@ -1520,7 +1519,7 @@ mod tests {
     #[test]
     #[serial]
     fn airdrop_local_missing_manifest_reports_local_error() {
-        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
         let mut profile = test_profile(BTreeMap::new());
         profile.name = "local".into();
         profile.network = Some(Network::Local);
@@ -1530,7 +1529,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "profile `local` targets local, but airdrop requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`"
+            "profile `local` targets local, but airdrop requires a local runtime manifest; run `thruput node` or configure `runtime_manifest`"
         );
     }
 

@@ -12,7 +12,7 @@ and the lifecycle of targets it starts. Bootstrap and runtime manifests remain
 the contracts for chain setup and discovery. Workloads use public JSON-RPC;
 they do not bypass it through private scheduler injection.
 
-A `local` provider owns a `groundhog node` subprocess. An `existing` provider
+A `local` provider owns a `thruput node` subprocess. An `existing` provider
 borrows an endpoint and must not restart or clean it up. Process ownership is
 recorded separately from chain identity because knowing where a service runs
 does not grant permission to kill it. Orphan sweeping verifies recorded ownership

@@ -602,7 +602,7 @@ pub(crate) fn resolve_call(
         }),
         None => Err(CliError::Other(
             "cannot resolve the contract method from the local project or contract spec. \
-             Run `groundhog build` from inside the project that defines the contract, or pass an \
+             Run `thruput build` from inside the project that defines the contract, or pass an \
              explicit 0x-prefixed 8-byte entrypoint ID."
                 .into(),
         )),
@@ -1344,7 +1344,7 @@ mod tests {
         assert_call_encode_error(
             err,
             "arguments",
-            "multiple call arguments require local contract metadata — run `groundhog call` from \
+            "multiple call arguments require local contract metadata — run `thruput call` from \
              inside the project that defines the contract, or pass a single hex-encoded calldata \
              argument",
         );
@@ -1867,7 +1867,7 @@ mod tests {
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
         let custom_target = project_root.join("custom-target");
-        let rv32 = custom_target.join("groundhog").join("demo_contract.rv32a");
+        let rv32 = custom_target.join("thruput").join("demo_contract.rv32a");
         std::fs::create_dir_all(rv32.parent().expect("bug: rv32 parent should exist"))
             .expect("bug: custom target dir should be created");
         std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
@@ -1903,7 +1903,7 @@ mod tests {
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
         let custom_target = project_root.join("custom-target");
-        let rv32 = custom_target.join("groundhog").join("demo_contract.rv32a");
+        let rv32 = custom_target.join("thruput").join("demo_contract.rv32a");
         std::fs::create_dir_all(rv32.parent().expect("bug: rv32 parent should exist"))
             .expect("bug: custom target dir should be created");
         std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
@@ -1932,7 +1932,7 @@ mod tests {
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
         let custom_target = project_root.join("custom-target");
-        let rv32 = custom_target.join("groundhog").join("erc20.rv32a");
+        let rv32 = custom_target.join("thruput").join("erc20.rv32a");
         std::fs::create_dir_all(rv32.parent().expect("bug: rv32 parent should exist"))
             .expect("bug: custom target dir should be created");
         std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
@@ -2101,8 +2101,8 @@ mod tests {
             "[workspace]\nresolver = \"3\"\nmembers = [\"erc20\", \"counter\"]\n\n             [workspace.package]\nversion = \"9.9.9\"\n",
         )
         .expect("bug: workspace manifest should be written");
-        std::fs::write(workspace.path().join("groundhog.toml"), "")
-            .expect("bug: groundhog.toml should be written");
+        std::fs::write(workspace.path().join("thruput.toml"), "")
+            .expect("bug: thruput.toml should be written");
 
         for (member, interface, method) in [
             ("erc20", "Erc20", "mint"),

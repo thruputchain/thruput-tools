@@ -175,16 +175,16 @@ pub fn cargo_rv32_elf_output_path(target_dir: &Path, package_name: &str) -> Path
         .join(crate::scaffold::to_snake(package_name))
 }
 
-/// Return the Groundhog-owned RV32 artifact output path for a package in the given target directory.
-pub fn groundhog_rv32_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+/// Return the Thruput-owned RV32 artifact output path for a package in the given target directory.
+pub fn thruput_rv32_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
     target_dir
-        .join("groundhog")
+        .join("thruput")
         .join(format!("{}.rv32a", crate::scaffold::to_snake(package_name)))
 }
 
-/// Return the Groundhog-owned RV32 build metadata sidecar path.
-pub fn groundhog_rv32_metadata_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
-    target_dir.join("groundhog").join(format!(
+/// Return the Thruput-owned RV32 build metadata sidecar path.
+pub fn thruput_rv32_metadata_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+    target_dir.join("thruput").join(format!(
         "{}.rv32.json",
         crate::scaffold::to_snake(package_name)
     ))
@@ -200,15 +200,15 @@ pub fn infer_artifact_kind(path: &Path) -> Result<ArtifactKind, CliError> {
     }
 }
 
-/// Resolve a Groundhog-owned build artifact for an explicit or inferred package.
-pub fn resolve_groundhog_artifact(
+/// Resolve a Thruput-owned build artifact for an explicit or inferred package.
+pub fn resolve_thruput_artifact(
     cwd: &Path,
     artifacts: &ArtifactOptions,
     package: Option<&str>,
 ) -> Result<ResolvedPackageArtifact, CliError> {
     let metadata = crate::build::cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = crate::build::resolve_package(&metadata, package, cwd)?;
-    let path = groundhog_rv32_output_path(&metadata.target_directory, pkg_name);
+    let path = thruput_rv32_output_path(&metadata.target_directory, pkg_name);
 
     if !path.try_exists()? {
         return Err(CliError::ArtifactNotFound {

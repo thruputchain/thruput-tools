@@ -74,7 +74,7 @@ jobs:
         run: |
           python3 scripts/test_import_docs_snapshot.py
           python3 scripts/import-docs-snapshot.py
-          cargo package -p groundhog-cli --list --allow-dirty --locked > /tmp/cli-package-files.txt
+          cargo package -p thruput-cli --list --allow-dirty --locked > /tmp/cli-package-files.txt
           grep -Fx 'assets/docs/snapshot.tar.gz' /tmp/cli-package-files.txt
           grep -Fx 'assets/docs/snapshot-lock.json' /tmp/cli-package-files.txt
 
@@ -87,14 +87,14 @@ jobs:
 
           package_args=(
             -p groundhog-json-rpc-gateway
-            -p groundhog-cli
+            -p thruput-cli
             -p groundhog-rv32-lower
             -p groundhog-sim
             -p groundhog-faucet
           )
           targets=(
             groundhog-json-rpc-gateway:hog-gateway
-            groundhog-cli:groundhog
+            thruput-cli:thruput
             groundhog-rv32-lower:rv32-lower
             groundhog-sim:hogsim
             groundhog-faucet:groundhog-faucet
@@ -102,7 +102,7 @@ jobs:
           source_commit=$(git rev-parse HEAD)
           export GROUNDHOG_SOURCE_COMMIT="$source_commit"
 
-          cargo test --quiet --locked -p groundhog-cli \
+          cargo test --quiet --locked -p thruput-cli \
             --test cli_integration_test version_flag
           cargo test --quiet --locked -p groundhog-json-rpc-gateway \
             --test version_identity
@@ -116,7 +116,7 @@ jobs:
             crate_version=${crate_id##*[@#]}
             test -n "$crate_version"
             expected_version="$crate_version"
-            if [ "$app" = groundhog ] || [ "$app" = hog-gateway ]; then
+            if [ "$app" = thruput ] || [ "$app" = hog-gateway ]; then
               expected_version="$crate_version (commit ${source_commit:0:8})"
             fi
             test "$("target/debug/$app" --version)" = "$app $expected_version"
@@ -124,7 +124,7 @@ jobs:
 
   cli-smoke:
     needs: dependency-policy # Check deps before building anything
-    name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + groundhog test + groundhog test --integration)
+    name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + thruput test + thruput test --integration)
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
@@ -143,21 +143,21 @@ jobs:
         with:
           cache: rust
 
-      - name: Build groundhog CLI
-        run: cargo build --locked -p groundhog-cli
+      - name: Build thruput CLI
+        run: cargo build --locked -p thruput-cli
 
-      - name: Put groundhog on PATH
+      - name: Put thruput on PATH
         run: echo "${GITHUB_WORKSPACE}/target/debug" >> "$GITHUB_PATH"
 
       # Scaffold outside the repo so the generated project stands on its own
       # config rather than inheriting the workspace.
-      - name: Scaffold project (groundhog new)
+      - name: Scaffold project (thruput new)
         working-directory: ${{ runner.temp }}
         run: |
           if [ '${{ matrix.template }}' = minimal ]; then
-            groundhog new my-minimal
+            thruput new my-minimal
           else
-            groundhog new my-${{ matrix.template }} --template ${{ matrix.template }}
+            thruput new my-${{ matrix.template }} --template ${{ matrix.template }}
           fi
 
       # A release PR advances the scaffold to a client version that does not
@@ -185,34 +185,34 @@ jobs:
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Contract tests (groundhog test)
+      - name: Contract tests (thruput test)
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
-        run: groundhog test
+        run: thruput test
 
       # Starts an ephemeral hog-devnode from the embedded catalog, deploys the
       # contract with a native local-user account, and runs tests/integration.rs.
       # Nothing else exercises the integration deploy end to end.
-      - name: Integration tests (groundhog test --integration)
+      - name: Integration tests (thruput test --integration)
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
-        run: groundhog test --integration
+        run: thruput test --integration
 
       # A user-level rustflags override makes cargo drop the project's
       # .cargo/config.toml target rustflags (linker script, codegen flags such
       # as -Z trap-unreachable=false), yielding artifacts that fail validation.
       # The CLI must refuse to build instead of proceeding silently.
-      - name: RUSTFLAGS guard (groundhog build refuses env rustflags)
+      - name: RUSTFLAGS guard (thruput build refuses env rustflags)
         if: matrix.template == 'counter'
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: |
           set -euo pipefail
           for probe in 'RUSTFLAGS=-C opt-level=2' 'CARGO_ENCODED_RUSTFLAGS='; do
-            if env "$probe" groundhog build >guard.log 2>&1; then
-              echo "groundhog build unexpectedly succeeded with $probe set"
+            if env "$probe" thruput build >guard.log 2>&1; then
+              echo "thruput build unexpectedly succeeded with $probe set"
               cat guard.log
               exit 1
             fi
             if ! grep -q "is set in the environment" guard.log; then
-              echo "groundhog build failed for a reason other than the rustflags guard with $probe set"
+              echo "thruput build failed for a reason other than the rustflags guard with $probe set"
               cat guard.log
               exit 1
             fi
@@ -227,7 +227,7 @@ jobs:
       # root the way a bootstrapper would. CARGO_HOME points at an empty
       # directory so the runner's global cargo config cannot satisfy the
       # check.
-      - name: Rv32 linker-script guard (groundhog build refuses missing rustflags)
+      - name: Rv32 linker-script guard (thruput build refuses missing rustflags)
         if: matrix.template == 'counter'
         working-directory: ${{ runner.temp }}
         run: |
@@ -237,14 +237,14 @@ jobs:
           printf '[workspace]\nmembers = ["my-counter"]\nresolver = "2"\n' > wrapped/Cargo.toml
           cp wrapped/my-counter/rust-toolchain.toml wrapped/
           cd wrapped/my-counter
-          if CARGO_HOME="${{ runner.temp }}/empty-cargo-home" groundhog build >guard.log 2>&1; then
-            echo "groundhog build unexpectedly succeeded without the Groundhog rustflags"
+          if CARGO_HOME="${{ runner.temp }}/empty-cargo-home" thruput build >guard.log 2>&1; then
+            echo "thruput build unexpectedly succeeded without the Groundhog rustflags"
             cat guard.log
             exit 1
           fi
           # shellcheck disable=SC2016
           if ! grep -q 'no `-T` linker script' guard.log; then
-            echo "groundhog build failed for a reason other than the rv32 linker-script guard"
+            echo "thruput build failed for a reason other than the rv32 linker-script guard"
             cat guard.log
             exit 1
           fi
@@ -272,8 +272,8 @@ jobs:
           scope: '@groundhogchain'
       - name: Build CLI and install selected runtime
         run: |
-          cargo build --locked -p groundhog-cli
-          ./target/debug/groundhog toolchain install --non-interactive
+          cargo build --locked -p thruput-cli
+          ./target/debug/thruput toolchain install --non-interactive
       - name: Install browser test dependencies
         run: |
           npm ci --prefix scripts/scaffold-app
@@ -287,7 +287,7 @@ jobs:
   # checked-in spec artifacts, then type-checks and runs what it generates.
   codegen-typecheck:
     needs: dependency-policy # Check deps before building anything
-    name: Codegen typecheck (spec artifact -> groundhog codegen ts -> tsc)
+    name: Codegen typecheck (spec artifact -> thruput codegen ts -> tsc)
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
@@ -305,8 +305,8 @@ jobs:
         with:
           cache: rust
 
-      - name: Build groundhog CLI
-        run: cargo build --locked -p groundhog-cli
+      - name: Build thruput CLI
+        run: cargo build --locked -p thruput-cli
 
       # Regenerating in place means the diff below also proves the checked-in
       # bindings are what the CLI emits today, not a stale snapshot.
@@ -322,7 +322,7 @@ jobs:
           for artifact in "${artifacts[@]}"; do
             output="${artifact%.spec.xdr}.ts"
             echo "codegen $artifact -> $output"
-            ./target/debug/groundhog codegen ts "$artifact" --output "$output"
+            ./target/debug/thruput codegen ts "$artifact" --output "$output"
           done
 
       - name: Bindings match the checked-in snapshots
@@ -331,7 +331,7 @@ jobs:
           if ! git diff --exit-code -- "$FIXTURES"; then
             echo
             echo "Generated bindings differ from the checked-in snapshots."
-            echo "Run: UPDATE_SNAPSHOTS=1 cargo test -p groundhog-cli --lib codegen"
+            echo "Run: UPDATE_SNAPSHOTS=1 cargo test -p thruput-cli --lib codegen"
             exit 1
           fi
           # git diff only covers tracked files, so check for untracked bindings too.

@@ -1,6 +1,6 @@
-use groundhog_cli::CliError;
 use groundhog_json_rpc_types::error::TxInvalidDetail;
 use groundhog_rv32_lower::LowerError;
+use thruput_cli::CliError;
 
 fn hint(error: &CliError) -> String {
     error.hint().expect("bug: hint expected").into_owned()
@@ -66,9 +66,9 @@ fn package_metadata_invalid_names_the_key_and_package() {
     };
     assert_eq!(error.code(), "package_metadata_invalid");
     assert!(
-        error.to_string().contains(
-            "`[package.metadata.groundhog] initial_memory_bytes` in package `my-counter`"
-        )
+        error
+            .to_string()
+            .contains("`[package.metadata.thruput] initial_memory_bytes` in package `my-counter`")
     );
     assert!(hint(&error).contains("128K"));
     assert_eq!(
@@ -121,7 +121,7 @@ fn generated_command_hints_quote_dynamic_arguments() {
     };
     assert_eq!(
         hint(&error),
-        "pass `--hogd-protocol='hogp/test;echo bad'` to override, or rebuild groundhog node against a matching groundhog-xdr"
+        "pass `--hogd-protocol='hogp/test;echo bad'` to override, or rebuild thruput node against a matching groundhog-xdr"
     );
 }
 

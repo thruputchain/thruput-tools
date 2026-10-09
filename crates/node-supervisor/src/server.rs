@@ -171,7 +171,7 @@ impl NodeSupervisorHandle {
                 release_version = ?identity.release_version(),
                 bundle_manifest_digest = ?identity.bundle_manifest_digest(),
                 bundle_manifest_mismatch_reason = ?identity.mismatch_reason(),
-                "Groundhog release identity",
+                "Thruput release identity",
             );
         }
         config

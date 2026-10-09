@@ -7,7 +7,7 @@ users interacting, rather than on one contract call in isolation.
 
 ## Relationship to other test tools
 
-`groundhog test --integration` provides the single-project build/deploy/test
+`thruput test --integration` provides the single-project build/deploy/test
 loop. `hogsim` drives a configured traffic mix and evaluates aggregate behavior.
 Testkit lets a small group of actors execute arbitrary application logic and
 make concrete assertions. It is not a load generator or a cloud launcher.
@@ -54,6 +54,6 @@ are [scenario.rs](../../crates/testkit/src/scenario.rs),
 
 For a real local contract smoke, use
 [scripts/smoke-testkit-local.sh](../../scripts/smoke-testkit-local.sh) with
-`GROUNDHOG_DEVNODE_BINARY` and `GROUNDHOG_EXAMPLES_ROOT` set. The script builds
+`THRUPUT_DEVNODE_BINARY` and `GROUNDHOG_EXAMPLES_ROOT` set. The script builds
 the caller-counter fixture and runs the live tests. Source tests and a successful
 local run do not prove compatibility with every deployed network.

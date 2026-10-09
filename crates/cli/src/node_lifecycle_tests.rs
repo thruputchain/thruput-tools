@@ -136,7 +136,7 @@ fn cancelled_managed_startup_keeps_bundle_busy_after_runtime_teardown() {
 // routing avoids another fixture binary while exercising the actual CLI path.
 #[test]
 fn managed_startup_parent_process() {
-    let Some(root) = std::env::var_os("GROUNDHOG_TEST_MANAGED_PARENT_ROOT") else {
+    let Some(root) = std::env::var_os("THRUPUT_TEST_MANAGED_PARENT_ROOT") else {
         return;
     };
     let root = std::path::PathBuf::from(root);
@@ -167,7 +167,7 @@ fn managed_startup_parent_process() {
                 () = tokio::time::sleep(Duration::from_millis(10)) => {}
             }
             if bundle.join("started").exists()
-                && std::env::var_os("GROUNDHOG_TEST_MANAGED_PARENT_EXIT").is_some()
+                && std::env::var_os("THRUPUT_TEST_MANAGED_PARENT_EXIT").is_some()
             {
                 // Bypass Rust drops, just like an embedding caller exiting.
                 std::process::exit(0);
@@ -192,9 +192,9 @@ fn managed_lease_survives_parent_exit_and_sigkill() {
                 "node::lifecycle_tests::managed_startup_parent_process",
                 "--nocapture",
             ])
-            .env("GROUNDHOG_TEST_MANAGED_PARENT_ROOT", root.path());
+            .env("THRUPUT_TEST_MANAGED_PARENT_ROOT", root.path());
         if normal_exit {
-            command.env("GROUNDHOG_TEST_MANAGED_PARENT_EXIT", "1");
+            command.env("THRUPUT_TEST_MANAGED_PARENT_EXIT", "1");
         }
         let mut parent = command.spawn().unwrap();
         wait_for_file(&bundle.join("started"));

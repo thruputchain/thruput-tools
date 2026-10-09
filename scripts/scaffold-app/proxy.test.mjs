@@ -13,7 +13,7 @@ const template = await readFile(
   "utf8",
 );
 
-for (const endpoint of ["/", "/groundhog", "/tenant/rpc?token=a%2Fb&network=local"]) {
+for (const endpoint of ["/", "/thruput", "/tenant/rpc?token=a%2Fb&network=local"]) {
   test(`dev proxy preserves RPC endpoint ${endpoint}`, { timeout: 10_000 }, async (t) => {
     const root = await mkdtemp(join(tmpdir(), "groundhog-proxy-"));
     t.after(() => rm(root, { recursive: true, force: true }));

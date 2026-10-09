@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir } from "node:fs/promises";
 
-const cli = process.env.GROUNDHOG_CLI ?? "groundhog";
+const cli = process.env.THRUPUT_CLI ?? "thruput";
 let child;
 
 // The CLI and its build children belong to this process group, never the user's node.
@@ -34,13 +34,13 @@ export async function command(executable, args) {
   });
 }
 
-export async function groundhog(args, { allowWarnings = false } = {}) {
+export async function thruput(args, { allowWarnings = false } = {}) {
   let result;
   try {
     result = await command(cli, [...args, "--json", "--non-interactive"]);
   } catch (error) {
     if (error.code === "ENOENT")
-      throw new Error("Install the Groundhog CLI and run groundhog init.");
+      throw new Error("Install the Thruput CLI and run thruput init.");
     throw error;
   }
   let report;
@@ -48,17 +48,17 @@ export async function groundhog(args, { allowWarnings = false } = {}) {
     report = JSON.parse(result.stdout);
   } catch {
     throw new Error(
-      `groundhog ${args[0]} failed. See the CLI diagnostic above.`,
+      `thruput ${args[0]} failed. See the CLI diagnostic above.`,
     );
   }
   if (!report.ok || (result.code !== 0 && !allowWarnings)) {
-    throw new Error(report.error?.message ?? `groundhog ${args[0]} failed.`);
+    throw new Error(report.error?.message ?? `thruput ${args[0]} failed.`);
   }
   return report.data;
 }
 
 export async function buildContract() {
-  const report = await groundhog(["build", "--bindings", "ts"]);
+  const report = await thruput(["build", "--bindings", "ts"]);
   if (
     typeof report.bindingsTs !== "string" ||
     typeof report.rv32 !== "string"

@@ -1,7 +1,7 @@
 //! Local hogd-dev block production driver.
 //!
 //! Production deployments rely on an external coordinator to ask the scheduler
-//! to nominate and commit blocks. `groundhog node` deliberately avoids running
+//! to nominate and commit blocks. `thruput node` deliberately avoids running
 //! chuckd for the localhost topology, so the supervisor owns that small piece
 //! of coordination policy for hogd-dev.
 

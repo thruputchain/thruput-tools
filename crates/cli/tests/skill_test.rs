@@ -5,7 +5,7 @@ use std::{
 };
 
 fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    Command::new(env!("CARGO_BIN_EXE_thruput"))
         .args(args)
         .output()
         .unwrap()
@@ -22,7 +22,7 @@ impl ReadFixture {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
         command
             .current_dir(self.0.path().join("project"))
             .env("HOME", self.0.path().join("home"))
@@ -149,7 +149,7 @@ fn missing_installation_requires_install_without_executing_tools() {
             .unwrap();
         assert!(!plain.status.success());
         assert!(plain.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&plain.stderr).contains("groundhog skill install"));
+        assert!(String::from_utf8_lossy(&plain.stderr).contains("thruput skill install"));
         let json = fixture.command().args([action, "--json"]).output().unwrap();
         assert!(!json.status.success());
         let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
@@ -309,7 +309,7 @@ mod installer {
     }
 
     fn command(root: &tempfile::TempDir) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_thruput"));
         cmd.env("PATH", root.path())
             .env("SKILL_ARGS", root.path().join("args"))
             .args(["skill"]);

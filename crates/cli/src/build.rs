@@ -169,7 +169,7 @@ fn build_summary(result: &BuildResult) -> Vec<(String, String)> {
 ///
 /// Cargo lets `CARGO_ENCODED_RUSTFLAGS` / `RUSTFLAGS` — even set-but-empty —
 /// replace the project's `.cargo/config.toml` target rustflags wholesale.
-/// That drops the Groundhog link args and per-crate codegen flags such as
+/// That drops the Thruput link args and per-crate codegen flags such as
 /// `-Z trap-unreachable=false`, which surfaces later as link failures or
 /// artifact-validation rejections instead of an obvious build error.
 fn ensure_no_env_rustflags() -> Result<(), CliError> {
@@ -216,11 +216,11 @@ pub enum StackSizeError {
     },
 }
 
-/// The `[package.metadata.groundhog]` key that sizes a contract's guest data
+/// The `[package.metadata.thruput]` key that sizes a contract's guest data
 /// memory.
 pub const INITIAL_MEMORY_BYTES_KEY: &str = "initial_memory_bytes";
 
-/// A byte count as `[package.metadata.groundhog]` may spell it: an integer,
+/// A byte count as `[package.metadata.thruput]` may spell it: an integer,
 /// or a string in the notation `--stack-size` takes (`"128K"`, `"0x20000"`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(untagged)]
@@ -231,7 +231,7 @@ pub enum ByteSizeValue {
     Text(String),
 }
 
-/// Parse `[package.metadata.groundhog] initial_memory_bytes`: the guest data
+/// Parse `[package.metadata.thruput] initial_memory_bytes`: the guest data
 /// address space a contract declares, a positive byte count that fits the
 /// artifact header's 32-bit `memory_bytes` field.
 pub fn parse_initial_memory_bytes(value: &ByteSizeValue) -> Result<u32, InitialMemoryError> {
@@ -274,10 +274,10 @@ pub enum InitialMemoryError {
 ///
 /// The stack reserve comes from `--stack-size` and defaults to the SDK linker
 /// script's. The data address space comes from the package's
-/// `[package.metadata.groundhog] initial_memory_bytes` and defaults to the
+/// `[package.metadata.thruput] initial_memory_bytes` and defaults to the
 /// protocol's 64 KiB. It lives in the manifest rather than on the command
 /// line because it is a property of the contract: it changes the artifact,
-/// and `groundhog build`, `groundhog test`, and the build behind a deploy
+/// and `thruput build`, `thruput test`, and the build behind a deploy
 /// must all see the same value.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct GuestLayout {
@@ -345,8 +345,8 @@ fn package_initial_memory_bytes(
         .iter()
         .find(|package| package.name == pkg_name)
         .and_then(|package| package.metadata.as_ref())
-        .and_then(|table| table.groundhog.as_ref())
-        .and_then(|groundhog| groundhog.initial_memory_bytes.as_ref());
+        .and_then(|table| table.thruput.as_ref())
+        .and_then(|thruput| thruput.initial_memory_bytes.as_ref());
     let Some(value) = value else {
         return Ok(None);
     };
@@ -378,8 +378,8 @@ fn stack_size_defsym_ignored(
 /// `--defsym` on the final link (requires an SDK with the stack-first linker
 /// script; older scripts ignore the symbol, which is reported as a warning).
 /// The guest data address space comes from the package's
-/// `[package.metadata.groundhog] initial_memory_bytes`, so every build of the
-/// package, including the one under `groundhog test`, stamps the same size.
+/// `[package.metadata.thruput] initial_memory_bytes`, so every build of the
+/// package, including the one under `thruput test`, stamps the same size.
 ///
 /// No chain bound is checked here: the build is offline and does not know
 /// where the artifact will be deployed. It reports the code and memory sizes,
@@ -426,7 +426,7 @@ pub fn build_rv32_project(
 
     if let Some(bytes) = layout.initial_memory_bytes {
         print.status(format_args!(
-            "Sizing guest data memory at {bytes} bytes ([package.metadata.groundhog] \
+            "Sizing guest data memory at {bytes} bytes ([package.metadata.thruput] \
              {INITIAL_MEMORY_BYTES_KEY})"
         ));
     }
@@ -482,9 +482,9 @@ pub fn build_rv32_project(
         return Err(CliError::Rv32ElfNotFound(elf.display().to_string()));
     }
 
-    let rv32 = artifacts::groundhog_rv32_output_path(&metadata.target_directory, pkg_name);
+    let rv32 = artifacts::thruput_rv32_output_path(&metadata.target_directory, pkg_name);
     let lower_metadata =
-        artifacts::groundhog_rv32_metadata_output_path(&metadata.target_directory, pkg_name);
+        artifacts::thruput_rv32_metadata_output_path(&metadata.target_directory, pkg_name);
     if let Some(parent) = rv32.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -595,7 +595,7 @@ pub fn build_rv32_project(
     })
 }
 
-/// The warning for a spec `groundhog codegen ts` would refuse, so the author
+/// The warning for a spec `thruput codegen ts` would refuse, so the author
 /// hears at build time rather than when someone generates bindings.
 fn ts_bindings_warning(spec: &ContractSpec, source_name: &str) -> Option<Finding> {
     let refusal = crate::codegen::generate_ts_bindings(spec, source_name).err()?;
@@ -703,16 +703,13 @@ pub struct MetadataTarget {
 /// A package's `[package.metadata]` table, as far as the CLI reads it.
 #[derive(Debug, serde::Deserialize)]
 pub struct PackageMetadata {
-    /// The `[package.metadata.groundhog]` table.
-    pub groundhog: Option<GroundhogPackageMetadata>,
+    /// The `[package.metadata.thruput]` table.
+    pub thruput: Option<ThruputPackageMetadata>,
 }
 
-/// The `[package.metadata.groundhog]` keys the CLI reads.
+/// The `[package.metadata.thruput]` keys the CLI reads.
 #[derive(Debug, serde::Deserialize)]
-pub struct GroundhogPackageMetadata {
-    /// Declared by `groundhog-contract-spec`: the raw spec wire format it
-    /// emits.
-    pub raw_spec_format: Option<u32>,
+pub struct ThruputPackageMetadata {
     /// Declared by a contract: the guest data address space it wants
     /// ([`INITIAL_MEMORY_BYTES_KEY`]).
     pub initial_memory_bytes: Option<ByteSizeValue>,
@@ -803,7 +800,18 @@ struct DependencyPackage {
     id: String,
     name: String,
     /// `null` for a package with no `[package.metadata]` table.
-    metadata: Option<PackageMetadata>,
+    metadata: Option<SpecPackageMetadata>,
+}
+
+// This table is authored by the published SDK, independently of CLI project settings.
+#[derive(Debug, serde::Deserialize)]
+struct SpecPackageMetadata {
+    groundhog: Option<DependencySpecMetadata>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DependencySpecMetadata {
+    raw_spec_format: Option<u32>,
 }
 
 impl DependencyPackage {
@@ -975,7 +983,7 @@ fn check_dependency_raw_spec_format(
 /// as a fragment parse failure after a full contract compile.
 ///
 /// A project with no `groundhog-contract-spec` in its graph is not a
-/// Groundhog contract and is left alone. An unavailable dependency graph
+/// Thruput contract and is left alone. An unavailable dependency graph
 /// warns rather than refuses, so an offline or vendored build still
 /// completes: only a format this build genuinely cannot read is a hard error.
 ///
@@ -1005,13 +1013,13 @@ fn check_contract_raw_spec_format(
     }
 }
 
-/// The linker script the Groundhog SDK supplies for rv32 builds.
+/// The linker script the Thruput SDK supplies for rv32 builds.
 pub(crate) const RV32_LINKER_SCRIPT: &str = "groundhog-rv32.ld";
 
 /// What cargo's effective config says about the rv32 build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Rv32ConfigCheck {
-    /// The Groundhog linker script is in the effective rustflags.
+    /// The Thruput linker script is in the effective rustflags.
     GroundhogScript,
     /// A different `-T` linker script is configured.
     CustomScript(String),
@@ -1028,7 +1036,7 @@ enum Rv32ConfigCheck {
 ///
 /// Cargo discovers config from its invocation directory upward plus
 /// `CARGO_HOME`, and the build runs cargo from the workspace root — so a
-/// project wrapped into a parent workspace after `groundhog new` leaves the
+/// project wrapped into a parent workspace after `thruput new` leaves the
 /// generated config behind in the member directory where cargo never reads
 /// it. Linking without a `-T` script cannot produce a valid artifact, so
 /// that refuses with the copy-the-config hint; every other imperfect probe
@@ -1044,7 +1052,7 @@ fn check_rv32_build_config(
             print.warn(format_args!(
                 "the effective rv32 rustflags select linker script `-T{script}` instead of \
                  `-T{RV32_LINKER_SCRIPT}`; the build proceeds, but the script must preserve \
-                 the Groundhog memory layout for the artifact to validate"
+                 the Thruput memory layout for the artifact to validate"
             ));
             Ok(())
         }
@@ -1056,7 +1064,7 @@ fn check_rv32_build_config(
         Rv32ConfigCheck::NotNightly => {
             print.warn(format_args!(
                 "could not verify the rv32 build config: cargo at the workspace root {} is \
-                 not a nightly toolchain, which Groundhog builds require; if this project \
+                 not a nightly toolchain, which Thruput builds require; if this project \
                  was wrapped into a workspace, copy `rust-toolchain.toml` to the workspace \
                  root alongside `.cargo/config.toml`",
                 workspace_root.display()
@@ -1313,6 +1321,34 @@ mod tests {
         assert_eq!(parse_stack_size("32K"), Ok(32768));
         assert_eq!(parse_stack_size("24k"), Ok(24576));
         assert_eq!(parse_stack_size("32KiB"), Ok(32768));
+    }
+
+    #[test]
+    fn contract_memory_settings_use_only_thruput_metadata() {
+        let metadata: super::CargoMetadata = serde_json::from_value(serde_json::json!({
+            "workspace_root": "/contract",
+            "target_directory": "/contract/target",
+            "packages": [{
+                "name": "contract",
+                "version": "0.1.0",
+                "manifest_path": "/contract/Cargo.toml",
+                "metadata": {
+                    "groundhog": { "initial_memory_bytes": "128K" },
+                    "thruput": { "initial_memory_bytes": "256K" }
+                }
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            super::package_initial_memory_bytes(&metadata, "contract").unwrap(),
+            Some(262_144)
+        );
+
+        let old: super::PackageMetadata = serde_json::from_value(serde_json::json!({
+            "groundhog": { "initial_memory_bytes": "128K" }
+        }))
+        .unwrap();
+        assert!(old.thruput.is_none());
     }
 
     #[test]
@@ -1598,7 +1634,7 @@ mod raw_spec_format_preflight_tests {
 
     #[test]
     fn skips_a_project_that_does_not_depend_on_contract_spec() {
-        // Not a Groundhog contract: there is no format to disagree about.
+        // Not a Thruput contract: there is no format to disagree about.
         assert!(check(&workspace_json(SpecDep::Absent, SpecDep::Absent)).is_ok());
     }
 

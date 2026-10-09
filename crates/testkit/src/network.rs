@@ -704,7 +704,7 @@ impl NetworkConfig {
 #[non_exhaustive]
 pub struct LocalNetworkConfig {
     /// Explicit `hog-devnode` binary path. Falls back to discovery when unset
-    /// (the `GROUNDHOG_DEVNODE_BINARY` env var, then a sibling of the current
+    /// (the `THRUPUT_DEVNODE_BINARY` env var, then a sibling of the current
     /// executable, then `PATH`).
     pub hog_devnode_binary: Option<PathBuf>,
     /// Artifact directories searched before the selected devnode's defaults.

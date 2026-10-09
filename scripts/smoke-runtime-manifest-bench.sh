@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Runtime-manifest gateway/bench smoke and scenario runner.
 #
-# Starts a real hog-devnode-backed `groundhog node`, extracts the runtime manifest
+# Starts a real hog-devnode-backed `thruput node`, extracts the runtime manifest
 # path from the CLI startup JSON, starts a standalone gateway from the same
 # manifest, then runs a named groundhog-bench scenario.
 #
 # Required environment:
-#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode
 #
 # Optional environment:
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
@@ -151,12 +151,12 @@ PY
 }
 
 find_hogd_dev_binary() {
-    if [[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]]; then
-        printf '%s\n' "$GROUNDHOG_DEVNODE_BINARY"
+    if [[ -n "${THRUPUT_DEVNODE_BINARY:-}" ]]; then
+        printf '%s\n' "$THRUPUT_DEVNODE_BINARY"
         return
     fi
 
-    die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
+    die "set THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 detect_hogd_protocol() {
@@ -394,7 +394,7 @@ case "$BENCH_BUILD_PROFILE" in
         die "unknown BENCH_BUILD_PROFILE=$BENCH_BUILD_PROFILE (expected debug or release)"
         ;;
 esac
-CLI="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/groundhog"
+CLI="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/thruput"
 GATEWAY="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/hog-gateway"
 BENCH="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/groundhog-bench"
 
@@ -413,7 +413,7 @@ fi
 
 log "Building $BENCH_BUILD_PROFILE CLI, gateway, and bench"
 cargo build "${BENCH_BUILD_ARGS[@]}" \
-    -p groundhog-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
+    -p thruput-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
     --manifest-path "$REPO_ROOT/Cargo.toml"
 
 if [[ -n "$BENCH_RESULTS_DIR" ]]; then
@@ -528,7 +528,7 @@ NODE_DESCENDANTS="$(collect_descendants "$NODE_PID" || true)"
 NODE_RPC_URL="$(json_field data.rpc_url "$NODE_JSON")"
 RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
 [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
-    || die "groundhog node did not report a runtime manifest path"
+    || die "thruput node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
 log "Node RPC: $NODE_RPC_URL"
 log "Runtime manifest: $RUNTIME_MANIFEST"

@@ -14,7 +14,7 @@ WalletBindingConflict
 
 WalletCreatePrefundUnsupported
   code: wallet_create_prefund_unsupported
-  hint text: create the empty wallet first, then run groundhog airdrop <wallet-name>
+  hint text: create the empty wallet first, then run thruput airdrop <wallet-name>
 
 NativeDeploymentFundingRequired
   code: native_deployment_funding_required
@@ -44,7 +44,7 @@ CargoNotFound
 
 ContractTomlNotFound
   code: contract_toml_not_found
-  hint text: every contract build runs as `cargo --config .cargo/contract.toml`; create that file containing `[unstable]` and `build-std = ["core", "alloc"]`, or run `groundhog new` to scaffold a project. Do not put `[target.*]` rustflags in it — cargo joins those with `.cargo/config.toml`, so a flag in both files is passed twice
+  hint text: every contract build runs as `cargo --config .cargo/contract.toml`; create that file containing `[unstable]` and `build-std = ["core", "alloc"]`, or run `thruput new` to scaffold a project. Do not put `[target.*]` rustflags in it — cargo joins those with `.cargo/config.toml`, so a flag in both files is passed twice
 
 PackageNotFound
   code: package_not_found
@@ -52,7 +52,7 @@ PackageNotFound
 
 PackageRequired
   code: package_required
-  hint text: run from inside a package directory, pass `-p <package>` to select one, or pass `--workspace` to `groundhog test` to test every member with a `test_rv32` target
+  hint text: run from inside a package directory, pass `-p <package>` to select one, or pass `--workspace` to `thruput test` to test every member with a `test_rv32` target
 
 CargoMetadataFailed
   code: cargo_metadata_failed
@@ -64,7 +64,7 @@ Rv32ElfNotFound
 
 ArtifactNotFound
   code: artifact_not_found
-  hint format: run `groundhog build` first to produce the {kind} artifact, or pass `--artifact <path>`
+  hint format: run `thruput build` first to produce the {kind} artifact, or pass `--artifact <path>`
 
 UnsupportedArtifactExtension
   code: unsupported_artifact_extension
@@ -98,28 +98,28 @@ ProjectDirectory
 
 UnknownTemplate
   code: unknown_template
-  hint text: run `groundhog templates list` for available templates; omit --template for a minimal contract
+  hint text: run `thruput templates list` for available templates; omit --template for a minimal contract
 
 Io
   code: io_error
 
 ProfileNotFound
   code: profile_not_found
-  hint format: create it with `groundhog config new {0} --network <NETWORK>`, or switch to an existing one with `--profile` or `GROUNDHOG_PROFILE`
+  hint format: create it with `thruput config new {0} --network <NETWORK>`, or switch to an existing one with `--profile` or `THRUPUT_PROFILE`
 
 ProfileNotFoundInScope
   code: profile_not_found_in_scope
-  hint format: create the profile with `groundhog config new {} --network <NETWORK> --{scope}`
+  hint format: create the profile with `thruput config new {} --network <NETWORK> --{scope}`
   details: profile, scope
 
 ProfileAlreadyExists
   code: profile_already_exists
-  hint format: update it with `groundhog config set <FIELD> <VALUE> --profile={} --{scope}`
+  hint format: update it with `thruput config set <FIELD> <VALUE> --profile={} --{scope}`
   details: profile, scope
 
 NoActiveProfile
   code: no_active_profile
-  hint text: select a profile with `--profile` or `GROUNDHOG_PROFILE`, or set default_profile in project or global config
+  hint text: select a profile with `--profile` or `THRUPUT_PROFILE`, or set default_profile in project or global config
 
 ProfileNameInvalid
   code: profile_name_invalid
@@ -146,7 +146,7 @@ ConfigFileInvalid
 
 ProjectConfigUnavailable
   code: project_config_unavailable
-  hint text: run from inside a Groundhog project or remove `--project`
+  hint text: run from inside a Thruput project or remove `--project`
 
 ConfigScopeConflict
   code: config_scope_conflict
@@ -168,11 +168,11 @@ ConfigChangedDuringConfirmation
 
 CredentialsEmpty
   code: credentials_empty
-  hint text: rerun `groundhog init` and provide a password; the username is optional
+  hint text: rerun `thruput init` and provide a password; the username is optional
 
 UnsupportedOs
   code: unsupported_os
-  hint text: `groundhog test` currently supports macOS and Linux host targets
+  hint text: `thruput test` currently supports macOS and Linux host targets
 
 Rv32LowerFailed
   code: rv32_lower_failed
@@ -191,11 +191,11 @@ RawSpecFormat
 
 KeyExists
   code: key_exists
-  hint format: use a different name, or remove the existing key with `groundhog keys rm -- {}`
+  hint format: use a different name, or remove the existing key with `thruput keys rm -- {}`
 
 KeyNotFound
   code: key_not_found
-  hint text: list available keys with `groundhog keys ls`
+  hint text: list available keys with `thruput keys ls`
 
 KeyNameEmpty
   code: key_name_empty
@@ -215,7 +215,7 @@ InvalidSecretSeed
 
 JsonUnsupported
   code: json_unsupported
-  hint format: run `groundhog {0}` without `--json`
+  hint format: run `thruput {0}` without `--json`
 
 NotImplemented
   code: not_implemented
@@ -223,24 +223,24 @@ NotImplemented
 
 IntegrationTestNotFound
   code: integration_test_not_found
-  hint text: create `tests/integration.rs` before running `groundhog test --integration`
+  hint text: create `tests/integration.rs` before running `thruput test --integration`
 
 InvalidTestOptions
   code: invalid_test_options
-  hint text: remove the conflicting `groundhog test` option and rerun the command
+  hint text: remove the conflicting `thruput test` option and rerun the command
 
 NoWorkspaceTestPackages
   code: no_workspace_test_packages
-  hint text: `--workspace` tests the members that declare a `tests/test_rv32.rs` target, as `groundhog new` scaffolds; run `groundhog test -p <package>` to test one member
+  hint text: `--workspace` tests the members that declare a `tests/test_rv32.rs` target, as `thruput new` scaffolds; run `thruput test -p <package>` to test one member
 
 WorkspaceTestsFailed
   code: workspace_tests_failed
-  hint text: see each package's test output above; rerun one package with `groundhog test -p <package>`, or `groundhog test --workspace --rerun` to run only the recorded failures
+  hint text: see each package's test output above; rerun one package with `thruput test -p <package>`, or `thruput test --workspace --rerun` to run only the recorded failures
   details: failed, total
 
 EnvRustflagsSet
   code: env_rustflags_set
-  hint format: unset it for this build (e.g. `env -u {0} groundhog build`); to add extra rustflags, append them to the `[target.*]` rustflags lists in the project's `.cargo/config.toml` instead
+  hint format: unset it for this build (e.g. `env -u {0} thruput build`); to add extra rustflags, append them to the `[target.*]` rustflags lists in the project's `.cargo/config.toml` instead
 
 Rv32LinkerScriptNotConfigured
   code: rv32_linker_script_not_configured
@@ -262,11 +262,11 @@ NodeSupervisorProtocolIntroRejected
 
 LocalNodeAlreadyRunning
   code: local_node_already_running
-  hint text: stop the running `groundhog node` process before starting another local node
+  hint text: stop the running `thruput node` process before starting another local node
 
 RpcConnect
   code: rpc_connect
-  hint format: run `groundhog node` in another terminal, or check that the RPC endpoint at {0} is running
+  hint format: run `thruput node` in another terminal, or check that the RPC endpoint at {0} is running
 
 ProxyConfiguration
   code: proxy_configuration_invalid
@@ -278,11 +278,11 @@ HttpClientInit
 
 MissingRpcUrl
   code: missing_rpc_url
-  hint text: for a local profile, start `groundhog node` in another terminal; otherwise run `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`
+  hint text: for a local profile, start `thruput node` in another terminal; otherwise run `thruput config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`
 
 LocalNodeUnavailable
   code: missing_rpc_url
-  hint text: start `groundhog node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile devnet`) or `--rpc-url <URL>`
+  hint text: start `thruput node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile devnet`) or `--rpc-url <URL>`
   details: computed
 
 ProfileConfigInvalid
@@ -305,11 +305,11 @@ FaucetService
 
 MissingSigningKey
   code: missing_signing_key
-  hint text: set `default_key` in project or global config, or run `groundhog keys generate`
+  hint text: set `default_key` in project or global config, or run `thruput keys generate`
 
 MissingNetworkHash
   code: missing_network_hash
-  hint text: signing binds each transaction to a network: run `groundhog config set network-hash <hash> --profile <name>`, or point the profile at a runtime manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
+  hint text: signing binds each transaction to a network: run `thruput config set network-hash <hash> --profile <name>`, or point the profile at a runtime manifest from `thruput node` via THRUPUT_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
 
 InvalidNetworkHash
   code: invalid_network_hash
@@ -332,7 +332,7 @@ UnknownAddressTarget
 
 UnknownContractAlias
   code: unknown_contract_alias
-  hint format: use a configured contract alias or a 32-byte 0x-prefixed address; inspect aliases with `groundhog config get {} --sources`
+  hint format: use a configured contract alias or a 32-byte 0x-prefixed address; inspect aliases with `thruput config get {} --sources`
   details: alias, profile, configSource, availableAliases
 
 InvalidTransactionHash
@@ -347,7 +347,7 @@ InvalidTransactionHistoryLimit
 
 InvalidTransactionCursor
   code: invalid_transaction_cursor
-  hint text: pass the opaque hex cursor returned by the previous `groundhog tx list` page
+  hint text: pass the opaque hex cursor returned by the previous `thruput tx list` page
   details: input, message
 
 InvalidEventTopic
@@ -367,7 +367,7 @@ InvalidEventLimit
 
 InvalidEventCursor
   code: invalid_event_cursor
-  hint text: pass the opaque hex cursor returned by the previous `groundhog events list` page with unchanged filters
+  hint text: pass the opaque hex cursor returned by the previous `thruput events list` page with unchanged filters
   details: input, message
 
 InvalidEventOptions
@@ -382,7 +382,7 @@ InvalidTokenTransferLimit
 
 InvalidTokenTransferCursor
   code: invalid_event_cursor
-  hint text: pass the opaque hex cursor returned by the previous `groundhog token transfers` page with the same token and participant filters
+  hint text: pass the opaque hex cursor returned by the previous `thruput token transfers` page with the same token and participant filters
   details: input, message
 
 InvalidTokenTransferOptions
@@ -418,7 +418,7 @@ LocalFundingAttempt
 
 LocalFundingUnresolved
   code: local_funding_unresolved
-  hint text: inspect this hash with groundhog tx show, then retry the original recipient and amount; keep the retained attempt until an authoritative receipt resolves it
+  hint text: inspect this hash with thruput tx show, then retry the original recipient and amount; keep the retained attempt until an authoritative receipt resolves it
   details: txHash, attemptPath
 
 LocalRuntimeUnavailable
@@ -451,7 +451,7 @@ SavedWalletAmbiguous
 
 SavedWalletNotFound
   code: saved_wallet_not_found
-  hint text: run `groundhog wallet ls` and select a saved wallet name
+  hint text: run `thruput wallet ls` and select a saved wallet name
   details: walletName, profile
 
 SavedWalletOwnerMismatch
@@ -461,17 +461,17 @@ SavedWalletOwnerMismatch
 
 InheritedDefaultWalletRemoval
   code: inherited_default_wallet_removal
-  hint format: run `groundhog wallet use <NAME> --profile={}` to select a project default before removing this wallet
+  hint format: run `thruput wallet use <NAME> --profile={}` to select a project default before removing this wallet
   details: walletName, profile
 
 WalletRemovalExposesMissingDefault
   code: wallet_removal_exposes_missing_default
-  hint format: save the inherited wallet binding or select another project default with `groundhog wallet use <NAME> --profile={}`
+  hint format: save the inherited wallet binding or select another project default with `thruput wallet use <NAME> --profile={}`
   details: walletName, inheritedWallet, profile
 
 SavedWalletOwnerPublicKeyInvalid
   code: saved_wallet_owner_public_key_invalid
-  hint text: recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile
+  hint text: recreate the wallet binding with `thruput wallet create`, or fix owner_public_key in the selected profile
   details: keyName, message
 
 TransferToSelf
@@ -481,7 +481,7 @@ TransferToSelf
 
 ReceiptTimeout
   code: receipt_timeout
-  hint format: inspect with `groundhog tx show {}` using the same profile and RPC endpoint as the original submission before submitting the operation again. Unknown is inconclusive; check the sending wallet's HOG balance on the same network before resubmitting. Local logs: node terminal or redirected output; use `--verbose` on future starts (restarting loses ephemeral state).
+  hint format: inspect with `thruput tx show {}` using the same profile and RPC endpoint as the original submission before submitting the operation again. Unknown is inconclusive; check the sending wallet's HOG balance on the same network before resubmitting. Local logs: node terminal or redirected output; use `--verbose` on future starts (restarting loses ephemeral state).
 
 TransactionInvalid
   code: transaction_invalid
@@ -538,7 +538,7 @@ ChainDataDirLocked
 
 ChainArchiveInvalid
   code: chain_archive_invalid
-  hint text: use an unmodified archive produced by `groundhog chain dump`
+  hint text: use an unmodified archive produced by `thruput chain dump`
 
 ChainDumpExists
   code: chain_dump_exists
@@ -559,7 +559,7 @@ InvalidArgument
 
 PackageMetadataInvalid
   code: package_metadata_invalid
-  hint format: set `{key}` under `[package.metadata.groundhog]` in the package's Cargo.toml to a positive byte count: an integer, or a string such as "128K" or "0x20000"
+  hint format: set `{key}` under `[package.metadata.thruput]` in the package's Cargo.toml to a positive byte count: an integer, or a string such as "128K" or "0x20000"
   details: package, key, message
 
 TransactionRejectedBeforeSubmission
@@ -577,16 +577,16 @@ ToolchainInstall
 
 ToolchainSource
   code: toolchain_source_error
-  hint text: check the artifact source and cache permissions, then retry `groundhog toolchain install`
+  hint text: check the artifact source and cache permissions, then retry `thruput toolchain install`
 
 ToolchainOfflineMissing
   code: toolchain_offline_missing
-  hint text: rerun `groundhog toolchain install` without offline mode, or set GROUNDHOG_DEVNODE_BINARY to a local build
+  hint text: rerun `thruput toolchain install` without offline mode, or set THRUPUT_DEVNODE_BINARY to a local build
   details: version, target
 
 ToolchainNotInstalled
   code: toolchain_not_installed
-  hint format: run `groundhog toolchain install {}` first
+  hint format: run `thruput toolchain install {}` first
   details: version, target
 
 Other

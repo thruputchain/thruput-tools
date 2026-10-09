@@ -1,4 +1,4 @@
-//! Setup results for interactive and automated `groundhog init` invocations.
+//! Setup results for interactive and automated `thruput init` invocations.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

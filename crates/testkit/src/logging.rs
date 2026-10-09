@@ -3,7 +3,7 @@
 //! The supervisor forwards `hog-devnode`'s logs through the `tracing` framework
 //! (under the `hogd_dev` target, with its own diagnostics under
 //! `groundhog_node_supervisor`). These helpers install a stderr subscriber so
-//! those events actually print, mirroring what `groundhog node` does.
+//! those events actually print, mirroring what `thruput node` does.
 
 use groundhog_node_supervisor::LogLevel;
 

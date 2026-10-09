@@ -4,13 +4,13 @@ use std::process::{Command, Output, Stdio};
 use tempfile::TempDir;
 
 fn run(home: &TempDir, args: &[&str], input: Option<&str>) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
     command
         .args(args)
         .current_dir(home.path())
         .env("XDG_CONFIG_HOME", home.path())
         .env("XDG_CACHE_HOME", home.path().join("cache"));
-    for (name, _) in std::env::vars().filter(|(name, _)| name.starts_with("GROUNDHOG_")) {
+    for (name, _) in std::env::vars().filter(|(name, _)| name.starts_with("THRUPUT_")) {
         command.env_remove(name);
     }
     let mut child = command
@@ -66,7 +66,7 @@ fn strkey_import_preserves_legacy_storage_and_public_identity() {
     for stream in [&imported.stdout, &imported.stderr] {
         assert!(!String::from_utf8_lossy(stream).contains(secret.as_str()));
     }
-    let key_path = home.path().join("groundhog/keys/alice.json");
+    let key_path = home.path().join("thruput/keys/alice.json");
     let bytes = std::fs::read(&key_path).unwrap();
     let stored: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(stored["version"], 1);
@@ -149,12 +149,12 @@ fn import_rejects_invalid_secret_types_and_reserved_names_without_echoing_input(
             assert!(!String::from_utf8_lossy(&out.stdout).contains(&input));
             assert!(!String::from_utf8_lossy(&out.stderr).contains(&input));
         }
-        assert!(!home.path().join("groundhog/keys/alice.json").exists());
+        assert!(!home.path().join("thruput/keys/alice.json").exists());
     }
     let home = TempDir::new().unwrap();
     let out = run(&home, &["keys", "import", "dev-1"], Some(&"ab".repeat(32)));
     assert!(out.status.success());
-    assert!(home.path().join("groundhog/keys/dev-1.json").exists());
+    assert!(home.path().join("thruput/keys/dev-1.json").exists());
     let good = run(&home, &["keys", "import", "alice"], Some(&"ab".repeat(32)));
     assert!(good.status.success());
 }
@@ -162,7 +162,7 @@ fn import_rejects_invalid_secret_types_and_reserved_names_without_echoing_input(
 #[test]
 fn import_invalid_config_leaves_no_key_and_can_be_retried() {
     let home = TempDir::new().unwrap();
-    let config_dir = home.path().join("groundhog");
+    let config_dir = home.path().join("thruput");
     std::fs::create_dir_all(&config_dir).unwrap();
     let config = config_dir.join("config.toml");
     let invalid = "default_key = [\n";
@@ -207,15 +207,15 @@ fn assert_imported_with_default_warning(result: &Output, home: &TempDir) {
         value["warnings"][0]["hint"]
             .as_str()
             .unwrap()
-            .contains("groundhog keys use alice")
+            .contains("thruput keys use alice")
     );
-    assert!(home.path().join("groundhog/keys/alice.json").exists());
+    assert!(home.path().join("thruput/keys/alice.json").exists());
 }
 
 #[test]
 fn import_config_lock_timeout_reports_import_success_and_recovery() {
     let home = TempDir::new().unwrap();
-    let config_dir = home.path().join("groundhog");
+    let config_dir = home.path().join("thruput");
     std::fs::create_dir_all(&config_dir).unwrap();
     let lock = std::fs::OpenOptions::new()
         .read(true)
@@ -246,7 +246,7 @@ fn import_config_lock_timeout_reports_import_success_and_recovery() {
 #[test]
 fn import_rejected_config_write_preserves_key_and_both_config_links() {
     let home = TempDir::new().unwrap();
-    let config_dir = home.path().join("groundhog");
+    let config_dir = home.path().join("thruput");
     std::fs::create_dir_all(&config_dir).unwrap();
     let config = config_dir.join("config.toml");
     let alias = config_dir.join("config-alias.toml");
@@ -287,7 +287,7 @@ fn import_preserves_an_existing_default_key() {
     assert_eq!(value["data"]["key"]["isDefault"], false);
     assert_eq!(value["warnings"], serde_json::json!([]));
     assert!(
-        std::fs::read_to_string(home.path().join("groundhog/config.toml"))
+        std::fs::read_to_string(home.path().join("thruput/config.toml"))
             .unwrap()
             .contains("default_key = \"alice\"")
     );

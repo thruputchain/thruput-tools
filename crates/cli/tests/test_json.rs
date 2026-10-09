@@ -1,7 +1,7 @@
-use groundhog_cli::artifacts::ArtifactKind;
 use std::path::PathBuf;
+use thruput_cli::artifacts::ArtifactKind;
 
-use groundhog_cli::test_json::*;
+use thruput_cli::test_json::*;
 
 #[test]
 fn missing_mode_deserializes_as_rv32_default() {
@@ -33,7 +33,7 @@ fn missing_mode_deserializes_as_rv32_default() {
         "runs": [],
         "rerun": {
             "enabled": false,
-            "cachePath": "/project/target/groundhog/test-failures/demo.json",
+            "cachePath": "/project/target/thruput/test-failures/demo.json",
             "cachedTests": [],
             "cachedTestsAfter": [],
             "executedTests": [],
@@ -93,7 +93,7 @@ fn old_reports_without_artifact_fail_deserialization() {
         "runs": [],
         "rerun": {
             "enabled": false,
-            "cachePath": "/project/target/groundhog/test-failures/demo.json",
+            "cachePath": "/project/target/thruput/test-failures/demo.json",
             "cachedTests": [],
             "cachedTestsAfter": [],
             "executedTests": [],

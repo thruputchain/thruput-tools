@@ -34,7 +34,7 @@ members = [
 version = "0.26.2"
 edition = "2024"
 # Keep in step with rust-toolchain.toml. Without this, `cargo install
-# groundhog-cli` on an older stable fails deep in dependency resolution with
+# thruput-cli` on an older stable fails deep in dependency resolution with
 # one "<crate> requires rustc 1.96" line per crate instead of naming this
 # package's requirement up front.
 rust-version = "1.96"
@@ -43,7 +43,7 @@ license = "Apache-2.0"
 publish = ["groundhog"]
 repository = "https://github.com/groundhogchain/groundhog-rpc"
 homepage = "https://github.com/groundhogchain/groundhog-rpc"
-keywords = ["groundhog"]
+keywords = ["thruput"]
 categories = ["development-tools"]
 
 [workspace.dependencies]

@@ -13,7 +13,7 @@ use crate::{CliError, Print};
 /// Version of the toolchain command JSON payload schema.
 pub const TOOLCHAIN_JSON_SCHEMA_VERSION: u32 = 1;
 /// Override for the public artifact origin; catalog digests remain authoritative.
-pub const TOOLCHAIN_BASE_URL_ENV: &str = "GROUNDHOG_TOOLCHAIN_BASE_URL";
+pub const TOOLCHAIN_BASE_URL_ENV: &str = "THRUPUT_TOOLCHAIN_BASE_URL";
 
 /// Origin represented by one toolchain command result.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -41,7 +41,7 @@ pub struct ToolchainEntry {
     pub installed: bool,
 }
 
-/// Stable JSON data for `groundhog toolchain list`.
+/// Stable JSON data for `thruput toolchain list`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolchainListReport {
@@ -216,7 +216,7 @@ pub fn list(command: &'static str, print: &Print) -> Result<(), CliError> {
             }),
         )?;
         if !report.toolchains.iter().any(|entry| entry.active) {
-            print.warn(format_args!("Selected hog-devnode {} is absent from this catalog; run `groundhog toolchain use {}` to select its default", report.selected_version, report.default_version));
+            print.warn(format_args!("Selected hog-devnode {} is absent from this catalog; run `thruput toolchain use {}` to select its default", report.selected_version, report.default_version));
         }
         Ok(())
     }

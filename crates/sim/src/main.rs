@@ -66,11 +66,11 @@ struct RunArgs {
     /// Override the runtime manifest path.
     #[arg(long)]
     runtime_manifest: Option<PathBuf>,
-    /// Override the groundhog binary path for local target runs.
+    /// Override the thruput binary path for local target runs.
     #[arg(long)]
-    groundhog_binary: Option<PathBuf>,
+    thruput_binary: Option<PathBuf>,
     /// Override the hog-devnode binary path for local target runs.
-    #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
+    #[arg(long = "hog-devnode-binary", value_name = "THRUPUT_DEVNODE_BINARY")]
     hogd_dev_binary: Option<PathBuf>,
     /// Override the hog-devnode x23 intro protocol token for local target runs.
     #[arg(long)]
@@ -130,7 +130,7 @@ impl From<RunArgs> for RunOptions {
             scenario: args.scenario,
             rpc_url: args.rpc_url,
             runtime_manifest: args.runtime_manifest,
-            groundhog_binary: args.groundhog_binary,
+            thruput_binary: args.thruput_binary,
             hogd_dev_binary: args.hogd_dev_binary,
             hogd_protocol: args.hogd_protocol,
             port: args.port,
@@ -525,8 +525,8 @@ mod tests {
             "hogsim",
             "run",
             "scenario.json",
-            "--groundhog-binary",
-            "/tmp/groundhog",
+            "--thruput-binary",
+            "/tmp/thruput",
             "--hog-devnode-binary",
             "/tmp/hog-devnode",
             "--hogd-protocol",
@@ -542,7 +542,7 @@ mod tests {
 
         match cli.command {
             Command::Run(args) => {
-                assert_eq!(args.groundhog_binary, Some(PathBuf::from("/tmp/groundhog")));
+                assert_eq!(args.thruput_binary, Some(PathBuf::from("/tmp/thruput")));
                 assert_eq!(
                     args.hogd_dev_binary,
                     Some(PathBuf::from("/tmp/hog-devnode"))

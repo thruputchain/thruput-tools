@@ -42,19 +42,19 @@ pub struct TestOptions {
     pub harness: TestHarnessOptions,
 }
 
-/// Options for the `groundhog test --integration` orchestration path.
+/// Options for the `thruput test --integration` orchestration path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IntegrationTestOptions {
     /// Override the hog-devnode handshake protocol token used when launching the ephemeral
-    /// hog-devnode node (mirrors `groundhog node --hogd-protocol`). Useful
+    /// hog-devnode node (mirrors `thruput node --hogd-protocol`). Useful
     /// when the local hog-devnode build is ahead of the published protocol
-    /// crates. When `None`, falls back to the `GROUNDHOG_HOGD_PROTOCOL`
+    /// crates. When `None`, falls back to the `THRUPUT_HOGD_PROTOCOL`
     /// environment variable.
     pub hogd_protocol: Option<String>,
     /// Exact managed hog-devnode version requested for the ephemeral node.
     pub hog_devnode_version: Option<String>,
     /// Genesis network parameter overrides for the ephemeral node (mirrors
-    /// `groundhog node --network-config`). A parameter given twice is rejected.
+    /// `thruput node --network-config`). A parameter given twice is rejected.
     pub network_config_overrides: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
     /// Forbid managed network acquisition for the ephemeral node.
     pub offline: bool,
@@ -64,7 +64,7 @@ pub struct IntegrationTestOptions {
 }
 
 /// Environment fallback for the integration node's protocol override.
-const HOGD_PROTOCOL_ENV: &str = "GROUNDHOG_HOGD_PROTOCOL";
+const HOGD_PROTOCOL_ENV: &str = "THRUPUT_HOGD_PROTOCOL";
 
 /// Boolean controls forwarded to the selected libtest harness.
 #[derive(Debug, Clone, Default)]
@@ -466,12 +466,12 @@ impl IntegrationFixture {
             .map_err(|error| CliError::Io(std::io::Error::other(error.to_string())))?;
         let signer = groundhog_signing::LocalSigner::from_secret_key(*secret);
         crate::keys::write_fixture_key(
-            &config.path().join("groundhog/keys"),
+            &config.path().join("thruput/keys"),
             "integration",
             &signer,
         )?;
         fs::write(
-            config.path().join("groundhog/config.toml"),
+            config.path().join("thruput/config.toml"),
             "default_profile = 'integration'\ndefault_key = 'integration'\n[profile.integration]\n",
         )?;
         Ok(Self { config, signer })
@@ -637,9 +637,9 @@ fn integration_test_features(package_root: &Path) -> &'static str {
     if manifest
         .get("features")
         .and_then(toml::Value::as_table)
-        .is_some_and(|features| features.contains_key("groundhog-integration-test"))
+        .is_some_and(|features| features.contains_key("thruput-integration-test"))
     {
-        "dev,groundhog-integration-test"
+        "dev,thruput-integration-test"
     } else {
         "dev"
     }
@@ -681,26 +681,26 @@ fn integration_test_environment(
 ) -> Vec<(OsString, OsString)> {
     let mut env = vec![
         (
-            OsString::from("GROUNDHOG_INTEGRATION_TEST"),
+            OsString::from("THRUPUT_INTEGRATION_TEST"),
             OsString::from("1"),
         ),
-        (OsString::from("GROUNDHOG_RPC_URL"), OsString::from(rpc_url)),
+        (OsString::from("THRUPUT_RPC_URL"), OsString::from(rpc_url)),
         (
-            OsString::from("GROUNDHOG_CONTRACT_ADDRESS"),
+            OsString::from("THRUPUT_CONTRACT_ADDRESS"),
             OsString::from(contract_address),
         ),
         (
-            OsString::from("GROUNDHOG_PROFILE"),
+            OsString::from("THRUPUT_PROFILE"),
             OsString::from("integration"),
         ),
         (
-            OsString::from("GROUNDHOG_DEFAULT_KEY"),
+            OsString::from("THRUPUT_DEFAULT_KEY"),
             OsString::from(default_key),
         ),
     ];
     if let Some(path) = runtime_manifest {
         env.push((
-            OsString::from("GROUNDHOG_RUNTIME_MANIFEST"),
+            OsString::from("THRUPUT_RUNTIME_MANIFEST"),
             path.as_os_str().to_owned(),
         ));
     }
@@ -1337,11 +1337,7 @@ fn should_watch_file(root: &Path, path: &Path) -> bool {
     if matches!(
         relative.file_name().and_then(OsStr::to_str),
         Some(
-            "Cargo.toml"
-                | "Cargo.lock"
-                | "groundhog.toml"
-                | "rust-toolchain"
-                | "rust-toolchain.toml"
+            "Cargo.toml" | "Cargo.lock" | "thruput.toml" | "rust-toolchain" | "rust-toolchain.toml"
         )
     ) {
         return true;
@@ -1985,7 +1981,7 @@ fn join_capture(handle: thread::JoinHandle<io::Result<Vec<u8>>>) -> Result<Vec<u
 
 fn failure_cache_path(target_directory: &Path, package: &str, kind: ArtifactKind) -> PathBuf {
     target_directory
-        .join("groundhog")
+        .join("thruput")
         .join("test-failures")
         .join(format!("{package}-{}.json", kind.as_str()))
 }
@@ -2162,7 +2158,7 @@ mod tests {
             TestArtifactInfo::new(artifact_kind, artifact_path),
             &outputs,
             false,
-            std::path::Path::new("/project/target/.groundhog/failures.json"),
+            std::path::Path::new("/project/target/.thruput/failures.json"),
             &[],
             &[],
             &[],
@@ -2235,7 +2231,7 @@ mod tests {
             ),
             &[],
             false,
-            std::path::Path::new("/project/target/.groundhog/failures.json"),
+            std::path::Path::new("/project/target/.thruput/failures.json"),
             &[],
             &[],
             &[],
@@ -2412,7 +2408,7 @@ mod tests {
             std::path::Path::new("/project"),
             "demo",
             INTEGRATION_TEST_TARGET,
-            "dev,groundhog-integration-test",
+            "dev,thruput-integration-test",
         );
 
         let args: Vec<_> = command
@@ -2424,10 +2420,7 @@ mod tests {
                 .any(|window| window[0] == "--test" && window[1] == "integration")
         );
         assert!(!args.iter().any(|arg| arg == "--include-ignored"));
-        assert!(
-            args.iter()
-                .any(|arg| arg == "dev,groundhog-integration-test")
-        );
+        assert!(args.iter().any(|arg| arg == "dev,thruput-integration-test"));
     }
 
     #[test]
@@ -2451,12 +2444,12 @@ mod tests {
         let tmp = TempDir::new().expect("bug: tempdir should be created");
         fs::write(
             tmp.path().join("Cargo.toml"),
-            "[features]\ngroundhog-integration-test = []\n",
+            "[features]\nthruput-integration-test = []\n",
         )
         .expect("bug: manifest should be written");
         assert_eq!(
             integration_test_features(tmp.path()),
-            "dev,groundhog-integration-test"
+            "dev,thruput-integration-test"
         );
 
         fs::write(tmp.path().join("Cargo.toml"), "[features]\ndev = []\n")
@@ -2528,27 +2521,27 @@ mod tests {
         );
 
         assert!(env.contains(&(
-            OsString::from("GROUNDHOG_INTEGRATION_TEST"),
+            OsString::from("THRUPUT_INTEGRATION_TEST"),
             OsString::from("1")
         )));
         assert!(env.contains(&(
-            OsString::from("GROUNDHOG_RPC_URL"),
+            OsString::from("THRUPUT_RPC_URL"),
             OsString::from("http://127.0.0.1:1234")
         )));
         assert!(env.iter().any(|(key, value)| {
-            key == "GROUNDHOG_CONTRACT_ADDRESS"
+            key == "THRUPUT_CONTRACT_ADDRESS"
                 && value == &OsString::from(format!("0x{}", "11".repeat(32)))
         }));
         assert!(env.contains(&(
-            OsString::from("GROUNDHOG_PROFILE"),
+            OsString::from("THRUPUT_PROFILE"),
             OsString::from("integration")
         )));
         assert!(env.contains(&(
-            OsString::from("GROUNDHOG_DEFAULT_KEY"),
+            OsString::from("THRUPUT_DEFAULT_KEY"),
             OsString::from("dev-4")
         )));
         assert!(env.contains(&(
-            OsString::from("GROUNDHOG_RUNTIME_MANIFEST"),
+            OsString::from("THRUPUT_RUNTIME_MANIFEST"),
             OsString::from("/tmp/runtime-manifest.json")
         )));
     }
@@ -2589,14 +2582,14 @@ mod tests {
                 )
             })
             .collect();
-        assert!(applied.contains(&("GROUNDHOG_RPC_URL".into(), "http://127.0.0.1:1234".into())));
+        assert!(applied.contains(&("THRUPUT_RPC_URL".into(), "http://127.0.0.1:1234".into())));
         assert!(applied.iter().any(|(key, value)| {
-            key == "GROUNDHOG_CONTRACT_ADDRESS" && value == &format!("0x{}", "11".repeat(32))
+            key == "THRUPUT_CONTRACT_ADDRESS" && value == &format!("0x{}", "11".repeat(32))
         }));
-        assert!(applied.contains(&("GROUNDHOG_PROFILE".into(), "integration".into())));
-        assert!(applied.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-4".into())));
+        assert!(applied.contains(&("THRUPUT_PROFILE".into(), "integration".into())));
+        assert!(applied.contains(&("THRUPUT_DEFAULT_KEY".into(), "dev-4".into())));
         assert!(applied.contains(&(
-            "GROUNDHOG_RUNTIME_MANIFEST".into(),
+            "THRUPUT_RUNTIME_MANIFEST".into(),
             "/tmp/runtime-manifest.json".into()
         )));
     }
@@ -2773,7 +2766,7 @@ mod tests {
             &root.join("tests/fixtures/input.txt")
         ));
         assert!(should_watch_file(&root, &root.join(".cargo/contract.toml")));
-        assert!(should_watch_file(&root, &root.join("groundhog.toml")));
+        assert!(should_watch_file(&root, &root.join("thruput.toml")));
         assert!(!should_watch_file(&root, &root.join("README.md")));
     }
 
@@ -3106,7 +3099,7 @@ failures:
     #[test]
     fn preserves_cache_when_command_fails_without_failed_test_lines() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let path = tmp.path().join("target/groundhog/test-failures/demo.json");
+        let path = tmp.path().join("target/thruput/test-failures/demo.json");
         let cached = vec!["tests::a".to_string(), "tests::b".to_string()];
         write_failure_cache(&path, "demo", &cached).expect("bug: cache should write");
         let options = TestOptions {
@@ -3209,14 +3202,14 @@ failures:
 
         assert_eq!(
             path,
-            PathBuf::from("/tmp/target/groundhog/test-failures/demo-contract-rv32.json")
+            PathBuf::from("/tmp/target/thruput/test-failures/demo-contract-rv32.json")
         );
     }
 
     #[test]
     fn failure_cache_roundtrips_and_deduplicates() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let path = tmp.path().join("target/groundhog/test-failures/demo.json");
+        let path = tmp.path().join("target/thruput/test-failures/demo.json");
         let tests = vec![
             "tests::fails".to_string(),
             "tests::fails".to_string(),
@@ -3232,7 +3225,7 @@ failures:
     #[test]
     fn empty_failure_cache_clears_file() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let path = tmp.path().join("target/groundhog/test-failures/demo.json");
+        let path = tmp.path().join("target/thruput/test-failures/demo.json");
         write_failure_cache(&path, "demo", &["tests::fails".into()])
             .expect("bug: cache should write");
 
@@ -3244,7 +3237,7 @@ failures:
     #[test]
     fn ignores_cache_for_other_package() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let path = tmp.path().join("target/groundhog/test-failures/demo.json");
+        let path = tmp.path().join("target/thruput/test-failures/demo.json");
         let cache = FailureCache {
             version: FAILURE_CACHE_VERSION,
             package: "other".into(),

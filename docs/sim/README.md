@@ -10,11 +10,11 @@ compatible `hog-devnode` binary. Build the CLI first so the local provider can
 launch it:
 
 ```sh
-cargo build -p groundhog-cli --locked
+cargo build -p thruput-cli --locked
 cargo run -p groundhog-sim --bin hogsim -- catalog
 cargo run -p groundhog-sim --bin hogsim -- validate examples/sim/local-chain-tip-smoke.json
 cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-chain-tip-smoke.json \
-  --groundhog-binary target/debug/groundhog \
+  --thruput-binary target/debug/thruput \
   --hog-devnode-binary /absolute/path/to/hog-devnode --port 0
 ```
 
@@ -27,8 +27,8 @@ be part of the normal quickstart.
 
 ```sh
 cargo run -p groundhog-sim --bin hogsim -- catalog --tag contract
-GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-local.sh
-GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-scenarios.sh
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-local.sh
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-scenarios.sh
 ```
 
 The catalog lists target provider, tags, and artifact requirements. Contract

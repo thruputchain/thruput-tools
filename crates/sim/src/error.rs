@@ -32,29 +32,29 @@ pub enum SimError {
     #[error("failed to build JSON-RPC client: {0}")]
     RpcClient(String),
     #[error(
-        "groundhog binary `{binary}` was not found; pass --groundhog-binary to hogsim run for local targets"
+        "thruput binary `{binary}` was not found; pass --thruput-binary to hogsim run for local targets"
     )]
-    GroundhogBinaryNotFound { binary: String },
-    #[error("failed to spawn local groundhog node `{binary}`: {source}")]
+    ThruputBinaryNotFound { binary: String },
+    #[error("failed to spawn local thruput node `{binary}`: {source}")]
     LocalNodeSpawn {
         binary: String,
         #[source]
         source: std::io::Error,
     },
     #[error(
-        "local groundhog node did not emit startup JSON within {timeout_secs}s; stderr: {stderr}"
+        "local thruput node did not emit startup JSON within {timeout_secs}s; stderr: {stderr}"
     )]
     LocalNodeStartupTimeout { timeout_secs: u64, stderr: String },
-    #[error("local groundhog node exited before startup JSON; status: {status}; stderr: {stderr}")]
+    #[error("local thruput node exited before startup JSON; status: {status}; stderr: {stderr}")]
     LocalNodeStartupExit { status: String, stderr: String },
-    #[error("local groundhog node startup JSON is missing field `{field}`")]
+    #[error("local thruput node startup JSON is missing field `{field}`")]
     LocalNodeStartupJsonMissing { field: &'static str },
-    #[error("local groundhog node startup JSON is invalid: {source}")]
+    #[error("local thruput node startup JSON is invalid: {source}")]
     LocalNodeStartupJson {
         #[source]
         source: serde_json::Error,
     },
-    #[error("failed to signal local groundhog node pid {pid}: {source}")]
+    #[error("failed to signal local thruput node pid {pid}: {source}")]
     LocalNodeSignal {
         pid: u32,
         #[source]

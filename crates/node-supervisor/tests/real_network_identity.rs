@@ -27,7 +27,7 @@ fn config(
     hash: NetworkHashHex,
     accounts: Vec<BootstrapManifestAllocation>,
 ) -> NodeSupervisorConfig {
-    let binary = std::env::var_os("GROUNDHOG_DEVNODE_BINARY").expect("runtime binary is required");
+    let binary = std::env::var_os("THRUPUT_DEVNODE_BINARY").expect("runtime binary is required");
     let artifacts = std::path::Path::new(&binary)
         .parent()
         .unwrap()
@@ -132,7 +132,7 @@ fn transfer(signer: &LocalSigner, recipient: ContractAddress) -> Transaction {
 }
 
 #[tokio::test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY pointing to a compatible schema-4 real runtime"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY pointing to a compatible schema-4 real runtime"]
 #[expect(
     clippy::too_many_lines,
     reason = "one process qualification covers domain isolation and restart recovery"

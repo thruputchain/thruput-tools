@@ -14,7 +14,7 @@ reimplementing node semantics in a development-only backend.
 From the repository root, with private registry access and a compatible runtime:
 
 ```sh
-GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
@@ -32,7 +32,7 @@ namespace followed by `:account-N`. The smoke script shows the executable setup.
 These deterministic keys are disposable fixtures. In one terminal:
 
 ```sh
-groundhog --json node --bootstrap-accounts ./bench-accounts.json --hog-devnode-binary /absolute/path/to/hog-devnode \
+thruput --json node --bootstrap-accounts ./bench-accounts.json --hog-devnode-binary /absolute/path/to/hog-devnode \
   --block-driver interval --block-interval-ms 500 > /tmp/groundhog-node.json
 ```
 
@@ -61,7 +61,7 @@ benchmark methods do not need submission confirmation.
 The node writes its endpoint and manifest path into global `local_runtime_state`.
 Profiles with `network = "local"` consume that state; startup does not rewrite
 the selected profile. Scripts can pass an explicit runtime manifest or use
-`GROUNDHOG_RUNTIME_MANIFEST`. Resolution and override precedence live in
+`THRUPUT_RUNTIME_MANIFEST`. Resolution and override precedence live in
 [CLI configuration](../../crates/cli/src/config/project.rs).
 
 ## Readiness and trust
@@ -110,12 +110,12 @@ only when the child group does not exit. Dropping a handle is not equivalent to
 awaiting shutdown. An interrupted shutdown must not release ownership as though
 all descendants were confirmed stopped.
 
-Use the [CLI node reference](../../crates/cli/README.md#groundhog-node) for
+Use the [CLI node reference](../../crates/cli/README.md#thruput-node) for
 runtime selection, logging, persistence, and supported overrides. The lifecycle
 implementation is in [process.rs](../../crates/node-supervisor/src/process.rs)
 and [pid_file.rs](../../crates/node-supervisor/src/pid_file.rs).
 
-`groundhog node --init-network-hash` selects a new chain's bootstrap signing domain.
+`thruput node --init-network-hash` selects a new chain's bootstrap signing domain.
 Distinct ports alone do not create distinct networks. Omission initializes zero for
 a new chain; a restart loads the identity from the existing chain-bound funding
 journal. Initialized directories reject the initialization flag, including a matching

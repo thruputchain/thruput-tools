@@ -5287,7 +5287,7 @@ export type Result =
             let output = generate_ts_bindings(&spec, source_name).unwrap();
             assert_codegen_snapshot(name, &output);
             // The artifact is checked in beside the binding so CI can run the
-            // real `groundhog codegen ts` over it and type-check the result.
+            // real `thruput codegen ts` over it and type-check the result.
             assert_spec_artifact_snapshot(name, &spec);
         }
     }

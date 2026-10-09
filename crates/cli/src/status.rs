@@ -1,4 +1,4 @@
-//! `groundhog status` — non-interactive diagnostic.
+//! `thruput status` — non-interactive diagnostic.
 //!
 //! Reports the RV32 toolchain, local devnode, keys,
 //! and project context.
@@ -93,7 +93,7 @@ fn render_report(report: &checks::StatusReport, print: &Print) {
         ("Default Key".into(), default_key_label(report)),
     ]);
     items.extend(project_items(report));
-    print.summary_report("Groundhog Status", &items, report.all_findings());
+    print.summary_report("Thruput Status", &items, report.all_findings());
 }
 
 fn environment_items(report: &checks::StatusReport) -> Vec<(String, String)> {

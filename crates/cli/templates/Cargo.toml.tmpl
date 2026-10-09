@@ -9,7 +9,7 @@ doctest = false
 test = false
 
 # RV32 ELF bin wrapper. The name must stay the snake-case package name:
-# `groundhog build` looks for the ELF at `release/<snake_name>`.
+# `thruput build` looks for the ELF at `release/<snake_name>`.
 # `required-features` keeps host `cargo build` / `cargo test` from building
 # this no_std binary.
 [[bin]]
@@ -22,13 +22,13 @@ bench = false
 # Three of these feature names are contracts with the toolchain — do not
 # rename them:
 # - `entrypoints`: the #[contract] macro keys guest entrypoint codegen on
-#   this exact name, and `groundhog build` compiles the rv32 bin with it.
-# - `dev`: `groundhog test` runs host tests with `--features dev`.
-# - `groundhog-integration-test`: `groundhog test --integration` enables it.
+#   this exact name, and `thruput build` compiles the rv32 bin with it.
+# - `dev`: `thruput test` runs host tests with `--features dev`.
+# - `thruput-integration-test`: `thruput test --integration` enables it.
 [features]
 entrypoints = []
 dev = ["sdk/dev"]
-groundhog-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
+thruput-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 
 # `sdk` is declared per target because it needs `std` on the host and forbids
 # it on the guest. Cargo resolves features per platform, so host `cargo build`

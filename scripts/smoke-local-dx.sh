@@ -2,7 +2,7 @@
 # Real local-DX smoke test.
 #
 # Exercises the user-facing CLI path against a real hog-devnode binary:
-#   groundhog new -> build -> persistent node -> smoke-sender deploy/call/view/storage
+#   thruput new -> build -> persistent node -> smoke-sender deploy/call/view/storage
 #   -> smoke-sender/smoke-recipient transfer with recipient and sender balance validation
 #   -> transaction show and bounded sender-history pagination
 #   -> raw/spec-decoded counter events and canonical token transfer history
@@ -11,7 +11,7 @@
 #   -> stop -> dump/restore -> restart -> verify state and continued progress
 #
 # Required environment:
-#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode
 #
 # Optional environment:
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
@@ -27,7 +27,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 [[ "$BUILD_TARGET_DIR" = /* ]] || BUILD_TARGET_DIR="$REPO_ROOT/$BUILD_TARGET_DIR"
 export CARGO_TARGET_DIR="$BUILD_TARGET_DIR"
-CLI="$BUILD_TARGET_DIR/debug/groundhog"
+CLI="$BUILD_TARGET_DIR/debug/thruput"
 GATEWAY="$BUILD_TARGET_DIR/debug/hog-gateway"
 PROJECT_NAME="smoke-counter"
 SMOKE_PROFILE="local"
@@ -280,12 +280,12 @@ PY
 }
 
 find_hogd_dev_binary() {
-    if [[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]]; then
-        printf '%s\n' "$GROUNDHOG_DEVNODE_BINARY"
+    if [[ -n "${THRUPUT_DEVNODE_BINARY:-}" ]]; then
+        printf '%s\n' "$THRUPUT_DEVNODE_BINARY"
         return
     fi
 
-    die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
+    die "set THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 detect_hogd_protocol() {
@@ -501,7 +501,7 @@ assert_transaction_committed() {
 display_command() {
     local parts=("$@")
     if [[ "${parts[0]}" == "$CLI" ]]; then
-        parts[0]="groundhog"
+        parts[0]="thruput"
     fi
     python3 - "${parts[@]}" <<'PY'
 import sys
@@ -599,10 +599,10 @@ HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     log "Building CLI and standalone gateway"
-    cargo build --locked -p groundhog-cli -p groundhog-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --locked -p thruput-cli -p groundhog-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
 else
     log "Building CLI"
-    cargo build --locked -p groundhog-cli --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --locked -p thruput-cli --manifest-path "$REPO_ROOT/Cargo.toml"
 fi
 
 WORK="$(mktemp -d)"
@@ -662,7 +662,7 @@ cd "$WORK"
 log "Scaffolding counter contract"
 "$CLI" new "$PROJECT_NAME" --template counter
 cd "$PROJECT_NAME"
-export GROUNDHOG_PROFILE="$SMOKE_PROFILE"
+export THRUPUT_PROFILE="$SMOKE_PROFILE"
 
 # Exercise this checkout's RPC client before its matching registry release,
 # just as the generated-project CI job does. SDK dependencies remain published.
@@ -728,7 +728,7 @@ log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
     || die "initial node chain_state was $CHAIN_STATE, expected fresh"
 [[ "$VIEW_PLANE" == "view_gateway" ]] || die "node view plane was $VIEW_PLANE, expected view_gateway"
 [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
-    || die "groundhog node did not report a runtime manifest path"
+    || die "thruput node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
 RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
 [[ "$(json_field networkHash "$RUNTIME_JSON")" == "$EXPECTED_NETWORK_HASH" ]] \
@@ -765,23 +765,23 @@ for index in 0 1 2 3; do
     [[ "$(json_field bootstrapAccounts.$index.initialStorageTokens "$RUNTIME_JSON")" == "$expected_tokens" ]] \
         || die "runtime manifest account $index did not advertise funding $expected_tokens"
 done
-NODE_PROFILE="$(toml_field groundhog.toml default_profile)"
+NODE_PROFILE="$(toml_field thruput.toml default_profile)"
 [[ "$NODE_PROFILE" == "$SMOKE_PROFILE" ]] \
     || die "default_profile was $NODE_PROFILE, expected $SMOKE_PROFILE"
-PROFILE_RPC_URL="$(toml_profile_field groundhog.toml "$NODE_PROFILE" rpc_url)"
-PROFILE_RUNTIME_MANIFEST="$(toml_profile_field groundhog.toml "$NODE_PROFILE" runtime_manifest)"
+PROFILE_RPC_URL="$(toml_profile_field thruput.toml "$NODE_PROFILE" rpc_url)"
+PROFILE_RUNTIME_MANIFEST="$(toml_profile_field thruput.toml "$NODE_PROFILE" runtime_manifest)"
 [[ "$PROFILE_RPC_URL" == "null" ]] \
     || die "project profile.$NODE_PROFILE.rpc_url was dirtied: $PROFILE_RPC_URL"
 [[ "$PROFILE_RUNTIME_MANIFEST" == "null" ]] \
     || die "project profile.$NODE_PROFILE.runtime_manifest was dirtied: $PROFILE_RUNTIME_MANIFEST"
-GLOBAL_CONFIG="$XDG_CONFIG_HOME/groundhog/config.toml"
+GLOBAL_CONFIG="$XDG_CONFIG_HOME/thruput/config.toml"
 GLOBAL_RPC_URL="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.rpc_url)"
 GLOBAL_RUNTIME_MANIFEST="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.runtime_manifest)"
 [[ "$GLOBAL_RPC_URL" == "$RPC_URL" ]] \
     || die "local_runtime_state.rpc_url was $GLOBAL_RPC_URL, expected $RPC_URL"
 [[ "$GLOBAL_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
     || die "local_runtime_state.runtime_manifest was $GLOBAL_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
-unset GROUNDHOG_RUNTIME_MANIFEST
+unset THRUPUT_RUNTIME_MANIFEST
 
 TRANSFER_SENDER="smoke-sender"
 TRANSFER_RECIPIENT="smoke-recipient"
@@ -1001,8 +1001,8 @@ log "counter event result: tx=$PING_TX_HASH raw+decoded"
 VIEW_FROM="smoke-sender"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC to standalone gateway for view/storage checks"
-    export GROUNDHOG_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
-    update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$GATEWAY_RPC_URL"
+    export THRUPUT_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
+    update_rpc_url thruput.toml "$SMOKE_PROFILE" "$GATEWAY_RPC_URL"
 fi
 
 EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))
@@ -1063,7 +1063,7 @@ log "view ping result: height=$(json_field data.height "$PING_VIEW_JSON") events
 contract=$PING_EVENT_CONTRACT topic0=$PING_EVENT_TOPIC0 data=$PING_EVENT_DATA"
 
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
-    log "Skipping call get through standalone gateway because local block driving is owned by groundhog node"
+    log "Skipping call get through standalone gateway because local block driving is owned by thruput node"
 else
     GET_JSON="$(run_json "call get" "$CLI" --json call --force "$PROJECT_NAME" get)"
     assert_call_succeeded "get" "$GET_JSON"
@@ -1086,8 +1086,8 @@ log "storage args: address=$CONTRACT_ADDRESS key=$COUNTER_VALUE_KEY"
 log "storage result: height=$(json_field data.blockHeight "$STORAGE_JSON") kind=$STORAGE_KIND value=$STORAGE_VALUE"
 
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
-    log "Switching project RPC back to groundhog node for wallet-create write checks"
-    update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
+    log "Switching project RPC back to thruput node for wallet-create write checks"
+    update_rpc_url thruput.toml "$SMOKE_PROFILE" "$RPC_URL"
 fi
 
 # An ordinary key without a saved binding already resolves to its empty native
@@ -1170,7 +1170,7 @@ USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
     || die "native deployment changed the wallet identity"
 [[ "$(json_field data.nativeDeployment.fundingRawAmount "$USER_DEPLOY_JSON")" == "100000000" ]] \
     || die "native deployment did not record the exact 10 HOG funding"
-SAVED_ALIAS="$(toml_field groundhog.toml "profile.$SMOKE_PROFILE.contracts.$PROJECT_NAME")"
+SAVED_ALIAS="$(toml_field thruput.toml "profile.$SMOKE_PROFILE.contracts.$PROJECT_NAME")"
 [[ "$SAVED_ALIAS" == "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy alias was $SAVED_ALIAS, expected $USER_CONTRACT_ADDRESS"
 USER_GET_JSON="$(run_json "read atomic initializer value" "$CLI" --json call --force "$PROJECT_NAME" get)"
@@ -1198,7 +1198,7 @@ assert_transfer_balance_deltas \
 WALLET_BALANCE_BEFORE_RESTART="$(json_field data.rawBalance "$NATIVE_SENDER_AFTER_JSON")"
 log "native wallet flow passed: address=$WALLET_ADDRESS contract=$USER_CONTRACT_ADDRESS"
 
-unset GROUNDHOG_RUNTIME_MANIFEST
+unset THRUPUT_RUNTIME_MANIFEST
 VIEW_FROM="smoke-sender"
 PERSISTED_VIEW_BEFORE="$(run_view_json "view before persistent restart" "$PROJECT_NAME" get)"
 PERSISTED_VALUE_BEFORE="$(json_field data.returnValue "$PERSISTED_VIEW_BEFORE")"
@@ -1264,7 +1264,7 @@ assert_rpc_network_identity "$RPC_URL"
 [[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_ACCOUNT_RAW" ]] \
     || die "restarted runtime manifest did not retain custom local-user HOG allocation"
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
-    update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
+    update_rpc_url thruput.toml "$SMOKE_PROFILE" "$RPC_URL"
 fi
 
 WALLET_AFTER_RESTART_JSON="$(run_json "native wallet balance after restart" "$CLI" --json balance "$USER_KEY")"

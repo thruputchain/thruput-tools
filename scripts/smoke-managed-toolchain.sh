@@ -2,18 +2,18 @@
 # Qualify the embedded default through real acquisition, startup, RPC, and offline restart.
 set -euo pipefail
 TASK_REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-if [[ -z "${GROUNDHOG_CLI:-}" ]]; then
-    GROUNDHOG_CLI="$(cargo build --locked --manifest-path "$TASK_REPO_ROOT/Cargo.toml" \
-        -p groundhog-cli --bin groundhog --message-format=json | python3 -c '
+if [[ -z "${THRUPUT_CLI:-}" ]]; then
+    THRUPUT_CLI="$(cargo build --locked --manifest-path "$TASK_REPO_ROOT/Cargo.toml" \
+        -p thruput-cli --bin thruput --message-format=json | python3 -c '
 import json, sys
 artifacts = [json.loads(line) for line in sys.stdin]
 paths = [a["executable"] for a in artifacts if a.get("reason") == "compiler-artifact"
-         and a.get("target", {}).get("name") == "groundhog" and a.get("executable")]
+         and a.get("target", {}).get("name") == "thruput" and a.get("executable")]
 if len(paths) != 1:
-    raise SystemExit("expected one groundhog executable from Cargo")
+    raise SystemExit("expected one thruput executable from Cargo")
 print(paths[0])')"
 fi
-python3 - "$GROUNDHOG_CLI" <<'PY'
+python3 - "$THRUPUT_CLI" <<'PY'
 import hashlib
 import json
 import os
@@ -70,11 +70,11 @@ def stop_session():
 
 try:
     # Remove sibling discovery as well as environment overrides: this must exercise acquisition.
-    binary = root / 'groundhog'
+    binary = root / 'thruput'
     shutil.copy2(Path(sys.argv[1]).resolve(), binary)
     env = os.environ.copy()
-    for name in ('GROUNDHOG_DEVNODE_BINARY', 'GROUNDHOG_TOOLCHAIN_BASE_URL', 'GROUNDHOG_OFFLINE',
-                 'GROUNDHOG_PROFILE', 'HOGD_PROTOCOL_OVERRIDE'):
+    for name in ('THRUPUT_DEVNODE_BINARY', 'THRUPUT_TOOLCHAIN_BASE_URL', 'THRUPUT_OFFLINE',
+                 'THRUPUT_PROFILE', 'HOGD_PROTOCOL_OVERRIDE'):
         env.pop(name, None)
     env['XDG_CONFIG_HOME'] = str(root / 'config')
     env['XDG_CACHE_HOME'] = str(root / 'cache')
@@ -84,14 +84,14 @@ try:
                               capture_output=True, text=True, timeout=60)
 
     def check_status():
-        before = snapshot(root / 'cache' / 'groundhog' / 'toolchain')
+        before = snapshot(root / 'cache' / 'thruput' / 'toolchain')
         result = command('--json', 'status')
         # Other diagnostics can fail on a fresh developer machine; managed discovery must work.
         payload = json.loads(result.stdout)
         devnode = payload['data']['environment']['devnode']
         assert devnode['reachable'], devnode
         assert str(root / 'cache') in devnode['path'], devnode
-        assert snapshot(root / 'cache' / 'groundhog' / 'toolchain') == before, 'status mutated cache'
+        assert snapshot(root / 'cache' / 'thruput' / 'toolchain') == before, 'status mutated cache'
 
     for attempt, offline in enumerate((False, True, True)):
         kill_parent = attempt == 2

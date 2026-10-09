@@ -219,7 +219,7 @@ pub struct RunOptions {
     pub scenario: PathBuf,
     pub rpc_url: Option<String>,
     pub runtime_manifest: Option<PathBuf>,
-    pub groundhog_binary: Option<PathBuf>,
+    pub thruput_binary: Option<PathBuf>,
     pub hogd_dev_binary: Option<PathBuf>,
     pub hogd_protocol: Option<String>,
     pub port: Option<u16>,
@@ -247,7 +247,7 @@ impl From<ExistingRunOptions> for RunOptions {
             scenario: args.scenario,
             rpc_url: args.rpc_url,
             runtime_manifest: args.runtime_manifest,
-            groundhog_binary: None,
+            thruput_binary: None,
             hogd_dev_binary: None,
             hogd_protocol: None,
             port: None,
@@ -266,7 +266,7 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
         scenario,
         rpc_url,
         runtime_manifest,
-        groundhog_binary,
+        thruput_binary,
         hogd_dev_binary,
         hogd_protocol,
         port,
@@ -285,7 +285,7 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
     let overrides = TargetOverrides {
         rpc_url,
         runtime_manifest,
-        groundhog_binary,
+        thruput_binary,
         hogd_dev_binary,
         hogd_protocol,
         port,
@@ -1604,7 +1604,7 @@ mod tests {
             scenario,
             rpc_url: Some("http://127.0.0.1:9545".into()),
             runtime_manifest: None,
-            groundhog_binary: None,
+            thruput_binary: None,
             hogd_dev_binary: None,
             hogd_protocol: None,
             port: None,
@@ -1636,7 +1636,7 @@ mod tests {
             scenario,
             rpc_url: None,
             runtime_manifest: None,
-            groundhog_binary: Some(missing.clone()),
+            thruput_binary: Some(missing.clone()),
             hogd_dev_binary: None,
             hogd_protocol: None,
             port: None,
@@ -1651,7 +1651,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            SimError::GroundhogBinaryNotFound { binary } if binary == missing.display().to_string()
+            SimError::ThruputBinaryNotFound { binary } if binary == missing.display().to_string()
         ));
     }
 
@@ -1832,7 +1832,7 @@ mod tests {
                 pgid: 42,
                 port: 9545,
                 start_time: "Wed May 27 12:00:00 2026".into(),
-                command: "groundhog node".into(),
+                command: "thruput node".into(),
             }),
         };
         write_json_pretty(out_dir.join("target-ownership.json"), &latest)

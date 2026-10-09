@@ -59,7 +59,7 @@ pub fn load_built_contract_spec(
     target_dir: &Path,
     package_name: &str,
 ) -> Result<Option<ContractSpec>, CliError> {
-    let rv32 = crate::artifacts::groundhog_rv32_output_path(target_dir, package_name);
+    let rv32 = crate::artifacts::thruput_rv32_output_path(target_dir, package_name);
     load_artifact_contract_spec(&rv32)
 }
 
@@ -349,7 +349,7 @@ mod tests {
         let rv32_spec = sample_contract_spec();
         let dir = tempfile::tempdir().expect("bug: temp dir should be created");
         let target_dir = dir.path();
-        let output_dir = target_dir.join("groundhog");
+        let output_dir = target_dir.join("thruput");
         std::fs::create_dir_all(&output_dir).expect("bug: output dir should be created");
         let rv32 = output_dir.join("demo_contract.rv32a");
         std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
@@ -372,7 +372,7 @@ mod tests {
     fn built_contract_spec_rejects_rv32_sidecar_older_than_artifact() {
         let dir = tempfile::tempdir().expect("bug: temp dir should be created");
         let target_dir = dir.path();
-        let output_dir = target_dir.join("groundhog");
+        let output_dir = target_dir.join("thruput");
         std::fs::create_dir_all(&output_dir).expect("bug: output dir should be created");
         let rv32 = output_dir.join("demo_contract.rv32a");
         std::fs::write(&rv32, b"new rv32 fixture").expect("bug: rv32 fixture should be written");

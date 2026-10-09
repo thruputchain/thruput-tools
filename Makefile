@@ -2,11 +2,11 @@
 # authoritative; run `make help` for the available targets.
 #
 #   make config     fetch dependencies (needs the private registry token)
-#   make cli        build just the groundhog CLI
+#   make cli        build just the thruput CLI
 #   make node       run a local node against a hog-devnode binary
 #   make help       list every target
 #
-# The local devnode path needs two repos: this one supplies `groundhog`, which
+# The local devnode path needs two repos: this one supplies `thruput`, which
 # serves the public JSON-RPC surface on 9545, and hogd supplies the hog-devnode
 # process it supervises.
 
@@ -50,7 +50,7 @@ endif
 # Binaries `make install` copies. The workspace builds more (groundhog-bench,
 # rv32-lower, groundhog-open-rpc-spec, groundhog-faucet); add them here when a
 # deployment needs them rather than installing the whole target directory.
-BINS ?= groundhog hogsim hog-gateway
+BINS ?= thruput hogsim hog-gateway
 
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
@@ -66,13 +66,13 @@ TOOLCHAIN := $(shell grep -m1 '^channel' rust-toolchain.toml | tr -d '"' | awk '
 .PHONY: help
 help:
 	@echo "Setup"
-	@echo "  config        cargo fetch --locked; needs the groundhog registry token"
+	@echo "  config        cargo fetch --locked; needs the thruput registry token"
 	@echo ""
 	@echo "Build"
 	@echo "  build         the whole workspace ($(PROFILE))"
 	@echo "  build-native  local-only host-tuned workspace; NEVER use for release artifacts"
-	@echo "  cli           just the groundhog binary, all a local node needs"
-	@echo "  node          run groundhog node against DEVNODE_BINARY"
+	@echo "  cli           just the thruput binary, all a local node needs"
+	@echo "  node          run thruput node against DEVNODE_BINARY"
 	@echo ""
 	@echo "Verify"
 	@echo "  check         fmt-check, lint, and test together"
@@ -141,17 +141,17 @@ check-native:
 
 .PHONY: cli
 cli:
-	$(CARGO) build -p groundhog-cli $(CARGO_PROFILE_FLAG)
+	$(CARGO) build -p thruput-cli $(CARGO_PROFILE_FLAG)
 
 # Runs the built binary rather than `cargo run` so an unbuilt tree says so
 # instead of starting a long compile with a node command tacked on the end.
 .PHONY: node
 node:
-	@test -x $(TARGET_DIR)/groundhog || { \
-		echo "no groundhog binary in $(TARGET_DIR); run 'make cli' first" >&2; exit 1; }
+	@test -x $(TARGET_DIR)/thruput || { \
+		echo "no thruput binary in $(TARGET_DIR); run 'make cli' first" >&2; exit 1; }
 	@test -x "$(DEVNODE_BINARY)" || { \
 		echo "no hog-devnode at $(DEVNODE_BINARY); build it in the hogd repo or set DEVNODE_BINARY" >&2; exit 1; }
-	GROUNDHOG_DEVNODE_BINARY="$(DEVNODE_BINARY)" $(TARGET_DIR)/groundhog node $(NODE_ARGS)
+	THRUPUT_DEVNODE_BINARY="$(DEVNODE_BINARY)" $(TARGET_DIR)/thruput node $(NODE_ARGS)
 
 # Core workspace format, lint, and test checks.
 .PHONY: check

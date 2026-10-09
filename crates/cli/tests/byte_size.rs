@@ -1,4 +1,4 @@
-use groundhog_cli::byte_size::parse_byte_size;
+use thruput_cli::byte_size::parse_byte_size;
 
 #[test]
 fn accepts_decimal_hex_and_unit_suffixes() {

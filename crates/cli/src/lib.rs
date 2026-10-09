@@ -1,4 +1,4 @@
-//! Groundhog CLI — smart contract development tools.
+//! Thruput CLI — smart contract development tools.
 
 pub mod abort_json;
 pub(crate) mod account_resolution;
@@ -66,10 +66,10 @@ pub use print::Print;
 
 const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
 
-/// Discover the validated release identity for the `groundhog` client binary.
+/// Discover the validated release identity for the `thruput` client binary.
 pub fn bundle_identity() -> groundhog_bundle_identity::BundleIdentity {
     groundhog_bundle_identity::BundleIdentity::discover(
-        groundhog_bundle_identity::BundleSubject::client("groundhog", "groundhog-rpc", "cli"),
+        groundhog_bundle_identity::BundleSubject::client("thruput", "groundhog-rpc", "cli"),
         BUILD_VERSION,
     )
 }
@@ -177,7 +177,7 @@ pub fn run_cargo(
     } else {
         // Tee stderr: stream it to the user as cargo produces it, and keep a
         // copy so failure hints can react to what cargo actually said (for
-        // example a link error naming the Groundhog linker script). Piping
+        // example a link error naming the Thruput linker script). Piping
         // stderr would otherwise turn cargo's color off, so ask for it back
         // when our own stderr is a terminal and the user has not chosen.
         keep_cargo_color(cmd, print);

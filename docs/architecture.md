@@ -43,8 +43,8 @@ and [RV32 design](rv32/design.md).
 
 | Tool | Question it answers |
 | --- | --- |
-| `groundhog test` | Does this project's contract pass executor-backed tests? |
-| `groundhog test --integration` | Does the project work through a real local node? |
+| `thruput test` | Does this project's contract pass executor-backed tests? |
+| `thruput test --integration` | Does the project work through a real local node? |
 | `groundhog-testkit` | Do several application actors interact correctly? |
 | `hogsim` | How does a stateful traffic mix behave over time and during faults? |
 | `groundhog-bench` | How does a specific RPC workload perform under controlled load? |

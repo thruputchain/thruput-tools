@@ -146,7 +146,7 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
 }
 
 #[tokio::test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
 async fn caller_counter_deploy_call_read() {
     let Some(artifact) = caller_counter_artifact() else {
         eprintln!(
@@ -158,7 +158,7 @@ async fn caller_counter_deploy_call_read() {
 
     let mut config = LocalNetworkConfig::default();
     // config.log_level = Some(groundhog_testkit::LogLevel::Trace);
-    if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
     if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
@@ -234,7 +234,7 @@ async fn caller_counter_deploy_call_read() {
 }
 
 #[tokio::test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
 async fn multiple_runs_are_possible() {
     let Some(artifact) = caller_counter_artifact() else {
         eprintln!(
@@ -246,7 +246,7 @@ async fn multiple_runs_are_possible() {
 
     let mut config = LocalNetworkConfig::default();
     // config.log_level = Some(groundhog_testkit::LogLevel::Trace);
-    if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
     if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
@@ -292,7 +292,7 @@ async fn multiple_runs_are_possible() {
 }
 
 #[tokio::test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
 async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
     let Some(artifact) = caller_counter_artifact() else {
         eprintln!(
@@ -304,7 +304,7 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
 
     let mut config = LocalNetworkConfig::default();
     config.block_driver = BlockDriverConfig::manual();
-    if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
     if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
@@ -378,7 +378,7 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
 }
 
 #[tokio::test]
-#[ignore = "requires GROUNDHOG_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
 async fn manual_block_production_stages_deploys_and_calls() {
     let Some(artifact) = caller_counter_artifact() else {
         eprintln!(
@@ -390,7 +390,7 @@ async fn manual_block_production_stages_deploys_and_calls() {
 
     let mut config = LocalNetworkConfig::default();
     config.block_driver = BlockDriverConfig::manual();
-    if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
     if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {

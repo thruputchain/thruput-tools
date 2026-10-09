@@ -1,6 +1,6 @@
 # Groundhog Developer Tools
 
-This repository contains Groundhog's off-chain tools: the `groundhog` CLI,
+This repository contains Groundhog's off-chain tools: the `thruput` CLI,
 JSON-RPC gateway and clients, signing and RV32 build libraries, hosted faucet,
 and local development, simulation, and benchmark harnesses. The node runtime
 (`hog-devnode`) lives in the separate `hogd` repository.
@@ -24,8 +24,8 @@ Install from the registry:
 
 ```sh
 export CARGO_REGISTRIES_GROUNDHOG_INDEX="sparse+https://crates.thruput.network/api/v1/crates/"
-cargo install groundhog-cli --registry groundhog --locked
-groundhog --version
+cargo install thruput-cli --registry groundhog --locked
+thruput --version
 ```
 
 Or, from the root of this checkout:
@@ -34,7 +34,7 @@ Or, from the root of this checkout:
 cargo install --path crates/cli --locked --force
 ```
 
-Cargo installs `groundhog` under `~/.cargo/bin`; make sure it is on your
+Cargo installs `thruput` under `~/.cargo/bin`; make sure it is on your
 `PATH`. `--force` replaces an existing installation.
 
 ## Run your first contract locally
@@ -42,43 +42,43 @@ Cargo installs `groundhog` under `~/.cargo/bin`; make sure it is on your
 Install the CLI's selected runtime bundle, then create and build a project:
 
 ```sh
-groundhog toolchain install
-groundhog init
-groundhog new my-counter --template counter
+thruput toolchain install
+thruput init
+thruput new my-counter --template counter
 cd my-counter
-groundhog status
-groundhog build
-groundhog test
+thruput status
+thruput build
+thruput test
 ```
 
 Start the node from the generated project directory:
 
 ```sh
-groundhog node
+thruput node
 ```
 
 Leave it running. In another terminal, enter the same project directory and
 deploy and read the counter:
 
 ```sh
-groundhog deploy --fund 10 --profile local
-groundhog call my-counter get --profile local
+thruput deploy --fund 10 --profile local
+thruput call my-counter get --profile local
 ```
 
 The node listens on `127.0.0.1:9545` and is ephemeral by default. Use
-`groundhog node --data-dir .groundhog/node` to preserve state across restarts.
-`groundhog test --integration` manages its own ephemeral node for the project's
+`thruput node --data-dir .thruput/node` to preserve state across restarts.
+`thruput test --integration` manages its own ephemeral node for the project's
 integration tests.
 
 For a runtime built in `hogd`, set
-`GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode` before starting the node.
-See the [toolchain reference](crates/cli/README.md#groundhog-toolchain)
+`THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode` before starting the node.
+See the [toolchain reference](crates/cli/README.md#thruput-toolchain)
 for supported hosts, version selection, and local overrides.
 
 For managed runtime installation, wallets, hosted Devnet, container networking,
 and the full command reference, see the [CLI guide](crates/cli/README.md).
-Use `groundhog <command> --help` for the installed version's options.
-`groundhog docs` serves the bundled developer documentation locally.
+Use `thruput <command> --help` for the installed version's options.
+`thruput docs` serves the bundled developer documentation locally.
 
 ## Clients and API
 
@@ -119,12 +119,12 @@ cargo test --workspace --locked
 ```
 
 Run the CLI without installing it with
-`cargo run -p groundhog-cli -- --help`. `make help` lists convenience targets.
+`cargo run -p thruput-cli -- --help`. `make help` lists convenience targets.
 
 For the complete local contract loop against a real runtime:
 
 ```sh
-GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-local-dx.sh
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-local-dx.sh
 ```
 
 Process-level smokes need registry access and a compatible runtime; the ordinary
@@ -139,7 +139,7 @@ explicit redeployment, node resets, and cleanup:
 ```sh
 npm ci --prefix scripts/scaffold-app
 npx --prefix scripts/scaffold-app playwright install chromium
-GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode npm test --prefix scripts/scaffold-app
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode npm test --prefix scripts/scaffold-app
 ```
 
 It requires Node.js 22.12+, Groundhog Cargo and npm registry access, and a compatible

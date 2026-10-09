@@ -8,7 +8,7 @@ use groundhog_json_rpc_types::runtime_manifest::{RuntimeManifest, parse_runtime_
 
 use crate::{CliError, config::ResolvedProfile};
 
-pub(crate) const ENV_RUNTIME_MANIFEST: &str = "GROUNDHOG_RUNTIME_MANIFEST";
+pub(crate) const ENV_RUNTIME_MANIFEST: &str = "THRUPUT_RUNTIME_MANIFEST";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 /// Load the runtime manifest configured by environment or profile.

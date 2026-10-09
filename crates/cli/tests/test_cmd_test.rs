@@ -30,13 +30,13 @@ fn test_fails_outside_project() {
     let tmp = TempDir::new().unwrap();
     let _cwd = CurrentDirGuard::enter(tmp.path());
 
-    let result = groundhog_cli::test_cmd::run(
+    let result = thruput_cli::test_cmd::run(
         None,
         &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         "test",
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     );
 
     let err = result.unwrap_err().to_string();
@@ -58,7 +58,7 @@ fn test_rejects_conflicting_target_dir_passthrough() {
     fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
     fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
     )
     .unwrap();
@@ -90,19 +90,19 @@ fn test_rejects_conflicting_target_dir_passthrough() {
     let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
-        groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = groundhog_cli::test_cmd::run(
+        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
+    let err = thruput_cli::test_cmd::run(
         Some("demo-contract"),
         &["--target-dir".into(), "nested".into()],
         &artifacts,
         None,
         "test",
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
     assert!(
-        matches!(err, groundhog_cli::CliError::TargetDirConflict),
+        matches!(err, thruput_cli::CliError::TargetDirConflict),
         "expected TargetDirConflict, got: {err:?}"
     );
 }
@@ -140,19 +140,19 @@ fn test_prefers_metadata_failure_over_redundant_target_dir_precheck() {
     let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
-        groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = groundhog_cli::test_cmd::run(
+        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
+    let err = thruput_cli::test_cmd::run(
         Some("demo-contract"),
         &["--target-dir".into(), "nested".into()],
         &artifacts,
         None,
         "test",
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
     assert!(
-        matches!(err, groundhog_cli::CliError::CargoMetadataFailed(_)),
+        matches!(err, thruput_cli::CliError::CargoMetadataFailed(_)),
         "expected CargoMetadataFailed, got: {err:?}"
     );
 }
@@ -202,19 +202,19 @@ fn test_resolves_relative_config_conflicts_from_project_root() {
     let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
-        groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = groundhog_cli::test_cmd::run(
+        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
+    let err = thruput_cli::test_cmd::run(
         Some("demo-contract"),
         &["--config".into(), "target-config.toml".into()],
         &artifacts,
         None,
         "test",
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
     assert!(
-        matches!(err, groundhog_cli::CliError::TargetDirConflict),
+        matches!(err, thruput_cli::CliError::TargetDirConflict),
         "expected TargetDirConflict, got: {err:?}"
     );
 }
@@ -230,7 +230,7 @@ fn test_failed_rv32_tests_update_rerun_cache() {
     .unwrap();
     let (elf_fixture, raw_elf) = write_rv32_build_fixture(tmp.path());
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
     )
     .unwrap();
@@ -268,24 +268,24 @@ fn test_failed_rv32_tests_update_rerun_cache() {
     let _path = PathGuard::set(fake_bin.as_os_str());
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
 
-    let err = groundhog_cli::test_cmd::run_with_options(
+    let err = thruput_cli::test_cmd::run_with_options(
         Some("demo-contract"),
-        &groundhog_cli::test_cmd::TestOptions::default(),
+        &thruput_cli::test_cmd::TestOptions::default(),
         &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         "test",
-        &groundhog_cli::Print::new(true, true),
+        &thruput_cli::Print::new(true, true),
     )
     .unwrap_err();
 
     assert!(
-        matches!(err, groundhog_cli::CliError::CommandReportedFailure),
+        matches!(err, thruput_cli::CliError::CommandReportedFailure),
         "expected CommandReportedFailure, got: {err:?}"
     );
     let cache_path = tmp
         .path()
-        .join("target/groundhog/test-failures/demo-contract-rv32.json");
+        .join("target/thruput/test-failures/demo-contract-rv32.json");
     let cache = fs::read_to_string(cache_path).unwrap();
     assert!(cache.contains("\"package\": \"demo-contract\""));
     assert!(cache.contains("\"tests::fails\""));
@@ -315,7 +315,7 @@ fn test_json_lists_a_build_warning() {
     )
     .unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
     )
     .unwrap();
@@ -349,7 +349,7 @@ fn test_json_lists_a_build_warning() {
         fs::set_permissions(&cargo, perms).unwrap();
     }
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
         .env("XDG_CONFIG_HOME", tmp.path().join("config-home"))
@@ -373,7 +373,7 @@ fn test_json_lists_a_build_warning() {
     assert_eq!(warnings[0]["code"], "ts_bindings_failed");
 }
 
-/// `groundhog test` runs host tests without an explicit `--target`, so its
+/// `thruput test` runs host tests without an explicit `--target`, so its
 /// artifacts share `target/debug` with plain `cargo test` and IDE builds
 /// instead of populating a second per-triple host tree.
 #[test]
@@ -387,7 +387,7 @@ fn test_cargo_test_invocation_omits_host_target() {
     .unwrap();
     let (elf_fixture, raw_elf) = write_rv32_build_fixture(tmp.path());
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
     )
     .unwrap();
@@ -427,14 +427,14 @@ fn test_cargo_test_invocation_omits_host_target() {
     let _path = PathGuard::set(fake_bin.as_os_str());
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
 
-    groundhog_cli::test_cmd::run_with_options(
+    thruput_cli::test_cmd::run_with_options(
         Some("demo-contract"),
-        &groundhog_cli::test_cmd::TestOptions::default(),
+        &thruput_cli::test_cmd::TestOptions::default(),
         &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         "test",
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap();
 
@@ -516,7 +516,7 @@ fn write_workspace_fixture(
     )
     .unwrap();
     fs::write(
-        root.join("groundhog.toml"),
+        root.join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
     )
     .unwrap();
@@ -627,22 +627,22 @@ fn test_workspace_runs_every_rv32_member_and_reports_failures() {
     let _path = PathGuard::set(fixture.fake_bin.as_os_str());
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
 
-    let err = groundhog_cli::test_cmd::run_with_options(
+    let err = thruput_cli::test_cmd::run_with_options(
         None,
-        &groundhog_cli::test_cmd::TestOptions {
+        &thruput_cli::test_cmd::TestOptions {
             workspace: true,
-            ..groundhog_cli::test_cmd::TestOptions::default()
+            ..thruput_cli::test_cmd::TestOptions::default()
         },
         &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         "test",
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
     match err {
-        groundhog_cli::CliError::WorkspaceTestsFailed { failed, total } => {
+        thruput_cli::CliError::WorkspaceTestsFailed { failed, total } => {
             assert_eq!(failed, vec!["beta-contract".to_string()]);
             assert_eq!(total, 2);
         }
@@ -655,7 +655,7 @@ fn test_workspace_runs_every_rv32_member_and_reports_failures() {
     );
     let cache = fs::read_to_string(
         tmp.path()
-            .join("target/groundhog/test-failures/beta-contract-rv32.json"),
+            .join("target/thruput/test-failures/beta-contract-rv32.json"),
     )
     .unwrap();
     assert!(cache.contains("\"tests::fails\""));
@@ -678,26 +678,26 @@ fn test_workspace_fail_fast_stops_after_first_failing_member() {
     let _path = PathGuard::set(fixture.fake_bin.as_os_str());
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
 
-    let err = groundhog_cli::test_cmd::run_with_options(
+    let err = thruput_cli::test_cmd::run_with_options(
         None,
-        &groundhog_cli::test_cmd::TestOptions {
+        &thruput_cli::test_cmd::TestOptions {
             workspace: true,
-            harness: groundhog_cli::test_cmd::TestHarnessOptions {
+            harness: thruput_cli::test_cmd::TestHarnessOptions {
                 fail_fast: true,
-                ..groundhog_cli::test_cmd::TestHarnessOptions::default()
+                ..thruput_cli::test_cmd::TestHarnessOptions::default()
             },
-            ..groundhog_cli::test_cmd::TestOptions::default()
+            ..thruput_cli::test_cmd::TestOptions::default()
         },
         &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         "test",
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
     match err {
-        groundhog_cli::CliError::WorkspaceTestsFailed { failed, total } => {
+        thruput_cli::CliError::WorkspaceTestsFailed { failed, total } => {
             assert_eq!(failed, vec!["beta-contract".to_string()]);
             assert_eq!(total, 3);
         }
@@ -712,7 +712,7 @@ fn test_workspace_fail_fast_stops_after_first_failing_member() {
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
-/// `groundhog --json test --workspace` emits one record whose `data` is the
+/// `thruput --json test --workspace` emits one record whose `data` is the
 /// workspace report: aggregate summary, one per-package test report each
 /// naming its package, and the members `--fail-fast` skipped.
 #[test]
@@ -726,7 +726,7 @@ fn test_workspace_json_reports_every_member() {
         "",
     );
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .current_dir(tmp.path())
         .env("PATH", &fixture.fake_bin)
         .env("XDG_CONFIG_HOME", tmp.path().join("config-home"))
@@ -780,22 +780,22 @@ fn test_workspace_build_error_ends_the_run_with_that_error() {
     let _path = PathGuard::set(fixture.fake_bin.as_os_str());
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
 
-    let err = groundhog_cli::test_cmd::run_with_options(
+    let err = thruput_cli::test_cmd::run_with_options(
         None,
-        &groundhog_cli::test_cmd::TestOptions {
+        &thruput_cli::test_cmd::TestOptions {
             workspace: true,
-            ..groundhog_cli::test_cmd::TestOptions::default()
+            ..thruput_cli::test_cmd::TestOptions::default()
         },
         &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         "test",
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
     assert!(
-        matches!(err, groundhog_cli::CliError::CargoFailedWithOutput { .. }),
+        matches!(err, thruput_cli::CliError::CargoFailedWithOutput { .. }),
         "expected the build failure itself, got: {err:?}"
     );
     assert_eq!(
@@ -821,7 +821,7 @@ fn test_workspace_json_reports_a_member_that_fails_to_build() {
         "beta-contract",
     );
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .current_dir(tmp.path())
         .env("PATH", &fixture.fake_bin)
         .env("XDG_CONFIG_HOME", tmp.path().join("config-home"))

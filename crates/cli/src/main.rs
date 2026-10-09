@@ -1,15 +1,12 @@
 use clap::{ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use groundhog_cli::result::CommandResult;
-use groundhog_cli::{CliError, Print};
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use thruput_cli::result::CommandResult;
+use thruput_cli::{CliError, Print};
 
 #[derive(Parser)]
-#[command(
-    name = "groundhog",
-    about = "Groundhog smart contract development tools"
-)]
+#[command(name = "thruput", about = "Thruput smart contract development tools")]
 struct Cli {
     #[command(flatten)]
     global: GlobalArgs,
@@ -50,7 +47,7 @@ struct Ctx {
     print: Print,
     /// Canonical command name for JSON envelopes, from [`Command::command_name`].
     cmd_name: &'static str,
-    /// `--offline` or `GROUNDHOG_OFFLINE=1`.
+    /// `--offline` or `THRUPUT_OFFLINE=1`.
     offline: bool,
     bundle_identity: groundhog_bundle_identity::BundleIdentity,
 }
@@ -68,8 +65,8 @@ struct ArtifactArgs {
 }
 
 impl ArtifactArgs {
-    fn options(self, cwd: &Path) -> groundhog_cli::artifacts::ArtifactOptions {
-        groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(self.target_dir, cwd)
+    fn options(self, cwd: &Path) -> thruput_cli::artifacts::ArtifactOptions {
+        thruput_cli::artifacts::ArtifactOptions::from_invocation_cwd(self.target_dir, cwd)
     }
 }
 
@@ -90,7 +87,7 @@ struct ConfirmationArgs {
     force: bool,
 }
 
-impl From<RpcTargetArgs> for groundhog_cli::config::ProfileOverrides {
+impl From<RpcTargetArgs> for thruput_cli::config::ProfileOverrides {
     fn from(value: RpcTargetArgs) -> Self {
         Self {
             rpc_url: value.rpc_url,
@@ -105,7 +102,7 @@ enum NodeBlockDriverArg {
     Interval,
 }
 
-impl From<NodeBlockDriverArg> for groundhog_cli::node::LocalNodeBlockDriverMode {
+impl From<NodeBlockDriverArg> for thruput_cli::node::LocalNodeBlockDriverMode {
     fn from(value: NodeBlockDriverArg) -> Self {
         match value {
             NodeBlockDriverArg::Instant => Self::Instant,
@@ -116,7 +113,7 @@ impl From<NodeBlockDriverArg> for groundhog_cli::node::LocalNodeBlockDriverMode 
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a new Groundhog contract project
+    /// Create a new Thruput contract project
     New(NewArgs),
     /// Discover embedded project templates
     Templates {
@@ -125,7 +122,7 @@ enum Command {
     },
     /// Serve the bundled developer documentation on localhost
     Docs(DocsArgs),
-    /// Install, update, or read Groundhog coding-agent guidance
+    /// Install, update, or read Thruput coding-agent guidance
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
@@ -137,7 +134,7 @@ enum Command {
         initial key creation. Existing keys and explicit selections are preserved. \
         Without a TTY, or with --quiet/--json, questions are skipped.\n\n\
         --json emits one setup result; use status --json for read-only diagnostics. \
-        Exit 1 means setup is incomplete or failed. Scripts create projects with groundhog new.")]
+        Exit 1 means setup is incomplete or failed. Scripts create projects with thruput new.")]
     Init(InitArgs),
     /// Show RV32, devnode, keys, and project status
     #[command(long_about = "Non-interactive diagnostic. Reports \
@@ -148,7 +145,7 @@ enum Command {
                       exit code 1 means at least one warning-level \
                       finding exists.")]
     Status(StatusArgs),
-    /// Manage persisted Groundhog configuration
+    /// Manage persisted Thruput configuration
     #[command(
         long_about = "Inspect and manage persisted global and project profiles. Inspection \
                       commands show the merged configuration. Mutations update one physical \
@@ -167,8 +164,8 @@ enum Command {
     /// Build contract artifact
     #[command(long_about = "Cross-compile the contract to \
                       riscv32im-unknown-none-elf via cargo, then lower the ELF \
-                      to a Groundhog RV32 artifact. Must be run inside a \
-                      Groundhog project.")]
+                      to a Thruput RV32 artifact. Must be run inside a \
+                      Thruput project.")]
     Build(BuildArgs),
     /// Build and test the contract under RV32 or local-node execution
     #[command(
@@ -214,15 +211,15 @@ enum Command {
     #[command(long_about = "Read one latest committed raw storage item via \
                       groundhog_getStorageAt. This is a low-level state \
                       inspection command for address/key reads; use \
-                      `groundhog call` for signed transaction invocation \
-                      and `groundhog view` for sandboxed contract \
+                      `thruput call` for signed transaction invocation \
+                      and `thruput view` for sandboxed contract \
                       simulation.")]
     Storage(StorageArgs),
     /// Start a local development node
     #[command(
         long_about = "Start a local development node \
                       backed by a supervised hog-devnode process.",
-        after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the protocol token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Local binary override unless --hog-devnode-version is supplied\n  GROUNDHOG_OFFLINE=1  Forbids managed downloads\n  GROUNDHOG_TOOLCHAIN_BASE_URL  Overrides the public artifact source\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
+        after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the protocol token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, thruput node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  THRUPUT_DEVNODE_BINARY  Local binary override unless --hog-devnode-version is supplied\n  THRUPUT_OFFLINE=1  Forbids managed downloads\n  THRUPUT_TOOLCHAIN_BASE_URL  Overrides the public artifact source\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node(NodeArgs),
     /// Dump or restore persistent local-chain state
@@ -232,7 +229,7 @@ enum Command {
     },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
-                       ~/.config/groundhog/keys/. Keys are \
+                       ~/.config/thruput/keys/. Keys are \
                        global (not per-profile). Profiles can \
                        override the default key via default_key \
                        in project or global config.")]
@@ -320,10 +317,10 @@ impl Command {
             Self::New(args) => args.run(ctx),
             Self::Templates {
                 command: TemplatesCommand::List,
-            } => groundhog_cli::templates::list(ctx.cmd_name, &ctx.print),
+            } => thruput_cli::templates::list(ctx.cmd_name, &ctx.print),
             Self::Templates {
                 command: TemplatesCommand::Show { id },
-            } => groundhog_cli::templates::show(&id, ctx.cmd_name, &ctx.print),
+            } => thruput_cli::templates::show(&id, ctx.cmd_name, &ctx.print),
             Self::Docs(args) => args.run(ctx),
             Self::Skill { command } => command.run(ctx),
             Self::Init(args) => args.run(ctx),
@@ -366,7 +363,7 @@ struct NewArgs {
 
 impl NewArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        groundhog_cli::new::run(
+        thruput_cli::new::run(
             self.name,
             self.path,
             self.template,
@@ -433,7 +430,7 @@ enum SkillCommand {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Update only the installed Groundhog skill in the selected scope
+    /// Update only the installed Thruput skill in the selected scope
     Update {
         #[arg(long)]
         global: bool,
@@ -467,7 +464,7 @@ impl SkillCommand {
     }
 
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        use groundhog_cli::skill::{self, InstallOptions};
+        use thruput_cli::skill::{self, InstallOptions};
         match self {
             Self::Show { topic, global } => {
                 skill::show(topic.as_deref(), global, false, ctx.cmd_name, &ctx.print)
@@ -501,7 +498,7 @@ impl SkillCommand {
 
 impl DocsArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        use groundhog_cli::docs::{
+        use thruput_cli::docs::{
             self,
             service::{self, Action},
         };
@@ -530,7 +527,7 @@ impl DocsArgs {
                 &ctx.print,
             );
         }
-        groundhog_cli::docs::run(self.dir.as_deref(), self.port, ctx.cmd_name, &ctx.print)
+        thruput_cli::docs::run(self.dir.as_deref(), self.port, ctx.cmd_name, &ctx.print)
     }
 }
 
@@ -543,9 +540,9 @@ struct InitArgs {
 
 impl InitArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        groundhog_cli::init::run(
+        thruput_cli::init::run(
             &invocation_cwd()?,
-            &groundhog_cli::init::InitOptions {
+            &thruput_cli::init::InitOptions {
                 generate_key: self.generate_key,
             },
             ctx.cmd_name,
@@ -563,7 +560,7 @@ struct StatusArgs {
 
 impl StatusArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        groundhog_cli::status::run(
+        thruput_cli::status::run(
             &invocation_cwd()?,
             self.profile.as_deref(),
             ctx.cmd_name,
@@ -586,8 +583,8 @@ struct BuildArgs {
     /// Guest stack size (decimal, 0x hex, or a K/M/G suffix such as 32K;
     /// multiple of 16, below the guest data memory). RV32 only; sets the
     /// SDK linker script's `__stack_size`. The data memory itself is the
-    /// package's `[package.metadata.groundhog] initial_memory_bytes`.
-    #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_stack_size)]
+    /// package's `[package.metadata.thruput] initial_memory_bytes`.
+    #[arg(long, value_name = "SIZE", value_parser = thruput_cli::build::parse_stack_size)]
     stack_size: Option<u32>,
     /// Config profile to use
     #[arg(long = "profile")]
@@ -602,7 +599,7 @@ struct BuildArgs {
 impl BuildArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let cwd = invocation_cwd()?;
-        groundhog_cli::build::run(
+        thruput_cli::build::run(
             self.package.as_deref(),
             &self.bindings,
             self.stack_size,
@@ -664,16 +661,16 @@ struct TestArgs {
     /// Override the hog-devnode handshake protocol token for the ephemeral integration node
     ///
     /// (Only used with --integration)
-    /// Falls back to the `GROUNDHOG_HOGD_PROTOCOL` env var.
+    /// Falls back to the `THRUPUT_HOGD_PROTOCOL` env var.
     #[arg(long = "hogd-protocol", requires = "integration")]
     hogd_protocol: Option<String>,
     /// Use one exact managed hog-devnode version for the integration node
     #[arg(long, requires = "integration")]
     hog_devnode_version: Option<String>,
     /// Override a genesis network parameter on the integration node (repeatable;
-    /// decimal, hex, or K/M/G values). Mirrors `groundhog node --network-config`.
+    /// decimal, hex, or K/M/G values). Mirrors `thruput node --network-config`.
     #[arg(long = "network-config", value_name = "NAME=VALUE", requires = "integration",
-          value_parser = groundhog_cli::node::parse_network_config_override)]
+          value_parser = thruput_cli::node::parse_network_config_override)]
     network_config: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
     /// Config profile to use
     #[arg(long = "profile")]
@@ -689,24 +686,24 @@ impl TestArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let cwd = invocation_cwd()?;
         let artifacts = self.artifacts.options(&cwd);
-        let options = groundhog_cli::test_cmd::TestOptions {
+        let options = thruput_cli::test_cmd::TestOptions {
             match_test: self.match_test,
             test_threads: self.test_threads,
             skip: self.skip,
             rerun: self.rerun,
             watch: self.watch,
             workspace: self.workspace,
-            harness: groundhog_cli::test_cmd::TestHarnessOptions {
+            harness: thruput_cli::test_cmd::TestHarnessOptions {
                 fail_fast: self.fail_fast,
                 show_output: self.show_output,
                 no_capture: self.no_capture,
             },
         };
         if self.integration {
-            groundhog_cli::test_cmd::run_integration_with_options(
+            thruput_cli::test_cmd::run_integration_with_options(
                 self.package.as_deref(),
                 &options,
-                &groundhog_cli::test_cmd::IntegrationTestOptions {
+                &thruput_cli::test_cmd::IntegrationTestOptions {
                     hogd_protocol: self.hogd_protocol,
                     hog_devnode_version: self.hog_devnode_version,
                     network_config_overrides: self.network_config,
@@ -720,7 +717,7 @@ impl TestArgs {
                 &ctx.print,
             )
         } else {
-            groundhog_cli::test_cmd::run_with_options(
+            thruput_cli::test_cmd::run_with_options(
                 self.package.as_deref(),
                 &options,
                 &self.cargo_args,
@@ -761,10 +758,10 @@ struct DeployArgs {
     /// Path to compiled .rv32a (default: auto-detect)
     #[arg(long)]
     artifact: Option<PathBuf>,
-    /// Name to record the deployed address under in groundhog.toml
+    /// Name to record the deployed address under in thruput.toml
     /// (defaults to the package name; with --artifact there is no package,
     /// so without this no alias is recorded)
-    #[arg(long, value_parser = groundhog_cli::config::parse_contract_alias)]
+    #[arg(long, value_parser = thruput_cli::config::parse_contract_alias)]
     alias: Option<String>,
     /// Build and sign the deploy transaction without submitting it
     #[arg(long)]
@@ -786,9 +783,9 @@ struct DeployArgs {
 impl DeployArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let cwd = invocation_cwd()?;
-        groundhog_cli::deploy::run(
+        thruput_cli::deploy::run(
             self.artifact.as_deref(),
-            &groundhog_cli::deploy::DeploymentOptions {
+            &thruput_cli::deploy::DeploymentOptions {
                 estimate: self.estimate,
                 fund: self.fund.as_deref(),
                 init_method: self.init.as_deref(),
@@ -825,7 +822,7 @@ struct CallArgs {
     #[arg(long)]
     dry_run: bool,
     /// Gas budget for the transaction and its inner contract invocation
-    #[arg(long, default_value_t = groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT,
+    #[arg(long, default_value_t = thruput_cli::call::DEFAULT_CALL_GAS_LIMIT,
           value_parser = clap::value_parser!(u64).range(1..))]
     gas_limit: u64,
     /// Saved wallet to call from
@@ -845,7 +842,7 @@ struct CallArgs {
 impl CallArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let cwd = invocation_cwd()?;
-        groundhog_cli::call::run(
+        thruput_cli::call::run(
             &self.contract,
             &self.method,
             &self.args,
@@ -886,7 +883,7 @@ struct TransferArgs {
 
 impl TransferArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        groundhog_cli::transfer::run(
+        thruput_cli::transfer::run(
             &self.recipient,
             &self.amount,
             self.from.as_deref(),
@@ -921,7 +918,7 @@ struct AirdropArgs {
 
 impl AirdropArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        groundhog_cli::airdrop::run(
+        thruput_cli::airdrop::run(
             self.recipient.as_deref(),
             self.amount.as_deref(),
             self.dry_run,
@@ -947,7 +944,7 @@ struct BalanceArgs {
 
 impl BalanceArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        groundhog_cli::balance::run(
+        thruput_cli::balance::run(
             self.target.as_deref(),
             &invocation_cwd()?,
             self.profile.as_deref(),
@@ -988,7 +985,7 @@ struct ViewArgs {
 impl ViewArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let cwd = invocation_cwd()?;
-        groundhog_cli::view::run(
+        thruput_cli::view::run(
             &self.contract,
             &self.method,
             &self.args,
@@ -1021,7 +1018,7 @@ struct StorageArgs {
 
 impl StorageArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
-        groundhog_cli::storage::run(
+        thruput_cli::storage::run(
             &self.address,
             &self.key,
             &invocation_cwd()?,
@@ -1048,13 +1045,13 @@ struct NodeArgs {
     #[arg(long)]
     key: Option<String>,
     /// Initial HOG for the selected key (default: 100; up to 7 decimals)
-    #[arg(long, value_name = "HOG", value_parser = groundhog_cli::node::parse_initial_account_hog)]
+    #[arg(long, value_name = "HOG", value_parser = thruput_cli::node::parse_initial_account_hog)]
     initial_account_hog: Option<u64>,
     /// JSON array of public key allocations for fixture-owned accounts
     #[arg(long, value_name = "FILE", conflicts_with_all = ["key", "initial_account_hog"])]
     bootstrap_accounts: Option<PathBuf>,
     /// Explicit hog-devnode binary path
-    #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
+    #[arg(long = "hog-devnode-binary", value_name = "THRUPUT_DEVNODE_BINARY")]
     hogd_dev_binary: Option<std::path::PathBuf>,
     /// Contract artifact directory passed to hog-devnode; may be repeated
     #[arg(long = "contract-artifacts-dir", value_name = "DIR")]
@@ -1070,7 +1067,7 @@ struct NodeArgs {
     hogd_protocol: Option<String>,
     /// Initialize a new chain: 64 lowercase hex digits, optionally 0x-prefixed
     /// (default: all zeros for new chains). Omit on restart; initialized directories reject it.
-    #[arg(long, value_name = "HEX64", value_parser = groundhog_cli::config::parse_network_hash)]
+    #[arg(long, value_name = "HEX64", value_parser = thruput_cli::config::parse_network_hash)]
     init_network_hash: Option<groundhog_json_rpc_types::NetworkHashHex>,
     /// Override hog-devnode readiness timeout for smoke tests
     #[arg(long, hide = true)]
@@ -1090,12 +1087,12 @@ struct NodeArgs {
     rpc_batch_concurrency: Option<groundhog_node_supervisor::RpcBatchConcurrency>,
     /// RAM database capacity for hog-devnode (decimal, 0x hex, or a K/M/G
     /// suffix such as 2G); omit for the devnode default
-    #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::byte_size::parse_byte_size)]
+    #[arg(long, value_name = "SIZE", value_parser = thruput_cli::byte_size::parse_byte_size)]
     ramdb_bytes: Option<u64>,
     /// Override a genesis network parameter (repeatable; decimal, hex, or K/M/G values).
     /// Existing data directories must use the same overrides they were created with.
     #[arg(long = "network-config", value_name = "NAME=VALUE",
-          value_parser = groundhog_cli::node::parse_network_config_override)]
+          value_parser = thruput_cli::node::parse_network_config_override)]
     network_config: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
 }
 
@@ -1103,7 +1100,7 @@ impl NodeArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         // LocalNodeOptions is #[non_exhaustive], so it is filled field by field
         // rather than with a struct literal.
-        let mut options = groundhog_cli::node::LocalNodeOptions::default();
+        let mut options = thruput_cli::node::LocalNodeOptions::default();
         options.host = Some(self.host);
         options.port = self.port;
         options.hogd_dev_binary = self.hogd_dev_binary;
@@ -1117,10 +1114,10 @@ impl NodeArgs {
             .startup_timeout_secs
             .map(std::time::Duration::from_secs);
         if let Some(path) = self.bootstrap_accounts {
-            options.bootstrap_accounts = groundhog_cli::node::load_bootstrap_allocations(&path)?;
+            options.bootstrap_accounts = thruput_cli::node::load_bootstrap_allocations(&path)?;
         } else {
             (options.selected_key, options.bootstrap_accounts) =
-                groundhog_cli::node::stored_key_allocation(
+                thruput_cli::node::stored_key_allocation(
                     self.key.as_deref(),
                     self.initial_account_hog
                         .unwrap_or(groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS),
@@ -1133,7 +1130,7 @@ impl NodeArgs {
         options.ramdb_bytes = self.ramdb_bytes;
         options.network_config_overrides = self.network_config;
         options.bundle_identity = Some(ctx.bundle_identity.clone());
-        groundhog_cli::node::run_with_options(options, self.verbose, ctx.cmd_name, &ctx.print)
+        thruput_cli::node::run_with_options(options, self.verbose, ctx.cmd_name, &ctx.print)
     }
 }
 
@@ -1151,7 +1148,7 @@ impl CompletionArgs {
         clap_complete::generate(
             self.shell,
             &mut cli_command(&ctx.bundle_identity),
-            "groundhog",
+            "thruput",
             &mut output,
         );
 
@@ -1196,8 +1193,8 @@ enum KeysCommand {
         /// Key name to export
         name: String,
         /// Private seed encoding
-        #[arg(long, value_enum, default_value_t = groundhog_cli::keys::KeyExportFormat::Hex)]
-        format: groundhog_cli::keys::KeyExportFormat,
+        #[arg(long, value_enum, default_value_t = thruput_cli::keys::KeyExportFormat::Hex)]
+        format: thruput_cli::keys::KeyExportFormat,
         #[command(flatten)]
         confirmation: ConfirmationArgs,
     },
@@ -1230,23 +1227,19 @@ impl KeysCommand {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let (cmd, print) = (ctx.cmd_name, &ctx.print);
         match self {
-            Self::Generate { name, fund } => groundhog_cli::keys::generate(&name, fund, cmd, print),
-            Self::Import { name } => groundhog_cli::keys::import(&name, cmd, print),
-            Self::Ls => groundhog_cli::keys::list(cmd, print),
+            Self::Generate { name, fund } => thruput_cli::keys::generate(&name, fund, cmd, print),
+            Self::Import { name } => thruput_cli::keys::import(&name, cmd, print),
+            Self::Ls => thruput_cli::keys::list(cmd, print),
             Self::Export {
                 name,
                 format,
                 confirmation,
-            } => groundhog_cli::keys::export_with_format(
-                &name,
-                confirmation.force,
-                format,
-                cmd,
-                print,
-            ),
-            Self::Use { name } => groundhog_cli::keys::use_key(&name, cmd, print),
+            } => {
+                thruput_cli::keys::export_with_format(&name, confirmation.force, format, cmd, print)
+            }
+            Self::Use { name } => thruput_cli::keys::use_key(&name, cmd, print),
             Self::Rm { name, confirmation } => {
-                groundhog_cli::keys::remove(&name, confirmation.force, cmd, print)
+                thruput_cli::keys::remove(&name, confirmation.force, cmd, print)
             }
         }
     }
@@ -1364,9 +1357,9 @@ enum ConfigCommand {
     },
     /// Select the default profile in one config layer
     #[command(
-        long_about = "Set the profile used when --profile and GROUNDHOG_PROFILE are omitted. \
+        long_about = "Set the profile used when --profile and THRUPUT_PROFILE are omitted. \
                       A global selection requires a global profile. A project selection may use a \
-                      profile from either layer. Explicit --profile and GROUNDHOG_PROFILE still \
+                      profile from either layer. Explicit --profile and THRUPUT_PROFILE still \
                       take precedence."
     )]
     Use {
@@ -1399,9 +1392,9 @@ impl ConfigCommand {
         let (cmd, print) = (ctx.cmd_name, &ctx.print);
         match self {
             Self::Get { profile, sources } => {
-                groundhog_cli::config_cmd::get(&cwd, profile.as_deref(), sources, cmd, print)
+                thruput_cli::config_cmd::get(&cwd, profile.as_deref(), sources, cmd, print)
             }
-            Self::Profiles => groundhog_cli::config_cmd::profiles(&cwd, cmd, print),
+            Self::Profiles => thruput_cli::config_cmd::profiles(&cwd, cmd, print),
             Self::New {
                 profile,
                 network,
@@ -1412,10 +1405,10 @@ impl ConfigCommand {
                 select,
                 global,
                 project,
-            } => groundhog_cli::config_cmd::new_profile(
+            } => thruput_cli::config_cmd::new_profile(
                 &cwd,
                 &profile,
-                &groundhog_cli::config::NewProfileOptions {
+                &thruput_cli::config::NewProfileOptions {
                     network,
                     rpc_url,
                     network_hash,
@@ -1433,7 +1426,7 @@ impl ConfigCommand {
                 confirmation,
                 global,
                 project,
-            } => groundhog_cli::config_cmd::remove(
+            } => thruput_cli::config_cmd::remove(
                 &cwd,
                 &profile,
                 confirmation.force,
@@ -1448,7 +1441,7 @@ impl ConfigCommand {
                 profile,
                 global,
                 project,
-            } => groundhog_cli::config_cmd::set(
+            } => thruput_cli::config_cmd::set(
                 &cwd, &profile, &field, &value, global, project, cmd, print,
             ),
             Self::Unset {
@@ -1456,16 +1449,14 @@ impl ConfigCommand {
                 profile,
                 global,
                 project,
-            } => groundhog_cli::config_cmd::unset(
-                &cwd, &profile, &field, global, project, cmd, print,
-            ),
+            } => {
+                thruput_cli::config_cmd::unset(&cwd, &profile, &field, global, project, cmd, print)
+            }
             Self::Use {
                 profile,
                 global,
                 project,
-            } => {
-                groundhog_cli::config_cmd::use_default(&cwd, &profile, global, project, cmd, print)
-            }
+            } => thruput_cli::config_cmd::use_default(&cwd, &profile, global, project, cmd, print),
         }
     }
 }
@@ -1508,16 +1499,14 @@ impl ToolchainCommand {
         let (cmd, print) = (ctx.cmd_name, &ctx.print);
         match self {
             Self::Install { version } => {
-                groundhog_cli::toolchain_cmd::install(version.as_deref(), ctx.offline, cmd, print)
+                thruput_cli::toolchain_cmd::install(version.as_deref(), ctx.offline, cmd, print)
             }
-            Self::List => groundhog_cli::toolchain_cmd::list(cmd, print),
-            Self::Use { version } => {
-                groundhog_cli::toolchain_cmd::use_version(&version, cmd, print)
-            }
+            Self::List => thruput_cli::toolchain_cmd::list(cmd, print),
+            Self::Use { version } => thruput_cli::toolchain_cmd::use_version(&version, cmd, print),
             Self::Clean { version } => {
-                groundhog_cli::toolchain_cmd::clean(version.as_deref(), cmd, print)
+                thruput_cli::toolchain_cmd::clean(version.as_deref(), cmd, print)
             }
-            Self::Which => groundhog_cli::toolchain_cmd::which(cmd, print),
+            Self::Which => thruput_cli::toolchain_cmd::which(cmd, print),
         }
     }
 }
@@ -1549,7 +1538,7 @@ enum WalletCommand {
         /// Derive the native wallet without saving it or contacting the network
         #[arg(long)]
         dry_run: bool,
-        /// Removed: use groundhog airdrop after creating the wallet
+        /// Removed: use thruput airdrop after creating the wallet
         #[arg(long)]
         prefund: Option<String>,
         #[command(flatten)]
@@ -1585,9 +1574,9 @@ impl WalletCommand {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let (cmd, print) = (ctx.cmd_name, &ctx.print);
         match self {
-            Self::Ls { profile } => groundhog_cli::wallet::list(profile.as_deref(), cmd, print),
+            Self::Ls { profile } => thruput_cli::wallet::list(profile.as_deref(), cmd, print),
             Self::Use { name, profile } => {
-                groundhog_cli::wallet::use_wallet(&name, profile.as_deref(), cmd, print)
+                thruput_cli::wallet::use_wallet(&name, profile.as_deref(), cmd, print)
             }
             Self::Create {
                 key,
@@ -1597,7 +1586,7 @@ impl WalletCommand {
                 confirmation,
                 profile,
                 target_args,
-            } => groundhog_cli::wallet::create(
+            } => thruput_cli::wallet::create(
                 key.as_deref(),
                 name.as_deref(),
                 dry_run,
@@ -1612,7 +1601,7 @@ impl WalletCommand {
                 name,
                 profile,
                 confirmation,
-            } => groundhog_cli::wallet::remove(
+            } => thruput_cli::wallet::remove(
                 &name,
                 profile.as_deref(),
                 confirmation.force,
@@ -1644,12 +1633,9 @@ impl CodegenCommand {
 
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         match self {
-            Self::Ts { source, output } => groundhog_cli::codegen_cmd::run(
-                &source,
-                output.as_deref(),
-                ctx.cmd_name,
-                &ctx.print,
-            ),
+            Self::Ts { source, output } => {
+                thruput_cli::codegen_cmd::run(&source, output.as_deref(), ctx.cmd_name, &ctx.print)
+            }
         }
     }
 }
@@ -1658,7 +1644,7 @@ impl CodegenCommand {
 enum ChainCommand {
     /// Dump a stopped persistent node into one compressed JSON archive
     Dump {
-        /// Persistent directory passed to `groundhog node --data-dir`
+        /// Persistent directory passed to `thruput node --data-dir`
         #[arg(long)]
         data_dir: PathBuf,
         /// JSON archive to create
@@ -1669,7 +1655,7 @@ enum ChainCommand {
     },
     /// Restore one compressed JSON archive into a stopped persistent node
     Restore {
-        /// Persistent directory passed to `groundhog node --data-dir`
+        /// Persistent directory passed to `thruput node --data-dir`
         #[arg(long)]
         data_dir: PathBuf,
         /// JSON archive to restore
@@ -1695,12 +1681,12 @@ impl ChainCommand {
                 data_dir,
                 output,
                 confirmation,
-            } => groundhog_cli::chain::dump(&data_dir, &output, confirmation.force, cmd, print),
+            } => thruput_cli::chain::dump(&data_dir, &output, confirmation.force, cmd, print),
             Self::Restore {
                 data_dir,
                 input,
                 confirmation,
-            } => groundhog_cli::chain::restore(&data_dir, &input, confirmation.force, cmd, print),
+            } => thruput_cli::chain::restore(&data_dir, &input, confirmation.force, cmd, print),
         }
     }
 }
@@ -1727,7 +1713,7 @@ enum TxCommand {
         long_about = "List exactly one page of transactions whose root invocation targets \
                        the resolved address. Incoming wallet-wrapped transfers may not appear \
                        when querying the recipient.\n\nThe continuation cursor is opaque and reusable. \
-                       Receipts are not fetched; inspect selected hashes with `groundhog tx show`."
+                       Receipts are not fetched; inspect selected hashes with `thruput tx show`."
     )]
     List {
         /// Wallet name, contract alias, stored key, or address (default: effective wallet)
@@ -1762,7 +1748,7 @@ impl TxCommand {
                 tx_hash,
                 profile,
                 target_args,
-            } => groundhog_cli::tx::show(
+            } => thruput_cli::tx::show(
                 &tx_hash,
                 &cwd,
                 profile.as_deref(),
@@ -1776,7 +1762,7 @@ impl TxCommand {
                 cursor,
                 profile,
                 target_args,
-            } => groundhog_cli::tx::list(
+            } => thruput_cli::tx::list(
                 target.as_deref(),
                 limit.as_deref(),
                 cursor.as_deref(),
@@ -1852,7 +1838,7 @@ impl EventsCommand {
                 event,
                 profile,
                 target_args,
-            } => groundhog_cli::events::list(
+            } => thruput_cli::events::list(
                 &contract,
                 &topic0,
                 &topic1,
@@ -1927,7 +1913,7 @@ impl TokenCommand {
                 cursor,
                 profile,
                 target_args,
-            } => groundhog_cli::token::transfers(
+            } => thruput_cli::token::transfers(
                 &token,
                 from.as_deref(),
                 to.as_deref(),
@@ -1979,7 +1965,7 @@ fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Cli
 }
 
 fn main() {
-    let bundle_identity = groundhog_cli::bundle_identity();
+    let bundle_identity = thruput_cli::bundle_identity();
     let cli = parse_cli(&bundle_identity);
     let ctx = Ctx {
         print: Print::new(cli.global.quiet, cli.global.json)
@@ -1988,7 +1974,7 @@ fn main() {
             .with_command_trace(cli.global.show_cargo_commands),
         cmd_name: cli.command.command_name(),
         offline: cli.global.offline
-            || std::env::var("GROUNDHOG_OFFLINE").is_ok_and(|value| value == "1"),
+            || std::env::var("THRUPUT_OFFLINE").is_ok_and(|value| value == "1"),
         bundle_identity,
     };
 
@@ -2013,7 +1999,7 @@ mod tests {
 
     #[test]
     fn config_get_flags_and_command_name_parse() {
-        let cli = Cli::parse_from(["groundhog", "config", "get", "devnet", "--sources"]);
+        let cli = Cli::parse_from(["thruput", "config", "get", "devnet", "--sources"]);
 
         assert_eq!(cli.command.command_name(), "config.get");
         match cli.command {
@@ -2030,7 +2016,7 @@ mod tests {
     #[test]
     fn deploy_alias_flag_parses_and_defaults_to_none() {
         let with_alias = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "deploy",
             "--package",
             "my-counter",
@@ -2047,7 +2033,7 @@ mod tests {
 
         // Without --alias the package name is what deploy records, so the flag
         // stays absent rather than being defaulted here.
-        let without_alias = Cli::parse_from(["groundhog", "deploy", "--package", "my-counter"]);
+        let without_alias = Cli::parse_from(["thruput", "deploy", "--package", "my-counter"]);
         match without_alias.command {
             Command::Deploy(DeployArgs { alias, .. }) => assert_eq!(alias, None),
             _ => panic!("expected deploy command"),
@@ -2062,7 +2048,7 @@ mod tests {
         // alias it never wrote. The parser rejects it first.
         for empty in ["", "   ", "\t"] {
             let result = Cli::try_parse_from([
-                "groundhog",
+                "thruput",
                 "deploy",
                 "--package",
                 "counter",
@@ -2081,7 +2067,7 @@ mod tests {
         // Surrounding whitespace is trimmed, so what is reported matches the
         // key that gets written.
         let Ok(padded) = Cli::try_parse_from([
-            "groundhog",
+            "thruput",
             "deploy",
             "--package",
             "counter",
@@ -2107,10 +2093,10 @@ mod tests {
         // is how you name it; it stays optional so that dry runs and one-off
         // artifact deploys, which record nothing, need not invent one.
         let Ok(alone) = Cli::try_parse_from([
-            "groundhog",
+            "thruput",
             "deploy",
             "--artifact",
-            "target/groundhog/token.rv32a",
+            "target/thruput/token.rv32a",
         ]) else {
             panic!("--artifact alone should still parse");
         };
@@ -2120,10 +2106,10 @@ mod tests {
         }
 
         let Ok(paired) = Cli::try_parse_from([
-            "groundhog",
+            "thruput",
             "deploy",
             "--artifact",
-            "target/groundhog/token.rv32a",
+            "target/thruput/token.rv32a",
             "--alias",
             "token",
         ]) else {
@@ -2133,10 +2119,7 @@ mod tests {
             Command::Deploy(DeployArgs {
                 artifact, alias, ..
             }) => {
-                assert_eq!(
-                    artifact,
-                    Some(PathBuf::from("target/groundhog/token.rv32a"))
-                );
+                assert_eq!(artifact, Some(PathBuf::from("target/thruput/token.rv32a")));
                 assert_eq!(alias.as_deref(), Some("token"));
             }
             _ => panic!("expected deploy command"),
@@ -2145,7 +2128,7 @@ mod tests {
 
     #[test]
     fn config_profiles_command_name_parses() {
-        let cli = Cli::parse_from(["groundhog", "config", "profiles"]);
+        let cli = Cli::parse_from(["thruput", "config", "profiles"]);
 
         assert_eq!(cli.command.command_name(), "config.profiles");
         assert!(matches!(
@@ -2159,7 +2142,7 @@ mod tests {
     #[test]
     fn config_mutation_commands_and_flags_parse() {
         let new_profile = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "config",
             "new",
             "staging",
@@ -2189,14 +2172,8 @@ mod tests {
             } if profile == "staging" && network == "devnet"
         ));
 
-        let remove = Cli::parse_from([
-            "groundhog",
-            "config",
-            "rm",
-            "staging",
-            "--project",
-            "--force",
-        ]);
+        let remove =
+            Cli::parse_from(["thruput", "config", "rm", "staging", "--project", "--force"]);
         assert_eq!(remove.command.command_name(), "config.rm");
         assert!(matches!(
             remove.command,
@@ -2211,7 +2188,7 @@ mod tests {
         ));
 
         let set = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "config",
             "set",
             "rpc-url",
@@ -2234,7 +2211,7 @@ mod tests {
         ));
 
         let unset = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "config",
             "unset",
             "faucet-url",
@@ -2244,13 +2221,13 @@ mod tests {
         ]);
         assert_eq!(unset.command.command_name(), "config.unset");
 
-        let use_profile = Cli::parse_from(["groundhog", "config", "use", "devnet", "--global"]);
+        let use_profile = Cli::parse_from(["thruput", "config", "use", "devnet", "--global"]);
         assert_eq!(use_profile.command.command_name(), "config.use");
     }
 
     #[test]
     fn node_key_flag_parses() {
-        let cli = Cli::parse_from(["groundhog", "node", "--key", "alice"]);
+        let cli = Cli::parse_from(["thruput", "node", "--key", "alice"]);
 
         match cli.command {
             Command::Node(NodeArgs { key, .. }) => assert_eq!(key.as_deref(), Some("alice")),
@@ -2260,7 +2237,7 @@ mod tests {
 
     #[test]
     fn node_host_flag_parses() {
-        let cli = Cli::parse_from(["groundhog", "node", "--host", "0.0.0.0"]);
+        let cli = Cli::parse_from(["thruput", "node", "--host", "0.0.0.0"]);
 
         match cli.command {
             Command::Node(NodeArgs { host, .. }) => {
@@ -2272,7 +2249,7 @@ mod tests {
 
     #[test]
     fn node_host_defaults_to_loopback() {
-        let cli = Cli::parse_from(["groundhog", "node"]);
+        let cli = Cli::parse_from(["thruput", "node"]);
 
         match cli.command {
             Command::Node(NodeArgs { host, .. }) => {
@@ -2284,7 +2261,7 @@ mod tests {
 
     #[test]
     fn node_host_rejects_invalid_address() {
-        let Err(error) = Cli::try_parse_from(["groundhog", "node", "--host", "not-an-address"])
+        let Err(error) = Cli::try_parse_from(["thruput", "node", "--host", "not-an-address"])
         else {
             panic!("invalid host address should be rejected");
         };
@@ -2300,7 +2277,7 @@ mod tests {
             "00".repeat(32),
         ] {
             let cli =
-                Cli::try_parse_from(["groundhog", "node", "--init-network-hash", &input]).unwrap();
+                Cli::try_parse_from(["thruput", "node", "--init-network-hash", &input]).unwrap();
             let Command::Node(args) = cli.command else {
                 panic!("expected node")
             };
@@ -2309,7 +2286,7 @@ mod tests {
                 input.strip_prefix("0x").unwrap_or(&input)
             );
         }
-        let cli = Cli::try_parse_from(["groundhog", "node"]).unwrap();
+        let cli = Cli::try_parse_from(["thruput", "node"]).unwrap();
         let Command::Node(args) = cli.command else {
             panic!("expected node")
         };
@@ -2328,7 +2305,7 @@ mod tests {
             &format!("0X{}", "ab".repeat(32)),
             &"é".repeat(32),
         ] {
-            let error = Cli::try_parse_from(["groundhog", "node", "--init-network-hash", input])
+            let error = Cli::try_parse_from(["thruput", "node", "--init-network-hash", input])
                 .err()
                 .unwrap();
             assert_eq!(
@@ -2346,7 +2323,7 @@ mod tests {
 
     #[test]
     fn node_rejects_the_old_network_hash_flag() {
-        let error = Cli::try_parse_from(["groundhog", "node", "--network-hash", &"ab".repeat(32)])
+        let error = Cli::try_parse_from(["thruput", "node", "--network-hash", &"ab".repeat(32)])
             .err()
             .unwrap();
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
@@ -2354,7 +2331,7 @@ mod tests {
 
     #[test]
     fn node_initial_account_hog_flag_parses_exact_raw_units() {
-        let cli = Cli::parse_from(["groundhog", "node", "--initial-account-hog", "25.0000001"]);
+        let cli = Cli::parse_from(["thruput", "node", "--initial-account-hog", "25.0000001"]);
 
         match cli.command {
             Command::Node(NodeArgs {
@@ -2367,11 +2344,11 @@ mod tests {
 
     #[test]
     fn node_data_dir_flag_parses() {
-        let cli = Cli::parse_from(["groundhog", "node", "--data-dir", "/tmp/groundhog"]);
+        let cli = Cli::parse_from(["thruput", "node", "--data-dir", "/tmp/thruput"]);
 
         match cli.command {
             Command::Node(NodeArgs { data_dir, .. }) => {
-                assert_eq!(data_dir, Some(PathBuf::from("/tmp/groundhog")));
+                assert_eq!(data_dir, Some(PathBuf::from("/tmp/thruput")));
             }
             _ => panic!("expected node command"),
         }
@@ -2380,7 +2357,7 @@ mod tests {
     #[test]
     fn node_contract_artifact_directories_are_repeatable() {
         let cli = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "node",
             "--contract-artifacts-dir",
             "/tmp/contracts-a",
@@ -2409,7 +2386,7 @@ mod tests {
             (vec![], 25_000_000),
             (vec!["--gas-limit", "200000000"], 200_000_000),
         ] {
-            let mut args = vec!["groundhog", "call", "counter", "increment"];
+            let mut args = vec!["thruput", "call", "counter", "increment"];
             args.extend(extra);
             match Cli::parse_from(args).command {
                 Command::Call(CallArgs { gas_limit, .. }) => assert_eq!(gas_limit, expected),
@@ -2418,7 +2395,7 @@ mod tests {
         }
         assert!(
             Cli::try_parse_from([
-                "groundhog",
+                "thruput",
                 "call",
                 "counter",
                 "increment",
@@ -2432,7 +2409,7 @@ mod tests {
     #[test]
     fn node_network_config_flags_parse() {
         let cli = Cli::try_parse_from([
-            "groundhog",
+            "thruput",
             "node",
             "--network-config",
             "max_rv32_memory_bytes=16M",
@@ -2453,7 +2430,7 @@ mod tests {
         // Past u32, and a name no parameter carries.
         for invalid in ["max_rv32_memory_bytes=4G", "max_rv32_memmory_bytes=16M"] {
             assert!(
-                Cli::try_parse_from(["groundhog", "node", "--network-config", invalid]).is_err(),
+                Cli::try_parse_from(["thruput", "node", "--network-config", invalid]).is_err(),
                 "{invalid}"
             );
         }
@@ -2462,7 +2439,7 @@ mod tests {
     #[test]
     fn node_block_driver_flags_parse() {
         let cli = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "node",
             "--block-driver",
             "interval",
@@ -2495,15 +2472,14 @@ mod tests {
     fn node_rpc_batch_concurrency_rejects_invalid_values() {
         for value in ["0", "1025"] {
             assert!(
-                Cli::try_parse_from(["groundhog", "node", "--rpc-batch-concurrency", value])
-                    .is_err()
+                Cli::try_parse_from(["thruput", "node", "--rpc-batch-concurrency", value]).is_err()
             );
         }
     }
 
     #[test]
     fn node_profile_flag_is_not_supported() {
-        let result = Cli::try_parse_from(["groundhog", "node", "--profile", "local"]);
+        let result = Cli::try_parse_from(["thruput", "node", "--profile", "local"]);
         let Err(err) = result else {
             panic!("node --profile should be rejected");
         };
@@ -2513,7 +2489,7 @@ mod tests {
 
     #[test]
     fn wallet_create_key_flag_parses() {
-        let cli = Cli::parse_from(["groundhog", "wallet", "create", "--key", "alice"]);
+        let cli = Cli::parse_from(["thruput", "wallet", "create", "--key", "alice"]);
 
         match cli.command {
             Command::Wallet {
@@ -2537,7 +2513,7 @@ mod tests {
 
     #[test]
     fn wallet_ls_flags_parse() {
-        let cli = Cli::parse_from(["groundhog", "wallet", "ls"]);
+        let cli = Cli::parse_from(["thruput", "wallet", "ls"]);
 
         match cli.command {
             Command::Wallet {
@@ -2549,14 +2525,7 @@ mod tests {
 
     #[test]
     fn wallet_use_flags_parse() {
-        let cli = Cli::parse_from([
-            "groundhog",
-            "wallet",
-            "use",
-            "trading",
-            "--profile",
-            "devnet",
-        ]);
+        let cli = Cli::parse_from(["thruput", "wallet", "use", "trading", "--profile", "devnet"]);
 
         match cli.command {
             Command::Wallet {
@@ -2571,7 +2540,7 @@ mod tests {
 
     #[test]
     fn wallet_create_key_flag_is_optional() {
-        let cli = Cli::parse_from(["groundhog", "wallet", "create", "--dry-run"]);
+        let cli = Cli::parse_from(["thruput", "wallet", "create", "--dry-run"]);
 
         match cli.command {
             Command::Wallet {
@@ -2596,13 +2565,7 @@ mod tests {
     #[test]
     fn wallet_create_name_flag_parses() {
         let cli = Cli::parse_from([
-            "groundhog",
-            "wallet",
-            "create",
-            "--key",
-            "alice",
-            "--name",
-            "trading",
+            "thruput", "wallet", "create", "--key", "alice", "--name", "trading",
         ]);
 
         match cli.command {
@@ -2628,7 +2591,7 @@ mod tests {
     #[test]
     fn wallet_create_name_flag_without_key_parses() {
         let cli = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "wallet",
             "create",
             "--name",
@@ -2658,7 +2621,7 @@ mod tests {
 
     #[test]
     fn wallet_rm_flags_parse() {
-        let cli = Cli::parse_from(["groundhog", "wallet", "rm", "alice", "--force"]);
+        let cli = Cli::parse_from(["thruput", "wallet", "rm", "alice", "--force"]);
 
         match cli.command {
             Command::Wallet {
@@ -2680,7 +2643,7 @@ mod tests {
     #[test]
     fn airdrop_flags_parse() {
         let cli = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "airdrop",
             "alice",
             "--amount",
@@ -2708,7 +2671,7 @@ mod tests {
     #[test]
     fn transfer_flags_and_command_name_parse() {
         let cli = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "transfer",
             "alice",
             "1.5",
@@ -2753,11 +2716,11 @@ mod tests {
     #[test]
     fn transaction_commands_parse_command_local_force() {
         for args in [
-            vec!["groundhog", "deploy", "--force"],
-            vec!["groundhog", "call", "contract", "method", "--force"],
-            vec!["groundhog", "transfer", "recipient", "1", "--force"],
-            vec!["groundhog", "airdrop", "recipient", "--force"],
-            vec!["groundhog", "wallet", "create", "--force"],
+            vec!["thruput", "deploy", "--force"],
+            vec!["thruput", "call", "contract", "method", "--force"],
+            vec!["thruput", "transfer", "recipient", "1", "--force"],
+            vec!["thruput", "airdrop", "recipient", "--force"],
+            vec!["thruput", "wallet", "create", "--force"],
         ] {
             let cli = Cli::try_parse_from(args).expect("transaction command should accept --force");
             let force = match cli.command {
@@ -2777,8 +2740,8 @@ mod tests {
     #[test]
     fn airdrop_and_wallet_create_reject_yes() {
         for args in [
-            vec!["groundhog", "airdrop", "recipient", "--yes"],
-            vec!["groundhog", "wallet", "create", "--yes"],
+            vec!["thruput", "airdrop", "recipient", "--yes"],
+            vec!["thruput", "wallet", "create", "--yes"],
         ] {
             let Err(error) = Cli::try_parse_from(args) else {
                 panic!("--yes should be removed");
@@ -2790,7 +2753,7 @@ mod tests {
     #[test]
     fn tx_show_flags_and_command_name_parse() {
         let cli = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "tx",
             "show",
             &format!("0x{}", "ab".repeat(32)),
@@ -2827,7 +2790,7 @@ mod tests {
     #[test]
     fn tx_list_flags_and_command_name_parse() {
         let cli = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "tx",
             "list",
             "alice",
@@ -2872,7 +2835,7 @@ mod tests {
     #[test]
     fn events_list_flags_and_command_name_parse() {
         let cli = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "events",
             "list",
             "counter",
@@ -2942,7 +2905,7 @@ mod tests {
     #[test]
     fn token_transfers_flags_and_command_name_parse() {
         let cli = Cli::parse_from([
-            "groundhog",
+            "thruput",
             "token",
             "transfers",
             "alula",
@@ -2996,7 +2959,7 @@ mod tests {
 
     #[test]
     fn test_workspace_flag_parses() {
-        let cli = Cli::parse_from(["groundhog", "test", "--workspace"]);
+        let cli = Cli::parse_from(["thruput", "test", "--workspace"]);
 
         match cli.command {
             Command::Test(TestArgs {
@@ -3011,7 +2974,7 @@ mod tests {
 
     #[test]
     fn test_workspace_flag_conflicts_with_package() {
-        let result = Cli::try_parse_from(["groundhog", "test", "--workspace", "-p", "demo"]);
+        let result = Cli::try_parse_from(["thruput", "test", "--workspace", "-p", "demo"]);
 
         match result {
             Err(err) => assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict),
@@ -3021,7 +2984,7 @@ mod tests {
 
     #[test]
     fn test_integration_verbose_flag_parses() {
-        let cli = Cli::parse_from(["groundhog", "test", "--integration", "-v"]);
+        let cli = Cli::parse_from(["thruput", "test", "--integration", "-v"]);
 
         match cli.command {
             Command::Test(TestArgs {
@@ -3039,7 +3002,7 @@ mod tests {
     #[test]
     fn test_integration_network_config_flags_parse() {
         let cli = Cli::try_parse_from([
-            "groundhog",
+            "thruput",
             "test",
             "--integration",
             "--network-config",
@@ -3061,7 +3024,7 @@ mod tests {
         // The override only reaches a node, so it needs --integration.
         assert!(
             Cli::try_parse_from([
-                "groundhog",
+                "thruput",
                 "test",
                 "--network-config",
                 "max_rv32_memory_bytes=16M",

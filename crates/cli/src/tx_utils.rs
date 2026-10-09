@@ -417,7 +417,7 @@ mod tests {
                     .contains(&format!("last observed status: {expected}"))
             );
             let hint = error.hint().unwrap();
-            assert!(hint.contains(&format!("groundhog tx show {}", format_tx_hash(&tx_hash))));
+            assert!(hint.contains(&format!("thruput tx show {}", format_tx_hash(&tx_hash))));
             assert!(!hint.contains("--rpc-url"));
             assert!(hint.contains("same profile and RPC endpoint as the original submission"));
             assert!(hint.contains("sending wallet's HOG balance on the same network"));

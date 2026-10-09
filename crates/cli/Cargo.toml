@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-cli"
+name = "thruput-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Groundhog smart contract development tools"
+description = "Thruput smart contract development tools"
 
 exclude = [
     "/docs/",
@@ -18,7 +18,7 @@ exclude = [
 ]
 
 [[bin]]
-name = "groundhog"
+name = "thruput"
 path = "src/main.rs"
 
 [dependencies]

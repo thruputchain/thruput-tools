@@ -20,7 +20,7 @@ Release assets:
 ```text
 <linux-app>-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 <linux-app>-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz
-groundhog-vX.Y.Z-aarch64-apple-darwin.tar.gz
+thruput-vX.Y.Z-aarch64-apple-darwin.tar.gz
 SHA256SUMS
 ```
 
@@ -32,7 +32,7 @@ companion covered by `SHA256SUMS` (24 archives total).
 - Linux binaries retain `.symtab` and carry a GNU debuglink. Their split debug
   files are rooted at `usr/lib/debug/.build-id/<xx>/<rest>.debug`, using the
   binary's GNU build-id.
-- The macOS companion contains a `groundhog.dSYM` bundle. Its binary is stripped
+- The macOS companion contains a `thruput.dSYM` bundle. Its binary is stripped
   of debug information and re-signed ad hoc.
 - Release builds include line tables and force frame pointers.
 
@@ -42,11 +42,11 @@ Install the Linux debuginfo companion with
 for gdb, perf, and eBPF profilers. Alternatively, extract it elsewhere and point
 the tool's debug-file directory at the extracted `usr/lib/debug` tree.
 
-Linux apps are `hog-gateway`, `groundhog`, `rv32-lower`, `hogsim`, and
+Linux apps are `hog-gateway`, `thruput`, `rv32-lower`, `hogsim`, and
 `groundhog-faucet`. Each archive contains one app binary plus `README.md` and
 `LICENSE`. `hog-gateway`, `hogsim`, and `groundhog-faucet` are binary release
 artifacts only; `groundhog-rv32-lower` is also a published crate/library. macOS
-releases currently target Apple Silicon and include only the `groundhog` CLI,
+releases currently target Apple Silicon and include only the `thruput` CLI,
 which links the RV32 lowerer in-process. The macOS binary is ad-hoc signed but
 not notarized, so macOS may require explicit approval after download.
 

@@ -28,7 +28,7 @@ impl Fixture {
         let fixture = Self {
             dir: TempDir::new().unwrap(),
         };
-        std::fs::write(fixture.dir.path().join("groundhog.toml"), format!("default_profile = 'default'\n[profile.default]\ndefault_key = 'owner'\nrpc_url = '{rpc}'\nnetwork_hash = '{NETWORK}'\n")).unwrap();
+        std::fs::write(fixture.dir.path().join("thruput.toml"), format!("default_profile = 'default'\n[profile.default]\ndefault_key = 'owner'\nrpc_url = '{rpc}'\nnetwork_hash = '{NETWORK}'\n")).unwrap();
         std::fs::write(fixture.dir.path().join("counter.rv32a"), b"test-artifact").unwrap();
         assert!(
             fixture
@@ -51,12 +51,12 @@ impl Fixture {
         fixture
     }
     fn command(&self) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_thruput"));
         cmd.arg("--json")
             .current_dir(self.dir.path())
             .env("XDG_CONFIG_HOME", self.dir.path().join("config"))
-            .env_remove("GROUNDHOG_PROFILE")
-            .env_remove("GROUNDHOG_RUNTIME_MANIFEST");
+            .env_remove("THRUPUT_PROFILE")
+            .env_remove("THRUPUT_RUNTIME_MANIFEST");
         cmd
     }
     fn deploy(&self, args: &[&str]) -> Output {
@@ -74,10 +74,9 @@ impl Fixture {
             .unwrap()
     }
     fn config(&self) -> Value {
-        let parsed: toml::Value = toml::from_str(
-            &std::fs::read_to_string(self.dir.path().join("groundhog.toml")).unwrap(),
-        )
-        .unwrap();
+        let parsed: toml::Value =
+            toml::from_str(&std::fs::read_to_string(self.dir.path().join("thruput.toml")).unwrap())
+                .unwrap();
         serde_json::to_value(parsed).unwrap()
     }
 }
@@ -86,7 +85,7 @@ impl Fixture {
 async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
     let (url, handle, state) = server(Outcome::Success).await;
     let fixture = Fixture::new(&url);
-    let path = fixture.dir.path().join("groundhog.toml");
+    let path = fixture.dir.path().join("thruput.toml");
     let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let profile = config["profile"]["default"].as_table_mut().unwrap();
     let owner = profile["wallets"]["owner"]["owner_public_key"]
@@ -269,7 +268,7 @@ fn native_deploy_requires_explicit_funding_without_rpc() {
 #[test]
 fn legacy_wallet_rejects_native_funding_options_without_rpc() {
     let fixture = Fixture::new("http://127.0.0.1:1");
-    let path = fixture.dir.path().join("groundhog.toml");
+    let path = fixture.dir.path().join("thruput.toml");
     let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let wallet = config["profile"]["default"]["wallets"]["owner"]
         .as_table_mut()
@@ -292,7 +291,7 @@ fn legacy_wallet_rejects_native_funding_options_without_rpc() {
 async fn native_deployment_rejects_network_mismatch_before_submission() {
     let (url, handle, state) = server(Outcome::Success).await;
     let fixture = Fixture::new(&url);
-    let path = fixture.dir.path().join("groundhog.toml");
+    let path = fixture.dir.path().join("thruput.toml");
     let config = std::fs::read_to_string(&path)
         .unwrap()
         .replace(NETWORK, &"08".repeat(32));
@@ -447,11 +446,11 @@ async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments()
     let tx = signed(report["data"]["signedTx"].as_str().unwrap());
     assert_eq!(
         tx.tx.invocation.gas_limit,
-        groundhog_signing::DEFAULT_TX_GAS_LIMIT + groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT
+        groundhog_signing::DEFAULT_TX_GAS_LIMIT + thruput_cli::call::DEFAULT_CALL_GAS_LIMIT
     );
     assert_eq!(
         init["gasLimit"],
-        groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT.to_string()
+        thruput_cli::call::DEFAULT_CALL_GAS_LIMIT.to_string()
     );
     for value in ["not-a-number", "18446744073709551616"] {
         let bad = fixture.deploy(&["--fund", "5", "--init", "initialize", "--init-arg", value]);
@@ -725,7 +724,7 @@ async fn only_verified_success_saves_the_native_alias() {
 async fn recovery_hint_preserves_explicit_profile_without_a_default() {
     let (url, handle, _) = server(Outcome::SendError).await;
     let fixture = Fixture::new(&url);
-    let path = fixture.dir.path().join("groundhog.toml");
+    let path = fixture.dir.path().join("thruput.toml");
     let config = std::fs::read_to_string(&path).unwrap();
     let mut config: toml::Value = toml::from_str(&config).unwrap();
     config.as_table_mut().unwrap().remove("default_profile");
@@ -744,7 +743,7 @@ async fn recovery_hint_preserves_explicit_profile_without_a_default() {
 async fn native_alias_write_failure_preserves_verified_deployment() {
     let (url, handle, state) = server(Outcome::Success).await;
     let fixture = Fixture::new(&url);
-    let path = fixture.dir.path().join("groundhog.toml");
+    let path = fixture.dir.path().join("thruput.toml");
     let config = std::fs::read_to_string(&path)
         .unwrap()
         .replace("[profile.default]", "[profile.default]\ncontracts = {}");

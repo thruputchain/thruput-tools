@@ -40,8 +40,8 @@ pub(crate) const BASE: &[File] = &[
     ("AGENTS.md", include_str!("../templates/agents.md.tmpl")),
     (".gitignore", include_str!("../templates/gitignore.tmpl")),
     (
-        "groundhog.toml",
-        include_str!("../templates/groundhog.toml.tmpl"),
+        "thruput.toml",
+        include_str!("../templates/thruput.toml.tmpl"),
     ),
     (
         "tests/integration.rs",
@@ -123,8 +123,8 @@ const APP: &[File] = &[
         include_str!("../templates/counter-app/style.css.tmpl"),
     ),
     (
-        "scripts/groundhog.mjs",
-        include_str!("../templates/counter-app/groundhog.mjs.tmpl"),
+        "scripts/thruput.mjs",
+        include_str!("../templates/counter-app/thruput.mjs.tmpl"),
     ),
     (
         "scripts/build.mjs",
@@ -165,10 +165,10 @@ pub const CATALOG: &[Template] = &[
         contents: &[
             "Rust counter contract",
             "contract tests",
-            "Groundhog project configuration",
+            "Thruput project configuration",
         ],
-        prerequisites: &["Rust with rustup", "Groundhog Cargo registry credentials"],
-        next_steps: &["cargo test", "groundhog build", "groundhog test"],
+        prerequisites: &["Rust with rustup", "Thruput Cargo registry credentials"],
+        next_steps: &["cargo test", "thruput build", "thruput test"],
         files: &[COUNTER],
         agent_notes: None,
     },
@@ -182,14 +182,14 @@ pub const CATALOG: &[Template] = &[
             "local deployment scripts",
         ],
         prerequisites: &[
-            "Groundhog CLI configured via groundhog init",
-            "running groundhog node",
+            "Thruput CLI configured via thruput init",
+            "running thruput node",
             "Rust with rustup",
-            "Groundhog Cargo and npm registry access",
+            "Thruput Cargo and npm registry access",
             "Node.js 22.12+ and npm",
         ],
         next_steps: &[
-            "groundhog node  # in another terminal",
+            "thruput node  # in another terminal",
             "npm install",
             "npm run contract:deploy",
             "npm run dev",
