@@ -2,8 +2,8 @@
 //!
 //! A view is a sandboxed root invocation: hogd's viewing mode is what keeps
 //! writes from committing, so the query carries no special flags and the
-//! auth claim is assumed, never signature-verified. Events are still produced, which lets
-//! a wallet preview show what a real submit would emit.
+//! auth claim is assumed, never signature-verified. Events are still produced,
+//! which lets a wallet preview show what a real submit would emit.
 
 use groundhog_json_rpc_server::RpcServerError;
 use groundhog_json_rpc_types::{
