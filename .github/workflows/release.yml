@@ -148,14 +148,23 @@ jobs:
           echo "EXPECTED_BINARY_VERSION=$expected_version" >> "$GITHUB_ENV"
           echo "EXPECTED_SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
 
+          # Gateway and faucet ship with jemalloc and inactive heap profiling;
+          # GROUNDHOG_HEAP_PROFILING=1 turns it on. The feature is Linux-only.
           package_args=()
+          features=()
           for app in $RELEASE_APPS; do
             case "$app" in
-              hog-gateway) package_args+=(-p thruput-json-rpc-gateway) ;;
+              hog-gateway)
+                package_args+=(-p thruput-json-rpc-gateway)
+                features+=(thruput-json-rpc-gateway/heap-profiling)
+                ;;
               thruput) package_args+=(-p thruput-cli) ;;
               rv32-lower) package_args+=(-p thruput-rv32-lower) ;;
               hogsim) package_args+=(-p thruput-sim) ;;
-              thruput-faucet) package_args+=(-p thruput-faucet) ;;
+              thruput-faucet)
+                package_args+=(-p thruput-faucet)
+                features+=(thruput-faucet/heap-profiling)
+                ;;
               hog-firehose-store|hog-firehose-serve)
                 package_args+=(-p thruput-firehose) ;;
               *)
@@ -164,8 +173,26 @@ jobs:
                 ;;
             esac
           done
+          if [ "${{ matrix.platform }}" = linux ] && [ "${#features[@]}" -gt 0 ]; then
+            package_args+=(--features "$(IFS=,; echo "${features[*]}")")
+          fi
 
           cargo build --locked --release "${package_args[@]}" --bins
+
+          if [ "${{ matrix.platform }}" = linux ]; then
+            for app in $RELEASE_APPS; do
+              case "$app" in
+                hog-gateway | thruput-faucet) want=1 ;;
+                *) want=0 ;;
+              esac
+              have=0
+              if grep -aq '<jemalloc>' "target/release/$app"; then have=1; fi
+              if [ "$have" != "$want" ]; then
+                echo "$app: jemalloc linked=$have, expected $want" >&2
+                exit 1
+              fi
+            done
+          fi
 
       - name: Verify macOS CLI portability
         if: matrix.platform == 'macos'
@@ -237,7 +264,8 @@ jobs:
           unset GROUNDHOG_DISTRIBUTION_VERSION
           export GROUNDHOG_SOURCE_COMMIT="$EXPECTED_SOURCE_COMMIT"
           cargo build --locked --release --target x86_64-unknown-linux-gnu \
-            -p thruput-json-rpc-gateway --bin hog-gateway
+            -p thruput-json-rpc-gateway --bin hog-gateway --features heap-profiling
+          grep -aq '<jemalloc>' target/znver5/x86_64-unknown-linux-gnu/release/hog-gateway
           release_ref=${GITHUB_REF_NAME//\//-}
           archive_base="hog-gateway-${release_ref}-x86_64-unknown-linux-gnu-znver5"
           mkdir -p "package/$archive_base"

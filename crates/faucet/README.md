@@ -45,8 +45,10 @@ Heap profiling is opt-in on a separate private listener:
 - Dumps require a writable temporary directory. Private dump files use mode 0600
   and are removed after each request.
 - Build on Linux with `--features heap-profiling` to use jemalloc profiling with
-  a 512 KiB average allocation sampling interval. Default builds keep the system
-  allocator and fail startup if `GROUNDHOG_HEAP_PROFILING=1`.
+  a 512 KiB average allocation sampling interval. Linux release archives are
+  built this way, with profiling inactive until `GROUNDHOG_HEAP_PROFILING=1`.
+  Default builds keep the system allocator and fail startup if
+  `GROUNDHOG_HEAP_PROFILING=1`.
 - Profiles are symbolized in process with function names, plus file and line when
   debuginfo is present. Mappings carry GNU build IDs.
 

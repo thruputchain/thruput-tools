@@ -70,7 +70,7 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [features]
-# Linux jemalloc allocator plus opt-in heap profiles. Off until load numbers qualify it.
+# Linux jemalloc allocator plus opt-in heap profiles. Linux release builds enable it.
 heap-profiling = ["groundhog-heap-profiling/jemalloc", "dep:tikv-jemallocator"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
