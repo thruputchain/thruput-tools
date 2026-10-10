@@ -26,6 +26,7 @@ use crate::event::parse_emitted_events;
 /// claim. Older runtimes reject this token instead of silently ignoring auth.
 pub const VIEW_AUTH_CLAIMS_PROTOCOL: [u8; 20] = *b"view-auth-claims-v1_";
 
+/// Reject an explicit claim when the backend does not accept the capability token.
 pub fn require_auth_claim_support(
     outcome: groundhog_view::ViewGatewayIntroOutcome,
 ) -> Result<(), RpcServerError> {
