@@ -86,7 +86,20 @@ impl Tailer {
             let path = record_path(&self.directory, height);
             let metadata = match tokio::fs::metadata(&path).await {
                 Ok(metadata) => metadata,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    match self.retained_floor_past(height).await? {
+                        Some(floor) => {
+                            tracing::warn!(
+                                missing = height,
+                                floor,
+                                "retention pruned past the tailer; resuming at the retained floor"
+                            );
+                            height = floor;
+                            continue;
+                        }
+                        None => return Ok(()),
+                    }
+                }
                 Err(error) => return Err(error.into()),
             };
             let bytes = tokio::fs::read(path).await?;
@@ -104,6 +117,19 @@ impl Tailer {
                 .checked_add(1)
                 .ok_or_else(|| crate::invalid("archive height overflow"))?;
         }
+    }
+
+    /// The retained minimum, when the writer's retention has pruned `missing` and
+    /// the published tip. Live subscribers still expecting a pruned height end
+    /// with `archive_gap` on the next publication rather than skipping history.
+    async fn retained_floor_past(&self, missing: i64) -> Result<Option<i64>, Error> {
+        // One stat while caught up: a published tip that is gone means retention moved.
+        if self.awaiting_origin
+            || tokio::fs::try_exists(record_path(&self.directory, self.tip)).await?
+        {
+            return Ok(None);
+        }
+        Ok(discover_height(&self.directory, Extreme::Minimum)?.filter(|floor| *floor > missing))
     }
 
     /// Refresh health from record age, independently of writer availability.
@@ -216,11 +242,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn publication_refreshes_health_before_the_drain_finishes() {
+    async fn resumes_at_the_retained_floor_after_retention_prunes_past_the_tip() {
         let dir = tempfile::tempdir().unwrap();
+        let first = test_records::fixture();
+        fs::write(record_path(dir.path(), 1), crate::encode(&first).unwrap()).unwrap();
         let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
-        let metrics = Metrics::new().unwrap();
-        let config = Config {
+        let hub = Hub::new(dir.path().to_owned(), -1, test_config());
+        tailer.poll(&hub).await.unwrap();
+        assert_eq!(tailer.tip(), 1);
+        let second = test_records::next(&first);
+        let third = test_records::next(&second);
+        fs::write(record_path(dir.path(), 3), crate::encode(&third).unwrap()).unwrap();
+        fs::remove_file(record_path(dir.path(), 1)).unwrap();
+        tailer.poll(&hub).await.unwrap();
+        assert_eq!(tailer.tip(), 3);
+    }
+
+    #[tokio::test]
+    async fn waits_for_the_next_record_while_the_tip_is_retained() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = test_records::fixture();
+        fs::write(record_path(dir.path(), 1), crate::encode(&first).unwrap()).unwrap();
+        let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+        let hub = Hub::new(dir.path().to_owned(), -1, test_config());
+        tailer.poll(&hub).await.unwrap();
+        let third = test_records::next(&test_records::next(&first));
+        fs::write(record_path(dir.path(), 3), crate::encode(&third).unwrap()).unwrap();
+        tailer.poll(&hub).await.unwrap();
+        assert_eq!(tailer.tip(), 1);
+    }
+
+    fn test_config() -> Config {
+        Config {
             ws_listen: "127.0.0.1:0".parse().unwrap(),
             allow_remote: false,
             max_subscribers: 64,
@@ -232,8 +285,15 @@ mod tests {
             catchup_timeout_ms: 10000,
             catchup_progress_ms: 30000,
             request_window: 42_428,
-        };
-        let hub = Hub::new(dir.path().to_owned(), -1, config);
+        }
+    }
+
+    #[tokio::test]
+    async fn publication_refreshes_health_before_the_drain_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+        let metrics = Metrics::new().unwrap();
+        let hub = Hub::new(dir.path().to_owned(), -1, test_config());
         let block = test_records::fixture();
         fs::write(record_path(dir.path(), 1), crate::encode(&block).unwrap()).unwrap();
         let mut invalid = test_records::next(&block);
