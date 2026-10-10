@@ -2145,6 +2145,7 @@
             "additionalProperties": false,
             "properties": {
               "allowedKeys": {
+                "description": "Bitmap of source-address authorization keys allowed by this claim.",
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
@@ -2154,6 +2155,7 @@
                 "type": "string"
               },
               "requiredWeight": {
+                "description": "Required source-address authorization weight assumed by this claim.",
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"

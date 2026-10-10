@@ -17,7 +17,9 @@ use crate::{BlockHeight, ContractAddress};
 )]
 pub enum ViewAuthClaim {
     SourceAddress {
+        /// Bitmap of source-address authorization keys allowed by this claim.
         allowed_keys: u32,
+        /// Required source-address authorization weight assumed by this claim.
         required_weight: u32,
     },
     PubkeySignature {
