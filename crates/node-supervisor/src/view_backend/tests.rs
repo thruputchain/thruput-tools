@@ -185,6 +185,9 @@ fn request(caller: Option<ContractAddress>) -> ViewRequest {
 
 #[tokio::test]
 async fn explicit_claims_fail_closed_on_legacy_backends() {
+    use groundhog_json_rpc_server::ViewBatchConfig;
+    use groundhog_json_rpc_types::view::{ViewAuthClaim, ViewBatchRequest, ViewCall};
+
     let (addr, server) = start_fake_view_gateway(FakeViewGatewayMode::Legacy).await;
     let backend = HogdDevViewBackend::connect_optional(
         Some(addr),
@@ -201,30 +204,27 @@ async fn explicit_claims_fail_closed_on_legacy_backends() {
             .await
             .is_ok()
     );
-    input.auth_claim = Some(
-        groundhog_json_rpc_types::view::ViewAuthClaim::SourceAddress {
-            allowed_keys: 0,
-            required_weight: 0,
-        },
-    );
+    input.auth_claim = Some(ViewAuthClaim::SourceAddress {
+        allowed_keys: 0,
+        required_weight: 0,
+    });
     assert!(matches!(
         backend
             .view(RpcRequestContext::new(None), input.clone(), 123)
             .await,
         Err(RpcServerError::NotImplemented(_))
     ));
-    let entry: groundhog_json_rpc_types::view::ViewCall =
-        serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
+    let entry: ViewCall = serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
     assert!(matches!(
         backend
             .view_batch(
                 RpcRequestContext::new(None),
-                groundhog_json_rpc_types::view::ViewBatchRequest {
+                ViewBatchRequest {
                     calls: vec![entry],
                     min_height: None
                 },
                 123,
-                groundhog_json_rpc_server::ViewBatchConfig::default()
+                ViewBatchConfig::default()
             )
             .await,
         Err(RpcServerError::NotImplemented(_))
