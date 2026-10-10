@@ -857,6 +857,7 @@ mod view_batch_validation_tests {
     #[test]
     fn aggregate_cap_counts_declared_and_default_limits_without_overflow() {
         let call = ViewCall {
+            auth_claim: None,
             contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![]),
@@ -892,6 +893,7 @@ mod view_batch_validation_tests {
     #[test]
     fn operator_limits_can_exceed_defaults_and_still_bound_aggregate_work() {
         let call = ViewCall {
+            auth_claim: None,
             contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![0; 4096]),
@@ -922,6 +924,7 @@ mod view_batch_validation_tests {
     #[test]
     fn validates_call_count_calldata_gas_and_height_bounds() {
         let call = ViewCall {
+            auth_claim: None,
             contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![0; 4096]),
@@ -2499,6 +2502,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         );
 
         let request = ViewRequest {
+            auth_claim: None,
             min_height: None,
             contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
@@ -2565,6 +2569,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             BuildInfo::for_tests(),
         );
         let request = |min_height: Option<i64>| ViewRequest {
+            auth_claim: None,
             contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0; 32])),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![]),

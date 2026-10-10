@@ -108,6 +108,9 @@ impl ViewPlane for HogdDevViewBackend {
             return Err(RpcServerError::NotImplemented("viewBatch".into()));
         };
         let context = context.capped(*request_timeout);
+        if request.calls.iter().any(|call| call.auth_claim.is_some()) {
+            check_auth_claim_support(client, context).await?;
+        }
         let query = shared_view::view_batch_query(
             request,
             gas_limit,
@@ -150,8 +153,12 @@ impl ViewPlane for HogdDevViewBackend {
             return Err(RpcServerError::NotImplemented("view".into()));
         };
 
+        let context = context.capped(*request_timeout);
+        if request.auth_claim.is_some() {
+            check_auth_claim_support(client, context).await?;
+        }
         let query = shared_view::view_query(request, gas_limit)?;
-        let result = within_request_deadline(context.capped(*request_timeout), async {
+        let result = within_request_deadline(context, async {
             client.viewgateway_view(&query).await.map_err(|source| {
                 RpcServerError::BackendUnavailable(format!("{VIEW_GATEWAY}: {source}"))
             })
@@ -167,6 +174,22 @@ impl ViewPlane for HogdDevViewBackend {
         }
         Ok(outcome.response)
     }
+}
+
+async fn check_auth_claim_support(
+    client: &ViewGateway_ViewGateway1_Client,
+    context: RpcRequestContext,
+) -> Result<(), RpcServerError> {
+    within_request_deadline(context, async {
+        let outcome = client
+            .viewgateway_intro(&shared_view::VIEW_AUTH_CLAIMS_PROTOCOL)
+            .await
+            .map_err(|error| {
+                RpcServerError::BackendUnavailable(format!("{VIEW_GATEWAY}: {error}"))
+            })?;
+        shared_view::require_auth_claim_support(outcome)
+    })
+    .await
 }
 
 #[cfg(test)]

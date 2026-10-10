@@ -58,6 +58,7 @@ enum FakeViewGatewayMode {
     IntroRejected,
     ViewSlow,
     Batch,
+    Legacy,
 }
 
 struct FakeViewGateway {
@@ -80,6 +81,11 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
         }
         assert!(query.budget_millis > 30_000);
         assert_eq!(query.max_response_bytes, 256);
+        assert_ne!(
+            query.calls.0[0].auth_claim,
+            shared_view::public_view_auth_claim()
+        );
+        assert_ne!(query.calls.0[0].auth_claim, query.calls.0[1].auth_claim);
         if let Some(requested) = query.min_height.filter(|height| **height > 42) {
             return Ok(ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
                 height_unavailable: ViewGatewayHeightUnavailable {
@@ -110,9 +116,14 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
     }
     async fn viewgateway_intro(
         &self,
-        _arg0: Protocol,
+        protocol: Protocol,
     ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
         if self.mode == FakeViewGatewayMode::IntroRejected {
+            return Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol);
+        }
+        if self.mode == FakeViewGatewayMode::Legacy
+            && protocol == shared_view::VIEW_AUTH_CLAIMS_PROTOCOL
+        {
             return Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol);
         }
         Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)
@@ -162,6 +173,7 @@ async fn start_fake_view_gateway(
 
 fn request(caller: Option<ContractAddress>) -> ViewRequest {
     ViewRequest {
+        auth_claim: None,
         min_height: None,
         contract: ContractAddress::from(groundhog_xdr::types::ContractAddress::from([7; 32])),
         entrypoint: HexBytes(vec![8; 8]),
@@ -169,6 +181,55 @@ fn request(caller: Option<ContractAddress>) -> ViewRequest {
         caller,
         gas_limit: None,
     }
+}
+
+#[tokio::test]
+async fn explicit_claims_fail_closed_on_legacy_backends() {
+    let (addr, server) = start_fake_view_gateway(FakeViewGatewayMode::Legacy).await;
+    let backend = HogdDevViewBackend::connect_optional(
+        Some(addr),
+        &protocol_text(&PROTOCOL_VERSION),
+        None,
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap();
+    let mut input = request(None);
+    assert!(
+        backend
+            .view(RpcRequestContext::new(None), input.clone(), 123)
+            .await
+            .is_ok()
+    );
+    input.auth_claim = Some(
+        groundhog_json_rpc_types::view::ViewAuthClaim::SourceAddress {
+            allowed_keys: 0,
+            required_weight: 0,
+        },
+    );
+    assert!(matches!(
+        backend
+            .view(RpcRequestContext::new(None), input.clone(), 123)
+            .await,
+        Err(RpcServerError::NotImplemented(_))
+    ));
+    let entry: groundhog_json_rpc_types::view::ViewCall =
+        serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
+    assert!(matches!(
+        backend
+            .view_batch(
+                RpcRequestContext::new(None),
+                groundhog_json_rpc_types::view::ViewBatchRequest {
+                    calls: vec![entry],
+                    min_height: None
+                },
+                123,
+                groundhog_json_rpc_server::ViewBatchConfig::default()
+            )
+            .await,
+        Err(RpcServerError::NotImplemented(_))
+    ));
+    server.abort();
 }
 
 #[tokio::test]
@@ -187,6 +248,7 @@ async fn batch_pending_io_respects_the_public_deadline() {
             RpcRequestContext::new(Some(Duration::from_millis(10))),
             groundhog_json_rpc_types::view::ViewBatchRequest {
                 calls: vec![groundhog_json_rpc_types::view::ViewCall {
+                    auth_claim: None,
                     contract: ContractAddress::from(groundhog_xdr::types::ContractAddress::from(
                         [7; 32],
                     )),
@@ -240,6 +302,7 @@ async fn public_views_preserve_order_gas_height_and_freshness_errors() {
     for min_height in ["42", "43"] {
         let calls: Vec<_> = [("0x01", "123"), ("0x02", "456")].into_iter().map(|(calldata, gas)| serde_json::json!({
             "contract": format!("0x{}", "07".repeat(32)), "entrypoint": "0x0808080808080808", "calldata": calldata, "gasLimit": gas,
+            "authClaim": {"kind":"sourceAddress", "allowedKeys":5, "requiredWeight": if calldata == "0x01" { 3 } else { 4 }},
         })).collect();
         let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"groundhog_viewBatch", "params":[{"calls":calls,"minHeight":min_height}]}).to_string();
         let (response, _) = module.raw_json_request(&request, 1).await.unwrap();

@@ -152,6 +152,7 @@ fn prepare_view(
         entrypoint_id,
         calldata_hex,
         request: ViewRequest {
+            auth_claim: None,
             min_height: None,
             contract: contract_address,
             entrypoint: HexBytes(entrypoint_bytes),
@@ -401,6 +402,7 @@ mod tests {
             entrypoint_id: "0x0000000000000000".into(),
             calldata_hex: "0x".into(),
             request: ViewRequest {
+                auth_claim: None,
                 min_height: None,
                 contract: ContractAddress::from(groundhog_xdr::types::ContractAddress::from(
                     [0u8; 32],

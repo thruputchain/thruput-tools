@@ -35,6 +35,9 @@ pub async fn view_batch(
             RpcServerError::NotImplemented("viewBatch".into())
         }
     })?;
+    if request.calls.iter().any(|call| call.auth_claim.is_some()) {
+        check_auth_claim_support(&client, &ctx.metrics, deadline).await?;
+    }
     let query = shared_view::view_batch_query(
         request,
         gas_limit,
@@ -94,11 +97,33 @@ pub async fn view(
         }
     })?;
 
+    let explicit_auth = request.auth_claim.is_some();
     let query = shared_view::view_query(request, gas_limit)?;
     let timeout =
         Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
     let deadline = backend_deadline(context, timeout)?;
+    if explicit_auth {
+        check_auth_claim_support(&client, &ctx.metrics, deadline).await?;
+    }
     view_response_from_client(&client, &ctx.metrics, &query, deadline).await
+}
+
+async fn check_auth_claim_support(
+    client: &groundhog_view::ViewGateway_ViewGateway1_Client,
+    metrics: &GatewayMetrics,
+    deadline: Instant,
+) -> Result<(), RpcServerError> {
+    let outcome = timed_backend_call(
+        metrics,
+        HealthBackend::ViewGateway,
+        "viewgateway_intro",
+        VIEW_GATEWAY,
+        deadline,
+        client.viewgateway_intro(&shared_view::VIEW_AUTH_CLAIMS_PROTOCOL),
+        |_| true,
+    )
+    .await?;
+    shared_view::require_auth_claim_support(outcome)
 }
 
 async fn view_response_from_client(
@@ -167,6 +192,7 @@ mod tests {
     enum FakeViewGatewayMode {
         Slow,
         Batch,
+        Legacy,
         BatchOutcome(i32),
     }
 
@@ -200,6 +226,11 @@ mod tests {
                     },
                 });
             }
+            assert_ne!(
+                query.calls.0[0].auth_claim,
+                shared_view::public_view_auth_claim()
+            );
+            assert_ne!(query.calls.0[0].auth_claim, query.calls.0[1].auth_claim);
             Ok(ViewGatewayBatchResult::ViewGatewayBatchOk {
                 payload: ViewGatewayBatchPayload {
                     height: 42.into(),
@@ -222,8 +253,13 @@ mod tests {
         }
         async fn viewgateway_intro(
             &self,
-            _arg0: Protocol,
+            protocol: Protocol,
         ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
+            if self.mode == FakeViewGatewayMode::Legacy
+                && protocol == shared_view::VIEW_AUTH_CLAIMS_PROTOCOL
+            {
+                return Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol);
+            }
             Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)
         }
 
@@ -269,8 +305,36 @@ mod tests {
         (addr, handle)
     }
 
+    #[tokio::test]
+    async fn explicit_auth_probe_distinguishes_legacy_and_capable_backends() {
+        for mode in [FakeViewGatewayMode::Legacy, FakeViewGatewayMode::Batch] {
+            let (addr, server) = start_fake_view_gateway(mode).await;
+            let client = groundhog_x23_transport::connect(
+                "view",
+                &addr.to_string(),
+                1,
+                ViewGateway_ViewGateway1_Client::new,
+            )
+            .await
+            .unwrap();
+            let result = check_auth_claim_support(
+                &client,
+                &GatewayMetrics::for_tests(),
+                Instant::now() + Duration::from_secs(1),
+            )
+            .await;
+            if mode == FakeViewGatewayMode::Legacy {
+                assert!(matches!(result, Err(RpcServerError::NotImplemented(_))));
+            } else {
+                assert!(result.is_ok());
+            }
+            server.abort();
+        }
+    }
+
     fn request(caller: Option<ContractAddress>) -> ViewRequest {
         ViewRequest {
+            auth_claim: None,
             min_height: None,
             contract: ContractAddress::from(XdrContractAddress::from([7; 32])),
             entrypoint: HexBytes(vec![8; 8]),
@@ -366,6 +430,7 @@ mod tests {
         for min_height in ["42", "43"] {
             let calls: Vec<_> = [("0x01", "123"), ("0x02", "456")].into_iter().map(|(calldata, gas)| serde_json::json!({
                 "contract": format!("0x{}", "07".repeat(32)), "entrypoint": "0x0808080808080808",
+                "authClaim": {"kind":"sourceAddress", "allowedKeys":5, "requiredWeight": if calldata == "0x01" { 3 } else { 4 }},
                 "calldata": calldata, "gasLimit": gas,
             })).collect();
             let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"groundhog_viewBatch", "params":[{"calls":calls,"minHeight":min_height}]}).to_string();
@@ -489,6 +554,7 @@ mod tests {
                 RpcRequestContext::unbounded(),
                 ViewBatchRequest {
                     calls: vec![ViewCall {
+                        auth_claim: None,
                         contract: request(None).contract,
                         entrypoint: HexBytes(vec![8; 8]),
                         calldata: HexBytes(vec![]),

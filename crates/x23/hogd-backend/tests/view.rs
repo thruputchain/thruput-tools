@@ -17,6 +17,7 @@ use groundhog_hogd_backend::view::*;
 
 fn request(caller: Option<ContractAddress>) -> ViewRequest {
     ViewRequest {
+        auth_claim: None,
         min_height: None,
         contract: ContractAddress::from(XdrContractAddress::from([7; 32])),
         entrypoint: HexBytes(vec![8; 8]),
@@ -24,6 +25,22 @@ fn request(caller: Option<ContractAddress>) -> ViewRequest {
         caller,
         gas_limit: None,
     }
+}
+
+#[test]
+fn explicit_claim_replaces_only_the_default_auth_context() {
+    use groundhog_json_rpc_types::view::ViewAuthClaim;
+    let mut input = request(None);
+    let default = view_query(input.clone(), 123).unwrap();
+    input.auth_claim = Some(ViewAuthClaim::SourceAddress {
+        allowed_keys: 5,
+        required_weight: 3,
+    });
+    let explicit = view_query(input, 123).unwrap();
+    assert_eq!(explicit.invocation, default.invocation);
+    assert_eq!(explicit.parent_address, default.parent_address);
+    assert_eq!(explicit.invoke_flags, default.invoke_flags);
+    assert_ne!(explicit.auth_claim, default.auth_claim);
 }
 
 #[test]

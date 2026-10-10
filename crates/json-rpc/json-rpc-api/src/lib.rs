@@ -32,7 +32,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "11.1.0";
+pub const WIRE_FORMAT_VERSION: &str = "11.2.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -176,6 +176,8 @@ pub trait GroundhogApi {
     /// Optional `minHeight` requires that execution snapshot to be at least the
     /// requested committed height. An older result returns `ViewHeightUnavailable`.
     /// This is a freshness floor, not a historical selector, wait, or refresh request.
+    /// Optional `authClaim` is assumed without signature verification; contract
+    /// checks still run. An older backend that cannot preserve it is rejected.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
 
@@ -187,6 +189,7 @@ pub trait GroundhogApi {
     /// strict, but running backend work may outlive it. The minimum height is a
     /// freshness floor, not a wait or refresh request. The returned height is
     /// committed H, with execution context H+1.
+    /// Each entry may supply its own optional `authClaim`, independently of caller.
     #[method(name = "viewBatch")]
     async fn view_batch(&self, request: ViewBatchRequest) -> RpcResult<ViewBatchResponse>;
 
