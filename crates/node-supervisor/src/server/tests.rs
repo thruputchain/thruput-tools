@@ -25,7 +25,7 @@ use crate::{
 
 /// Env var the fake hogd-dev reads to write its PID before printing
 /// readiness. Tests use this to verify cleanup via `kill(pid, 0)`.
-const FAKE_HOGD_DEV_PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
+const FAKE_HOGD_DEV_PID_FILE_ENV: &str = "THRUPUT_FAKE_HOGD_DEV_PID_FILE";
 const FAKE_COMMIT_ENTERED_FILE_ENV: &str = "GROUNDHOG_FAKE_COMMIT_ENTERED_FILE";
 // Canonical XDR/hash vector only. This transaction is structurally valid
 // and has a stable hash, but it is not auth-valid against empty hogd-dev
@@ -45,7 +45,7 @@ fn write_matching_client_manifest() -> (TempDir, BundleIdentity, String) {
     const RELEASE: &str = "0.1.25-rc.4";
 
     let canonical = format!(
-        "{{\"bundle\":{{\"version\":\"{RELEASE}\"}},\"clients\":{{\"groundhog\":{{\"assetRole\":\"cli\",\"component\":\"groundhog-rpc\",\"sourceCommit\":\"{COMMIT}\",\"version\":\"{VERSION}\"}}}},\"components\":{{\"groundhog-rpc\":{{\"active\":true,\"sourceCommit\":\"{COMMIT}\",\"version\":\"{VERSION}\"}}}},\"schema\":\"groundhog-bundle-v1\"}}\n"
+        "{{\"bundle\":{{\"version\":\"{RELEASE}\"}},\"clients\":{{\"thruput\":{{\"assetRole\":\"cli\",\"component\":\"groundhog-rpc\",\"sourceCommit\":\"{COMMIT}\",\"version\":\"{VERSION}\"}}}},\"components\":{{\"groundhog-rpc\":{{\"active\":true,\"sourceCommit\":\"{COMMIT}\",\"version\":\"{VERSION}\"}}}},\"schema\":\"groundhog-bundle-v1\"}}\n"
     );
     let digest = format!(
         "sha256:{}",
@@ -63,7 +63,7 @@ fn write_matching_client_manifest() -> (TempDir, BundleIdentity, String) {
     )
     .expect("bug: manifest should write");
     let identity = BundleIdentity::from_manifest_path(
-        BundleSubject::client("groundhog", "groundhog-rpc", "cli"),
+        BundleSubject::client("thruput", "groundhog-rpc", "cli"),
         BuildVersion::new(VERSION, None).with_source_commit(Some(COMMIT)),
         &path,
     );

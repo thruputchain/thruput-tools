@@ -6,9 +6,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn isolated_cli(root: &std::path::Path) -> Command {
-    let executable = root.join("groundhog");
+    let executable = root.join("thruput");
     if !executable.exists() {
-        let contents = std::fs::read(env!("CARGO_BIN_EXE_groundhog")).unwrap();
+        let contents = std::fs::read(env!("CARGO_BIN_EXE_thruput")).unwrap();
         std::fs::write(&executable, contents).unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
@@ -17,10 +17,10 @@ fn isolated_cli(root: &std::path::Path) -> Command {
         .current_dir(root)
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_CACHE_HOME", root.join("cache"))
-        .env_remove("GROUNDHOG_DEVNODE_BINARY")
+        .env_remove("THRUPUT_DEVNODE_BINARY")
         .env_remove("HOGD_DEV_BINARY")
-        .env_remove("GROUNDHOG_OFFLINE")
-        .env_remove("GROUNDHOG_TOOLCHAIN_BASE_URL")
+        .env_remove("THRUPUT_OFFLINE")
+        .env_remove("THRUPUT_TOOLCHAIN_BASE_URL")
         .env("PATH", root.join("bin"));
     command
 }
@@ -77,7 +77,7 @@ fn implicit_offline_node_uses_path_when_cache_is_read_only() {
 #[test]
 fn saved_selection_does_not_fall_back_to_path_when_cache_is_unusable() {
     let root = tempfile::tempdir().unwrap();
-    let config = root.path().join("config/groundhog");
+    let config = root.path().join("config/thruput");
     let bin = root.path().join("bin");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
@@ -120,7 +120,7 @@ fn status_retains_uninstalled_and_stale_managed_selections() {
     for selected in [None, Some(catalog.default_version()), Some("0.0.0-retired")] {
         let version = selected.unwrap_or(catalog.default_version());
         let root = tempfile::tempdir().unwrap();
-        let config = root.path().join("config/groundhog");
+        let config = root.path().join("config/thruput");
         std::fs::create_dir_all(&config).unwrap();
         if selected.is_some() {
             std::fs::write(
@@ -139,7 +139,7 @@ fn status_retains_uninstalled_and_stale_managed_selections() {
         assert_eq!(node["version"], version);
         assert!(node["path"].is_null());
         assert!(node["error"].as_str().unwrap().contains("selected"));
-        assert!(!root.path().join("cache/groundhog/toolchain").exists());
+        assert!(!root.path().join("cache/thruput/toolchain").exists());
     }
 }
 
@@ -150,7 +150,7 @@ fn interrupted_acquisition_reports_json_failure_and_nonzero_exit() {
     listener.set_nonblocking(true).unwrap();
     let mut child = isolated_cli(root.path())
         .env(
-            "GROUNDHOG_TOOLCHAIN_BASE_URL",
+            "THRUPUT_TOOLCHAIN_BASE_URL",
             format!("http://{}/", listener.local_addr().unwrap()),
         )
         .env_remove("HTTPS_PROXY")

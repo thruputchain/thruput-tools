@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn restores_signal_actions_before_later_cargo_work() {
-        const CHILD_PHASE: &str = "GROUNDHOG_STARTUP_SIGNAL_TEST_PHASE";
+        const CHILD_PHASE: &str = "THRUPUT_STARTUP_SIGNAL_TEST_PHASE";
         if let Ok(phase) = std::env::var(CHILD_PHASE) {
             let signals = StartupSignals::capture().unwrap();
             match phase.as_str() {

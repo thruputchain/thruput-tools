@@ -440,7 +440,7 @@ mod tests {
         let live = LiveProcess {
             start_time: recorded.start_time.clone(),
             pgid: recorded.pgid,
-            command: "/tmp/groundhog node --json".into(),
+            command: "/tmp/thruput node --json".into(),
         };
 
         assert_eq!(
@@ -486,12 +486,12 @@ mod tests {
     #[test]
     fn parses_single_ps_snapshot_with_lstart_pgid_and_command() {
         let snapshot =
-            parse_ps_snapshot_line("Wed May  7 12:00:00 2026  5678 /tmp/groundhog node --json")
+            parse_ps_snapshot_line("Wed May  7 12:00:00 2026  5678 /tmp/thruput node --json")
                 .expect("ps snapshot should parse");
 
         assert_eq!(snapshot.start_time, "Wed May 7 12:00:00 2026");
         assert_eq!(snapshot.pgid, 5678);
-        assert_eq!(snapshot.command, "/tmp/groundhog node --json");
+        assert_eq!(snapshot.command, "/tmp/thruput node --json");
     }
 
     #[test]
@@ -549,7 +549,7 @@ mod tests {
                 LiveProcess {
                     start_time: "Wed May 27 12:00:00 2026".into(),
                     pgid: 5678,
-                    command: "/tmp/groundhog node --json".into(),
+                    command: "/tmp/thruput node --json".into(),
                 },
             )]),
             terminated: RefCell::new(Vec::new()),
@@ -631,7 +631,7 @@ mod tests {
                 LiveProcess {
                     start_time: process.start_time.clone(),
                     pgid: process.pgid,
-                    command: "/tmp/groundhog node --json".into(),
+                    command: "/tmp/thruput node --json".into(),
                 },
             )]),
             terminated: RefCell::new(Vec::new()),
@@ -672,7 +672,7 @@ mod tests {
             pgid: pid,
             port: 9545,
             start_time: "Wed May 27 12:00:00 2026".into(),
-            command: "groundhog node".into(),
+            command: "thruput node".into(),
         }
     }
 

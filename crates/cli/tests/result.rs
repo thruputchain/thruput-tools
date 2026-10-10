@@ -1,9 +1,9 @@
-use groundhog_cli::checks::Finding;
-use groundhog_cli::checks::FindingLevel;
+use thruput_cli::checks::Finding;
+use thruput_cli::checks::FindingLevel;
 
 use std::borrow::Cow;
 
-use groundhog_cli::result::*;
+use thruput_cli::result::*;
 
 #[test]
 fn new_result_serializes_envelope() {

@@ -19,7 +19,7 @@ use crate::{CliError, Print};
 const ARCHIVE_SCHEMA_VERSION: u32 = 3;
 const LEGACY_ARCHIVE_SCHEMA_VERSION: u32 = 1;
 const REPORT_SCHEMA_VERSION: u32 = 2;
-const ARCHIVE_KIND: &str = "groundhog-chain-dump";
+const ARCHIVE_KIND: &str = "thruput-chain-dump";
 // Files are compressed independently in bounded chunks so restore never has to
 // hold an entire database file in memory.
 const CHUNK_SIZE: usize = 1024 * 1024;
@@ -35,7 +35,7 @@ const NODE_PID_FILE: &str = "hog-devnode.pid";
 // metadata must be recreated when the restored node starts.
 const PERSISTENT_DIRS: [&str; 3] = ["ramdb", "events", "indexer"];
 
-/// Stable machine-readable result for `groundhog chain dump`.
+/// Stable machine-readable result for `thruput chain dump`.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainDumpReport {
@@ -50,7 +50,7 @@ pub struct ChainDumpReport {
     pub archive_sha256: String,
 }
 
-/// Stable machine-readable result for `groundhog chain restore`.
+/// Stable machine-readable result for `thruput chain restore`.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainRestoreReport {
@@ -128,7 +128,7 @@ pub fn dump(
     // Build and fsync beside the destination, then rename into place. This
     // avoids exposing a partial archive and keeps the rename on one filesystem.
     let mut temp = tempfile::Builder::new()
-        .prefix(".groundhog-chain-dump-")
+        .prefix(".thruput-chain-dump-")
         .tempfile_in(output_parent)
         .map_err(|error| archive_io(format!("create temporary archive: {error}")))?;
     let total_bytes = write_archive(
@@ -275,7 +275,7 @@ pub fn restore(
     // Restore into a sibling directory first. No unverified archive content is
     // installed into the live data directory.
     let staging = tempfile::Builder::new()
-        .prefix(".groundhog-chain-restore-")
+        .prefix(".thruput-chain-restore-")
         .tempdir_in(parent)
         .map_err(|error| archive_io(format!("create restore staging directory: {error}")))?;
     set_directory_permissions(staging.path())?;
@@ -693,7 +693,7 @@ impl<'de> Visitor<'de> for ArchiveVisitor<'_> {
 
     // Describes the top-level shape expected by serde diagnostics.
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a canonical Groundhog chain archive")
+        formatter.write_str("a canonical Thruput chain archive")
     }
 
     // Validates archive metadata before delegating the file stream.
@@ -1103,7 +1103,7 @@ fn unused_backup_path(
         .unwrap_or("chain-data");
     for sequence in 0..1000u32 {
         let candidate = parent.join(format!(
-            ".{name}.groundhog-replaced-{}-{sequence}",
+            ".{name}.thruput-replaced-{}-{sequence}",
             std::process::id()
         ));
         if !candidate.exists() {

@@ -10,7 +10,7 @@ For stateful mixed traffic and fault scenarios, use [hogsim](../sim/README.md).
 From the repository root, provide a compatible real devnode and registry access:
 
 ```sh
-GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
   BENCH_SCENARIO=smoke scripts/smoke-runtime-manifest-bench.sh
 ```
 
@@ -24,7 +24,7 @@ for current rates, durations, account counts, and environment overrides.
 Save results outside the source tree or in an ignored results directory:
 
 ```sh
-GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
   BENCH_SCENARIO=gateway-baseline \
   BENCH_RESULTS_DIR="$PWD/benchmark-results" \
   scripts/smoke-runtime-manifest-bench.sh

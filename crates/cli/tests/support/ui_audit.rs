@@ -29,20 +29,20 @@ fn rendered(command: Command, width: u16) -> (ExitStatus, String) {
 #[test]
 fn top_level_and_nested_commands_share_argument_error_policy() {
     for args in [vec!["balance"], vec!["wallet", "ls"]] {
-        let help = groundhog().args(&args).arg("--help").output().unwrap();
+        let help = thruput().args(&args).arg("--help").output().unwrap();
         assert!(help.status.success(), "{args:?}");
         assert!(
             String::from_utf8_lossy(&help.stdout).contains("Usage:"),
             "{args:?}"
         );
-        let mut command = groundhog();
+        let mut command = thruput();
         command.args(&args).arg("--ui-audit-unknown-option");
         let (output, raw) = captured(command, 80);
         assert_eq!(output.status.code(), Some(2), "{args:?}: {raw}");
         assert!(output.stdout.is_empty());
         assert!(raw.contains("38;2;248;113;113"), "{args:?}: {raw:?}");
         for flag in ["--no-ui", "--non-interactive"] {
-            let mut plain = groundhog();
+            let mut plain = thruput();
             plain.args(&args).args([flag, "--ui-audit-unknown-option"]);
             let (output, raw) = captured(plain, 40);
             assert_eq!(output.status.code(), Some(2));
@@ -53,7 +53,7 @@ fn top_level_and_nested_commands_share_argument_error_policy() {
 
 #[test]
 fn parser_errors_respect_no_color_on_a_terminal() {
-    let mut command = groundhog();
+    let mut command = thruput();
     command
         .args(["balance", "--ui-audit-unknown-option"])
         .env("NO_COLOR", "1");
@@ -83,7 +83,7 @@ fn toolchain_cache_actions_render_results_and_which_stays_a_raw_path() {
         vec!["toolchain", "install", "--offline"],
         vec!["toolchain", "use", catalog.default_version()],
     ] {
-        let mut command = groundhog();
+        let mut command = thruput();
         command
             .args(args)
             .env("XDG_CACHE_HOME", &cache)
@@ -95,7 +95,7 @@ fn toolchain_cache_actions_render_results_and_which_stays_a_raw_path() {
             "{text}"
         );
     }
-    let path = groundhog()
+    let path = thruput()
         .args(["toolchain", "which", "--quiet"])
         .env("XDG_CACHE_HOME", &cache)
         .env("XDG_CONFIG_HOME", &config)
@@ -112,7 +112,7 @@ fn toolchain_cache_actions_render_results_and_which_stays_a_raw_path() {
 fn missing_local_endpoint_explains_the_selected_profile_and_node_startup() {
     let temp = TempDir::new().unwrap();
     let config = temp.path().join("config");
-    std::fs::write(temp.path().join("groundhog.toml"), "default_profile = \"sandbox\"\n[profile.sandbox]\nnetwork = \"local\"\n[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
+    std::fs::write(temp.path().join("thruput.toml"), "default_profile = \"sandbox\"\n[profile.sandbox]\nnetwork = \"local\"\n[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
     let address = format!("0x{}", "11".repeat(32));
     for args in [
         vec!["balance", &address],
@@ -120,7 +120,7 @@ fn missing_local_endpoint_explains_the_selected_profile_and_node_startup() {
         vec!["view", &address, "0x0123456789abcdef"],
         vec!["storage", &address, &address],
     ] {
-        let output = groundhog()
+        let output = thruput()
             .args(args)
             .arg("--json")
             .current_dir(temp.path())
@@ -141,7 +141,7 @@ fn missing_local_endpoint_explains_the_selected_profile_and_node_startup() {
             error["error"]["hint"]
                 .as_str()
                 .unwrap()
-                .contains("groundhog node")
+                .contains("thruput node")
         );
         assert!(
             error["error"]["hint"]
@@ -150,7 +150,7 @@ fn missing_local_endpoint_explains_the_selected_profile_and_node_startup() {
                 .contains("--profile devnet")
         );
     }
-    let remote = groundhog()
+    let remote = thruput()
         .args(["balance", &address, "--profile", "devnet", "--json"])
         .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", &config)
@@ -172,13 +172,13 @@ fn local_node_registration_and_rpc_overrides_are_used_before_missing_endpoint_er
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config");
         std::fs::write(
-            temp.path().join("groundhog.toml"),
+            temp.path().join("thruput.toml"),
             "default_profile = \"local\"\n[profile.local]\nnetwork = \"local\"\n",
         )
         .unwrap();
         let address = format!("0x{}", "11".repeat(32));
         let (rpc, server) = spawn_balance_rpc(&address, "0");
-        let mut command = groundhog();
+        let mut command = thruput();
         command
             .args(["balance", &address, "--json"])
             .current_dir(temp.path())
@@ -211,13 +211,13 @@ fn version_warning_uses_shared_presentation_without_framing_the_version() {
     let temp = TempDir::new().unwrap();
     let manifest = temp.path().join("bundle.json");
     write_bundle_manifest(&manifest, env!("CARGO_PKG_VERSION"), "not-this-build");
-    let mut command = groundhog();
+    let mut command = thruput();
     command
         .arg("--version")
-        .env("GROUNDHOG_BUNDLE_MANIFEST", manifest);
+        .env("THRUPUT_BUNDLE_MANIFEST", manifest);
     let (output, raw) = captured(command, 80);
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).starts_with("groundhog "));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("thruput "));
     assert!(!output.stdout.contains(&0x1b));
     assert!(raw.contains("38;2;251;191;36"));
     assert!(strip_terminal_styles(&raw).contains("Warning"));
@@ -226,8 +226,8 @@ fn version_warning_uses_shared_presentation_without_framing_the_version() {
 #[test]
 fn framework_payloads_stay_raw_and_all_completion_shells_match_json() {
     for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
-        let plain = groundhog().args(["completion", shell]).output().unwrap();
-        let json = groundhog()
+        let plain = thruput().args(["completion", shell]).output().unwrap();
+        let json = thruput()
             .args(["completion", shell, "--json"])
             .output()
             .unwrap();
@@ -241,11 +241,11 @@ fn framework_payloads_stay_raw_and_all_completion_shells_match_json() {
         assert!(!plain.stdout.contains(&0x1b));
     }
     let temp = TempDir::new().unwrap();
-    let installed = temp.path().join(".agents/skills/groundhog");
+    let installed = temp.path().join(".agents/skills/thruput");
     std::fs::create_dir_all(&installed).unwrap();
-    let entry = "---\nname: groundhog\n---\n\nInstalled guidance\n";
+    let entry = "---\nname: thruput\n---\n\nInstalled guidance\n";
     std::fs::write(installed.join("SKILL.md"), entry).unwrap();
-    let skill = groundhog()
+    let skill = thruput()
         .current_dir(temp.path())
         .args(["skill", "show"])
         .output()
@@ -276,7 +276,7 @@ fn live_call_and_deploy_results_cover_success_and_execution_failure() {
             let (rpc, server) =
                 spawn_transaction_rpc(42, receipt, DevDetailRpcResponse::MethodNotFound);
             write_project_config_with_alice_wallet(&project, &rpc, &config);
-            let mut command = groundhog();
+            let mut command = thruput();
             if deploy {
                 command
                     .args(["deploy", "--artifact"])
@@ -311,13 +311,13 @@ fn live_call_and_deploy_results_cover_success_and_execution_failure() {
 #[test]
 fn remote_funding_dry_runs_are_explicit_and_do_not_contact_services() {
     let temp = TempDir::new().unwrap();
-    std::fs::write(temp.path().join("groundhog.toml"), "default_profile = \"devnet\"\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:9\"\nfaucet_url = \"http://127.0.0.1:9\"\n").unwrap();
+    std::fs::write(temp.path().join("thruput.toml"), "default_profile = \"devnet\"\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:9\"\nfaucet_url = \"http://127.0.0.1:9\"\n").unwrap();
     let args = [
         "airdrop",
         "0x1111111111111111111111111111111111111111111111111111111111111111",
         "--dry-run",
     ];
-    let mut command = groundhog();
+    let mut command = thruput();
     command.args(args).current_dir(temp.path());
     let (status, text) = rendered(command, 60);
     assert!(status.success(), "{text}");
@@ -329,12 +329,12 @@ fn remote_funding_dry_runs_are_explicit_and_do_not_contact_services() {
 fn services_report_ready_without_exiting_and_stop_cleanly() {
     for node in [false, true] {
         let temp = TempDir::new().unwrap();
-        let mut command = groundhog();
+        let mut command = thruput();
         let needle = if node {
             command
                 .args(["node", "--port", "0", "--hog-devnode-binary"])
                 .arg(fake_hogd_dev_binary())
-                .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer");
+                .env("THRUPUT_FAKE_HOGD_DEV_MODE", "ready-with-indexer");
             "account manifest"
         } else {
             command.args(["docs", "--port", "0"]);
@@ -394,8 +394,8 @@ fn transfer_cards_distinguish_commitment_rejection_and_uncertainty() {
             },
             sender,
         );
-        std::fs::write(temp.path().join("groundhog.toml"), format!("default_profile = \"default\"\n[profile.default]\nrpc_url = \"{rpc}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n", manifest.file_name().unwrap().to_str().unwrap())).unwrap();
-        let mut command = groundhog();
+        std::fs::write(temp.path().join("thruput.toml"), format!("default_profile = \"default\"\n[profile.default]\nrpc_url = \"{rpc}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n", manifest.file_name().unwrap().to_str().unwrap())).unwrap();
+        let mut command = thruput();
         command
             .args([
                 "transfer",
@@ -405,8 +405,8 @@ fn transfer_cards_distinguish_commitment_rejection_and_uncertainty() {
             ])
             .current_dir(temp.path())
             .env("XDG_CONFIG_HOME", temp.path().join("fixture-config"))
-            .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
-            .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0");
+            .env("THRUPUT_TEST_RECEIPT_POLL_ATTEMPTS", "1")
+            .env("THRUPUT_TEST_RECEIPT_POLL_INTERVAL_MS", "0");
         let (status, text) = rendered(command, 80);
         assert_eq!(status.success(), success, "{text}");
         assert!(text.contains(label) && text.contains('╭'), "{text}");
@@ -424,9 +424,9 @@ fn native_wallet_creation_reports_offline_save_and_dry_run() {
     for dry_run in [false, true] {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config");
-        std::fs::write(temp.path().join("groundhog.toml"), "default_profile = \"default\"\n[profile.default]\nrpc_url = \"http://127.0.0.1:9\"\nfaucet_url = \"http://127.0.0.1:9\"\n").unwrap();
+        std::fs::write(temp.path().join("thruput.toml"), "default_profile = \"default\"\n[profile.default]\nrpc_url = \"http://127.0.0.1:9\"\nfaucet_url = \"http://127.0.0.1:9\"\n").unwrap();
         generate_key_public_key(&config, "owner");
-        let mut command = groundhog();
+        let mut command = thruput();
         command
             .args([
                 "wallet", "create", "--key", "owner", "--name", "trading", "--force",
@@ -451,7 +451,7 @@ fn native_wallet_creation_reports_offline_save_and_dry_run() {
             "{text}"
         );
         let saved: toml::Value =
-            toml::from_str(&std::fs::read_to_string(temp.path().join("groundhog.toml")).unwrap())
+            toml::from_str(&std::fs::read_to_string(temp.path().join("thruput.toml")).unwrap())
                 .unwrap();
         assert_eq!(
             saved["profile"]["default"]

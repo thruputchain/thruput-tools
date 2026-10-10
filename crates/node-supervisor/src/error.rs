@@ -579,7 +579,7 @@ pub enum NodeSupervisorError {
 
     /// Another managed local node appears to be running.
     #[error(
-        "groundhog local node already appears to be running (PID file {}, hogd-dev pid {pid:?}); stop it before starting another node",
+        "thruput local node already appears to be running (PID file {}, hogd-dev pid {pid:?}); stop it before starting another node",
         path.display()
     )]
     LocalNodeAlreadyRunning {
@@ -649,12 +649,12 @@ fn intro_rejected_message(
     if is_protocol_mismatch {
         return match expected_protocol {
             Some(expected_protocol) => format!(
-                "{service} intro mismatch: groundhog node speaks protocol {protocol}, \
+                "{service} intro mismatch: thruput node speaks protocol {protocol}, \
                  hogd-dev expects {expected_protocol} ({outcome_name}; binary is built against \
                  a different protocol commit)"
             ),
             None => format!(
-                "{service} intro mismatch: groundhog node speaks protocol {protocol}, \
+                "{service} intro mismatch: thruput node speaks protocol {protocol}, \
                  but hogd-dev rejected it ({outcome_name})"
             ),
         };
@@ -662,6 +662,6 @@ fn intro_rejected_message(
 
     format!(
         "hogd-dev {service} intro rejected with outcome {outcome_name} \
-         (discriminant {outcome}); groundhog node speaks protocol {protocol}"
+         (discriminant {outcome}); thruput node speaks protocol {protocol}"
     )
 }

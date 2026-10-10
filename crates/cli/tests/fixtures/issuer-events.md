@@ -5,8 +5,8 @@
 Regenerate from `example-contracts/` in that checkout:
 
 ```sh
-groundhog build -p erc20_issuer -- --locked -Zbuild-std=core,alloc
-ISSUER_TOKEN_RV32_ARTIFACT="$PWD/../target/groundhog/erc20_issuer.rv32a" \
+thruput build -p erc20_issuer -- --locked -Zbuild-std=core,alloc
+ISSUER_TOKEN_RV32_ARTIFACT="$PWD/../target/thruput/erc20_issuer.rv32a" \
 ISSUER_TOKEN_CLI_EVENTS_OUT=/tmp/issuer-events.json \
   cargo test -p erc20_issuer --locked export_cli_event_fixture -- --ignored
 ```

@@ -61,11 +61,11 @@ use sha2::{Digest, Sha256};
 use tokio::{net::TcpListener, runtime::Runtime};
 use xdr_common::{BytesM, VecM};
 
-const MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
+const MODE_ENV: &str = "THRUPUT_FAKE_HOGD_DEV_MODE";
 const SUBMIT_LOG_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG";
 /// Optional path the fake writes its PID to before printing readiness.
 /// Tests use this to verify cleanup (poll `kill(pid, 0)` until ESRCH).
-const PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
+const PID_FILE_ENV: &str = "THRUPUT_FAKE_HOGD_DEV_PID_FILE";
 const COMMIT_ENTERED_FILE_ENV: &str = "GROUNDHOG_FAKE_COMMIT_ENTERED_FILE";
 const GRACEFUL_SHUTDOWN_FILE_ENV: &str = "GROUNDHOG_FAKE_GRACEFUL_SHUTDOWN_FILE";
 static TERMINATED: AtomicBool = AtomicBool::new(false);
@@ -451,8 +451,7 @@ fn run_with_indexer_and_db_gateway(
     );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
-    let ui_trigger =
-        env::var_os("GROUNDHOG_FAKE_HOGD_DEV_UI_TRIGGER").map(std::path::PathBuf::from);
+    let ui_trigger = env::var_os("THRUPUT_FAKE_HOGD_DEV_UI_TRIGGER").map(std::path::PathBuf::from);
     let mut logged = false;
     while !TERMINATED.load(Ordering::SeqCst) {
         if !logged && ui_trigger.as_ref().is_some_and(|path| path.exists()) {

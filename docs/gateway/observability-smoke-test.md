@@ -9,7 +9,7 @@ to reflect backend availability without making every scrape perform backend RPCs
 From the repository root:
 
 ```sh
-GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
   KEEP_WORKDIR=1 scripts/smoke-gateway-observability.sh
 ```
 

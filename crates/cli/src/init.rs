@@ -1,4 +1,4 @@
-//! `groundhog init` — interactive first-run wizard.
+//! `thruput init` — interactive first-run wizard.
 //!
 //! Walks a new user through environment setup, key generation, and optional
 //! project scaffolding. When everything is already configured, prints a short
@@ -112,11 +112,11 @@ fn finish_setup(
     let complete = setup.complete;
     let hints = setup.missing.iter().map(|requirement| match requirement {
         InitRequirement::Cargo => "Install Rust and put cargo on PATH.",
-        InitRequirement::Profile => "Repair the active profile with groundhog config, or select a valid profile.",
+        InitRequirement::Profile => "Repair the active profile with thruput config, or select a valid profile.",
         InitRequirement::SigningKey if can_generate_initial_key(report) =>
-            "Run groundhog init --non-interactive --generate-key to create the initial signing key.",
+            "Run thruput init --non-interactive --generate-key to create the initial signing key.",
         InitRequirement::SigningKey =>
-            "Select a valid stored key with groundhog keys use <name>; repair any profile default_key override with groundhog config. Restore or replace corrupt key files explicitly.",
+            "Select a valid stored key with thruput keys use <name>; repair any profile default_key override with thruput config. Restore or replace corrupt key files explicitly.",
     }).collect::<Vec<_>>().join(" ");
     if ui.print.is_json() {
         let envelope = if complete {
@@ -144,7 +144,7 @@ fn finish_setup(
         };
         ui.completion_review(
             if already_ready {
-                "Groundhog Ready"
+                "Thruput Ready"
             } else {
                 "Setup Complete"
             },
@@ -353,7 +353,7 @@ impl<'a> InitUi<'a> {
             print,
             wizard: Wizard::new(
                 print,
-                "Groundhog Setup",
+                "Thruput Setup",
                 "Set up your local development environment.",
                 InitStep::ALL.map(InitStep::label),
             ),
@@ -400,12 +400,12 @@ impl<'a> InitUi<'a> {
         }
         let mut commands = Vec::new();
         match next_steps {
-            NextSteps::Status => commands.push("groundhog status".into()),
+            NextSteps::Status => commands.push("thruput status".into()),
             NextSteps::NewProject => {
                 commands.extend([
-                    "groundhog new my-contract".into(),
+                    "thruput new my-contract".into(),
                     "cd my-contract".into(),
-                    "groundhog build".into(),
+                    "thruput build".into(),
                 ]);
             }
             NextSteps::BuildProject(project) => {
@@ -415,7 +415,7 @@ impl<'a> InitUi<'a> {
                         crate::terminal::render_shell_arg(&project.name),
                     ));
                 }
-                commands.push("groundhog build".into());
+                commands.push("thruput build".into());
             }
         }
         self.print.next_steps(&commands);

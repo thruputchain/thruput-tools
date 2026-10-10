@@ -2,8 +2,8 @@
 
 use std::{fs, path::Path, process::Command};
 
-fn groundhog(home: &Path, directory: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+fn thruput(home: &Path, directory: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
     command
         .current_dir(directory)
         .env("HOME", home)
@@ -18,7 +18,7 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
     for template in [None, Some("counter"), Some("counter-app")] {
         let template_name = template.unwrap_or("minimal");
         let name = format!("guide-{template_name}");
-        let mut command = groundhog(temp.path(), temp.path());
+        let mut command = thruput(temp.path(), temp.path());
         command.args(["new", &name, "--json"]);
         if let Some(template) = template {
             command.args(["--template", template]);
@@ -31,15 +31,15 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
         );
         let project = temp.path().join(&name);
         let guide = fs::read_to_string(project.join("AGENTS.md")).unwrap();
-        assert!(guide.contains("groundhog skill install"));
-        let missing = groundhog(temp.path(), &project)
+        assert!(guide.contains("thruput skill install"));
+        let missing = thruput(temp.path(), &project)
             .env("PATH", "")
             .args(["skill", "show", "--offline"])
             .output()
             .unwrap();
         assert!(!missing.status.success());
-        assert!(String::from_utf8_lossy(&missing.stderr).contains("groundhog skill install"));
-        let installed = project.join(".agents/skills/groundhog");
+        assert!(String::from_utf8_lossy(&missing.stderr).contains("thruput skill install"));
+        let installed = project.join(".agents/skills/thruput");
         fs::create_dir_all(installed.join("references")).unwrap();
         fs::write(installed.join("SKILL.md"), "Installed entry\n").unwrap();
         for topic in ["contracts", "cli", "typescript"] {
@@ -50,7 +50,7 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
             .unwrap();
         }
         assert!(guide.contains(&format!(
-            "Scaffolded with Groundhog {}, template `{template_name}`",
+            "Scaffolded with Thruput {}, template `{template_name}`",
             env!("CARGO_PKG_VERSION")
         )));
         let manifest: toml::Value =
@@ -66,9 +66,9 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
             if let Some(topic) = topic {
                 args.push(topic);
             }
-            assert!(guide.contains(&format!("groundhog {}", args.join(" "))));
+            assert!(guide.contains(&format!("thruput {}", args.join(" "))));
             // Reading an installed skill needs no Node, Git, Cargo, or network.
-            let output = groundhog(temp.path(), &project)
+            let output = thruput(temp.path(), &project)
                 .env("PATH", "")
                 .args(&args)
                 .arg("--offline")
@@ -87,7 +87,7 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
             };
             assert_eq!(output.stdout, expected.as_bytes());
         }
-        assert!(!guide.contains("groundhog --skill"));
+        assert!(!guide.contains("thruput --skill"));
         assert!(!guide.contains("{{"));
         assert_eq!(guide.contains("npm run"), template == Some("counter-app"));
     }
@@ -98,11 +98,11 @@ fn the_documented_docs_export_works_outside_the_generated_project() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     fs::create_dir(&project).unwrap();
-    groundhog_cli::scaffold::generate(&project, "project", Some("counter")).unwrap();
+    thruput_cli::scaffold::generate(&project, "project", Some("counter")).unwrap();
     let guide = fs::read_to_string(project.join("AGENTS.md")).unwrap();
-    assert!(guide.contains("groundhog docs export --output <new-directory>"));
+    assert!(guide.contains("thruput docs export --output <new-directory>"));
     let destination = temp.path().join("docs");
-    let exported = groundhog(temp.path(), &project)
+    let exported = thruput(temp.path(), &project)
         .args(["docs", "export", "--output"])
         .arg(&destination)
         .args(["--offline", "--json"])

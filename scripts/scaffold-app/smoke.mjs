@@ -11,19 +11,19 @@ import { chromium } from "playwright";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const cli = resolve(
-  process.env.GROUNDHOG_CLI ?? join(repo, "target/debug/groundhog"),
+  process.env.THRUPUT_CLI ?? join(repo, "target/debug/thruput"),
 );
 const work = await mkdtemp(join(tmpdir(), "groundhog-counter-app-"));
 const project = join(work, "app");
 const env = {
   ...process.env,
   XDG_CONFIG_HOME: join(work, "config"),
-  GROUNDHOG_CLI: cli,
+  THRUPUT_CLI: cli,
 };
-delete env.GROUNDHOG_PROFILE;
-delete env.GROUNDHOG_DEFAULT_KEY;
-delete env.GROUNDHOG_RUNTIME_MANIFEST;
-delete env.GROUNDHOG_RPC_URL;
+delete env.THRUPUT_PROFILE;
+delete env.THRUPUT_DEFAULT_KEY;
+delete env.THRUPUT_RUNTIME_MANIFEST;
+delete env.THRUPUT_RPC_URL;
 delete env.PORT;
 let node, app, browser;
 console.log(`Scaffold app smoke: ${work}`);
@@ -125,32 +125,32 @@ try {
   assert.match(missingDeployment.stderr, /npm run contract:deploy/);
   console.log("Checking missing CLI and initialization diagnostics");
   const missingCli = start(process.execPath, ["scripts/deploy.mjs"], project, {
-    GROUNDHOG_CLI: join(work, "missing-groundhog"),
+    THRUPUT_CLI: join(work, "missing-groundhog"),
   });
   assert.notEqual(await missingCli.closed, 0);
-  assert.match(missingCli.stderr, /Install the Groundhog CLI/);
+  assert.match(missingCli.stderr, /Install the Thruput CLI/);
   const missingInit = start(process.execPath, ["scripts/deploy.mjs"]);
   assert.notEqual(await missingInit.closed, 0);
-  assert.match(missingInit.stderr, /groundhog init/);
+  assert.match(missingInit.stderr, /thruput init/);
   await run(cli, ["init", "--generate-key", "--non-interactive", "--json"]);
   console.log("Checking missing-node diagnostics");
   const missingNode = start(process.execPath, ["scripts/deploy.mjs"], project, {
-    GROUNDHOG_RPC_URL: `http://127.0.0.1:${await unusedPort()}`,
+    THRUPUT_RPC_URL: `http://127.0.0.1:${await unusedPort()}`,
   });
   assert.notEqual(await missingNode.closed, 0);
-  assert.match(missingNode.stderr, /groundhog node in another terminal/);
+  assert.match(missingNode.stderr, /thruput node in another terminal/);
 
   console.log("Building contract and bindings without a node");
   await run("npm", ["run", "contract:build"]);
-  await assert.rejects(readFile(join(project, ".groundhog/app.json")), {
+  await assert.rejects(readFile(join(project, ".thruput/app.json")), {
     code: "ENOENT",
   });
 
   const nodeArgs = ["node", "--port", "0", "--json", "--non-interactive"];
-  if (env.GROUNDHOG_DEVNODE_BINARY)
+  if (env.THRUPUT_DEVNODE_BINARY)
     nodeArgs.push(
       "--hog-devnode-binary",
-      resolve(env.GROUNDHOG_DEVNODE_BINARY),
+      resolve(env.THRUPUT_DEVNODE_BINARY),
     );
   if (env.HOGD_PROTOCOL_OVERRIDE)
     nodeArgs.push("--hogd-protocol", env.HOGD_PROTOCOL_OVERRIDE);
@@ -164,9 +164,9 @@ try {
 
   console.log("Checking explicit deployment");
   await run("npm", ["run", "contract:deploy"], project, {
-    GROUNDHOG_RPC_URL: rpcUrl,
+    THRUPUT_RPC_URL: rpcUrl,
   });
-  const deploymentPath = join(project, ".groundhog/app.json");
+  const deploymentPath = join(project, ".thruput/app.json");
   const savedDeployment = await readFile(deploymentPath, "utf8");
   const deployment = JSON.parse(savedDeployment);
   assert.equal(deployment.rpcUrl, rpcUrl);
@@ -207,7 +207,7 @@ try {
   async function startFrontend() {
     app = start("npm", ["run", "dev"], project, {
       // Frontend startup must not invoke the CLI, even when it is unavailable.
-      GROUNDHOG_CLI: join(work, "missing-groundhog"),
+      THRUPUT_CLI: join(work, "missing-groundhog"),
       PORT: String(port),
     });
     await waitFor(
@@ -252,7 +252,7 @@ try {
 
   console.log("Redeploying while the frontend keeps running");
   await run("npm", ["run", "contract:deploy"], project, {
-    GROUNDHOG_RPC_URL: rpcUrl,
+    THRUPUT_RPC_URL: rpcUrl,
   });
   const redeployed = await servedDeployment();
   assert.notEqual(redeployed.contractAddress, deployment.contractAddress);
@@ -276,7 +276,7 @@ try {
     /unavailable on this node.*contract:deploy/,
   );
   await run("npm", ["run", "contract:deploy"], project, {
-    GROUNDHOG_RPC_URL: rpcUrl,
+    THRUPUT_RPC_URL: rpcUrl,
   });
   const recovered = await servedDeployment();
   assert.notEqual(recovered.contractAddress, redeployed.contractAddress);

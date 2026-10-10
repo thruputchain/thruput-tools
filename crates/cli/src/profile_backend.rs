@@ -49,12 +49,12 @@ pub(crate) fn resolve_faucet_backend(
         Some(Network::Local) => {
             if profile.rpc_url.is_none() {
                 return Err(config_error(format!(
-                    "targets local, but no local node endpoint is available for {feature}; start `groundhog node` in another terminal or select another network with `--profile <name>`"
+                    "targets local, but no local node endpoint is available for {feature}; start `thruput node` in another terminal or select another network with `--profile <name>`"
                 )));
             }
             if configured_runtime_manifest_path(profile)?.is_none() {
                 return Err(config_error(format!(
-                    "targets local, but {feature} requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`"
+                    "targets local, but {feature} requires a local runtime manifest; run `thruput node` or configure `runtime_manifest`"
                 )));
             }
             Ok(FaucetBackend::LocalManifest)

@@ -9,13 +9,13 @@ fn default_version() -> String {
         .to_owned()
 }
 
-fn groundhog(config: &std::path::Path, cache: &std::path::Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+fn thruput(config: &std::path::Path, cache: &std::path::Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
     command
         .env("XDG_CONFIG_HOME", config)
         .env("XDG_CACHE_HOME", cache)
-        .env_remove("GROUNDHOG_OFFLINE")
-        .env_remove("GROUNDHOG_TOOLCHAIN_BASE_URL");
+        .env_remove("THRUPUT_OFFLINE")
+        .env_remove("THRUPUT_TOOLCHAIN_BASE_URL");
     command
 }
 
@@ -26,10 +26,10 @@ fn toolchain_use_persists_an_exact_catalog_version() {
     let config = root.path().join("config");
     let cache = root.path().join("cache");
 
-    let use_output = groundhog(&config, &cache)
+    let use_output = thruput(&config, &cache)
         .args(["--json", "toolchain", "use", version.as_str()])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
     assert!(use_output.status.success());
     let use_json: serde_json::Value =
         serde_json::from_slice(&use_output.stdout).expect("bug: use output should be JSON");
@@ -40,15 +40,15 @@ fn toolchain_use_persists_an_exact_catalog_version() {
     assert_eq!(use_json["data"]["installed"], false);
     assert_eq!(use_json["data"]["changed"], true);
 
-    let config_text = std::fs::read_to_string(config.join("groundhog/config.toml"))
+    let config_text = std::fs::read_to_string(config.join("thruput/config.toml"))
         .expect("bug: global config should exist");
     assert!(config_text.contains("[toolchain]"));
     assert!(config_text.contains(&format!("hog_devnode_version = \"{version}\"")));
 
-    let list_output = groundhog(&config, &cache)
+    let list_output = thruput(&config, &cache)
         .args(["--json", "toolchain", "list"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
     assert!(list_output.status.success());
     let list_json: serde_json::Value =
         serde_json::from_slice(&list_output.stdout).expect("bug: list output should be JSON");
@@ -69,10 +69,10 @@ fn toolchain_use_persists_an_exact_catalog_version() {
             .all(|toolchain| toolchain["active"] == false)
     );
 
-    let repeated_use_output = groundhog(&config, &cache)
+    let repeated_use_output = thruput(&config, &cache)
         .args(["--json", "toolchain", "use", version.as_str()])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
     assert!(repeated_use_output.status.success());
     let repeated_use_json: serde_json::Value = serde_json::from_slice(&repeated_use_output.stdout)
         .expect("bug: repeated use output should be JSON");
@@ -86,10 +86,10 @@ fn toolchain_use_accepts_the_previous_release() {
     let config = root.path().join("config");
     let cache = root.path().join("cache");
 
-    let output = groundhog(&config, &cache)
+    let output = thruput(&config, &cache)
         .args(["--json", "toolchain", "use", "0.1.30-rc.1"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
     assert!(output.status.success());
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("bug: use output should be JSON");
@@ -103,10 +103,10 @@ fn offline_install_fails_without_touching_the_network() {
     let config = root.path().join("config");
     let cache = root.path().join("cache");
 
-    let output = groundhog(&config, &cache)
+    let output = thruput(&config, &cache)
         .args(["--json", "--offline", "toolchain", "install"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
 
     assert!(!output.status.success());
     let json: serde_json::Value =
@@ -115,7 +115,7 @@ fn offline_install_fails_without_touching_the_network() {
     assert_eq!(json["error"]["code"], "toolchain_offline_missing");
     assert!(
         !cache
-            .join("groundhog/toolchain/hog-devnode")
+            .join("thruput/toolchain/hog-devnode")
             .join(default_version())
             .exists()
     );
@@ -124,10 +124,10 @@ fn offline_install_fails_without_touching_the_network() {
 #[test]
 fn toolchain_which_is_local_and_reports_a_missing_installation() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
-    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+    let output = thruput(&root.path().join("config"), &root.path().join("cache"))
         .args(["--json", "toolchain", "which"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
 
     assert!(!output.status.success());
     let json: serde_json::Value =
@@ -139,10 +139,10 @@ fn toolchain_which_is_local_and_reports_a_missing_installation() {
 #[test]
 fn toolchain_clean_is_a_lock_aware_noop_when_absent() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
-    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+    let output = thruput(&root.path().join("config"), &root.path().join("cache"))
         .args(["--json", "toolchain", "clean"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
 
     assert!(output.status.success());
     let json: serde_json::Value =
@@ -155,10 +155,10 @@ fn toolchain_clean_is_a_lock_aware_noop_when_absent() {
 #[test]
 fn toolchain_use_rejects_a_version_outside_the_embedded_catalog() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
-    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+    let output = thruput(&root.path().join("config"), &root.path().join("cache"))
         .args(["--json", "toolchain", "use", "0.1.12"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
 
     assert!(!output.status.success());
     let json: serde_json::Value =
@@ -169,11 +169,11 @@ fn toolchain_use_rejects_a_version_outside_the_embedded_catalog() {
 #[test]
 fn groundhog_offline_environment_blocks_a_missing_install() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
-    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
-        .env("GROUNDHOG_OFFLINE", "1")
+    let output = thruput(&root.path().join("config"), &root.path().join("cache"))
+        .env("THRUPUT_OFFLINE", "1")
         .args(["--json", "toolchain", "install"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
 
     assert!(!output.status.success());
     let json: serde_json::Value =
@@ -184,10 +184,10 @@ fn groundhog_offline_environment_blocks_a_missing_install() {
 #[test]
 fn toolchain_list_human_output_is_stdout_data() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
-    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+    let output = thruput(&root.path().join("config"), &root.path().join("cache"))
         .args(["toolchain", "list"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
@@ -199,14 +199,14 @@ fn toolchain_list_human_output_is_stdout_data() {
 fn status_never_creates_or_downloads_managed_toolchain_state() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
     let cache = root.path().join("cache");
-    let output = groundhog(&root.path().join("config"), &cache)
-        .env("GROUNDHOG_TOOLCHAIN_BASE_URL", "not a URL")
+    let output = thruput(&root.path().join("config"), &cache)
+        .env("THRUPUT_TOOLCHAIN_BASE_URL", "not a URL")
         .args(["--json", "status"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
 
     assert!(!output.status.success());
-    assert!(!cache.join("groundhog/toolchain").exists());
+    assert!(!cache.join("thruput/toolchain").exists());
 }
 
 #[test]
@@ -214,13 +214,13 @@ fn stale_selection_can_be_inspected_replaced_and_cleaned() {
     let root = tempfile::tempdir().expect("bug: tempdir");
     let config = root.path().join("config");
     let cache = root.path().join("cache");
-    std::fs::create_dir_all(config.join("groundhog")).expect("bug: config dir");
+    std::fs::create_dir_all(config.join("thruput")).expect("bug: config dir");
     std::fs::write(
-        config.join("groundhog/config.toml"),
+        config.join("thruput/config.toml"),
         "[toolchain]\nhog_devnode_version = \"0.1.13\"\n",
     )
     .expect("bug: config");
-    let list = groundhog(&config, &cache)
+    let list = thruput(&config, &cache)
         .args(["--json", "toolchain", "list"])
         .output()
         .expect("bug: list");
@@ -234,11 +234,11 @@ fn stale_selection_can_be_inspected_replaced_and_cleaned() {
     assert_eq!(report["data"]["toolchains"][0]["active"], false);
     let target = groundhog_toolchain::HostTarget::current().expect("bug: target");
     let retired = cache
-        .join("groundhog/toolchain/hog-devnode/0.1.13")
+        .join("thruput/toolchain/hog-devnode/0.1.13")
         .join(target.triple());
     std::fs::create_dir_all(&retired).expect("bug: retired dir");
     std::fs::write(retired.join("hog-devnode"), "old binary").expect("bug: retired binary");
-    let clean = groundhog(&config, &cache)
+    let clean = thruput(&config, &cache)
         .args(["--json", "toolchain", "clean", "0.1.13"])
         .output()
         .expect("bug: clean");
@@ -249,7 +249,7 @@ fn stale_selection_can_be_inspected_replaced_and_cleaned() {
     );
     assert!(!retired.exists());
     let catalog = groundhog_toolchain::Catalog::embedded().expect("bug: catalog");
-    let repair = groundhog(&config, &cache)
+    let repair = thruput(&config, &cache)
         .args(["--json", "toolchain", "use", catalog.default_version()])
         .output()
         .expect("bug: use");
@@ -271,7 +271,7 @@ fn which_reports_the_executable_and_offline_reuse_needs_no_source() {
     let version = catalog.default_version();
     let artifact = catalog.artifact(version, target).expect("bug: artifact");
     let bundle = cache
-        .join("groundhog/toolchain/hog-devnode")
+        .join("thruput/toolchain/hog-devnode")
         .join(version)
         .join(target.triple());
     for file in artifact.files() {
@@ -288,7 +288,7 @@ fn which_reports_the_executable_and_offline_reuse_needs_no_source() {
         .expect("bug: serialize"),
     )
     .expect("bug: completion");
-    let which = groundhog(&config, &cache)
+    let which = thruput(&config, &cache)
         .args(["toolchain", "which"])
         .output()
         .expect("bug: which");
@@ -297,8 +297,8 @@ fn which_reports_the_executable_and_offline_reuse_needs_no_source() {
         String::from_utf8(which.stdout).expect("bug: utf8").trim(),
         bundle.join("hog-devnode").to_str().expect("bug: utf8 path")
     );
-    let reuse = groundhog(&config, &cache)
-        .env("GROUNDHOG_TOOLCHAIN_BASE_URL", "invalid source")
+    let reuse = thruput(&config, &cache)
+        .env("THRUPUT_TOOLCHAIN_BASE_URL", "invalid source")
         .args(["--json", "--offline", "toolchain", "install"])
         .output()
         .expect("bug: reuse");
@@ -319,28 +319,28 @@ fn which_reports_the_executable_and_offline_reuse_needs_no_source() {
 #[test]
 fn toolchain_clean_invalid_version_preserves_catalog_error_and_hint() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
-    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+    let output = thruput(&root.path().join("config"), &root.path().join("cache"))
         .args(["--json", "toolchain", "clean", "../0.1.29-rc.4"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
     assert!(!output.status.success());
     let json: serde_json::Value =
         serde_json::from_slice(&output.stderr).expect("bug: error output should be JSON");
     assert_eq!(json["error"]["code"], "toolchain_catalog_error");
     assert_eq!(
         json["error"]["hint"],
-        "use a hog-devnode version and target present in this groundhog release's embedded catalog"
+        "use a hog-devnode version and target present in this thruput release's embedded catalog"
     );
 }
 
 #[test]
 fn toolchain_install_rejects_invalid_proxy_without_exposing_credentials() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
-    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+    let output = thruput(&root.path().join("config"), &root.path().join("cache"))
         .env("HTTPS_PROXY", "ftp://review-user:review-secret@localhost:9")
         .args(["--json", "toolchain", "install"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
     assert!(!output.status.success());
     let json: serde_json::Value =
         serde_json::from_slice(&output.stderr).expect("bug: error output should be JSON");
@@ -355,10 +355,10 @@ fn toolchain_install_rejects_invalid_proxy_without_exposing_credentials() {
 #[test]
 fn toolchain_clean_accepts_safe_retired_version_names() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
-    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+    let output = thruput(&root.path().join("config"), &root.path().join("cache"))
         .args(["--json", "toolchain", "clean", "v0.1.29-rc.4"])
         .output()
-        .expect("bug: groundhog should run");
+        .expect("bug: thruput should run");
     assert!(output.status.success());
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("bug: clean output should be JSON");
@@ -377,7 +377,7 @@ fn toolchain_url_errors_never_expose_supplied_values() {
     ] {
         for json in [false, true] {
             let root = tempfile::tempdir().unwrap();
-            let mut command = groundhog(&root.path().join("config"), &root.path().join("cache"));
+            let mut command = thruput(&root.path().join("config"), &root.path().join("cache"));
             if json {
                 command.arg("--json");
             }
@@ -393,7 +393,7 @@ fn toolchain_url_errors_never_expose_supplied_values() {
             }
             let output = command
                 .args(["toolchain", "install"])
-                .env("GROUNDHOG_TOOLCHAIN_BASE_URL", source)
+                .env("THRUPUT_TOOLCHAIN_BASE_URL", source)
                 .output()
                 .unwrap();
             assert!(!output.status.success());

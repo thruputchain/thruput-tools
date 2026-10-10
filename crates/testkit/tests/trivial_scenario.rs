@@ -316,12 +316,12 @@ async fn missing_artifact_file_fails_build() {
 
 /// Live end-to-end smoke: launch a real local node, run two agents that read
 /// chain state, coordinate off-chain, and receive distinct funded accounts.
-/// Requires a `hog-devnode` binary (via `GROUNDHOG_DEVNODE_BINARY` or `PATH`).
+/// Requires a `hog-devnode` binary (via `THRUPUT_DEVNODE_BINARY` or `PATH`).
 #[tokio::test]
-#[ignore = "requires a hog-devnode binary (set GROUNDHOG_DEVNODE_BINARY)"]
+#[ignore = "requires a hog-devnode binary (set THRUPUT_DEVNODE_BINARY)"]
 async fn local_two_agents_live_smoke() {
     let mut config = LocalNetworkConfig::default();
-    if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
 

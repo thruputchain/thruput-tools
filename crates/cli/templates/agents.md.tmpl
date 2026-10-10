@@ -1,6 +1,6 @@
 # {{PROJECT_NAME}} agent guide
 
-Scaffolded with Groundhog {{CLI_VERSION}}, template `{{TEMPLATE_NAME}}`.
+Scaffolded with Thruput {{CLI_VERSION}}, template `{{TEMPLATE_NAME}}`.
 This project contains a `no_std` Rust contract compiled to RV32.
 
 ## Start here
@@ -10,24 +10,24 @@ Read `README.md` if present, the project manifests and lockfiles, and any
 current dependencies and workflow; the scaffold version above is historical.
 Preserve dependency and toolchain pins unless the task includes a migration.
 
-Install the maintained skill with `groundhog skill install` if it is absent,
+Install the maintained skill with `thruput skill install` if it is absent,
 then read its entry point:
 
 ```console
-groundhog skill show
+thruput skill show
 ```
 
 Then load only the guidance needed for the task:
 
-- Contract logic, storage, or Rust tests: `groundhog skill show contracts`.
-- Profiles, keys, deployment, or local nodes: `groundhog skill show cli`.
-- Generated bindings or client calls: `groundhog skill show typescript`.
+- Contract logic, storage, or Rust tests: `thruput skill show contracts`.
+- Profiles, keys, deployment, or local nodes: `thruput skill show cli`.
+- Generated bindings or client calls: `thruput skill show typescript`.
 
 These commands read the installed files offline; they do not install or update skills.
 Use APIs supported by the project's resolved SDK version. If an instruction
-does not match the CLI, check `groundhog --version` and the command's `--help`.
+does not match the CLI, check `thruput --version` and the command's `--help`.
 
-For more detail, use `groundhog docs export --output <new-directory>` with a new
+For more detail, use `thruput docs export --output <new-directory>` with a new
 temporary directory outside the project. Start at its `index.md`, then read the
 relevant pages or section bundle. Reading these files does not need a server.
 
@@ -43,22 +43,22 @@ relevant pages or section bundle. Reading these files does not need a server.
 ## Verify contract changes
 
 - `cargo test`: run the host tests.
-- `groundhog build`: build the artifact, by default at
-  `target/groundhog/{{PROJECT_NAME_SNAKE}}.rv32a`. Use the reported path when
+- `thruput build`: build the artifact, by default at
+  `target/thruput/{{PROJECT_NAME_SNAKE}}.rv32a`. Use the reported path when
   build output is configured elsewhere.
-- `groundhog test`: build and test the RV32 artifact. Run both host and RV32
+- `thruput test`: build and test the RV32 artifact. Run both host and RV32
   tests for contract changes: release builds wrap on integer overflow where
   host builds panic.
-- `groundhog test --integration`: run RPC tests against a managed, ephemeral
+- `thruput test --integration`: run RPC tests against a managed, ephemeral
   local node. This also requires a compatible `hog-devnode` runtime.
 
-Builds and tests need the pinned Rust toolchain and Groundhog registry access.
+Builds and tests need the pinned Rust toolchain and Thruput registry access.
 Report missing prerequisites or failed checks rather than reporting an unrun
 check as successful. Use the project's selected network for deployment.
 
 ## Preserve the build setup
 
-- Keep features `entrypoints`, `dev`, and `groundhog-integration-test`; the
+- Keep features `entrypoints`, `dev`, and `thruput-integration-test`; the
   compiler macros, CLI, and test harness use those names.
 - Do not make `dev` a default feature: feature unification would pull `sdk/dev`
   and `std` into guest builds.
@@ -67,12 +67,12 @@ check as successful. Use the project's selected network for deployment.
   A contract that depends on this one must forward its `dev` feature too.
 - Keep the RV32 `[[bin]]` name `{{PROJECT_NAME_SNAKE}}`. If renaming the package,
   update both that name and the `extern crate` identifier in `src/main.rs`.
-- Use `groundhog build` for RV32 builds. It supplies the `build-std` overlay
+- Use `thruput build` for RV32 builds. It supplies the `build-std` overlay
   from `.cargo/contract.toml`; a bare Cargo RV32 build misses that configuration.
 
 Keep `.cargo/config.toml`, `.cargo/contract.toml`, `rust-toolchain.toml`, and
-`groundhog.toml` at the Cargo workspace root. Build reads project profiles from
-that root, not from a member's `groundhog.toml`.
+`thruput.toml` at the Cargo workspace root. Build reads project profiles from
+that root, not from a member's `thruput.toml`.
 
 When joining an existing workspace, merge the required settings into its root
 files without overwriting unrelated settings. Keep target rustflags in one

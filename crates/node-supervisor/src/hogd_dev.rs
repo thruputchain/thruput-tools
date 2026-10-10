@@ -46,7 +46,7 @@ pub const DEFAULT_HOGD_DEV_BINARY: &str = "hog-devnode";
 pub const LEGACY_HOGD_DEV_BINARY: &str = "hogd-dev";
 
 /// Environment variable used to override the devnode binary path.
-pub const DEVNODE_BINARY_ENV: &str = "GROUNDHOG_DEVNODE_BINARY";
+pub const DEVNODE_BINARY_ENV: &str = "THRUPUT_DEVNODE_BINARY";
 
 /// Environment variable used to request structured JSON logs from hogd-dev.
 pub const HOGD_LOG_FORMAT_ENV: &str = "HOGD_LOG_FORMAT";

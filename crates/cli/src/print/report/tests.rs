@@ -44,7 +44,7 @@ fn ratatui_card_preserves_columns_at_supported_sizes() {
     for width in [24, 40, 60, 80, 100] {
         for color in [false, true] {
             let mut report = Report::new(policy(width, color));
-            report.card("Groundhog Status", &items);
+            report.card("Thruput Status", &items);
             let lines: Vec<_> = report.into_lines().iter().map(|line| plain(line)).collect();
             let card_width = UnicodeWidthStr::width(lines[0].as_str());
             assert!(card_width <= usize::from(width));
@@ -54,7 +54,7 @@ fn ratatui_card_preserves_columns_at_supported_sizes() {
                     .all(|line| UnicodeWidthStr::width(line.as_str()) == card_width),
                 "{lines:?}"
             );
-            assert!(lines[0].starts_with("╭─ Groundhog Status"));
+            assert!(lines[0].starts_with("╭─ Thruput Status"));
             assert!(lines.last().unwrap().ends_with('╯'));
             let content = lines[1..lines.len() - 1]
                 .iter()
@@ -118,7 +118,7 @@ fn guided_steps_use_theme_accent_and_keep_every_state_at_narrow_widths() {
                 unicode,
             });
             report.wizard(
-                "Groundhog Setup",
+                "Thruput Setup",
                 "Set up your local development environment.",
                 &[
                     ("Environment", StepState::Done),
@@ -416,21 +416,21 @@ fn prompt_and_next_steps_use_same_layout_without_changing_input_rules() {
             .all(|line| UnicodeWidthStr::width(line.as_str()) <= 24)
     );
     let mut report = Report::new(policy(24, false));
-    report.next_steps(&["groundhog status --profile local".into()]);
+    report.next_steps(&["thruput status --profile local".into()]);
     let content = report
         .into_lines()
         .iter()
         .map(|line| line.trim())
         .collect::<String>();
     assert!(content.contains("Next:"));
-    assert!(content.contains("groundhog status"));
+    assert!(content.contains("thruput status"));
 }
 
 #[test]
 fn tiny_width_fallback_retains_complete_title_and_values() {
     let mut report = Report::new(policy(10, false));
     report.card(
-        "Groundhog Status",
+        "Thruput Status",
         &[("Path".into(), "abcdefghijklmnop".into())],
     );
     let lines = report.into_lines();

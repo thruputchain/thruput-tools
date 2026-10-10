@@ -33,7 +33,7 @@ class SplitReleaseDsymTests(unittest.TestCase):
         mock.chmod(0o755)
         for command in ("dsymutil", "strip", "codesign"):
             (tools / command).symlink_to(mock)
-        binary = root / "staged binary" / "groundhog"
+        binary = root / "staged binary" / "thruput"
         binary.parent.mkdir()
         binary.write_text("binary")
         debug_root = root / "debug root"
@@ -53,13 +53,13 @@ class SplitReleaseDsymTests(unittest.TestCase):
             result, commands, binary, debug_root, archive = self.package(directory)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(commands, [
-                ["dsymutil", str(binary), "-o", str(debug_root / "groundhog.dSYM")],
+                ["dsymutil", str(binary), "-o", str(debug_root / "thruput.dSYM")],
                 ["strip", "-S", str(binary)],
                 ["codesign", "--force", "--sign", "-", str(binary)],
                 ["codesign", "--verify", "--strict", str(binary)],
             ])
             with tarfile.open(archive) as contents:
-                self.assertIn("groundhog.dSYM/debug", contents.getnames())
+                self.assertIn("thruput.dSYM/debug", contents.getnames())
 
     def test_tool_failure_stops_packaging(self):
         for command, count in (("dsymutil", 1), ("strip", 2), ("codesign", 3)):

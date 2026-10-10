@@ -121,6 +121,6 @@ fn main() {
     };
 
     if let Ok("macos" | "linux") = env::var("CARGO_CFG_TARGET_OS").as_deref() {
-        println!("cargo:rustc-link-arg-bin=groundhog=-Wl,-rpath,{lib_dir}");
+        println!("cargo:rustc-link-arg-bin=thruput=-Wl,-rpath,{lib_dir}");
     }
 }

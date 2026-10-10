@@ -13,7 +13,27 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn global_config_path(tmp: &TempDir) -> PathBuf {
-    tmp.path().join("groundhog/config.toml")
+    tmp.path().join("thruput/config.toml")
+}
+
+#[test]
+fn project_discovery_uses_only_the_thruput_name() {
+    let tmp = TempDir::new().unwrap();
+    let nested = tmp.path().join("member/src");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = 'old'\n",
+    )
+    .unwrap();
+    assert_eq!(thruput_cli::config::find_project_config(&nested), None);
+
+    let config = tmp.path().join("thruput.toml");
+    fs::write(&config, "default_profile = 'new'\n").unwrap();
+    assert_eq!(
+        thruput_cli::config::find_project_config(&nested),
+        Some(config)
+    );
 }
 
 #[cfg(unix)]
@@ -39,8 +59,8 @@ fn config_dir_respects_xdg_env() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("custom_config");
     unsafe { env::set_var("XDG_CONFIG_HOME", &path) };
-    let result = groundhog_cli::config::config_dir().unwrap();
-    assert_eq!(result, path.join("groundhog"));
+    let result = thruput_cli::config::config_dir().unwrap();
+    assert_eq!(result, path.join("thruput"));
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
@@ -50,8 +70,8 @@ fn cache_dir_respects_xdg_env() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("custom_cache");
     unsafe { env::set_var("XDG_CACHE_HOME", &path) };
-    let result = groundhog_cli::config::cache_dir().unwrap();
-    assert_eq!(result, path.join("groundhog"));
+    let result = thruput_cli::config::cache_dir().unwrap();
+    assert_eq!(result, path.join("thruput"));
     unsafe { env::remove_var("XDG_CACHE_HOME") };
 }
 
@@ -61,7 +81,7 @@ fn load_returns_none_when_no_config() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("nonexistent")) };
 
-    let loaded = groundhog_cli::config::load_default_key().unwrap();
+    let loaded = thruput_cli::config::load_default_key().unwrap();
     assert!(loaded.is_none());
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -72,15 +92,15 @@ fn load_returns_none_when_no_config() {
 fn roundtrip_default_key() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         "# retained\nplugin = \"keep\"\ndefault_key = \"old\" # key comment\n",
     )
     .unwrap();
 
-    groundhog_cli::config::save_default_key("alice").unwrap();
-    let loaded = groundhog_cli::config::load_default_key().unwrap();
+    thruput_cli::config::save_default_key("alice").unwrap();
+    let loaded = thruput_cli::config::load_default_key().unwrap();
     assert_eq!(loaded.as_deref(), Some("alice"));
     assert!(
         fs::read_to_string(global_config_path(&tmp))
@@ -88,8 +108,8 @@ fn roundtrip_default_key() {
             .contains("# key comment")
     );
 
-    groundhog_cli::config::clear_default_key().unwrap();
-    let cleared = groundhog_cli::config::load_default_key().unwrap();
+    thruput_cli::config::clear_default_key().unwrap();
+    let cleared = thruput_cli::config::load_default_key().unwrap();
     assert!(cleared.is_none());
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains("# retained"));
@@ -100,13 +120,13 @@ fn roundtrip_default_key() {
 
 #[test]
 fn project_profile_default_wallet_roundtrips() {
-    let profile = groundhog_cli::config::ProjectProfile {
+    let profile = thruput_cli::config::ProjectProfile {
         default_wallet: Some("alice-wallet".into()),
         ..Default::default()
     };
 
     let encoded = toml::to_string(&profile).unwrap();
-    let decoded: groundhog_cli::config::ProjectProfile = toml::from_str(&encoded).unwrap();
+    let decoded: thruput_cli::config::ProjectProfile = toml::from_str(&encoded).unwrap();
 
     assert_eq!(decoded, profile);
 }
@@ -122,7 +142,7 @@ fn global_config_rewrite_replaces_permissive_file_with_private_permissions() {
     fs::write(&path, "default_key = \"old\"\n").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
 
-    groundhog_cli::config::save_default_key("alice").unwrap();
+    thruput_cli::config::save_default_key("alice").unwrap();
 
     assert!(
         fs::read_to_string(&path)
@@ -142,7 +162,7 @@ fn resolve_profile_loads_default_project_profile() {
     let tmp = TempDir::new().unwrap();
     let direct_addr = format!("0x{}", "bb".repeat(32));
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         r#"
 default_profile = "default"
 
@@ -164,7 +184,7 @@ owner_public_key = "0x1111"
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert_eq!(profile.name, "default");
     assert_eq!(profile.rpc_url.as_deref(), Some("http://localhost:9545"));
     assert_eq!(profile.default_key.as_deref(), Some("alice"));
@@ -190,7 +210,7 @@ owner_public_key = "0x1111"
         Some(direct_addr.as_str())
     );
     assert!(profile.resolve_wallet("missing").is_none());
-    assert_eq!(profile.source, Some(tmp.path().join("groundhog.toml")));
+    assert_eq!(profile.source, Some(tmp.path().join("thruput.toml")));
 }
 
 #[test]
@@ -198,14 +218,14 @@ owner_public_key = "0x1111"
 fn resolve_profile_uses_env_override() {
     let tmp = TempDir::new().unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         r#"
 [profile.default]
 rpc_url = "http://localhost:9545"
 
 [profile.testnet]
-rpc_url = "https://testnet.groundhog.network"
-faucet_url = "https://faucet.testnet.groundhog.network"
+rpc_url = "https://testnet.thruput.network"
+faucet_url = "https://faucet.testnet.thruput.network"
 default_key = "bob"
 
 [profile.testnet.contracts]
@@ -213,17 +233,17 @@ greeter = "0xbeef"
 "#,
     )
     .unwrap();
-    unsafe { env::set_var("GROUNDHOG_PROFILE", "testnet") };
+    unsafe { env::set_var("THRUPUT_PROFILE", "testnet") };
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(profile.name, "testnet");
     assert_eq!(
         profile.rpc_url.as_deref(),
-        Some("https://testnet.groundhog.network")
+        Some("https://testnet.thruput.network")
     );
     assert_eq!(
         profile.faucet_url.as_deref(),
-        Some("https://faucet.testnet.groundhog.network")
+        Some("https://faucet.testnet.thruput.network")
     );
     assert_eq!(profile.default_key.as_deref(), Some("bob"));
     assert_eq!(
@@ -231,7 +251,7 @@ greeter = "0xbeef"
         Some("0xbeef")
     );
 
-    unsafe { env::remove_var("GROUNDHOG_PROFILE") };
+    unsafe { env::remove_var("THRUPUT_PROFILE") };
 }
 
 #[test]
@@ -240,7 +260,7 @@ fn resolve_profile_requires_selection_when_no_config_exists() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    let error = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
+    let error = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
     assert_eq!(error.code(), "no_active_profile");
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -251,9 +271,9 @@ fn resolve_profile_requires_selection_when_no_config_exists() {
 fn resolve_profile_requires_selection_when_project_has_no_default_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::write(tmp.path().join("groundhog.toml"), "[contracts]\n").unwrap();
+    fs::write(tmp.path().join("thruput.toml"), "[contracts]\n").unwrap();
 
-    let error = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
+    let error = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
     assert_eq!(error.code(), "no_active_profile");
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -264,9 +284,9 @@ fn resolve_profile_requires_selection_when_project_has_no_default_profile() {
 fn resolve_profile_uses_global_default_profile_when_no_project_config_exists() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
-        tmp.path().join("groundhog/config.toml"),
+        tmp.path().join("thruput/config.toml"),
         r#"
 default_profile = "local"
 
@@ -277,14 +297,11 @@ default_key = "dev-0"
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(profile.name, "local");
     assert_eq!(profile.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
     assert_eq!(profile.default_key.as_deref(), Some("dev-0"));
-    assert_eq!(
-        profile.source,
-        Some(tmp.path().join("groundhog/config.toml"))
-    );
+    assert_eq!(profile.source, Some(tmp.path().join("thruput/config.toml")));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -296,9 +313,9 @@ fn resolve_profile_project_default_profile_overrides_global_default_profile() {
     let project = tmp.path().join("project");
     fs::create_dir(&project).unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
-        tmp.path().join("groundhog/config.toml"),
+        tmp.path().join("thruput/config.toml"),
         r#"
 default_profile = "local"
 
@@ -311,7 +328,7 @@ rpc_url = "https://rpc.devnet.example"
     )
     .unwrap();
     fs::write(
-        project.join("groundhog.toml"),
+        project.join("thruput.toml"),
         r#"
 default_profile = "devnet"
 
@@ -321,14 +338,14 @@ default_key = "alice"
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(&project, None).unwrap();
+    let profile = thruput_cli::config::resolve_profile(&project, None).unwrap();
     assert_eq!(profile.name, "devnet");
     assert_eq!(
         profile.rpc_url.as_deref(),
         Some("https://rpc.devnet.example")
     );
     assert_eq!(profile.default_key.as_deref(), Some("alice"));
-    assert_eq!(profile.source, Some(project.join("groundhog.toml")));
+    assert_eq!(profile.source, Some(project.join("thruput.toml")));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -348,9 +365,9 @@ fn resolve_profile_merges_global_and_project_profile_fields() {
     fs::create_dir(&project).unwrap();
     fs::create_dir(&artifacts_dir).unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
-        tmp.path().join("groundhog/config.toml"),
+        tmp.path().join("thruput/config.toml"),
         format!(
             r#"
 [profile.devnet]
@@ -374,7 +391,7 @@ owner_public_key = "0x{}"
     )
     .unwrap();
     fs::write(
-        project.join("groundhog.toml"),
+        project.join("thruput.toml"),
         format!(
             r#"
 [profile.devnet]
@@ -402,7 +419,7 @@ owner_public_key = "0x{}"
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(&project, Some("devnet")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(&project, Some("devnet")).unwrap();
     assert_eq!(
         profile.rpc_url.as_deref(),
         Some("https://project-rpc.devnet.example")
@@ -411,7 +428,7 @@ owner_public_key = "0x{}"
     assert_eq!(profile.default_wallet.as_deref(), Some("project-wallet"));
     assert_eq!(
         profile.runtime_manifest.as_deref(),
-        Some(tmp.path().join("groundhog/global-runtime.json").as_path())
+        Some(tmp.path().join("thruput/global-runtime.json").as_path())
     );
     assert_eq!(
         profile.runtime_artifacts_dir.as_deref(),
@@ -435,7 +452,7 @@ owner_public_key = "0x{}"
 #[serial]
 fn save_profile_default_wallet_preserves_existing_formatting() {
     let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join("groundhog.toml");
+    let config_path = tmp.path().join("thruput.toml");
     fs::write(
         &config_path,
         r#"# keep this project comment
@@ -448,14 +465,14 @@ rpc_url = "http://localhost:9545" # keep this field comment
     .unwrap();
 
     let written =
-        groundhog_cli::config::save_profile_default_wallet(tmp.path(), None, " alice-wallet ")
+        thruput_cli::config::save_profile_default_wallet(tmp.path(), None, " alice-wallet ")
             .unwrap();
 
     assert_eq!(written, config_path);
     let contents = fs::read_to_string(&config_path).unwrap();
     assert!(contents.contains("# keep this project comment"));
     assert!(contents.contains("rpc_url = \"http://localhost:9545\" # keep this field comment"));
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(profile.default_wallet.as_deref(), Some("alice-wallet"));
 }
 
@@ -465,14 +482,14 @@ fn save_wallet_and_default_uses_one_profile_update() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
     )
     .unwrap();
     let address = format!("0x{}", "aa".repeat(32));
     let owner = format!("0x{}", "bb".repeat(32));
 
-    groundhog_cli::config::save_profile_wallet_address_with_default(
+    thruput_cli::config::save_profile_wallet_address_with_default(
         tmp.path(),
         None,
         "alice",
@@ -482,7 +499,7 @@ fn save_wallet_and_default_uses_one_profile_update() {
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(profile.default_wallet.as_deref(), Some("alice"));
     assert_eq!(profile.wallets["alice"].address, address);
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -492,7 +509,7 @@ fn save_wallet_and_default_uses_one_profile_update() {
 #[serial]
 fn save_profile_contract_alias_updates_existing_profile() {
     let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join("groundhog.toml");
+    let config_path = tmp.path().join("thruput.toml");
     fs::write(
         &config_path,
         r#"# retained
@@ -513,11 +530,11 @@ counter = "0x1111" # alias comment
 
     let addr = format!("0x{}", "22".repeat(32));
     let written =
-        groundhog_cli::config::save_profile_contract_alias(tmp.path(), None, "counter", &addr)
+        thruput_cli::config::save_profile_contract_alias(tmp.path(), None, "counter", &addr)
             .unwrap();
     assert_eq!(written, config_path);
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(profile.rpc_url.as_deref(), Some("http://localhost:9545"));
     assert_eq!(profile.default_key.as_deref(), Some("alice"));
     assert_eq!(
@@ -542,7 +559,7 @@ fn save_profile_contract_alias_creates_selected_profile() {
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
     let addr = format!("0x{}", "be".repeat(32));
-    let written = groundhog_cli::config::save_profile_contract_alias(
+    let written = thruput_cli::config::save_profile_contract_alias(
         tmp.path(),
         Some("testnet"),
         "greeter",
@@ -551,10 +568,10 @@ fn save_profile_contract_alias_creates_selected_profile() {
     .unwrap();
     assert_eq!(written, global_config_path(&tmp));
 
-    let profiles = groundhog_cli::config::load_project_profiles(tmp.path()).unwrap();
+    let profiles = thruput_cli::config::load_project_profiles(tmp.path()).unwrap();
     assert!(profiles.is_none());
 
-    let testnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("testnet")).unwrap();
+    let testnet = thruput_cli::config::resolve_profile(tmp.path(), Some("testnet")).unwrap();
     assert_eq!(
         testnet.contracts.get("greeter").map(String::as_str),
         Some(addr.as_str())
@@ -567,7 +584,7 @@ fn save_profile_contract_alias_creates_selected_profile() {
 #[serial]
 fn save_profile_wallet_address_updates_existing_profile() {
     let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join("groundhog.toml");
+    let config_path = tmp.path().join("thruput.toml");
     fs::write(
         &config_path,
         r#"# retained
@@ -589,17 +606,12 @@ owner_public_key = "0x2222"
 
     let addr = format!("0x{}", "22".repeat(32));
     let owner = format!("0x{}", "33".repeat(32));
-    let written = groundhog_cli::config::save_profile_wallet_address(
-        tmp.path(),
-        None,
-        "alice",
-        &addr,
-        &owner,
-    )
-    .unwrap();
+    let written =
+        thruput_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr, &owner)
+            .unwrap();
     assert_eq!(written, config_path);
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(profile.rpc_url.as_deref(), Some("http://localhost:9545"));
     assert_eq!(profile.default_key.as_deref(), Some("alice"));
     assert_eq!(
@@ -630,7 +642,7 @@ fn save_profile_wallet_address_creates_selected_profile() {
 
     let addr = format!("0x{}", "be".repeat(32));
     let owner = format!("0x{}", "cd".repeat(32));
-    let written = groundhog_cli::config::save_profile_wallet_address(
+    let written = thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("testnet"),
         "alice",
@@ -640,10 +652,10 @@ fn save_profile_wallet_address_creates_selected_profile() {
     .unwrap();
     assert_eq!(written, global_config_path(&tmp));
 
-    let profiles = groundhog_cli::config::load_project_profiles(tmp.path()).unwrap();
+    let profiles = thruput_cli::config::load_project_profiles(tmp.path()).unwrap();
     assert!(profiles.is_none());
 
-    let testnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("testnet")).unwrap();
+    let testnet = thruput_cli::config::resolve_profile(tmp.path(), Some("testnet")).unwrap();
     assert_eq!(
         testnet
             .wallets
@@ -662,7 +674,7 @@ fn local_runtime_state_writes_global_and_resolves_for_local_profile() {
     let project = tmp.path().join("project");
     fs::create_dir(&project).unwrap();
     fs::write(
-        project.join("groundhog.toml"),
+        project.join("thruput.toml"),
         r#"
 [profile.local]
 network = "local"
@@ -676,28 +688,28 @@ default_key = "dev-0"
     let artifacts_dir = tmp.path().join("hog-devnode");
     fs::write(&manifest, "{}").unwrap();
     fs::create_dir(&artifacts_dir).unwrap();
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(global_config_path(&tmp), "# retained\nplugin = \"keep\"\n").unwrap();
 
-    let state = groundhog_cli::config::LocalRuntimeState {
+    let state = thruput_cli::config::LocalRuntimeState {
         node_id: "node-1".into(),
         rpc_url: "http://127.0.0.1:9545".into(),
         runtime_manifest: manifest.clone(),
         runtime_artifacts_dir: Some(artifacts_dir.clone()),
     };
-    let written = groundhog_cli::config::save_local_runtime_state(&state).unwrap();
+    let written = thruput_cli::config::save_local_runtime_state(&state).unwrap();
     assert_eq!(written, global_config_path(&tmp));
     let global_config = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(global_config.contains("# retained"));
     assert!(global_config.contains("plugin = \"keep\""));
 
-    let project_config = fs::read_to_string(project.join("groundhog.toml")).unwrap();
+    let project_config = fs::read_to_string(project.join("thruput.toml")).unwrap();
     assert!(!project_config.contains("rpc_url"));
     assert!(!project_config.contains("runtime_manifest"));
     assert!(!project_config.contains("runtime_artifacts_dir"));
 
-    let profile = groundhog_cli::config::resolve_profile(&project, Some("local")).unwrap();
-    assert_eq!(profile.network, Some(groundhog_cli::config::Network::Local));
+    let profile = thruput_cli::config::resolve_profile(&project, Some("local")).unwrap();
+    assert_eq!(profile.network, Some(thruput_cli::config::Network::Local));
     assert_eq!(profile.default_key.as_deref(), Some("dev-0"));
     assert_eq!(profile.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
     assert_eq!(
@@ -718,12 +730,12 @@ default_key = "dev-0"
 fn save_local_runtime_state_keeps_global_config_private() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    groundhog_cli::config::save_default_key("alice").unwrap();
+    thruput_cli::config::save_default_key("alice").unwrap();
     fs::create_dir_all(tmp.path().join("manifests")).unwrap();
     let manifest = tmp.path().join("manifests/runtime-manifest.json");
     fs::write(&manifest, "{}").unwrap();
 
-    groundhog_cli::config::save_local_runtime_state(&groundhog_cli::config::LocalRuntimeState {
+    thruput_cli::config::save_local_runtime_state(&thruput_cli::config::LocalRuntimeState {
         node_id: "node-1".into(),
         rpc_url: "http://127.0.0.1:9545".into(),
         runtime_manifest: manifest,
@@ -749,15 +761,14 @@ fn save_local_runtime_state_rejects_non_utf8_manifest_path() {
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let invalid_path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/manifest-\xff".to_vec()));
 
-    let error = groundhog_cli::config::save_local_runtime_state(
-        &groundhog_cli::config::LocalRuntimeState {
+    let error =
+        thruput_cli::config::save_local_runtime_state(&thruput_cli::config::LocalRuntimeState {
             node_id: "node-1".into(),
             rpc_url: "http://127.0.0.1:9545".into(),
             runtime_manifest: invalid_path,
             runtime_artifacts_dir: None,
-        },
-    )
-    .unwrap_err();
+        })
+        .unwrap_err();
 
     assert!(
         error
@@ -778,15 +789,14 @@ fn save_local_runtime_state_rejects_non_utf8_artifacts_path() {
         b"/tmp/artifacts-\xff".to_vec(),
     ));
 
-    let error = groundhog_cli::config::save_local_runtime_state(
-        &groundhog_cli::config::LocalRuntimeState {
+    let error =
+        thruput_cli::config::save_local_runtime_state(&thruput_cli::config::LocalRuntimeState {
             node_id: "node-1".into(),
             rpc_url: "http://127.0.0.1:9545".into(),
             runtime_manifest: tmp.path().join("runtime-manifest.json"),
             runtime_artifacts_dir: Some(invalid_path),
-        },
-    )
-    .unwrap_err();
+        })
+        .unwrap_err();
 
     assert!(
         error
@@ -803,7 +813,7 @@ fn non_local_profile_ignores_local_runtime_state() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         r#"
 [profile.devnet]
 network = "devnet"
@@ -814,7 +824,7 @@ rpc_url = "https://rpc.devnet.example"
     let manifest = tmp.path().join("runtime-manifest.json");
     fs::write(&manifest, "{}").unwrap();
 
-    groundhog_cli::config::save_local_runtime_state(&groundhog_cli::config::LocalRuntimeState {
+    thruput_cli::config::save_local_runtime_state(&thruput_cli::config::LocalRuntimeState {
         node_id: "node-1".into(),
         rpc_url: "http://127.0.0.1:9546".into(),
         runtime_manifest: manifest,
@@ -822,11 +832,8 @@ rpc_url = "https://rpc.devnet.example"
     })
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
-    assert_eq!(
-        profile.network,
-        Some(groundhog_cli::config::Network::Devnet)
-    );
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
+    assert_eq!(profile.network, Some(thruput_cli::config::Network::Devnet));
     assert_eq!(
         profile.rpc_url.as_deref(),
         Some("https://rpc.devnet.example")
@@ -846,7 +853,7 @@ fn local_profile_explicit_fields_override_local_runtime_state() {
     fs::write(&profile_manifest, "{}").unwrap();
     fs::write(&state_manifest, "{}").unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         format!(
             r#"
 [profile.local]
@@ -859,7 +866,7 @@ runtime_manifest = "{}"
     )
     .unwrap();
 
-    groundhog_cli::config::save_local_runtime_state(&groundhog_cli::config::LocalRuntimeState {
+    thruput_cli::config::save_local_runtime_state(&thruput_cli::config::LocalRuntimeState {
         node_id: "node-1".into(),
         rpc_url: "http://127.0.0.1:9545".into(),
         runtime_manifest: state_manifest,
@@ -867,7 +874,7 @@ runtime_manifest = "{}"
     })
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(profile.rpc_url.as_deref(), Some("http://127.0.0.1:9999"));
     assert_eq!(
         profile.runtime_manifest.as_deref(),
@@ -884,17 +891,17 @@ fn clear_local_runtime_state_removes_matching_state() {
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let manifest = tmp.path().join("runtime-manifest.json");
     fs::write(&manifest, "{}").unwrap();
-    let state = groundhog_cli::config::LocalRuntimeState {
+    let state = thruput_cli::config::LocalRuntimeState {
         node_id: "node-1".into(),
         rpc_url: "http://127.0.0.1:9545".into(),
         runtime_manifest: manifest,
         runtime_artifacts_dir: None,
     };
 
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(global_config_path(&tmp), "# retained\nplugin = \"keep\"\n").unwrap();
-    groundhog_cli::config::save_local_runtime_state(&state).unwrap();
-    groundhog_cli::config::clear_local_runtime_state_if_matches(&state).unwrap();
+    thruput_cli::config::save_local_runtime_state(&state).unwrap();
+    thruput_cli::config::clear_local_runtime_state_if_matches(&state).unwrap();
 
     let config = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(!config.contains("local_runtime_state"));
@@ -913,29 +920,29 @@ fn clear_local_runtime_state_preserves_changed_state() {
     let second_manifest = tmp.path().join("runtime-manifest-second.json");
     fs::write(&first_manifest, "{}").unwrap();
     fs::write(&second_manifest, "{}").unwrap();
-    let first = groundhog_cli::config::LocalRuntimeState {
+    let first = thruput_cli::config::LocalRuntimeState {
         node_id: "node-1".into(),
         rpc_url: "http://127.0.0.1:9545".into(),
         runtime_manifest: first_manifest,
         runtime_artifacts_dir: None,
     };
-    let second = groundhog_cli::config::LocalRuntimeState {
+    let second = thruput_cli::config::LocalRuntimeState {
         node_id: "node-2".into(),
         rpc_url: "http://127.0.0.1:9546".into(),
         runtime_manifest: second_manifest.clone(),
         runtime_artifacts_dir: None,
     };
 
-    groundhog_cli::config::save_local_runtime_state(&first).unwrap();
-    groundhog_cli::config::save_local_runtime_state(&second).unwrap();
-    groundhog_cli::config::clear_local_runtime_state_if_matches(&first).unwrap();
+    thruput_cli::config::save_local_runtime_state(&first).unwrap();
+    thruput_cli::config::save_local_runtime_state(&second).unwrap();
+    thruput_cli::config::clear_local_runtime_state_if_matches(&first).unwrap();
 
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "[profile.local]\nnetwork = \"local\"\n",
     )
     .unwrap();
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(profile.rpc_url.as_deref(), Some("http://127.0.0.1:9546"));
     assert_eq!(
         profile.runtime_manifest.as_deref(),
@@ -951,7 +958,7 @@ fn resolve_default_key_falls_back_to_global_selection() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         r#"
 default_profile = "default"
 
@@ -961,9 +968,9 @@ rpc_url = "http://localhost:9545"
     )
     .unwrap();
 
-    groundhog_cli::config::save_default_key("alice").unwrap();
+    thruput_cli::config::save_default_key("alice").unwrap();
 
-    let resolved = groundhog_cli::config::resolve_default_key(tmp.path(), None).unwrap();
+    let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert_eq!(resolved.as_deref(), Some("alice"));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -975,7 +982,7 @@ fn resolve_default_key_prefers_profile_value_over_global_selection() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         r#"
 default_profile = "default"
 
@@ -986,9 +993,9 @@ default_key = "project-key"
     )
     .unwrap();
 
-    groundhog_cli::config::save_default_key("global-key").unwrap();
+    thruput_cli::config::save_default_key("global-key").unwrap();
 
-    let resolved = groundhog_cli::config::resolve_default_key(tmp.path(), None).unwrap();
+    let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert_eq!(resolved.as_deref(), Some("project-key"));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -1002,7 +1009,7 @@ fn resolve_default_key_does_not_infer_key_from_local_runtime() {
     let runtime_manifest = tmp.path().join("runtime-manifest.json");
     write_local_runtime_manifest(&runtime_manifest, &[(0, "faucet"), (1, "local_user")]);
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         r#"
 default_profile = "local"
 
@@ -1011,7 +1018,7 @@ network = "local"
 "#,
     )
     .unwrap();
-    groundhog_cli::config::save_local_runtime_state(&groundhog_cli::config::LocalRuntimeState {
+    thruput_cli::config::save_local_runtime_state(&thruput_cli::config::LocalRuntimeState {
         node_id: "local-node".into(),
         rpc_url: "http://127.0.0.1:9545".into(),
         runtime_manifest,
@@ -1019,7 +1026,7 @@ network = "local"
     })
     .unwrap();
 
-    let resolved = groundhog_cli::config::resolve_default_key(tmp.path(), None).unwrap();
+    let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert_eq!(resolved, None);
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -1082,7 +1089,7 @@ fn resolve_default_key_does_not_use_builtin_dev_key_for_overridden_local_rpc() {
     let runtime_manifest = tmp.path().join("runtime-manifest.json");
     fs::write(&runtime_manifest, "{}").unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         r#"
 default_profile = "local"
 
@@ -1092,7 +1099,7 @@ rpc_url = "https://rpc.example.test"
 "#,
     )
     .unwrap();
-    groundhog_cli::config::save_local_runtime_state(&groundhog_cli::config::LocalRuntimeState {
+    thruput_cli::config::save_local_runtime_state(&thruput_cli::config::LocalRuntimeState {
         node_id: "local-node".into(),
         rpc_url: "http://127.0.0.1:9545".into(),
         runtime_manifest,
@@ -1100,7 +1107,7 @@ rpc_url = "https://rpc.example.test"
     })
     .unwrap();
 
-    let resolved = groundhog_cli::config::resolve_default_key(tmp.path(), None).unwrap();
+    let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert!(resolved.is_none());
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -1112,7 +1119,7 @@ fn resolve_default_key_does_not_use_builtin_dev_key_for_devnet_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         r#"
 default_profile = "devnet"
 
@@ -1122,7 +1129,7 @@ network = "devnet"
     )
     .unwrap();
 
-    let resolved = groundhog_cli::config::resolve_default_key(tmp.path(), None).unwrap();
+    let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert!(resolved.is_none());
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -1133,7 +1140,7 @@ network = "devnet"
 fn save_alias_rejects_empty_alias() {
     let tmp = TempDir::new().unwrap();
     let addr = format!("0x{}", "ab".repeat(32));
-    let result = groundhog_cli::config::save_profile_contract_alias(tmp.path(), None, "", &addr);
+    let result = thruput_cli::config::save_profile_contract_alias(tmp.path(), None, "", &addr);
     assert!(result.is_err());
 }
 
@@ -1141,8 +1148,7 @@ fn save_alias_rejects_empty_alias() {
 #[serial]
 fn save_alias_rejects_empty_address() {
     let tmp = TempDir::new().unwrap();
-    let result =
-        groundhog_cli::config::save_profile_contract_alias(tmp.path(), None, "counter", "");
+    let result = thruput_cli::config::save_profile_contract_alias(tmp.path(), None, "counter", "");
     assert!(result.is_err());
 }
 
@@ -1151,7 +1157,7 @@ fn save_alias_rejects_empty_address() {
 fn save_alias_rejects_malformed_address() {
     let tmp = TempDir::new().unwrap();
     let result =
-        groundhog_cli::config::save_profile_contract_alias(tmp.path(), None, "counter", "banana");
+        thruput_cli::config::save_profile_contract_alias(tmp.path(), None, "counter", "banana");
     assert!(result.is_err());
 }
 
@@ -1161,7 +1167,7 @@ fn save_alias_accepts_valid_hex_address() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let addr = format!("0x{}", "ab".repeat(32));
-    let result = groundhog_cli::config::save_profile_contract_alias(
+    let result = thruput_cli::config::save_profile_contract_alias(
         tmp.path(),
         Some("default"),
         "counter",
@@ -1180,7 +1186,7 @@ fn save_wallet_rejects_empty_name() {
     let addr = format!("0x{}", "ab".repeat(32));
     let owner = format!("0x{}", "cd".repeat(32));
     let result =
-        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "", &addr, &owner);
+        thruput_cli::config::save_profile_wallet_address(tmp.path(), None, "", &addr, &owner);
     assert!(result.is_err());
 }
 
@@ -1190,7 +1196,7 @@ fn save_wallet_rejects_empty_address() {
     let tmp = TempDir::new().unwrap();
     let owner = format!("0x{}", "cd".repeat(32));
     let result =
-        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", "", &owner);
+        thruput_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", "", &owner);
     assert!(result.is_err());
 }
 
@@ -1199,7 +1205,7 @@ fn save_wallet_rejects_empty_address() {
 fn save_wallet_rejects_malformed_address() {
     let tmp = TempDir::new().unwrap();
     let owner = format!("0x{}", "cd".repeat(32));
-    let result = groundhog_cli::config::save_profile_wallet_address(
+    let result = thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
         "alice",
@@ -1216,7 +1222,7 @@ fn save_wallet_accepts_valid_hex_address() {
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let addr = format!("0x{}", "ab".repeat(32));
     let owner = format!("0x{}", "cd".repeat(32));
-    let result = groundhog_cli::config::save_profile_wallet_address(
+    let result = thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
         "alice",
@@ -1234,7 +1240,7 @@ fn save_wallet_accepts_valid_hex_address() {
 fn resolve_profile_rejects_legacy_string_wallet_binding() {
     let tmp = TempDir::new().unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         format!(
             r#"
 default_profile = "default"
@@ -1247,7 +1253,7 @@ alice = "0x{}"
     )
     .unwrap();
 
-    let result = groundhog_cli::config::resolve_profile(tmp.path(), None);
+    let result = thruput_cli::config::resolve_profile(tmp.path(), None);
 
     assert!(result.is_err());
 }
@@ -1257,7 +1263,7 @@ alice = "0x{}"
 fn resolve_profile_accepts_wallet_table_missing_owner_for_stable_validation() {
     let tmp = TempDir::new().unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         format!(
             r#"
 default_profile = "default"
@@ -1270,7 +1276,7 @@ address = "0x{}"
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
 
     assert_eq!(
         profile
@@ -1289,14 +1295,14 @@ fn save_second_alias_preserves_first() {
     let addr_a = format!("0x{}", "aa".repeat(32));
     let addr_b = format!("0x{}", "bb".repeat(32));
 
-    groundhog_cli::config::save_profile_contract_alias(
+    thruput_cli::config::save_profile_contract_alias(
         tmp.path(),
         Some("default"),
         "counter",
         &addr_a,
     )
     .unwrap();
-    groundhog_cli::config::save_profile_contract_alias(
+    thruput_cli::config::save_profile_contract_alias(
         tmp.path(),
         Some("default"),
         "greeter",
@@ -1304,7 +1310,7 @@ fn save_second_alias_preserves_first() {
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert_eq!(
         profile.contracts.get("counter").map(String::as_str),
         Some(addr_a.as_str())
@@ -1327,7 +1333,7 @@ fn save_second_wallet_preserves_first() {
     let owner_a = format!("0x{}", "cc".repeat(32));
     let owner_b = format!("0x{}", "dd".repeat(32));
 
-    groundhog_cli::config::save_profile_wallet_address(
+    thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
         "alice",
@@ -1335,7 +1341,7 @@ fn save_second_wallet_preserves_first() {
         &owner_a,
     )
     .unwrap();
-    groundhog_cli::config::save_profile_wallet_address(
+    thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
         "bob",
@@ -1344,7 +1350,7 @@ fn save_second_wallet_preserves_first() {
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert_eq!(
         profile
             .wallets
@@ -1373,7 +1379,7 @@ fn remove_wallet_deletes_saved_entry() {
     let owner_a = format!("0x{}", "cc".repeat(32));
     let owner_b = format!("0x{}", "dd".repeat(32));
 
-    groundhog_cli::config::save_profile_wallet_address(
+    thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
         "alice",
@@ -1381,7 +1387,7 @@ fn remove_wallet_deletes_saved_entry() {
         &owner_a,
     )
     .unwrap();
-    groundhog_cli::config::save_profile_wallet_address(
+    thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
         "bob",
@@ -1392,10 +1398,10 @@ fn remove_wallet_deletes_saved_entry() {
     let config_path = global_config_path(&tmp);
     let config = fs::read_to_string(&config_path).unwrap();
     fs::write(&config_path, format!("# retained\nplugin = true\n{config}")).unwrap();
-    groundhog_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "alice")
+    thruput_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "alice")
         .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert!(!profile.wallets.contains_key("alice"));
     assert_eq!(
         profile
@@ -1418,9 +1424,9 @@ fn remove_wallet_clears_matching_default_in_same_write() {
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let address = format!("0x{}", "aa".repeat(32));
     let owner = format!("0x{}", "bb".repeat(32));
-    fs::write(tmp.path().join("groundhog.toml"), "").unwrap();
+    fs::write(tmp.path().join("thruput.toml"), "").unwrap();
 
-    groundhog_cli::config::save_profile_wallet_address(
+    thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
         "alice",
@@ -1428,14 +1434,13 @@ fn remove_wallet_clears_matching_default_in_same_write() {
         &owner,
     )
     .unwrap();
-    groundhog_cli::config::save_profile_default_wallet(tmp.path(), Some("default"), "alice")
-        .unwrap();
-    groundhog_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "alice")
+    thruput_cli::config::save_profile_default_wallet(tmp.path(), Some("default"), "alice").unwrap();
+    thruput_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "alice")
         .unwrap();
 
-    let contents = fs::read_to_string(tmp.path().join("groundhog.toml")).unwrap();
+    let contents = fs::read_to_string(tmp.path().join("thruput.toml")).unwrap();
     assert!(!contents.contains("default_wallet"));
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert!(profile.default_wallet.is_none());
     assert!(!profile.wallets.contains_key("alice"));
 
@@ -1450,7 +1455,7 @@ fn remove_wallet_rejects_missing_entry() {
     let addr = format!("0x{}", "aa".repeat(32));
     let owner = format!("0x{}", "bb".repeat(32));
 
-    groundhog_cli::config::save_profile_wallet_address(
+    thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
         "alice",
@@ -1459,7 +1464,7 @@ fn remove_wallet_rejects_missing_entry() {
     )
     .unwrap();
     let result =
-        groundhog_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "bob");
+        thruput_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "bob");
 
     assert!(result.is_err());
 
@@ -1471,7 +1476,7 @@ fn remove_wallet_rejects_missing_entry() {
 fn initialize_global_profiles_preserves_inline_profile_fields() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         r#"profile = { local = { rpc_url = "http://127.0.0.1:9999", plugin = "keep" } }
@@ -1479,9 +1484,9 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
     )
     .unwrap();
 
-    groundhog_cli::config::initialize_global_profiles().unwrap();
+    thruput_cli::config::initialize_global_profiles().unwrap();
 
-    let local = groundhog_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
+    let local = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(local.rpc_url.as_deref(), Some("http://127.0.0.1:9999"));
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains("plugin = \"keep\""));
@@ -1495,7 +1500,7 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
 fn concurrent_global_writers_preserve_independent_updates() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let path = global_config_path(&tmp);
     fs::write(&path, "plugin = true\n").unwrap();
     let lock = lock_config(&path);
@@ -1504,11 +1509,11 @@ fn concurrent_global_writers_preserve_independent_updates() {
     let key_started = started_tx.clone();
     let key_writer = std::thread::spawn(move || {
         key_started.send(()).unwrap();
-        groundhog_cli::config::save_default_key("alice")
+        thruput_cli::config::save_default_key("alice")
     });
     let profiles_writer = std::thread::spawn(move || {
         started_tx.send(()).unwrap();
-        groundhog_cli::config::initialize_global_profiles()
+        thruput_cli::config::initialize_global_profiles()
     });
 
     started_rx.recv().unwrap();
@@ -1519,13 +1524,11 @@ fn concurrent_global_writers_preserve_independent_updates() {
     profiles_writer.join().unwrap().unwrap();
 
     assert_eq!(
-        groundhog_cli::config::load_default_key()
-            .unwrap()
-            .as_deref(),
+        thruput_cli::config::load_default_key().unwrap().as_deref(),
         Some("alice")
     );
     assert_eq!(
-        groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet"))
+        thruput_cli::config::resolve_profile(tmp.path(), Some("devnet"))
             .unwrap()
             .rpc_url
             .as_deref(),
@@ -1539,7 +1542,7 @@ fn concurrent_global_writers_preserve_independent_updates() {
 #[cfg(unix)]
 fn concurrent_project_writers_preserve_independent_updates() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     fs::write(&path, "[profile.default]\nplugin = true\n").unwrap();
     let lock = lock_config(&path);
     let (started_tx, started_rx) = std::sync::mpsc::channel();
@@ -1551,7 +1554,7 @@ fn concurrent_project_writers_preserve_independent_updates() {
     let alias_started = started_tx.clone();
     let alias_writer = std::thread::spawn(move || {
         alias_started.send(()).unwrap();
-        groundhog_cli::config::save_profile_contract_alias(
+        thruput_cli::config::save_profile_contract_alias(
             &project,
             Some("default"),
             "counter",
@@ -1561,7 +1564,7 @@ fn concurrent_project_writers_preserve_independent_updates() {
     let project = tmp.path().to_path_buf();
     let wallet_writer = std::thread::spawn(move || {
         started_tx.send(()).unwrap();
-        groundhog_cli::config::save_profile_wallet_address(
+        thruput_cli::config::save_profile_wallet_address(
             &project,
             Some("default"),
             "alice",
@@ -1577,7 +1580,7 @@ fn concurrent_project_writers_preserve_independent_updates() {
     alias_writer.join().unwrap().unwrap();
     wallet_writer.join().unwrap().unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert!(profile.contracts.contains_key("counter"));
     assert!(profile.wallets.contains_key("alice"));
 }
@@ -1588,7 +1591,7 @@ fn persisted_profile_merge_tracks_sources_and_normalizes_runtime_paths() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     fs::create_dir(&project).unwrap();
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::write(
         global_config_path(&tmp),
@@ -1604,7 +1607,7 @@ HOG = "0x01"
     )
     .unwrap();
     fs::write(
-        project.join("groundhog.toml"),
+        project.join("thruput.toml"),
         r#"[profile.devnet]
 faucet_url = "https://faucet.example"
 runtime_manifest = "state/runtime.json"
@@ -1615,10 +1618,10 @@ counter = "0x02"
     )
     .unwrap();
 
-    let config = groundhog_cli::config::load_persisted_config(&project).unwrap();
+    let config = thruput_cli::config::load_persisted_config(&project).unwrap();
     let resolved = config.resolve("devnet").unwrap();
     let raw_project = config
-        .inspect("devnet", groundhog_cli::config::ConfigScope::Project)
+        .inspect("devnet", thruput_cli::config::ConfigScope::Project)
         .unwrap();
 
     assert_eq!(
@@ -1635,7 +1638,7 @@ counter = "0x02"
     );
     assert_eq!(
         resolved.sources.rpc_url.as_ref().map(|source| source.kind),
-        Some(groundhog_cli::config::ConfigSourceKind::Global)
+        Some(thruput_cli::config::ConfigSourceKind::Global)
     );
     assert_eq!(
         resolved
@@ -1643,7 +1646,7 @@ counter = "0x02"
             .faucet_url
             .as_ref()
             .map(|source| source.kind),
-        Some(groundhog_cli::config::ConfigSourceKind::Project)
+        Some(thruput_cli::config::ConfigSourceKind::Project)
     );
     assert_eq!(
         resolved
@@ -1651,7 +1654,7 @@ counter = "0x02"
             .contracts
             .get("counter")
             .map(|source| source.kind),
-        Some(groundhog_cli::config::ConfigSourceKind::Project)
+        Some(thruput_cli::config::ConfigSourceKind::Project)
     );
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -1663,7 +1666,7 @@ fn profile_listing_isolates_invalid_and_active_missing_profiles() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         r#"[profile.valid]
 network = "devnet"
 
@@ -1673,24 +1676,23 @@ network = "preview"
     )
     .unwrap();
 
-    let config = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap();
+    let config = thruput_cli::config::load_persisted_config(tmp.path()).unwrap();
     let valid = config.resolve("valid").unwrap();
     let report = config.profiles_report(Some("missing")).unwrap();
 
     assert_eq!(
         valid.values.network,
-        Some(groundhog_cli::config::Network::Devnet)
+        Some(thruput_cli::config::Network::Devnet)
     );
     assert_eq!(report.active_profile.as_deref(), Some("missing"));
     assert_eq!(report.profiles.len(), 3);
     assert!(report.profiles.iter().any(|row| {
-        row.profile == "invalid"
-            && row.status == groundhog_cli::config::ConfigProfileStatus::Invalid
+        row.profile == "invalid" && row.status == thruput_cli::config::ConfigProfileStatus::Invalid
     }));
     assert!(report.profiles.iter().any(|row| {
         row.profile == "missing"
             && row.active
-            && row.status == groundhog_cli::config::ConfigProfileStatus::Missing
+            && row.status == thruput_cli::config::ConfigProfileStatus::Missing
     }));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -1701,7 +1703,7 @@ network = "preview"
 fn config_get_json_projection_omits_protected_global_state() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         r#"default_profile = "devnet"
@@ -1726,16 +1728,16 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     )
     .unwrap();
 
-    let config = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap();
+    let config = thruput_cli::config::load_persisted_config(tmp.path()).unwrap();
     let selection = config.selection(None).unwrap().unwrap();
-    let report = groundhog_cli::config::ConfigGetReport::new(
+    let report = thruput_cli::config::ConfigGetReport::new(
         config.resolve("devnet").unwrap(),
         Some(selection.source),
-        groundhog_cli::config::ConfigScope::Resolved,
+        thruput_cli::config::ConfigScope::Resolved,
         true,
     );
     let json = serde_json::to_string(&report).unwrap();
-    let roundtrip: groundhog_cli::config::ConfigGetReport = serde_json::from_str(&json).unwrap();
+    let roundtrip: thruput_cli::config::ConfigGetReport = serde_json::from_str(&json).unwrap();
 
     assert!(json.contains("\"schemaVersion\":2"));
     assert!(json.contains("\"ownerPublicKey\""));
@@ -1753,19 +1755,19 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
 fn config_field_validation_accepts_typed_values_and_rejects_invalid_values() {
     use std::str::FromStr as _;
 
-    assert!(groundhog_cli::config::ConfigField::from_str("network").is_ok());
+    assert!(thruput_cli::config::ConfigField::from_str("network").is_ok());
     assert!(
-        groundhog_cli::config::ConfigField::RpcUrl
+        thruput_cli::config::ConfigField::RpcUrl
             .parse_value("https://rpc.example")
             .is_ok()
     );
     assert!(
-        groundhog_cli::config::ConfigField::FaucetUrl
+        thruput_cli::config::ConfigField::FaucetUrl
             .parse_value("relative/path")
             .is_err()
     );
     assert!(
-        groundhog_cli::config::ConfigField::DefaultKey
+        thruput_cli::config::ConfigField::DefaultKey
             .parse_value("  ")
             .is_err()
     );
@@ -1775,17 +1777,17 @@ fn config_field_validation_accepts_typed_values_and_rejects_invalid_values() {
 #[serial]
 fn config_new_creates_complete_project_profile_and_preserves_unrelated_content() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     fs::write(
         &path,
         "# retained\ndefault_profile = \"devnet\"\nplugin = true\n",
     )
     .unwrap();
 
-    let report = groundhog_cli::config::create_profile(
+    let report = thruput_cli::config::create_profile(
         tmp.path(),
         "staging",
-        &groundhog_cli::config::NewProfileOptions {
+        &thruput_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("https://rpc.example".into()),
             network_hash: None,
@@ -1799,15 +1801,15 @@ fn config_new_creates_complete_project_profile_and_preserves_unrelated_content()
     .unwrap();
 
     assert!(report.changed);
-    assert_eq!(report.scope, groundhog_cli::config::ConfigScope::Project);
+    assert_eq!(report.scope, thruput_cli::config::ConfigScope::Project);
     assert_eq!(report.path, path);
     assert_eq!(
         report.created_fields,
         [
-            groundhog_cli::config::ConfigField::DefaultKey,
-            groundhog_cli::config::ConfigField::FaucetUrl,
-            groundhog_cli::config::ConfigField::Network,
-            groundhog_cli::config::ConfigField::RpcUrl,
+            thruput_cli::config::ConfigField::DefaultKey,
+            thruput_cli::config::ConfigField::FaucetUrl,
+            thruput_cli::config::ConfigField::Network,
+            thruput_cli::config::ConfigField::RpcUrl,
         ]
     );
     assert!(report.selected);
@@ -1821,14 +1823,14 @@ fn config_new_creates_complete_project_profile_and_preserves_unrelated_content()
 #[serial]
 fn config_new_rejects_existing_target_layer_profile_without_changes() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     let contents = "# retained\ndefault_profile = \"local\"\n\n[profile]\ndevnet = \"malformed\"\n\n[profile.local]\nnetwork = \"local\"\n";
     fs::write(&path, contents).unwrap();
 
-    let error = groundhog_cli::config::create_profile(
+    let error = thruput_cli::config::create_profile(
         tmp.path(),
         "devnet",
-        &groundhog_cli::config::NewProfileOptions {
+        &thruput_cli::config::NewProfileOptions {
             network: "mainnet".into(),
             rpc_url: None,
             network_hash: None,
@@ -1849,14 +1851,14 @@ fn config_new_rejects_existing_target_layer_profile_without_changes() {
 #[cfg(unix)]
 fn config_new_validates_all_values_before_waiting_for_lock() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     fs::write(&path, "# retained\n").unwrap();
     let _lock = lock_config(&path);
 
-    let error = groundhog_cli::config::create_profile(
+    let error = thruput_cli::config::create_profile(
         tmp.path(),
         "staging",
-        &groundhog_cli::config::NewProfileOptions {
+        &thruput_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("relative/path".into()),
             network_hash: None,
@@ -1876,8 +1878,8 @@ fn config_new_validates_all_values_before_waiting_for_lock() {
 #[serial]
 fn concurrent_config_new_allows_only_one_creator() {
     let tmp = TempDir::new().unwrap();
-    fs::write(tmp.path().join("groundhog.toml"), "# retained\n").unwrap();
-    let options = groundhog_cli::config::NewProfileOptions {
+    fs::write(tmp.path().join("thruput.toml"), "# retained\n").unwrap();
+    let options = thruput_cli::config::NewProfileOptions {
         network: "devnet".into(),
         rpc_url: None,
         network_hash: None,
@@ -1888,11 +1890,11 @@ fn concurrent_config_new_allows_only_one_creator() {
     let project = tmp.path().to_path_buf();
     let first_options = options.clone();
     let first = std::thread::spawn(move || {
-        groundhog_cli::config::create_profile(&project, "staging", &first_options, false, true)
+        thruput_cli::config::create_profile(&project, "staging", &first_options, false, true)
     });
     let project = tmp.path().to_path_buf();
     let second = std::thread::spawn(move || {
-        groundhog_cli::config::create_profile(&project, "staging", &options, false, true)
+        thruput_cli::config::create_profile(&project, "staging", &options, false, true)
     });
 
     let results = [first.join().unwrap(), second.join().unwrap()];
@@ -1901,7 +1903,7 @@ fn concurrent_config_new_allows_only_one_creator() {
         results
             .iter()
             .filter_map(|result| result.as_ref().err())
-            .map(groundhog_cli::CliError::code)
+            .map(thruput_cli::CliError::code)
             .collect::<Vec<_>>(),
         ["profile_already_exists"]
     );
@@ -1912,18 +1914,18 @@ fn concurrent_config_new_allows_only_one_creator() {
 fn config_new_project_allows_overlay_for_global_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         "[profile.staging]\nnetwork = \"devnet\"\nrpc_url = \"https://global.example\"\n",
     )
     .unwrap();
-    fs::write(tmp.path().join("groundhog.toml"), "# project\n").unwrap();
+    fs::write(tmp.path().join("thruput.toml"), "# project\n").unwrap();
 
-    let report = groundhog_cli::config::create_profile(
+    let report = thruput_cli::config::create_profile(
         tmp.path(),
         "staging",
-        &groundhog_cli::config::NewProfileOptions {
+        &thruput_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("https://project.example".into()),
             network_hash: None,
@@ -1938,7 +1940,7 @@ fn config_new_project_allows_overlay_for_global_profile() {
 
     assert!(report.changed);
     assert_eq!(
-        groundhog_cli::config::load_persisted_config(tmp.path())
+        thruput_cli::config::load_persisted_config(tmp.path())
             .unwrap()
             .resolve("staging")
             .unwrap()
@@ -1955,20 +1957,20 @@ fn config_new_project_allows_overlay_for_global_profile() {
 fn config_new_project_use_rejects_invalid_global_layer_without_changes() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         "[profile.staging]\nnetwork = \"preview\"\n",
     )
     .unwrap();
-    let project_path = tmp.path().join("groundhog.toml");
+    let project_path = tmp.path().join("thruput.toml");
     let project_contents = "# project\n";
     fs::write(&project_path, project_contents).unwrap();
 
-    let error = groundhog_cli::config::create_profile(
+    let error = thruput_cli::config::create_profile(
         tmp.path(),
         "staging",
-        &groundhog_cli::config::NewProfileOptions {
+        &thruput_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: None,
             network_hash: None,
@@ -1990,18 +1992,18 @@ fn config_new_project_use_rejects_invalid_global_layer_without_changes() {
 #[serial]
 fn config_rm_removes_complete_profile_and_matching_default() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     fs::write(
         &path,
         "# retained\ndefault_profile = \"staging\"\nplugin = true\n\n[profile.keep]\nnetwork = \"local\"\n\n[profile.staging]\nnetwork = \"devnet\"\nunknown = true\n\n[profile.staging.contracts]\ncounter = \"0x1234\"\n\n[profile.staging.wallets.alice]\naddress = \"0xabcd\"\nowner_public_key = \"0xef01\"\n",
     )
     .unwrap();
 
-    let report = groundhog_cli::config::remove_profile(tmp.path(), "staging", false, true).unwrap();
+    let report = thruput_cli::config::remove_profile(tmp.path(), "staging", false, true).unwrap();
 
     assert!(report.changed);
     assert!(report.cleared_default);
-    assert_eq!(report.scope, groundhog_cli::config::ConfigScope::Project);
+    assert_eq!(report.scope, thruput_cli::config::ConfigScope::Project);
     assert_eq!(report.path, path);
     assert_eq!(
         fs::read_to_string(report.path).unwrap(),
@@ -2013,12 +2015,12 @@ fn config_rm_removes_complete_profile_and_matching_default() {
 #[serial]
 fn config_rm_rejects_missing_target_layer_profile_without_changes() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     let contents = "# retained\n[profile.keep]\nnetwork = \"local\"\n";
     fs::write(&path, contents).unwrap();
 
     let error =
-        groundhog_cli::config::remove_profile(tmp.path(), "missing", false, true).unwrap_err();
+        thruput_cli::config::remove_profile(tmp.path(), "missing", false, true).unwrap_err();
 
     assert_eq!(error.code(), "profile_not_found_in_scope");
     assert_eq!(fs::read_to_string(path).unwrap(), contents);
@@ -2028,14 +2030,14 @@ fn config_rm_rejects_missing_target_layer_profile_without_changes() {
 #[serial]
 fn config_rm_preserves_comment_position_when_default_is_between_keys() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     fs::write(
         &path,
         "before = true\n# selected profile\ndefault_profile = \"staging\"\nafter = true\n\n[profile.staging]\nnetwork = \"devnet\"\n",
     )
     .unwrap();
 
-    groundhog_cli::config::remove_profile(tmp.path(), "staging", false, true).unwrap();
+    thruput_cli::config::remove_profile(tmp.path(), "staging", false, true).unwrap();
 
     assert_eq!(
         fs::read_to_string(path).unwrap(),
@@ -2047,14 +2049,14 @@ fn config_rm_preserves_comment_position_when_default_is_between_keys() {
 #[serial]
 fn config_rm_preserves_leading_comment_when_profile_is_only_content() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     fs::write(
         &path,
         "# retained\ndefault_profile = \"staging\"\n\n[profile.staging]\nnetwork = \"devnet\"\n",
     )
     .unwrap();
 
-    groundhog_cli::config::remove_profile(tmp.path(), "staging", false, true).unwrap();
+    thruput_cli::config::remove_profile(tmp.path(), "staging", false, true).unwrap();
 
     assert_eq!(fs::read_to_string(path).unwrap(), "# retained\n");
 }
@@ -2064,17 +2066,17 @@ fn config_rm_preserves_leading_comment_when_profile_is_only_content() {
 fn concurrent_config_rm_allows_only_one_removal() {
     let tmp = TempDir::new().unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "[profile.staging]\nnetwork = \"devnet\"\n",
     )
     .unwrap();
     let project = tmp.path().to_path_buf();
     let first = std::thread::spawn(move || {
-        groundhog_cli::config::remove_profile(&project, "staging", false, true)
+        thruput_cli::config::remove_profile(&project, "staging", false, true)
     });
     let project = tmp.path().to_path_buf();
     let second = std::thread::spawn(move || {
-        groundhog_cli::config::remove_profile(&project, "staging", false, true)
+        thruput_cli::config::remove_profile(&project, "staging", false, true)
     });
 
     let results = [first.join().unwrap(), second.join().unwrap()];
@@ -2083,7 +2085,7 @@ fn concurrent_config_rm_allows_only_one_removal() {
         results
             .iter()
             .filter_map(|result| result.as_ref().err())
-            .map(groundhog_cli::CliError::code)
+            .map(thruput_cli::CliError::code)
             .collect::<Vec<_>>(),
         ["profile_not_found_in_scope"]
     );
@@ -2094,20 +2096,20 @@ fn concurrent_config_rm_allows_only_one_removal() {
 fn config_set_rejects_missing_target_layer_profile_without_creating_it() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         "[profile.missing]\nnetwork = \"devnet\"\n",
     )
     .unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     let contents = "# retained\nplugin = true\n";
     fs::write(&path, contents).unwrap();
 
-    let error = groundhog_cli::config::set_profile_field(
+    let error = thruput_cli::config::set_profile_field(
         tmp.path(),
         "missing",
-        groundhog_cli::config::ConfigField::Network,
+        thruput_cli::config::ConfigField::Network,
         "devnet",
         false,
         true,
@@ -2124,15 +2126,15 @@ fn config_set_rejects_missing_target_layer_profile_without_creating_it() {
 fn config_set_reports_unchanged_for_existing_value() {
     let tmp = TempDir::new().unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "[profile.devnet]\nnetwork = 'devnet'\n",
     )
     .unwrap();
 
-    let report = groundhog_cli::config::set_profile_field(
+    let report = thruput_cli::config::set_profile_field(
         tmp.path(),
         "devnet",
-        groundhog_cli::config::ConfigField::Network,
+        thruput_cli::config::ConfigField::Network,
         "devnet",
         false,
         true,
@@ -2141,7 +2143,7 @@ fn config_set_reports_unchanged_for_existing_value() {
 
     assert!(!report.changed);
     assert_eq!(
-        fs::read_to_string(tmp.path().join("groundhog.toml")).unwrap(),
+        fs::read_to_string(tmp.path().join("thruput.toml")).unwrap(),
         "[profile.devnet]\nnetwork = 'devnet'\n"
     );
 }
@@ -2150,7 +2152,7 @@ fn config_set_reports_unchanged_for_existing_value() {
 fn config_set_network_hash_parses_its_field_name_and_persists() {
     let tmp = TempDir::new().unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "[profile.devnet]\nnetwork = 'devnet'\n",
     )
     .unwrap();
@@ -2158,14 +2160,14 @@ fn config_set_network_hash_parses_its_field_name_and_persists() {
 
     // Parse the field name the way the CLI does, so a variant wired everywhere
     // except `FromStr` cannot pass this.
-    let field: groundhog_cli::config::ConfigField = "network-hash".parse().unwrap();
+    let field: thruput_cli::config::ConfigField = "network-hash".parse().unwrap();
     let report =
-        groundhog_cli::config::set_profile_field(tmp.path(), "devnet", field, &hash, false, true)
+        thruput_cli::config::set_profile_field(tmp.path(), "devnet", field, &hash, false, true)
             .unwrap();
 
     assert!(report.changed);
     assert!(
-        fs::read_to_string(tmp.path().join("groundhog.toml"))
+        fs::read_to_string(tmp.path().join("thruput.toml"))
             .unwrap()
             .contains(&format!("network_hash = \"{hash}\""))
     );
@@ -2175,16 +2177,16 @@ fn config_set_network_hash_parses_its_field_name_and_persists() {
 fn config_set_network_hash_accepts_the_0x_prefix_rpc_reports() {
     let tmp = TempDir::new().unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "[profile.devnet]\nnetwork = 'devnet'\n",
     )
     .unwrap();
     let hash = "ab".repeat(32);
-    let field: groundhog_cli::config::ConfigField = "network-hash".parse().unwrap();
+    let field: thruput_cli::config::ConfigField = "network-hash".parse().unwrap();
 
     // `groundhog_networkInfo` reports the hash 0x-prefixed; pasting it back
     // must work and persist the unprefixed form the manifest uses.
-    let report = groundhog_cli::config::set_profile_field(
+    let report = thruput_cli::config::set_profile_field(
         tmp.path(),
         "devnet",
         field,
@@ -2196,7 +2198,7 @@ fn config_set_network_hash_accepts_the_0x_prefix_rpc_reports() {
 
     assert!(report.changed);
     assert!(
-        fs::read_to_string(tmp.path().join("groundhog.toml"))
+        fs::read_to_string(tmp.path().join("thruput.toml"))
             .unwrap()
             .contains(&format!("network_hash = \"{hash}\""))
     );
@@ -2206,15 +2208,15 @@ fn config_set_network_hash_accepts_the_0x_prefix_rpc_reports() {
 fn config_set_network_hash_rejects_a_non_canonical_value() {
     let tmp = TempDir::new().unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "[profile.devnet]\nnetwork = 'devnet'\n",
     )
     .unwrap();
-    let field: groundhog_cli::config::ConfigField = "network-hash".parse().unwrap();
+    let field: thruput_cli::config::ConfigField = "network-hash".parse().unwrap();
 
     // Uppercase is a valid hex string but not the canonical form the manifest
     // and the signing path agree on.
-    let error = groundhog_cli::config::set_profile_field(
+    let error = thruput_cli::config::set_profile_field(
         tmp.path(),
         "devnet",
         field,
@@ -2226,10 +2228,10 @@ fn config_set_network_hash_rejects_a_non_canonical_value() {
 
     assert!(matches!(
         error,
-        groundhog_cli::CliError::ConfigValueInvalid { .. }
+        thruput_cli::CliError::ConfigValueInvalid { .. }
     ));
     assert_eq!(
-        fs::read_to_string(tmp.path().join("groundhog.toml")).unwrap(),
+        fs::read_to_string(tmp.path().join("thruput.toml")).unwrap(),
         "[profile.devnet]\nnetwork = 'devnet'\n"
     );
 }
@@ -2248,10 +2250,10 @@ fn config_set_updates_global_file_symlink_target_without_replacing_link() {
     fs::write(&managed_path, "[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
     symlink(&managed_path, &global_path).unwrap();
 
-    let report = groundhog_cli::config::set_profile_field(
+    let report = thruput_cli::config::set_profile_field(
         tmp.path(),
         "devnet",
-        groundhog_cli::config::ConfigField::RpcUrl,
+        thruput_cli::config::ConfigField::RpcUrl,
         "https://rpc.example",
         true,
         false,
@@ -2277,14 +2279,14 @@ fn config_set_updates_global_file_symlink_target_without_replacing_link() {
 #[serial]
 fn config_unset_missing_project_profile_is_noop_without_creating_table() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     let contents = "# retained\nplugin = true\n";
     fs::write(&path, contents).unwrap();
 
-    let report = groundhog_cli::config::unset_profile_field(
+    let report = thruput_cli::config::unset_profile_field(
         tmp.path(),
         "missing",
-        groundhog_cli::config::ConfigField::FaucetUrl,
+        thruput_cli::config::ConfigField::FaucetUrl,
         false,
         true,
     )
@@ -2298,14 +2300,14 @@ fn config_unset_missing_project_profile_is_noop_without_creating_table() {
 #[serial]
 fn config_set_validation_failure_leaves_selected_profile_unchanged() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     let contents = "# retained\n[profile.devnet]\nrpc_url = \"relative/path\"\nunknown = true\n";
     fs::write(&path, contents).unwrap();
 
-    let error = groundhog_cli::config::set_profile_field(
+    let error = thruput_cli::config::set_profile_field(
         tmp.path(),
         "devnet",
-        groundhog_cli::config::ConfigField::Network,
+        thruput_cli::config::ConfigField::Network,
         "devnet",
         false,
         true,
@@ -2321,7 +2323,7 @@ fn config_set_validation_failure_leaves_selected_profile_unchanged() {
 fn config_use_updates_only_selected_default_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let path = global_config_path(&tmp);
     fs::write(
         &path,
@@ -2329,7 +2331,7 @@ fn config_use_updates_only_selected_default_profile() {
     )
     .unwrap();
 
-    let report = groundhog_cli::config::use_profile(tmp.path(), "devnet", true, false).unwrap();
+    let report = thruput_cli::config::use_profile(tmp.path(), "devnet", true, false).unwrap();
 
     assert!(report.changed);
     assert_eq!(
@@ -2345,15 +2347,15 @@ fn config_use_updates_only_selected_default_profile() {
 fn config_use_project_locks_global_before_updating_selection() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let global_path = global_config_path(&tmp);
     fs::write(&global_path, "[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
-    let project_path = tmp.path().join("groundhog.toml");
+    let project_path = tmp.path().join("thruput.toml");
     let project_contents = "# project\n";
     fs::write(&project_path, project_contents).unwrap();
     let _lock = lock_config(&global_path);
 
-    let error = groundhog_cli::config::use_profile(tmp.path(), "devnet", false, true).unwrap_err();
+    let error = thruput_cli::config::use_profile(tmp.path(), "devnet", false, true).unwrap_err();
 
     assert_eq!(error.code(), "config_lock_timeout");
     assert_eq!(fs::read_to_string(project_path).unwrap(), project_contents);
@@ -2366,16 +2368,16 @@ fn config_use_project_locks_global_before_updating_selection() {
 fn config_use_project_validates_global_after_waiting_for_lock() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let global_path = global_config_path(&tmp);
     fs::write(&global_path, "[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
-    let project_path = tmp.path().join("groundhog.toml");
+    let project_path = tmp.path().join("thruput.toml");
     let project_contents = "# project\n";
     fs::write(&project_path, project_contents).unwrap();
     let lock = lock_config(&global_path);
     let project = tmp.path().to_path_buf();
     let mutation = std::thread::spawn(move || {
-        groundhog_cli::config::use_profile(&project, "devnet", false, true)
+        thruput_cli::config::use_profile(&project, "devnet", false, true)
     });
     std::thread::sleep(std::time::Duration::from_millis(100));
     fs::write(&global_path, "[profile.devnet]\nnetwork = \"preview\"\n").unwrap();
@@ -2393,20 +2395,20 @@ fn config_use_project_validates_global_after_waiting_for_lock() {
 fn config_use_global_rejects_project_only_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         "default_profile = \"local\"\n\n[profile.local]\nnetwork = \"local\"\n",
     )
     .unwrap();
     fs::write(
-        tmp.path().join("groundhog.toml"),
+        tmp.path().join("thruput.toml"),
         "[profile.project-only]\nnetwork = \"devnet\"\n",
     )
     .unwrap();
 
     let error =
-        groundhog_cli::config::use_profile(tmp.path(), "project-only", true, false).unwrap_err();
+        thruput_cli::config::use_profile(tmp.path(), "project-only", true, false).unwrap_err();
 
     assert_eq!(error.code(), "profile_not_found_in_scope");
     assert_eq!(
@@ -2426,12 +2428,12 @@ fn config_use_global_rejects_project_only_profile() {
 fn config_use_reports_noop_without_normalizing_string_style() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let path = global_config_path(&tmp);
     let contents = "default_profile = 'devnet'\n\n[profile.devnet]\nnetwork = \"devnet\"\n";
     fs::write(&path, contents).unwrap();
 
-    let report = groundhog_cli::config::use_profile(tmp.path(), "devnet", true, false).unwrap();
+    let report = thruput_cli::config::use_profile(tmp.path(), "devnet", true, false).unwrap();
 
     assert!(!report.changed);
     assert_eq!(fs::read_to_string(path).unwrap(), contents);
@@ -2443,10 +2445,10 @@ fn config_use_reports_noop_without_normalizing_string_style() {
 fn malformed_toml_reports_the_config_path() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     fs::write(&path, "[profile.devnet\n").unwrap();
 
-    let error = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap_err();
+    let error = thruput_cli::config::load_persisted_config(tmp.path()).unwrap_err();
 
     assert_eq!(error.code(), "config_parse_failed");
     assert!(error.to_string().contains(path.to_string_lossy().as_ref()));
@@ -2462,10 +2464,10 @@ fn malformed_toml_reports_the_config_path() {
 fn malformed_toml_reports_character_based_column() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let path = tmp.path().join("groundhog.toml");
+    let path = tmp.path().join("thruput.toml");
     fs::write(&path, "name = \"é\" trailing\n").unwrap();
 
-    let error = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap_err();
+    let error = thruput_cli::config::load_persisted_config(tmp.path()).unwrap_err();
 
     assert_eq!(error.code(), "config_parse_failed");
     assert_eq!(error.details_json().unwrap()["column"], 12);
@@ -2477,7 +2479,7 @@ fn malformed_toml_reports_character_based_column() {
 fn invalid_unrelated_profile_does_not_hide_global_scalars_or_valid_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         r#"default_profile = "valid"
@@ -2496,8 +2498,8 @@ network = "preview"
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
-    let key = groundhog_cli::config::load_default_key().unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let key = thruput_cli::config::load_default_key().unwrap();
 
     assert_eq!(profile.name, "valid");
     assert_eq!(key.as_deref(), Some("alice"));
@@ -2509,7 +2511,7 @@ network = "preview"
 fn invalid_local_runtime_state_does_not_block_non_local_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         r#"default_profile = "devnet"
@@ -2526,12 +2528,12 @@ runtime_manifest = "relative.json"
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
 
     assert_eq!(profile.name, "devnet");
     assert_eq!(profile.rpc_url.as_deref(), Some("https://rpc.example"));
     assert_eq!(
-        groundhog_cli::config::resolve_default_key_for_profile(&profile).unwrap(),
+        thruput_cli::config::resolve_default_key_for_profile(&profile).unwrap(),
         None
     );
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -2542,7 +2544,7 @@ runtime_manifest = "relative.json"
 fn invalid_local_runtime_state_is_rejected_for_local_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
         r#"default_profile = "local"
@@ -2558,7 +2560,7 @@ runtime_manifest = "/tmp/runtime.json"
     )
     .unwrap();
 
-    let error = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
+    let error = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
 
     assert_eq!(error.code(), "config_file_invalid");
     assert!(error.to_string().contains("local_runtime_state is invalid"));
@@ -2570,11 +2572,11 @@ runtime_manifest = "/tmp/runtime.json"
 fn invalid_persisted_default_profile_reports_its_layer_path() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let global_path = global_config_path(&tmp);
     fs::write(&global_path, "default_profile = \" \"\n").unwrap();
 
-    let global_error = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap_err();
+    let global_error = thruput_cli::config::load_persisted_config(tmp.path()).unwrap_err();
 
     assert_eq!(global_error.code(), "config_file_invalid");
     assert!(
@@ -2584,10 +2586,10 @@ fn invalid_persisted_default_profile_reports_its_layer_path() {
     );
 
     fs::write(&global_path, "").unwrap();
-    let project_path = tmp.path().join("groundhog.toml");
+    let project_path = tmp.path().join("thruput.toml");
     fs::write(&project_path, "default_profile = \" \"\n").unwrap();
 
-    let project_error = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap_err();
+    let project_error = thruput_cli::config::load_persisted_config(tmp.path()).unwrap_err();
 
     assert_eq!(project_error.code(), "config_file_invalid");
     assert!(
@@ -2603,14 +2605,14 @@ fn invalid_persisted_default_profile_reports_its_layer_path() {
 fn invalid_profile_reason_identifies_layer_without_duplicate_wrapping() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let project_path = tmp.path().join("groundhog.toml");
+    let project_path = tmp.path().join("thruput.toml");
     fs::write(
         &project_path,
         "default_profile = \"broken\"\n\n[profile.broken]\nnetwork = \"preview\"\n",
     )
     .unwrap();
 
-    let error = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
+    let error = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
     let message = error.to_string();
 
     assert_eq!(
@@ -2628,18 +2630,16 @@ fn invalid_profile_reason_identifies_layer_without_duplicate_wrapping() {
 fn unrelated_global_writes_preserve_ignored_legacy_executor_table() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let legacy =
         "[executor]\npassword = 42 # legacy value is not interpreted\nplugin_token = \"keep\"\n";
     fs::write(global_config_path(&tmp), legacy).unwrap();
-    groundhog_cli::config::initialize_global_profiles().unwrap();
-    groundhog_cli::config::save_default_key("alice").unwrap();
+    thruput_cli::config::initialize_global_profiles().unwrap();
+    thruput_cli::config::save_default_key("alice").unwrap();
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains(legacy));
     assert_eq!(
-        groundhog_cli::config::load_default_key()
-            .unwrap()
-            .as_deref(),
+        thruput_cli::config::load_default_key().unwrap().as_deref(),
         Some("alice")
     );
     unsafe { env::remove_var("XDG_CONFIG_HOME") };

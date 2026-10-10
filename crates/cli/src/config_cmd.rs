@@ -407,7 +407,7 @@ fn missing_default_key_warnings(value: &str) -> Vec<Finding> {
 }
 
 fn environment_profile_warnings() -> Vec<Finding> {
-    let Some(profile) = std::env::var("GROUNDHOG_PROFILE")
+    let Some(profile) = std::env::var("THRUPUT_PROFILE")
         .ok()
         .filter(|profile| !profile.trim().is_empty())
     else {
@@ -417,11 +417,11 @@ fn environment_profile_warnings() -> Vec<Finding> {
         level: FindingLevel::Warn,
         code: "environment_profile_override",
         message: format!(
-            "GROUNDHOG_PROFILE remains set to `{}` and still controls active profile selection",
+            "THRUPUT_PROFILE remains set to `{}` and still controls active profile selection",
             profile.trim()
         ),
         hint: Some(Cow::Borrowed(
-            "unset GROUNDHOG_PROFILE to use the configured default profile",
+            "unset THRUPUT_PROFILE to use the configured default profile",
         )),
     }]
 }

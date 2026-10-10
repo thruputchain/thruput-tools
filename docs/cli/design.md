@@ -73,7 +73,7 @@ Discovery and status stay local and non-mutating; acquisition is a separate
 operation. Installation verifies downloaded content before publishing a complete
 cache entry. Reuse trusts the local cache's completed installation, rather than
 rehashing every file on startup. Version selection, supported hosts, and override
-precedence belong in the [toolchain reference](../../crates/cli/README.md#groundhog-toolchain).
+precedence belong in the [toolchain reference](../../crates/cli/README.md#thruput-toolchain).
 
 A managed node holds a shared usage lease inherited by the child process.
 Cleanup requires the exclusive lock. This protects bundle files even if the CLI

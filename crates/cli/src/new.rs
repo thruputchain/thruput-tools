@@ -34,7 +34,7 @@ pub fn run(
     let interactive = name.is_none() && print.can_prompt();
     let mut wizard = Wizard::new(
         print,
-        "New Groundhog Project",
+        "New Thruput Project",
         "Choose a name, destination, and starting template.",
         ["Project name", "Destination", "Template"],
     );
@@ -47,7 +47,7 @@ pub fn run(
         None => {
             return Err(CliError::InvalidArgument {
                 argument: "project name".into(),
-                message: "pass a project name, or run `groundhog new` in an interactive terminal"
+                message: "pass a project name, or run `thruput new` in an interactive terminal"
                     .into(),
             });
         }
@@ -215,7 +215,7 @@ fn create(
             project_name: name,
             template,
             path: dir,
-            config_path: dir.join("groundhog.toml"),
+            config_path: dir.join("thruput.toml"),
         },
     ))?;
     Ok(warnings)
@@ -243,7 +243,7 @@ fn scaffold_warnings() -> Vec<Finding> {
         ),
         hint: Some(Cow::Borrowed(
             "install rustup from https://rustup.rs and make sure its shims come before \
-             any distro-packaged cargo on PATH, otherwise `groundhog build` will fail",
+             any distro-packaged cargo on PATH, otherwise `thruput build` will fail",
         )),
     }]
 }
@@ -268,7 +268,7 @@ fn render_project_ready(
         ),
         (
             "Config".to_string(),
-            dir.join("groundhog.toml").display().to_string(),
+            dir.join("thruput.toml").display().to_string(),
         ),
     ];
 
@@ -288,7 +288,7 @@ fn render_project_ready(
     if let Some(recipe) = template.and_then(|id| crate::templates::lookup(id).ok()) {
         next_steps.extend(recipe.next_steps.iter().map(|step| (*step).to_owned()));
     } else {
-        next_steps.extend(["cargo test".into(), "groundhog build".into()]);
+        next_steps.extend(["cargo test".into(), "thruput build".into()]);
     }
     print.next_steps(&next_steps);
 }

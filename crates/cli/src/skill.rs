@@ -1,4 +1,4 @@
-//! Read the installed Groundhog skill and manage it through the maintained installer.
+//! Read the installed Thruput skill and manage it through the maintained installer.
 
 use crate::{
     CliError, Print,
@@ -12,21 +12,21 @@ use std::{
     process::{Command, Stdio},
 };
 
-const SKILL_DIRECTORY: &str = ".agents/skills/groundhog";
+const SKILL_DIRECTORY: &str = ".agents/skills/thruput";
 const SKILLS_PACKAGE: &str = "skills@1.7.0";
 const REPOSITORY: &str = "groundhogchain/agent-skills";
 
-/// Errors reading or installing the Groundhog skill.
+/// Errors reading or installing the Thruput skill.
 #[derive(Debug, thiserror::Error)]
 pub enum SkillError {
-    #[error("unknown skill topic `{0}`; run `groundhog skill list`")]
+    #[error("unknown skill topic `{0}`; run `thruput skill list`")]
     Topic(String),
     #[error(
-        "Groundhog skill files are not installed; run `groundhog skill install` in this directory or `groundhog skill install --global`"
+        "Thruput skill files are not installed; run `thruput skill install` in this directory or `thruput skill install --global`"
     )]
     MissingInstallation,
     #[error(
-        "cannot read installed skill file {path}: {source}; check the installation or run `groundhog skill install` again"
+        "cannot read installed skill file {path}: {source}; check the installation or run `thruput skill install` again"
     )]
     Read {
         path: PathBuf,
@@ -40,13 +40,13 @@ pub enum SkillError {
     #[error("Node.js 22.20 or newer is required; installed version is {0}")]
     NodeVersion(String),
     #[error(
-        "Groundhog is not installed from groundhogchain/agent-skills in this scope; run `groundhog skill install` with the same scope"
+        "Thruput is not installed from groundhogchain/agent-skills in this scope; run `thruput skill install` with the same scope"
     )]
     NotInstalled,
     #[error("cannot read the skills installation report: {0}")]
     InstallerReport(serde_json::Error),
     #[error(
-        "skills did not confirm a global Groundhog refresh; check repository access and retry `groundhog skill update --global`"
+        "skills did not confirm a global Thruput refresh; check repository access and retry `thruput skill update --global`"
     )]
     UpdateUnconfirmed,
     #[error("skill installation and updates require network access; remove --offline")]
@@ -251,7 +251,7 @@ fn reported<T: Serialize>(
     }
 }
 
-/// Install or update only Groundhog, using the latest maintained source.
+/// Install or update only Thruput, using the latest maintained source.
 pub fn install(
     update: bool,
     options: &InstallOptions,
@@ -274,9 +274,9 @@ pub fn install(
     match run_installer(update, options, print) {
         Ok(()) => {
             print.success(if update {
-                "Groundhog skill update complete."
+                "Thruput skill update complete."
             } else {
-                "Groundhog skill is installed."
+                "Thruput skill is installed."
             });
             print.json(&CommandResult::new(cmd, report))
         }
@@ -325,7 +325,7 @@ fn run_installer(update: bool, options: &InstallOptions, print: &Print) -> Resul
     if !print.confirm(
         options.yes,
         "skill setup",
-        "Run npx skills to install or update Groundhog guidance?",
+        "Run npx skills to install or update Thruput guidance?",
     )? {
         return Err(SkillError::Cancelled.into());
     }
@@ -338,9 +338,9 @@ fn run_installer(update: bool, options: &InstallOptions, print: &Print) -> Resul
     let mut child = Command::new("npx");
     child.args(["--yes", SKILLS_PACKAGE]);
     if update {
-        child.args(["update", "groundhog", "--project"]);
+        child.args(["update", "thruput", "--project"]);
     } else {
-        child.args(["add", REPOSITORY, "--skill", "groundhog"]);
+        child.args(["add", REPOSITORY, "--skill", "thruput"]);
         if options.global {
             child.arg("--global");
         }
@@ -394,7 +394,7 @@ fn refresh_global() -> Result<(), CliError> {
         "add",
         REPOSITORY,
         "--skill",
-        "groundhog",
+        "thruput",
         "--global",
         "--yes",
         "--json",
@@ -406,7 +406,7 @@ fn refresh_global() -> Result<(), CliError> {
     let reports: Vec<RefreshReport> =
         serde_json::from_slice(&output.stdout).map_err(SkillError::InstallerReport)?;
     if !matches!(reports.as_slice(), [report]
-        if report.name.as_deref() == Some("groundhog")
+        if report.name.as_deref() == Some("thruput")
             && report.status == "installed"
             && report.source.as_deref() == Some(REPOSITORY)
             && report.scope.as_deref() == Some("global"))
@@ -441,7 +441,7 @@ fn require_installed(global: bool) -> Result<(), CliError> {
         serde_json::from_slice(&output.stdout).map_err(SkillError::InstallerReport)?;
     if !installed
         .iter()
-        .any(|skill| skill.name == "groundhog" && skill.source.as_deref() == Some(REPOSITORY))
+        .any(|skill| skill.name == "thruput" && skill.source.as_deref() == Some(REPOSITORY))
     {
         return Err(SkillError::NotInstalled.into());
     }

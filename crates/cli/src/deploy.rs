@@ -34,7 +34,7 @@ mod funding;
 /// Current schema version for `deploy --json` data payloads.
 pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 7;
 
-/// HOG that `groundhog test --integration` transfers to the contract it deploys.
+/// HOG that `thruput test --integration` transfers to the contract it deploys.
 ///
 /// Matches the `100_000_000` storage tokens the removed local dev wallet contract
 /// moved to every address it deployed. hogd charges storage to the contract's
@@ -165,7 +165,7 @@ pub fn run(
                 path: path.to_path_buf(),
             }
         } else {
-            crate::artifacts::resolve_groundhog_artifact(&cwd, artifacts, package)?.artifact
+            crate::artifacts::resolve_thruput_artifact(&cwd, artifacts, package)?.artifact
         };
         let bytes = std::fs::read(&artifact.path)?;
         let report = funding::read(
@@ -325,14 +325,14 @@ pub fn run(
         groundhog_json_rpc_types::receipt::ExecStatus::Ok
     ) {
         // `--alias` wins; otherwise the alias is the package name, which is what
-        // an author reads back with `groundhog call <name>`. There is no third
+        // an author reads back with `thruput call <name>`. There is no third
         // source. `--artifact` names a bare binary and carries no package, so
         // with no `--alias` nothing is recorded: this used to fall back to the
         // project directory name, which agrees with the package name only by
         // luck in a single-package project and disagrees in any workspace.
         //
         // `cwd` is a search start, not a project root: profile_write_path
-        // resolves it to the nearest groundhog.toml, or the global config when
+        // resolves it to the nearest thruput.toml, or the global config when
         // there is none, so an alias deployed outside a project lands in the
         // global profile rather than being dropped. With no profile anywhere,
         // the save reports NoActiveProfile and that surfaces as the warning
@@ -354,7 +354,7 @@ pub fn run(
                     // script can see it.
                     Err(error) => {
                         let message = format!(
-                            "deployed, but recording the alias `{name}` in groundhog.toml \
+                            "deployed, but recording the alias `{name}` in thruput.toml \
                              failed: {error}"
                         );
                         print.warn(&message);
@@ -364,7 +364,7 @@ pub fn run(
                             message,
                             hint: Some(
                                 "the contract is deployed; re-record the alias by hand in \
-                                 groundhog.toml"
+                                 thruput.toml"
                                     .into(),
                             ),
                         });
@@ -427,7 +427,7 @@ fn command_error_for_deploy_receipt(
     if is_insufficient_deploy_funding(receipt, decoded_abort, prepared) {
         let hint = prepared.map_or_else(
             || {
-                "fund the signing wallet before retrying; when the selected profile has a faucet, run `groundhog airdrop <WALLET>`".to_owned()
+                "fund the signing wallet before retrying; when the selected profile has a faucet, run `thruput airdrop <WALLET>`".to_owned()
             },
             |prepared| {
                 let [balance, airdrop] = deploy_funding_commands(prepared);
@@ -484,8 +484,8 @@ fn deploy_funding_commands(prepared: &PreparedDeploy) -> [String; 2] {
     let wallet = render_shell_arg(wallet);
     let profile = render_shell_arg(&format!("--profile={}", prepared.profile_name));
     [
-        format!("groundhog balance {profile} -- {wallet}"),
-        format!("groundhog airdrop {profile} -- {wallet}"),
+        format!("thruput balance {profile} -- {wallet}"),
+        format!("thruput airdrop {profile} -- {wallet}"),
     ]
 }
 
@@ -628,7 +628,7 @@ fn prepare_deploy_plan(
         )
     } else {
         let resolved_artifact =
-            crate::artifacts::resolve_groundhog_artifact(cwd, artifacts, package)?;
+            crate::artifacts::resolve_thruput_artifact(cwd, artifacts, package)?;
         warn_if_stale(
             &resolved_artifact.artifact,
             &resolved_artifact.package_root,
@@ -653,7 +653,7 @@ fn prepare_deploy_plan(
     )
 }
 
-/// Build and sign the deploy transaction `groundhog test --integration` submits.
+/// Build and sign the deploy transaction `thruput test --integration` submits.
 ///
 /// The local-user sender is a native account, so the deployment funds the new
 /// contract with [`INTEGRATION_DEPLOY_FUND_HOG`].
@@ -1023,7 +1023,7 @@ fn report_unverified_native_deploy(
 ) -> Result<(), CliError> {
     let tx_hash = format_tx_hash(&prepared.tx_hash);
     let inspect = format!(
-        "groundhog tx show {tx_hash} {} {}",
+        "thruput tx show {tx_hash} {} {}",
         render_shell_arg(&format!("--profile={}", prepared.profile_name)),
         render_shell_arg(&format!("--rpc-url={}", prepared.rpc_url))
     );
@@ -1070,13 +1070,13 @@ fn warn_if_stale(
 
 fn stale_artifact_warning(kind: ArtifactKind, package_name: &str) -> String {
     format!(
-        "source files or Cargo.toml are newer than the {} artifact — run `groundhog build -p {package_name}` to avoid deploying stale code",
+        "source files or Cargo.toml are newer than the {} artifact — run `thruput build -p {package_name}` to avoid deploying stale code",
         kind.as_str()
     )
 }
 
 /// When the package's build inputs last changed: its `src/` tree and its
-/// manifest. The manifest counts because `[package.metadata.groundhog]`
+/// manifest. The manifest counts because `[package.metadata.thruput]`
 /// changes the artifact (its guest memory) without touching a source file.
 /// `None` when the package has no `src/` directory to speak for.
 fn newest_input_mtime(package_root: &Path) -> Option<std::time::SystemTime> {
@@ -1146,7 +1146,7 @@ mod tests {
         resolve_deployed_address, stale_artifact_warning,
     };
     use super::{INTEGRATION_DEPLOY_FUND_HOG, resolve_native_funding};
-    use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact};
+    use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_thruput_artifact};
     use groundhog_json_rpc_types::{
         BlockHeight,
         hex::{Hex0x, HexBytes},
@@ -1159,7 +1159,7 @@ mod tests {
 
     #[test]
     fn integration_deploy_funds_the_contract_like_the_removed_dev_wallet() {
-        // The dev wallet contract that `groundhog test --integration` used to
+        // The dev wallet contract that `thruput test --integration` used to
         // deploy through transferred 100_000_000 storage tokens (10 HOG) to
         // every new contract before deploying it. A native deployment has to
         // keep doing so: hogd charges storage to the contract's own address,
@@ -1263,7 +1263,7 @@ mod tests {
     fn stale_artifact_warning_uses_current_build_command() {
         let warning = stale_artifact_warning(ArtifactKind::Rv32, "demo-contract");
 
-        assert!(warning.contains("groundhog build -p demo-contract"));
+        assert!(warning.contains("thruput build -p demo-contract"));
         assert!(!warning.contains("--target"));
     }
 
@@ -1411,8 +1411,8 @@ mod tests {
         assert_eq!(
             deploy_funding_commands(&prepared),
             [
-                "groundhog balance --profile=-preview -- -alice",
-                "groundhog airdrop --profile=-preview -- -alice",
+                "thruput balance --profile=-preview -- -alice",
+                "thruput airdrop --profile=-preview -- -alice",
             ]
         );
     }
@@ -1436,7 +1436,7 @@ mod tests {
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
         let custom_target = project_root.join("custom-target");
-        let expected_rv32 = custom_target.join("groundhog").join("demo_contract.rv32a");
+        let expected_rv32 = custom_target.join("thruput").join("demo_contract.rv32a");
         std::fs::create_dir_all(
             expected_rv32
                 .parent()
@@ -1447,7 +1447,7 @@ mod tests {
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let resolved = resolve_groundhog_artifact(&project_root, &artifacts, None)
+        let resolved = resolve_thruput_artifact(&project_root, &artifacts, None)
             .expect("bug: rv32 should resolve from explicit target dir");
 
         assert_eq!(resolved.artifact.path, expected_rv32);
@@ -1462,11 +1462,11 @@ mod tests {
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
         let custom_target = project_root.join("custom-target");
-        let expected_rv32 = custom_target.join("groundhog").join("demo_contract.rv32a");
+        let expected_rv32 = custom_target.join("thruput").join("demo_contract.rv32a");
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let err = resolve_groundhog_artifact(&project_root, &artifacts, None)
+        let err = resolve_thruput_artifact(&project_root, &artifacts, None)
             .expect_err("bug: missing rv32 artifact should error");
 
         assert!(

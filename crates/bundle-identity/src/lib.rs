@@ -12,9 +12,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// Environment override for nonstandard bundle-manifest installations.
-pub const BUNDLE_MANIFEST_ENV: &str = "GROUNDHOG_BUNDLE_MANIFEST";
+pub const BUNDLE_MANIFEST_ENV: &str = "THRUPUT_BUNDLE_MANIFEST";
 
-const BUNDLE_MANIFEST_RELATIVE_PATH: &str = "share/groundhog/bundle-manifest.json";
+const BUNDLE_MANIFEST_RELATIVE_PATH: &str = "share/thruput/bundle-manifest.json";
 const BUNDLE_MANIFEST_SCHEMA: &str = "groundhog-bundle-v1";
 
 /// The exact manifest record that identifies a binary inside a bundle.
@@ -451,7 +451,7 @@ mod tests {
                 }
             },
             "clients": {
-                "groundhog": {
+                "thruput": {
                     "assetRole": asset_role,
                     "component": "groundhog-rpc",
                     "version": version,
@@ -475,7 +475,7 @@ mod tests {
     }
 
     fn client_subject() -> BundleSubject {
-        BundleSubject::client("groundhog", "groundhog-rpc", "cli")
+        BundleSubject::client("thruput", "groundhog-rpc", "cli")
     }
 
     #[test]
@@ -578,13 +578,22 @@ mod tests {
     }
 
     #[test]
-    fn current_packaging_manifest_contract_is_accepted() {
+    fn packaging_manifest_schema_is_valid_but_requires_the_thruput_client() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("bundle-manifest.json");
         fs::write(&path, include_str!("testdata/bundle-manifest-v1.json")).unwrap();
-        let identity = BundleIdentity::from_manifest_path(client_subject(), build(), &path);
+        // The stored producer fixture predates the client rename. Its schema and
+        // digest remain valid; the new CLI must not select its old client entry.
+        let historical = BundleIdentity::from_manifest_path(
+            BundleSubject::client("groundhog", "groundhog-rpc", "cli"),
+            build(),
+            &path,
+        );
+        assert_eq!(historical.release_version(), Some("0.1.25-rc.3"));
+        assert_eq!(historical.mismatch_reason(), None);
 
-        assert_eq!(identity.release_version(), Some("0.1.25-rc.3"));
-        assert_eq!(identity.mismatch_reason(), None);
+        let identity = BundleIdentity::from_manifest_path(client_subject(), build(), &path);
+        assert_eq!(identity.release_version(), None);
+        assert!(identity.mismatch_reason().is_some());
     }
 }

@@ -6,8 +6,8 @@ use std::path::Path;
 /// SDK version exact-pinned into both scaffold target dependencies.
 ///
 /// Generated projects resolve outside this workspace, so this must be a
-/// version published to the Groundhog registry, and one whose raw spec
-/// format this CLI reads — otherwise `groundhog build` refuses the fresh
+/// version published to the Thruput registry, and one whose raw spec
+/// format this CLI reads — otherwise `thruput build` refuses the fresh
 /// scaffold at the preflight. Bump together with
 /// [`SCAFFOLD_TOOLCHAIN_CHANNEL`] when a new SDK release is validated on a
 /// newer nightly. The CI `cli-smoke` job builds and tests a fresh scaffold
@@ -79,7 +79,7 @@ const SCAFFOLD_DEPENDENCIES: &[&str] = &["groundhog_json_rpc_client", "sdk", "to
 /// Subdirectories Cargo creates under `target/<triple>/<profile>`.
 ///
 /// The scaffold's RV32 `[[bin]]` target takes the snake-case package name, and
-/// `groundhog build` reads the ELF from `release/<snake_name>` — which one of
+/// `thruput build` reads the ELF from `release/<snake_name>` — which one of
 /// these turns into a directory.
 const CARGO_BUILD_DIRS: &[&str] = &["build", "deps", "examples", "incremental"];
 
@@ -119,7 +119,7 @@ fn reserved_name_reason(name: &str) -> Option<&'static str> {
     }
     if CARGO_BUILD_DIRS.contains(&crate_name.as_str()) {
         return Some(
-            "conflicts with one of Cargo's build directory names, so `groundhog build` could \
+            "conflicts with one of Cargo's build directory names, so `thruput build` could \
              not find the RV32 artifact",
         );
     }
@@ -131,7 +131,7 @@ fn reserved_name_reason(name: &str) -> Option<&'static str> {
     None
 }
 
-/// Check that `name` can be a Groundhog project name.
+/// Check that `name` can be a Thruput project name.
 ///
 /// Rejects names a generated project could not build under, so the failure
 /// lands on the argument rather than on the first `cargo` invocation inside a

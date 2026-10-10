@@ -3,7 +3,7 @@ use groundhog_json_rpc_types::hex::{HexBytes, Topic};
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
 
-use groundhog_cli::events_json::{EventDecodeStatus, EventListItemReport};
+use thruput_cli::events_json::{EventDecodeStatus, EventListItemReport};
 
 fn tx_hash(byte: u8) -> TxHash {
     serde_json::from_value(serde_json::Value::String(format!(

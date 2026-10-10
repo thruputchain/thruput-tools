@@ -74,7 +74,7 @@ re-derive protocol primitives in the CLI.
   cached bound violations against a fresh tip before rejecting; a missing
   reading must not block submission. Use only stated config values or defaults
   fixed by the protocol, never unstated hogd implementation fallbacks.
-- `groundhog build` is offline and must not enforce a target chain's limits.
+- `thruput build` is offline and must not enforce a target chain's limits.
   Keep chain admission checks at submission.
 - Generate OpenRPC/JSON Schema from Rust traits and types. Never hand-edit
   `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json` or maintain
@@ -129,7 +129,7 @@ identity requires a validated installed bundle matching the serving build.
 - Declare `CliError` code/hint/details metadata beside each variant using
   `ErrorMeta` attributes. Avoid `CliError::Other` for routine user failures.
   Regenerate intentional metadata changes with
-  `UPDATE_SNAPSHOTS=1 cargo test -p groundhog-cli --test error_metadata`,
+  `UPDATE_SNAPSHOTS=1 cargo test -p thruput-cli --test error_metadata`,
   inspect the diff, then rerun without the update flag. Computed metadata
   needs value-specific tests; record deliberately shared codes in `SHARED_CODES`.
 - Never print or log private signing material. Do not pass credentials in
@@ -156,7 +156,7 @@ Report checks actually run and any environment blockers.
   sibling `<module>/tests.rs` declared with `#[cfg(test)] mod tests;`.
   Integration tests go in each crate's `tests/`. Use
   `#[tokio::test]` for async tests and serialize environment-mutating tests
-  with `serial_test`. CLI binary tests use `env!("CARGO_BIN_EXE_groundhog")`.
+  with `serial_test`. CLI binary tests use `env!("CARGO_BIN_EXE_thruput")`.
 - Keep generated artifacts under snapshot tests plus structural invariants.
   Regenerate intentional changes with the relevant `UPDATE_SNAPSHOTS=1` test,
   inspect the diff, and rerun without that variable so the comparison runs.
@@ -166,7 +166,7 @@ Report checks actually run and any environment blockers.
 - Process smokes require a compatible real `hog-devnode`, registry access,
   localhost access, and writable runtime/cache directories. Use absolute
   binary paths. Run the applicable script with
-  `GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode`:
+  `THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode`:
 
   | Change | Script |
   | --- | --- |
@@ -185,10 +185,10 @@ Report checks actually run and any environment blockers.
 ## Agent guidance and releases
 
 For Groundhog programming-model or developer-workflow changes, load the
-installed guidance with `cargo run -p groundhog-cli -- skill show`, then read
+installed guidance with `cargo run -p thruput-cli -- skill show`, then read
 the relevant reference with `skill show <topic>`. Install it first with
-`groundhog skill install` if absent. If building is unavailable, read the files
-under `.agents/skills/groundhog` in the project or home directory.
+`thruput skill install` if absent. If building is unavailable, read the files
+under `.agents/skills/thruput` in the project or home directory.
 Maintain skill content in `groundhogchain/agent-skills`; do not copy it into
 this repository or release artifacts. Skill updates are independent of CLI
 releases. Verify guidance against current APIs and installed dependencies.

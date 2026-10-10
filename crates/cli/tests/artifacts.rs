@@ -1,12 +1,12 @@
-use groundhog_cli::CliError;
-use groundhog_cli::artifacts::{
-    ArtifactKind, ArtifactOptions, ManifestFlags, cargo_rv32_elf_output_path,
-    ensure_no_target_dir_passthrough_conflicts, groundhog_rv32_metadata_output_path,
-    groundhog_rv32_output_path, infer_artifact_kind,
-};
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
+use thruput_cli::CliError;
+use thruput_cli::artifacts::{
+    ArtifactKind, ArtifactOptions, ManifestFlags, cargo_rv32_elf_output_path,
+    ensure_no_target_dir_passthrough_conflicts, infer_artifact_kind,
+    thruput_rv32_metadata_output_path, thruput_rv32_output_path,
+};
 
 #[test]
 fn cargo_rv32_elf_output_path_uses_cargo_layout() {
@@ -19,20 +19,20 @@ fn cargo_rv32_elf_output_path_uses_cargo_layout() {
 }
 
 #[test]
-fn groundhog_rv32_output_paths_use_flat_groundhog_layout() {
+fn thruput_rv32_output_paths_use_flat_groundhog_layout() {
     let artifact =
-        groundhog_rv32_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract-rv32");
-    let metadata = groundhog_rv32_metadata_output_path(
+        thruput_rv32_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract-rv32");
+    let metadata = thruput_rv32_metadata_output_path(
         PathBuf::from("/tmp/out").as_path(),
         "demo-contract-rv32",
     );
     assert_eq!(
         artifact,
-        PathBuf::from("/tmp/out/groundhog/demo_contract_rv32.rv32a")
+        PathBuf::from("/tmp/out/thruput/demo_contract_rv32.rv32a")
     );
     assert_eq!(
         metadata,
-        PathBuf::from("/tmp/out/groundhog/demo_contract_rv32.rv32.json")
+        PathBuf::from("/tmp/out/thruput/demo_contract_rv32.rv32.json")
     );
 }
 

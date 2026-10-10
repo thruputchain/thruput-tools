@@ -15,7 +15,7 @@ use super::read::{
 };
 use crate::CliError;
 
-/// Project profile loaded from `groundhog.toml`.
+/// Project profile loaded from `thruput.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectProfile {
     #[serde(default)]
@@ -89,7 +89,7 @@ pub struct SavedWalletBinding {
     pub account_nonce: Option<u64>,
 }
 
-/// Active project profile resolved from `groundhog.toml`.
+/// Active project profile resolved from `thruput.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ResolvedProfile {
     pub name: String,
@@ -229,7 +229,7 @@ fn profile_name_for_write(start: &Path, explicit: Option<&str>) -> Result<String
         .ok_or(CliError::NoActiveProfile)
 }
 
-/// Find `groundhog.toml` by walking up from `start`.
+/// Find `thruput.toml` by walking up from `start`.
 pub fn find_project_config(start: &Path) -> Option<PathBuf> {
     let mut dir = if start.is_file() {
         start
@@ -240,7 +240,7 @@ pub fn find_project_config(start: &Path) -> Option<PathBuf> {
     };
 
     loop {
-        let candidate = dir.join("groundhog.toml");
+        let candidate = dir.join("thruput.toml");
         if candidate.exists() {
             return Some(candidate);
         }
@@ -250,7 +250,7 @@ pub fn find_project_config(start: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Load `groundhog.toml` if one exists.
+/// Load `thruput.toml` if one exists.
 pub fn load_project_profiles(
     start: &Path,
 ) -> Result<Option<BTreeMap<String, ProjectProfile>>, CliError> {
@@ -268,7 +268,7 @@ pub fn load_project_profiles(
 
 /// Persist a contract alias under the selected project profile.
 ///
-/// Creates `groundhog.toml` if it does not already exist.
+/// Creates `thruput.toml` if it does not already exist.
 /// Uses `toml_edit` for in-place edits that preserve user
 /// comments and formatting.
 /// Validate a `--alias` value while parsing arguments.
@@ -335,7 +335,7 @@ pub fn save_profile_contract_alias(
 
 /// Persist a wallet address under the selected project profile.
 ///
-/// Creates `groundhog.toml` if it does not already exist.
+/// Creates `thruput.toml` if it does not already exist.
 /// Uses `toml_edit` for in-place edits that preserve user
 /// comments and formatting.
 pub fn save_profile_wallet_address(
@@ -789,7 +789,7 @@ pub fn save_profile_default_wallet(
 
 /// Resolve the effective default key for the active profile.
 ///
-/// Prefers `groundhog.toml` when the profile specifies
+/// Prefers `thruput.toml` when the profile specifies
 /// `default_key`, otherwise falls back to the global default
 /// selected via `keys use`. No selection leaves the default key unset.
 pub fn resolve_default_key(
@@ -962,7 +962,7 @@ mod tests {
     #[test]
     fn confirmed_wallet_removal_rejects_changed_config() {
         let temp = tempfile::TempDir::new().unwrap();
-        let path = temp.path().join("groundhog.toml");
+        let path = temp.path().join("thruput.toml");
         let original = "[profile.local.wallets.alice]\naddress = '0x00'\n";
         std::fs::write(&path, original).unwrap();
         let prepared = PreparedWalletRemoval {
@@ -989,7 +989,7 @@ mod tests {
     #[test]
     fn confirmed_wallet_removal_rejects_changed_inherited_config() {
         let temp = tempfile::TempDir::new().unwrap();
-        let path = temp.path().join("groundhog.toml");
+        let path = temp.path().join("thruput.toml");
         let peer_path = temp.path().join("config.toml");
         let original = "[profile.local.wallets.alice]\naddress = '0x00'\n";
         let inherited = "[profile.local]\ndefault_wallet = 'global'\n";

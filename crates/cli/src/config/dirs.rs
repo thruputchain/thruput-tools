@@ -9,31 +9,31 @@ pub fn home_dir() -> Result<PathBuf, CliError> {
         .map_err(|_| CliError::Other("HOME environment variable not set".into()))
 }
 
-/// Returns the Groundhog configuration directory.
+/// Returns the Thruput configuration directory.
 ///
-/// Uses `$XDG_CONFIG_HOME/groundhog/` if set,
-/// otherwise `~/.config/groundhog/`.
+/// Uses `$XDG_CONFIG_HOME/thruput/` if set,
+/// otherwise `~/.config/thruput/`.
 pub fn config_dir() -> Result<PathBuf, CliError> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        Ok(PathBuf::from(xdg).join("groundhog"))
+        Ok(PathBuf::from(xdg).join("thruput"))
     } else {
-        Ok(home_dir()?.join(".config").join("groundhog"))
+        Ok(home_dir()?.join(".config").join("thruput"))
     }
 }
 
-/// Returns the Groundhog cache directory.
+/// Returns the Thruput cache directory.
 ///
-/// Uses `$XDG_CACHE_HOME/groundhog/` if set,
-/// otherwise `~/.cache/groundhog/`.
+/// Uses `$XDG_CACHE_HOME/thruput/` if set,
+/// otherwise `~/.cache/thruput/`.
 pub fn cache_dir() -> Result<PathBuf, CliError> {
     if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        Ok(PathBuf::from(xdg).join("groundhog"))
+        Ok(PathBuf::from(xdg).join("thruput"))
     } else {
-        Ok(home_dir()?.join(".cache").join("groundhog"))
+        Ok(home_dir()?.join(".cache").join("thruput"))
     }
 }
 
-/// Returns the Groundhog key directory.
+/// Returns the Thruput key directory.
 ///
 /// Uses `<config_dir>/keys/`.
 pub fn keys_dir() -> Result<PathBuf, CliError> {

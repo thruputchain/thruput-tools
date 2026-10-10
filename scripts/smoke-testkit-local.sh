@@ -9,12 +9,12 @@
 # script just builds the fixture and sets the environment.)
 #
 # Required environment:
-#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode (must support native deploy funding + initialization)
+#   THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode (must support native deploy funding + initialization)
 #
 # Optional environment:
-#   GROUNDHOG_BINARY=/path/to/groundhog
+#   THRUPUT_BINARY=/path/to/thruput
 #   GROUNDHOG_EXAMPLES_ROOT=/path/to/groundhog-examples
-#   ARTIFACT_ROOT=/path/to/prebuilt/target/groundhog
+#   ARTIFACT_ROOT=/path/to/prebuilt/target/thruput
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
 #   GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT=/path/to/devnode/built_contracts
 #   KEEP_WORKDIR=1
@@ -61,8 +61,8 @@ if matches:
 ' <<< "$output"
 }
 
-[[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]] || die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
-DEVNODE_BINARY="$(expand_user_path "$GROUNDHOG_DEVNODE_BINARY")"
+[[ -n "${THRUPUT_DEVNODE_BINARY:-}" ]] || die "set THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode"
+DEVNODE_BINARY="$(expand_user_path "$THRUPUT_DEVNODE_BINARY")"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/groundhog-testkit-local.XXXXXX")"
@@ -81,29 +81,29 @@ if [[ -n "${ARTIFACT_ROOT:-}" ]]; then
 else
     EXAMPLES_ROOT="$(find_examples_root)"
     [[ -n "$EXAMPLES_ROOT" ]] || die "set GROUNDHOG_EXAMPLES_ROOT or provide a prebuilt ARTIFACT_ROOT"
-    if [[ -n "${GROUNDHOG_BINARY:-}" ]]; then
-        GROUNDHOG_BINARY="$(expand_user_path "${GROUNDHOG_BINARY}")"
-        log "using groundhog binary: $GROUNDHOG_BINARY"
+    if [[ -n "${THRUPUT_BINARY:-}" ]]; then
+        THRUPUT_BINARY="$(expand_user_path "${THRUPUT_BINARY}")"
+        log "using thruput binary: $THRUPUT_BINARY"
     else
-        log "building groundhog"
-        cargo build -p groundhog-cli
-        GROUNDHOG_BINARY="$REPO_ROOT/target/debug/groundhog"
+        log "building thruput"
+        cargo build -p thruput-cli
+        THRUPUT_BINARY="$REPO_ROOT/target/debug/thruput"
     fi
-    [[ -x "$GROUNDHOG_BINARY" ]] || die "groundhog binary is not executable: $GROUNDHOG_BINARY"
+    [[ -x "$THRUPUT_BINARY" ]] || die "thruput binary is not executable: $THRUPUT_BINARY"
 
     EXAMPLES_TARGET="$WORKDIR/groundhog-examples-target"
     log "building groundhog-examples caller-counter fixture"
     (
         cd "$EXAMPLES_ROOT"
-        "$GROUNDHOG_BINARY" build -p caller-counter --target-dir "$EXAMPLES_TARGET"
+        "$THRUPUT_BINARY" build -p caller-counter --target-dir "$EXAMPLES_TARGET"
     )
-    ARTIFACT_ROOT="$EXAMPLES_TARGET/groundhog"
+    ARTIFACT_ROOT="$EXAMPLES_TARGET/thruput"
 fi
 [[ -f "$ARTIFACT_ROOT/caller_counter.rv32a" ]] || die "caller_counter.rv32a not found under $ARTIFACT_ROOT"
 
 HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 ENV_ARGS=(
-    "GROUNDHOG_DEVNODE_BINARY=$DEVNODE_BINARY"
+    "THRUPUT_DEVNODE_BINARY=$DEVNODE_BINARY"
     "GROUNDHOG_TESTKIT_ARTIFACT_ROOT=$ARTIFACT_ROOT"
 )
 if [[ -n "$HOGD_PROTOCOL" ]]; then

@@ -24,8 +24,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-const HEALTH: &str = "__groundhog_docs/health";
-const STOP: &str = "__groundhog_docs/stop";
+const HEALTH: &str = "__thruput_docs/health";
+const STOP: &str = "__thruput_docs/stop";
 const HANDOFF: &str = "ready\n";
 
 /// A capability used only by the managed process and its parent controller.
@@ -55,12 +55,12 @@ pub(crate) fn routes(control: Option<Control>, shutdown: Arc<tokio::sync::Notify
                 if authorized(&headers, &health_token) {
                     (
                         StatusCode::NO_CONTENT,
-                        [("x-groundhog-docs-instance", identity)],
+                        [("x-thruput-docs-instance", identity)],
                     )
                 } else {
                     (
                         StatusCode::FORBIDDEN,
-                        [("x-groundhog-docs-instance", String::new())],
+                        [("x-thruput-docs-instance", String::new())],
                     )
                 }
             }),
@@ -128,7 +128,7 @@ pub enum Action {
     Stop,
 }
 
-/// Manage one background instance per Groundhog cache directory.
+/// Manage one background instance per Thruput cache directory.
 pub fn run(
     action: Action,
     dir: Option<&Path>,
@@ -267,7 +267,7 @@ fn running(state: &State) -> Result<bool, CliError> {
             if response.status() == StatusCode::NO_CONTENT
                 && response
                     .headers()
-                    .get("x-groundhog-docs-instance")
+                    .get("x-thruput-docs-instance")
                     .and_then(|value| value.to_str().ok())
                     == Some(
                         hex::encode(Sha256::digest(state.control.token.as_bytes())).as_str(),
@@ -345,7 +345,7 @@ fn manage(action: Action, dir: Option<&Path>, port: u16) -> Result<ServiceReport
                     || state.report.cli_version != env!("CARGO_PKG_VERSION")
                 {
                     return Err(service_error(
-                        "a different docs configuration is running; run `groundhog docs stop` first",
+                        "a different docs configuration is running; run `thruput docs stop` first",
                     ));
                 }
                 return Ok(report(state, true));

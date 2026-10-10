@@ -15,7 +15,7 @@ config.hog_devnode_binary = Some("/path/to/supporting/hog-devnode".into());
 config.contract_artifact_directories.push("/path/to/built_contracts".into());
 let scenario = Scenario::builder("counter-test")
     .network(NetworkConfig::local(config))
-    .artifact("counter", "target/groundhog/counter.rv32a")
+    .artifact("counter", "target/thruput/counter.rv32a")
     .build()
     .await?;
 
@@ -55,4 +55,4 @@ Local funding uses `groundhog_fundAccount`. The network handle retains each requ
 The live tests in `tests/contract_smoke.rs` cover atomic initialization,
 registration and hash-only deployment, native calls, manual blocks, and recovery
 across scenario runs. Run `scripts/smoke-testkit-local.sh` with a supporting
-`GROUNDHOG_DEVNODE_BINARY` and a built caller-counter fixture.
+`THRUPUT_DEVNODE_BINARY` and a built caller-counter fixture.

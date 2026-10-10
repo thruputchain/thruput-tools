@@ -28,7 +28,7 @@ pub struct NewProfileOptions {
     pub select: bool,
 }
 
-/// Stable JSON data for `groundhog config new`.
+/// Stable JSON data for `thruput config new`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigNewReport {
@@ -41,7 +41,7 @@ pub struct ConfigNewReport {
     pub selected: bool,
 }
 
-/// Stable JSON data for `groundhog config rm`.
+/// Stable JSON data for `thruput config rm`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigRemoveReport {
@@ -691,7 +691,7 @@ mod tests {
     #[test]
     fn confirmed_removal_rejects_profile_replaced_after_prompt() {
         let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("groundhog.toml");
+        let path = tmp.path().join("thruput.toml");
         fs::write(&path, "[profile.staging]\nnetwork = \"devnet\"\n").unwrap();
         let confirmation = prepare_profile_removal(tmp.path(), "staging", false, true).unwrap();
         let replacement = "[profile.staging]\nnetwork = \"mainnet\"\n";

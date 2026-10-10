@@ -12,10 +12,10 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
-use groundhog_cli::error::CliError;
 use groundhog_json_rpc_types::error::TxInvalidDetail;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
+use thruput_cli::error::CliError;
 
 const SNAPSHOT_PATH: &str = "tests/snapshots/error-metadata.txt";
 

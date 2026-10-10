@@ -201,7 +201,7 @@ fn import_default_selection(name: &str) -> (Option<bool>, Vec<crate::checks::Fin
                 ),
                 hint: Some(
                     format!(
-                        "After fixing configuration, run `groundhog keys use {name}`; \
+                        "After fixing configuration, run `thruput keys use {name}`; \
                          do not import the key again"
                     )
                     .into(),

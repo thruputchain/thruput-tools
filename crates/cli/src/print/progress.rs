@@ -157,7 +157,7 @@ impl Task {
             let (tx, rx) = mpsc::sync_channel(64);
             let phase = terminal_safe(phase);
             if let Ok(handle) = thread::Builder::new()
-                .name("groundhog-output".into())
+                .name("thruput-output".into())
                 .spawn(move || Worker::new(policy, phase, started).run(&rx))
             {
                 worker = Some(handle);

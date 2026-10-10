@@ -21,7 +21,7 @@ fn skill_setup_collects_consent_before_forwarding_the_installer_ui() {
         ("git", "#!/bin/sh\nexit 0\n"),
         (
             "npx",
-            "#!/bin/sh\nif [ \"$3\" = list ]; then\n  if [ \"$SKILL_UI_GLOBAL\" = 1 ] && [ \"$5\" != --global ]; then\n    printf '[]\\n'\n  else\n    printf '%s\\n' '[{\"name\":\"groundhog\",\"source\":\"groundhogchain/agent-skills\"}]'\n  fi\n  exit 0\nfi\nprintf 'installer-agent-selection: '\nread -r agent\nprintf '%s' \"$agent\" > selected-agent\n",
+            "#!/bin/sh\nif [ \"$3\" = list ]; then\n  if [ \"$SKILL_UI_GLOBAL\" = 1 ] && [ \"$5\" != --global ]; then\n    printf '[]\\n'\n  else\n    printf '%s\\n' '[{\"name\":\"thruput\",\"source\":\"groundhogchain/agent-skills\"}]'\n  fi\n  exit 0\nfi\nprintf 'installer-agent-selection: '\nread -r agent\nprintf '%s' \"$agent\" > selected-agent\n",
         ),
     ] {
         let path = root.path().join(name);
@@ -29,7 +29,7 @@ fn skill_setup_collects_consent_before_forwarding_the_installer_ui() {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
     for (approved, global) in [(false, false), (true, false), (true, true)] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
         command
             .args(["skill", "install", "--no-ui"])
             .env("SKILL_UI_GLOBAL", if global { "1" } else { "0" })
@@ -71,7 +71,7 @@ impl Query {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let rpc = format!("http://{}", listener.local_addr().unwrap());
-        fs::write(root.path().join("groundhog.toml"), format!(
+        fs::write(root.path().join("thruput.toml"), format!(
             "default_profile = \"local\"\n[profile.local]\nrpc_url = \"{rpc}\"\ndefault_wallet = \"primary\"\n[profile.local.contracts]\ncounter = \"{address}\"\n[profile.local.wallets.primary]\naddress = \"{address}\"\nowner_public_key = \"{address}\"\n",
             address = address(),
         )).unwrap();
@@ -121,15 +121,15 @@ impl Query {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
         command
             .args(args)
             .current_dir(self.root.path())
             .env("XDG_CONFIG_HOME", self.root.path().join("config"))
             .env("TERM", "xterm-256color")
             .env("LC_ALL", "C.UTF-8")
-            .env_remove("GROUNDHOG_PROFILE")
-            .env_remove("GROUNDHOG_BUNDLE_MANIFEST")
+            .env_remove("THRUPUT_PROFILE")
+            .env_remove("THRUPUT_BUNDLE_MANIFEST")
             .env_remove("NO_COLOR")
             .env_remove("CARGO_TARGET_DIR");
         command
@@ -159,7 +159,7 @@ const VIEW: &[&str] = &["view", "counter", "0x0102030405060708"];
 const SLOW: Duration = Duration::from_millis(500);
 
 fn init_command(root: &TempDir) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
     command
         .arg("init")
         .current_dir(root.path())
@@ -167,7 +167,7 @@ fn init_command(root: &TempDir) -> Command {
         .env("XDG_CACHE_HOME", root.path().join("cache"))
         .env("TERM", "xterm-256color")
         .env("LC_ALL", "C.UTF-8")
-        .env_remove("GROUNDHOG_PROFILE")
+        .env_remove("THRUPUT_PROFILE")
         .env_remove("NO_COLOR");
     command
 }
@@ -182,7 +182,7 @@ fn init_refreshes_the_step_overview_and_keeps_canonical_prompts() {
     });
     let screen = pty.parser.screen().contents();
     for text in [
-        "Groundhog Setup",
+        "Thruput Setup",
         "Progress",
         "Environment",
         "Profiles",
@@ -241,7 +241,7 @@ fn init_refresh_is_optional_and_interrupts_leave_terminal_input_intact() {
 #[test]
 fn docs_shutdown_is_a_short_message_on_its_own_line() {
     let root = TempDir::new().unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
     command
         .args(["docs", "--port", "0"])
         .current_dir(root.path())

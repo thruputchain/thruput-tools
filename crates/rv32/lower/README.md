@@ -5,7 +5,7 @@ Groundhog **v5 RV32 artifact** (`.rv32a`).
 
 This focused lowerer validates the contract ELF and emits the canonical RV32
 artifact format. It has two entrypoints: a standalone `rv32-lower` binary for
-scripts and interop checks, and a library API used by `groundhog build`. The
+scripts and interop checks, and a library API used by `thruput build`. The
 artifact format has exactly one Rust implementation.
 
 ## Usage
@@ -19,7 +19,7 @@ rv32-lower --elf target/riscv32im-unknown-none-elf/release/<contract>-rv32 \
            --out <contract>.rv32a
 ```
 
-`groundhog build` invokes the same lowerer in-process through the
+`thruput build` invokes the same lowerer in-process through the
 library API; use the binary directly when you need a scriptable lower-level
 tool.
 
@@ -91,13 +91,13 @@ hogd Spike oracle).
 
 See `hogd/docs/rv32/rv32-author-toolchain.md` for the full design.
 
-It is **published to the private `groundhog` registry** and consumable two ways:
+It is **published to the private `thruput` registry** and consumable two ways:
 
-- **as a binary** — `cargo install --registry groundhog groundhog-rv32-lower`
+- **as a binary** — `cargo install --registry thruput groundhog-rv32-lower`
   puts `rv32-lower` on `$PATH`; hogd's smoke tests and other scripts can call it
   directly;
-- **as a library** — add `groundhog-rv32-lower` (registry `groundhog`) as a
-  dependency and call `lower()` / `metadata` directly. `groundhog build` uses
+- **as a library** — add `groundhog-rv32-lower` (registry `thruput`) as a
+  dependency and call `lower()` / `metadata` directly. `thruput build` uses
   this path. Add
   `groundhog-rv32-artifact` for direct access to format constants, writer, and
   validator APIs.

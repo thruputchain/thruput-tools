@@ -36,7 +36,7 @@ const NETWORK_DESCRIPTOR_HINT: &str = "check that the selected profile's RPC and
 
 /// Next step for a toolchain bundle that could not be installed or fetched.
 const TOOLCHAIN_RETRY_HINT: &str =
-    "check the artifact source and cache permissions, then retry `groundhog toolchain install`";
+    "check the artifact source and cache permissions, then retry `thruput toolchain install`";
 
 /// All errors returned by CLI commands.
 ///
@@ -71,7 +71,7 @@ pub enum CliError {
     #[details]
     WalletBindingConflict { wallet_name: String },
     #[error("wallet create no longer accepts --prefund")]
-    #[hint("create the empty wallet first, then run groundhog airdrop <wallet-name>")]
+    #[hint("create the empty wallet first, then run thruput airdrop <wallet-name>")]
     WalletCreatePrefundUnsupported,
     #[error("native deployment requires an explicit --fund <HOG> amount")]
     #[hint(
@@ -101,7 +101,7 @@ pub enum CliError {
         "every contract build runs as \
          `cargo --config .cargo/contract.toml`; create that file \
          containing `[unstable]` and \
-         `build-std = [\"core\", \"alloc\"]`, or run `groundhog new` \
+         `build-std = [\"core\", \"alloc\"]`, or run `thruput new` \
          to scaffold a project. Do not put `[target.*]` rustflags in \
          it — cargo joins those with `.cargo/config.toml`, so a flag \
          in both files is passed twice"
@@ -117,7 +117,7 @@ pub enum CliError {
     #[error("could not determine package — specify one with `-p <name>`")]
     #[hint(
         "run from inside a package directory, pass `-p <package>` to select one, \
-         or pass `--workspace` to `groundhog test` to test every member with a \
+         or pass `--workspace` to `thruput test` to test every member with a \
          `test_rv32` target"
     )]
     PackageRequired,
@@ -135,9 +135,7 @@ pub enum CliError {
     )]
     Rv32ElfNotFound(String),
     #[error("expected {kind} artifact not found at {path}")]
-    #[hint(
-        "run `groundhog build` first to produce the {kind} artifact, or pass `--artifact <path>`"
-    )]
+    #[hint("run `thruput build` first to produce the {kind} artifact, or pass `--artifact <path>`")]
     ArtifactNotFound { kind: &'static str, path: String },
     #[error("unsupported artifact extension for {0}; expected .rv32a")]
     #[hint("pass a `.rv32a` artifact path")]
@@ -177,7 +175,7 @@ pub enum CliError {
     },
     #[error("unknown template: {0}")]
     #[hint(
-        "run `groundhog templates list` for available templates; omit --template for a minimal contract"
+        "run `thruput templates list` for available templates; omit --template for a minimal contract"
     )]
     UnknownTemplate(String),
     #[error(transparent)]
@@ -185,13 +183,13 @@ pub enum CliError {
     Io(#[from] std::io::Error),
     #[error("profile `{0}` not found in project or global config")]
     #[hint(
-        "create it with `groundhog config new {0} --network <NETWORK>`, or switch to \
-         an existing one with `--profile` or `GROUNDHOG_PROFILE`"
+        "create it with `thruput config new {0} --network <NETWORK>`, or switch to \
+         an existing one with `--profile` or `THRUPUT_PROFILE`"
     )]
     ProfileNotFound(String),
     #[error("profile `{profile}` not found in {scope} config")]
     #[hint(
-        "create the profile with `groundhog config new {} --network <NETWORK> --{scope}`",
+        "create the profile with `thruput config new {} --network <NETWORK> --{scope}`",
         render_shell_arg(profile)
     )]
     #[details]
@@ -201,7 +199,7 @@ pub enum CliError {
     },
     #[error("profile `{profile}` already exists in {scope} config")]
     #[hint(
-        "update it with `groundhog config set <FIELD> <VALUE> --profile={} --{scope}`",
+        "update it with `thruput config set <FIELD> <VALUE> --profile={} --{scope}`",
         render_shell_arg(profile)
     )]
     #[details]
@@ -211,7 +209,7 @@ pub enum CliError {
     },
     #[error("no active profile selected")]
     #[hint(
-        "select a profile with `--profile` or `GROUNDHOG_PROFILE`, or set default_profile in \
+        "select a profile with `--profile` or `THRUPUT_PROFILE`, or set default_profile in \
          project or global config"
     )]
     NoActiveProfile,
@@ -246,7 +244,7 @@ pub enum CliError {
         message: String,
     },
     #[error("project config not found")]
-    #[hint("run from inside a Groundhog project or remove `--project`")]
+    #[hint("run from inside a Thruput project or remove `--project`")]
     ProjectConfigUnavailable,
     #[error("`--global` and `--project` cannot be used together")]
     #[hint("choose exactly one of `--global` or `--project`")]
@@ -264,13 +262,13 @@ pub enum CliError {
     ConfigChangedDuringConfirmation { path: std::path::PathBuf },
     #[error("credential password cannot be empty")]
     #[hint(
-        "rerun `groundhog init` and provide a password; the username \
+        "rerun `thruput init` and provide a password; the username \
          is optional"
     )]
     CredentialsEmpty,
     #[error("unsupported OS: {0}")]
     #[hint(
-        "`groundhog test` currently supports macOS and \
+        "`thruput test` currently supports macOS and \
          Linux host targets"
     )]
     UnsupportedOs(String),
@@ -298,12 +296,12 @@ pub enum CliError {
     #[error("key `{0}` already exists")]
     #[hint(
         "use a different name, or remove the existing key \
-         with `groundhog keys rm -- {}`",
+         with `thruput keys rm -- {}`",
         render_shell_arg(_0)
     )]
     KeyExists(String),
     #[error("key `{0}` not found")]
-    #[hint("list available keys with `groundhog keys ls`")]
+    #[hint("list available keys with `thruput keys ls`")]
     KeyNotFound(String),
     #[error("key name cannot be empty")]
     #[hint(text = KEY_NAME_HINT)]
@@ -323,21 +321,21 @@ pub enum CliError {
     )]
     InvalidSecretSeed,
     #[error("`--json` is not supported for `{0}`")]
-    #[hint("run `groundhog {0}` without `--json`")]
+    #[hint("run `thruput {0}` without `--json`")]
     JsonUnsupported(&'static str),
     #[error("not yet implemented")]
     #[hint("this command is planned for a future release")]
     NotImplemented,
     #[error("integration test target not found at {0}")]
-    #[hint("create `tests/integration.rs` before running `groundhog test --integration`")]
+    #[hint("create `tests/integration.rs` before running `thruput test --integration`")]
     IntegrationTestNotFound(String),
     #[error("invalid test options: {0}")]
-    #[hint("remove the conflicting `groundhog test` option and rerun the command")]
+    #[hint("remove the conflicting `thruput test` option and rerun the command")]
     InvalidTestOptions(String),
     #[error("no workspace package declares a `test_rv32` test target under {0}")]
     #[hint(
         "`--workspace` tests the members that declare a `tests/test_rv32.rs` target, \
-         as `groundhog new` scaffolds; run `groundhog test -p <package>` to test one \
+         as `thruput new` scaffolds; run `thruput test -p <package>` to test one \
          member"
     )]
     NoWorkspaceTestPackages(String),
@@ -348,18 +346,18 @@ pub enum CliError {
     )]
     #[hint(
         "see each package's test output above; rerun one package with \
-         `groundhog test -p <package>`, or `groundhog test --workspace --rerun` to \
+         `thruput test -p <package>`, or `thruput test --workspace --rerun` to \
          run only the recorded failures"
     )]
     #[details]
     WorkspaceTestsFailed { failed: Vec<String>, total: usize },
     #[error(
         "`{0}` is set in the environment, so cargo would ignore the project's \
-         `.cargo/config.toml` target rustflags (Groundhog linker and codegen flags) and \
+         `.cargo/config.toml` target rustflags (Thruput linker and codegen flags) and \
          produce a broken artifact"
     )]
     #[hint(
-        "unset it for this build (e.g. `env -u {0} groundhog build`); to add extra \
+        "unset it for this build (e.g. `env -u {0} thruput build`); to add extra \
          rustflags, append them to the `[target.*]` rustflags lists in the project's \
          `.cargo/config.toml` instead"
     )]
@@ -394,11 +392,11 @@ pub enum CliError {
         expected_protocol: Option<String>,
     },
     #[error("local node already running: {0}")]
-    #[hint("stop the running `groundhog node` process before starting another local node")]
+    #[hint("stop the running `thruput node` process before starting another local node")]
     LocalNodeAlreadyRunning(String),
     #[error("could not connect to {0}")]
     #[hint(
-        "run `groundhog node` in another terminal, or check that \
+        "run `thruput node` in another terminal, or check that \
          the RPC endpoint at {0} is running"
     )]
     RpcConnect(String),
@@ -415,8 +413,8 @@ pub enum CliError {
     HttpClientInit,
     #[error("no rpc_url configured for the selected profile")]
     #[hint(
-        "for a local profile, start `groundhog node` in another terminal; otherwise run \
-         `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`"
+        "for a local profile, start `thruput node` in another terminal; otherwise run \
+         `thruput config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`"
     )]
     MissingRpcUrl,
     #[error(
@@ -424,7 +422,7 @@ pub enum CliError {
     )]
     #[code("missing_rpc_url")]
     #[hint(
-        "start `groundhog node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile devnet`) or `--rpc-url <URL>`"
+        "start `thruput node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile devnet`) or `--rpc-url <URL>`"
     )]
     #[details(expr = Some(json!({ "profile": profile, "network": "local" })))]
     LocalNodeUnavailable { profile: String },
@@ -463,13 +461,13 @@ pub enum CliError {
         retry_after_seconds: Option<u64>,
     },
     #[error("no signing key configured")]
-    #[hint("set `default_key` in project or global config, or run `groundhog keys generate`")]
+    #[hint("set `default_key` in project or global config, or run `thruput keys generate`")]
     MissingSigningKey,
     #[error("cannot determine the network hash for this profile")]
     #[hint(
-        "signing binds each transaction to a network: run `groundhog config set \
+        "signing binds each transaction to a network: run `thruput config set \
          network-hash <hash> --profile <name>`, or point the profile at a runtime \
-         manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or \
+         manifest from `thruput node` via THRUPUT_RUNTIME_MANIFEST or \
          profile.<name>.runtime_manifest"
     )]
     MissingNetworkHash,
@@ -494,7 +492,7 @@ pub enum CliError {
     #[error("unknown contract alias `{alias}` in profile `{profile}`")]
     #[hint(
         "use a configured contract alias or a 32-byte 0x-prefixed address; inspect aliases \
-         with `groundhog config get {} --sources`",
+         with `thruput config get {} --sources`",
         render_shell_arg(profile)
     )]
     #[details]
@@ -521,7 +519,7 @@ pub enum CliError {
         message: String,
     },
     #[error("invalid transaction cursor `{display_input}`: {message}")]
-    #[hint("pass the opaque hex cursor returned by the previous `groundhog tx list` page")]
+    #[hint("pass the opaque hex cursor returned by the previous `thruput tx list` page")]
     #[details(input, message)]
     InvalidTransactionCursor {
         input: String,
@@ -555,7 +553,7 @@ pub enum CliError {
     },
     #[error("invalid event cursor `{display_input}`: {message}")]
     #[hint(
-        "pass the opaque hex cursor returned by the previous `groundhog events list` page \
+        "pass the opaque hex cursor returned by the previous `thruput events list` page \
          with unchanged filters"
     )]
     #[details(input, message)]
@@ -583,7 +581,7 @@ pub enum CliError {
     #[error("invalid token transfer cursor `{display_input}`: {message}")]
     #[code("invalid_event_cursor")]
     #[hint(
-        "pass the opaque hex cursor returned by the previous `groundhog token transfers` \
+        "pass the opaque hex cursor returned by the previous `thruput token transfers` \
          page with the same token and participant filters"
     )]
     #[details(input, message)]
@@ -642,7 +640,7 @@ pub enum CliError {
     LocalFundingAttempt(String),
     #[error("local funding transaction {tx_hash} is unresolved: {message}")]
     #[hint(
-        "inspect this hash with groundhog tx show, then retry the original recipient and amount; keep the retained attempt until an authoritative receipt resolves it"
+        "inspect this hash with thruput tx show, then retry the original recipient and amount; keep the retained attempt until an authoritative receipt resolves it"
     )]
     #[details(tx_hash, attempt_path)]
     LocalFundingUnresolved {
@@ -718,7 +716,7 @@ pub enum CliError {
         wallet_names: Vec<String>,
     },
     #[error("wallet `{wallet_name}` is not saved in profile `{profile}`")]
-    #[hint("run `groundhog wallet ls` and select a saved wallet name")]
+    #[hint("run `thruput wallet ls` and select a saved wallet name")]
     #[details]
     SavedWalletNotFound {
         wallet_name: String,
@@ -739,7 +737,7 @@ pub enum CliError {
         "cannot remove wallet `{wallet_name}` from profile `{profile}` because it is the inherited default wallet"
     )]
     #[hint(
-        "run `groundhog wallet use <NAME> --profile={}` to select a project default before \
+        "run `thruput wallet use <NAME> --profile={}` to select a project default before \
          removing this wallet",
         render_shell_arg(profile)
     )]
@@ -752,7 +750,7 @@ pub enum CliError {
         "cannot remove wallet `{wallet_name}` from profile `{profile}` because it would expose inherited default wallet `{inherited_wallet}`, which is not saved"
     )]
     #[hint(
-        "save the inherited wallet binding or select another project default with `groundhog \
+        "save the inherited wallet binding or select another project default with `thruput \
          wallet use <NAME> --profile={}`",
         render_shell_arg(profile)
     )]
@@ -764,7 +762,7 @@ pub enum CliError {
     },
     #[error("saved wallet `{key_name}` owner_public_key is invalid: {message}")]
     #[hint(
-        "recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key \
+        "recreate the wallet binding with `thruput wallet create`, or fix owner_public_key \
          in the selected profile"
     )]
     #[details]
@@ -777,7 +775,7 @@ pub enum CliError {
         "transaction {tx_hash} submitted but no receipt after {seconds}s; last observed status: {last_status}"
     )]
     #[hint(
-        "inspect with `groundhog tx show {}` using the same profile and RPC endpoint as the \
+        "inspect with `thruput tx show {}` using the same profile and RPC endpoint as the \
          original submission before submitting the operation again. Unknown is inconclusive; \
          check the sending wallet's HOG balance on the same network before resubmitting. \
          Local logs: node terminal or redirected output; use `--verbose` on future starts \
@@ -846,7 +844,7 @@ pub enum CliError {
     #[hint("stop the node using this data directory and retry")]
     ChainDataDirLocked(String),
     #[error("invalid chain archive at {path}: {message}")]
-    #[hint("use an unmodified archive produced by `groundhog chain dump`")]
+    #[hint("use an unmodified archive produced by `thruput chain dump`")]
     ChainArchiveInvalid { path: String, message: String },
     #[error("chain dump output already exists: {0}")]
     #[hint("review the existing archive and rerun with `--force`, or choose another output path")]
@@ -866,9 +864,9 @@ pub enum CliError {
         /// Why the supplied value was rejected.
         message: String,
     },
-    #[error("invalid `[package.metadata.groundhog] {key}` in package `{package}`: {message}")]
+    #[error("invalid `[package.metadata.thruput] {key}` in package `{package}`: {message}")]
     #[hint(
-        "set `{key}` under `[package.metadata.groundhog]` in the package's Cargo.toml \
+        "set `{key}` under `[package.metadata.thruput]` in the package's Cargo.toml \
          to a positive byte count: an integer, or a string such as \"128K\" or \
          \"0x20000\""
     )]
@@ -876,7 +874,7 @@ pub enum CliError {
     PackageMetadataInvalid {
         /// The package whose manifest carries the value.
         package: String,
-        /// The key under `[package.metadata.groundhog]`.
+        /// The key under `[package.metadata.thruput]`.
         key: &'static str,
         /// Why the value was rejected.
         message: String,
@@ -910,17 +908,14 @@ pub enum CliError {
         "hog-devnode {version} for {target} is not installed and offline mode forbids downloading it"
     )]
     #[hint(
-        "rerun `groundhog toolchain install` without offline mode, or set \
-         GROUNDHOG_DEVNODE_BINARY to a local build"
+        "rerun `thruput toolchain install` without offline mode, or set \
+         THRUPUT_DEVNODE_BINARY to a local build"
     )]
     #[details]
     ToolchainOfflineMissing { version: String, target: String },
     /// A read-only lookup found no complete installation for the selection.
     #[error("hog-devnode {version} for {target} is not installed")]
-    #[hint(
-        "run `groundhog toolchain install {}` first",
-        render_shell_arg(version)
-    )]
+    #[hint("run `thruput toolchain install {}` first", render_shell_arg(version))]
     #[details]
     ToolchainNotInstalled { version: String, target: String },
     #[error("{0}")]
@@ -943,7 +938,7 @@ fn cargo_failure_hint(stderr: &str) -> Cow<'static, str> {
          be rebuilt from source; check that `.cargo/contract.toml` still \
          contains `[unstable]` and `build-std = [\"core\", \"alloc\"]`"
         } else if stderr.contains("groundhog-rv32.ld") {
-            "the link references `groundhog-rv32.ld`, which the Groundhog SDK's \
+            "the link references `groundhog-rv32.ld`, which the Thruput SDK's \
          build script supplies through a linker search path; check that the \
          `sdk` dependency resolves for this build, and rebuild after \
          `cargo clean` to re-run its build script"
@@ -958,12 +953,12 @@ fn cargo_failure_hint(stderr: &str) -> Cow<'static, str> {
 fn protocol_intro_hint(expected_protocol: Option<&str>) -> Cow<'static, str> {
     match expected_protocol {
         Some(protocol) => Cow::Owned(format!(
-            "pass `--hogd-protocol={}` to override, or rebuild groundhog node \
+            "pass `--hogd-protocol={}` to override, or rebuild thruput node \
              against a matching groundhog-xdr",
             render_shell_arg(protocol),
         )),
         None => Cow::Borrowed(
-            "pass `--hogd-protocol <hogd-protocol>` to override, or rebuild groundhog node \
+            "pass `--hogd-protocol <hogd-protocol>` to override, or rebuild thruput node \
              against a matching groundhog-xdr",
         ),
     }
@@ -991,7 +986,7 @@ fn recent_failure_hint(
                 ConflictCode::BoundsExceeded | ConflictCode::InsufficientFunds
             ) =>
         {
-            "check the signing wallet balance and run `groundhog airdrop` before retrying; \
+            "check the signing wallet balance and run `thruput airdrop` before retrying; \
              a commit attempt reported insufficient storage-token bounds"
         }
         TransactionFailureCause::ContractRejected { .. } => {
@@ -1019,7 +1014,7 @@ fn pre_submission_hint(detail: &TxInvalidDetail) -> Cow<'static, str> {
         TxInvalidDetail::Rv32MemoryTooLarge { .. } => {
             "the artifact declares more guest data memory than the target \
              chain's `max_rv32_memory_bytes`; lower \
-             `[package.metadata.groundhog] initial_memory_bytes` and rebuild, \
+             `[package.metadata.thruput] initial_memory_bytes` and rebuild, \
              or deploy to a chain configured for it"
         }
         TxInvalidDetail::ContractTooLarge { .. } => {
@@ -1039,10 +1034,10 @@ fn toolchain_catalog_hint(error: &groundhog_toolchain::CatalogError) -> Cow<'sta
     Cow::Borrowed(match error {
         groundhog_toolchain::CatalogError::IncompatibleRuntime { .. }
         | groundhog_toolchain::CatalogError::RuntimeProbeFailed { .. } => {
-            "upgrade the host runtime, or set GROUNDHOG_DEVNODE_BINARY to a compatible local build"
+            "upgrade the host runtime, or set THRUPUT_DEVNODE_BINARY to a compatible local build"
         }
         _ => {
-            "use a hog-devnode version and target present in this groundhog release's \
+            "use a hog-devnode version and target present in this thruput release's \
              embedded catalog"
         }
     })
@@ -1065,14 +1060,14 @@ fn rv32_lower_hint(error: &groundhog_rv32_lower::LowerError) -> Cow<'static, str
         groundhog_rv32_lower::LowerError::DataTooLarge { .. } => {
             "static data plus the reserved stack exceed the guest data \
              memory the contract declares; reduce static data, pass a \
-             smaller `groundhog build --stack-size` to shrink the stack \
-             reserve, or raise `[package.metadata.groundhog] \
+             smaller `thruput build --stack-size` to shrink the stack \
+             reserve, or raise `[package.metadata.thruput] \
              initial_memory_bytes` if the target chain's \
              `max_rv32_memory_bytes` admits more"
         }
         groundhog_rv32_lower::LowerError::Verify(_) => {
             "this is a bug — please report this lower→verify \
-             failure to the Groundhog team"
+             failure to the Thruput team"
         }
         _ => {
             "the RV32 ELF may have a malformed `.text`/data layout or a \
@@ -1089,11 +1084,11 @@ fn linker_script_hint(workspace_root: &str, member_config: Option<&str>) -> Cow<
             "cargo reads `.cargo/config.toml` from its invocation directory upward \
              and the build runs cargo at the workspace root — copy {member_config} \
              (and the adjacent `contract.toml`) into {workspace_root}/.cargo/ so the \
-             Groundhog rustflags apply"
+             Thruput rustflags apply"
         ),
         None => format!(
             "merge the `[target.riscv32im-unknown-none-elf]` rustflags from a \
-             `groundhog new` project's `.cargo/config.toml` into \
+             `thruput new` project's `.cargo/config.toml` into \
              {workspace_root}/.cargo/config.toml"
         ),
     })

@@ -2,7 +2,7 @@ use std::{fs, process::Command};
 use tempfile::TempDir;
 
 fn cli(root: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    Command::new(env!("CARGO_BIN_EXE_thruput"))
         .args(args)
         .args(["--json", "--non-interactive"])
         .env("XDG_CONFIG_HOME", root.join("unconfigured"))
@@ -17,7 +17,7 @@ fn discovery_preserves_human_data_on_stdout_in_quiet_mode() {
         vec!["templates", "list"],
         vec!["templates", "show", "counter"],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        let output = Command::new(env!("CARGO_BIN_EXE_thruput"))
             .args(args)
             .arg("--quiet")
             .output()
@@ -49,7 +49,7 @@ fn discovery_and_generation_share_the_catalog() {
     assert!(output.status.success(), "{output:?}");
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let entries = report["data"]["templates"].as_array().unwrap();
-    assert_eq!(entries.len(), groundhog_cli::templates::CATALOG.len());
+    assert_eq!(entries.len(), thruput_cli::templates::CATALOG.len());
     for entry in entries {
         let id = entry["id"].as_str().unwrap();
         assert_ne!(id, "stub");
@@ -101,10 +101,10 @@ fn project_reports_resolve_parent_components_in_destination_paths() {
     );
     assert_eq!(
         report["data"]["configPath"],
-        root.join("example/groundhog.toml").to_str().unwrap()
+        root.join("example/thruput.toml").to_str().unwrap()
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = Command::new(env!("CARGO_BIN_EXE_thruput"))
         .args(["new", "human", "--path", "../human", "--non-interactive"])
         .current_dir(&cwd)
         .output()
@@ -114,7 +114,7 @@ fn project_reports_resolve_parent_components_in_destination_paths() {
     let destination = root.join("human");
     assert!(stderr.contains(destination.to_str().unwrap()), "{stderr}");
     assert!(
-        stderr.contains(destination.join("groundhog.toml").to_str().unwrap()),
+        stderr.contains(destination.join("thruput.toml").to_str().unwrap()),
         "{stderr}"
     );
     assert!(
@@ -144,7 +144,7 @@ fn explicit_destination_expands_home_without_shell_help() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
     fs::create_dir(&home).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = Command::new(env!("CARGO_BIN_EXE_thruput"))
         .args([
             "new",
             "example",
@@ -197,7 +197,7 @@ fn missing_destination_parent_reports_path_and_recovery_hint() {
 fn home_destinations_report_invalid_home_and_unsupported_user_expansion() {
     let tmp = TempDir::new().unwrap();
     for path in ["~/example", "~someone/example"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        let output = Command::new(env!("CARGO_BIN_EXE_thruput"))
             .args([
                 "new",
                 "example",

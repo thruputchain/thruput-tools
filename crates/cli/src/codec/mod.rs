@@ -21,9 +21,11 @@ pub(crate) fn encode_args(
     if metadata.is_none() && args.len() > 1 {
         return Err(CliError::CallEncode {
             path: "arguments".into(),
-            message: "multiple call arguments require local contract metadata — run `groundhog call` from \
+            message:
+                "multiple call arguments require local contract metadata — run `thruput call` from \
          inside the project that defines the contract, or pass a single hex-encoded calldata \
-         argument".into(),
+         argument"
+                    .into(),
         });
     }
     groundhog_client::codec::encode_args(args, metadata).map_err(Into::into)

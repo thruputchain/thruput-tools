@@ -6,19 +6,19 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::ArtifactKind;
 use crate::config::ResolvedProfile;
 
-/// Schema version for the `groundhog test --json` payload.
+/// Schema version for the `thruput test --json` payload.
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
 pub const TEST_JSON_SCHEMA_VERSION: u32 = 7;
 
-/// Schema version for the `groundhog test --workspace --json` payload.
+/// Schema version for the `thruput test --workspace --json` payload.
 ///
 /// Bump this when the shape or semantics of `WorkspaceTestReport` change
 /// in a way that could break existing machine consumers.
 pub const WORKSPACE_TEST_JSON_SCHEMA_VERSION: u32 = 2;
 
-/// Structured machine-readable report for `groundhog test --json`.
+/// Structured machine-readable report for `thruput test --json`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TestReport {
@@ -40,7 +40,7 @@ pub struct TestReport {
     pub integration: Option<IntegrationTestInfo>,
 }
 
-/// Structured machine-readable report for `groundhog test --workspace --json`.
+/// Structured machine-readable report for `thruput test --workspace --json`.
 ///
 /// `packages` holds one [`TestReport`] per tested workspace member in the
 /// order they ran; `summary` aggregates their runs.
@@ -63,7 +63,7 @@ pub struct WorkspaceTestReport {
     pub errored: Option<String>,
 }
 
-/// Built contract artifact metadata for a `groundhog test --json` report.
+/// Built contract artifact metadata for a `thruput test --json` report.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TestArtifactInfo {
@@ -83,7 +83,7 @@ impl TestArtifactInfo {
     }
 }
 
-/// Execution mode used for this `groundhog test` report.
+/// Execution mode used for this `thruput test` report.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -93,7 +93,7 @@ pub enum TestMode {
     Integration,
 }
 
-/// Integration-node metadata for `groundhog test --integration --json`.
+/// Integration-node metadata for `thruput test --integration --json`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IntegrationTestInfo {
@@ -145,7 +145,7 @@ pub enum TestSummarySource {
     Empty,
 }
 
-/// One cargo/libtest invocation within `groundhog test`.
+/// One cargo/libtest invocation within `thruput test`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TestRun {

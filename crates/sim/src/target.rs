@@ -80,7 +80,7 @@ pub enum TargetProviderKind {
     RemoteSsh,
 }
 
-/// Block production mode forwarded to `groundhog node` for local targets.
+/// Block production mode forwarded to `thruput node` for local targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "kebab-case")]
@@ -144,7 +144,7 @@ pub struct TargetOwnership {
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct OwnedProcess {
-    /// Operating-system process identifier for the `groundhog node` process.
+    /// Operating-system process identifier for the `thruput node` process.
     pub pid: u32,
     /// Unix process-group identifier for the node and supervised backend.
     pub pgid: u32,
@@ -186,8 +186,8 @@ pub struct TargetOverrides {
     pub rpc_url: Option<String>,
     /// Runtime manifest path to use for the run.
     pub runtime_manifest: Option<PathBuf>,
-    /// `groundhog` binary path for the `local` provider.
-    pub groundhog_binary: Option<PathBuf>,
+    /// `thruput` binary path for the `local` provider.
+    pub thruput_binary: Option<PathBuf>,
     /// `hog-devnode` binary path for the `local` provider.
     pub hogd_dev_binary: Option<PathBuf>,
     /// `hog-devnode` x23 intro protocol token for the `local` provider.
@@ -210,8 +210,8 @@ pub struct TargetProviderContext {
 
 impl TargetOverrides {
     fn first_local_launch_override(&self) -> Option<&'static str> {
-        if self.groundhog_binary.is_some() {
-            Some("--groundhog-binary")
+        if self.thruput_binary.is_some() {
+            Some("--thruput-binary")
         } else if self.hogd_dev_binary.is_some() {
             Some("--hog-devnode-binary")
         } else if self.hogd_protocol.is_some() {
@@ -344,7 +344,7 @@ impl TargetProvider for ExistingTargetProvider {
     }
 }
 
-/// Provider that launches and owns a local `groundhog node` process.
+/// Provider that launches and owns a local `thruput node` process.
 #[derive(Debug, Default)]
 pub struct LocalTargetProvider {
     state: Mutex<LocalTargetState>,
@@ -371,7 +371,7 @@ struct LocalAcquiredTarget {
 
 #[derive(Debug, Clone)]
 struct LocalLaunchConfig {
-    groundhog_binary: PathBuf,
+    thruput_binary: PathBuf,
     hogd_dev_binary: Option<PathBuf>,
     hogd_protocol: Option<String>,
     block_driver: Option<TargetBlockDriverMode>,
@@ -488,7 +488,7 @@ impl LocalTargetProvider {
         overrides: TargetOverrides,
         context: TargetProviderContext,
     ) -> Result<ResolvedTarget, SimError> {
-        let groundhog = resolve_groundhog_binary(overrides.groundhog_binary.as_deref())?;
+        let thruput = resolve_thruput_binary(overrides.thruput_binary.as_deref())?;
         tokio::fs::create_dir_all(&context.logs_dir).await?;
         let bootstrap_accounts = context.logs_dir.join("bootstrap-accounts.json");
         let allocations = local_public_allocations(manifest)?;
@@ -500,7 +500,7 @@ impl LocalTargetProvider {
             .startup_timeout_secs
             .unwrap_or(DEFAULT_LOCAL_STARTUP_TIMEOUT_SECS);
         let launch_config = LocalLaunchConfig {
-            groundhog_binary: groundhog,
+            thruput_binary: thruput,
             hogd_dev_binary,
             hogd_protocol: overrides.hogd_protocol,
             block_driver: manifest.target.block_driver,
@@ -747,7 +747,7 @@ async fn launch_local_node(
         port,
         startup_timeout_secs: config.startup_timeout_secs,
     });
-    let mut command = Command::new(&config.groundhog_binary);
+    let mut command = Command::new(&config.thruput_binary);
     command
         .args(&args)
         .stdout(Stdio::piped())
@@ -756,7 +756,7 @@ async fn launch_local_node(
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().map_err(|source| SimError::LocalNodeSpawn {
-        binary: config.groundhog_binary.display().to_string(),
+        binary: config.thruput_binary.display().to_string(),
         source,
     })?;
 
@@ -845,19 +845,19 @@ fn format_restart_detail(old_pid: Option<u32>, new_pid: Option<u32>) -> String {
     )
 }
 
-fn resolve_groundhog_binary(override_path: Option<&Path>) -> Result<PathBuf, SimError> {
+fn resolve_thruput_binary(override_path: Option<&Path>) -> Result<PathBuf, SimError> {
     if let Some(path) = override_path {
         if path.is_file() {
             return Ok(path.to_path_buf());
         }
-        return Err(SimError::GroundhogBinaryNotFound {
+        return Err(SimError::ThruputBinaryNotFound {
             binary: path.display().to_string(),
         });
     }
 
-    let binary = "groundhog";
+    let binary = "thruput";
     let Some(paths) = std::env::var_os("PATH") else {
-        return Err(SimError::GroundhogBinaryNotFound {
+        return Err(SimError::ThruputBinaryNotFound {
             binary: binary.to_string(),
         });
     };
@@ -867,7 +867,7 @@ fn resolve_groundhog_binary(override_path: Option<&Path>) -> Result<PathBuf, Sim
             return Ok(candidate);
         }
     }
-    Err(SimError::GroundhogBinaryNotFound {
+    Err(SimError::ThruputBinaryNotFound {
         binary: binary.to_string(),
     })
 }
@@ -896,7 +896,7 @@ async fn capture_owned_process(pid: Option<u32>, port: u16) -> Option<OwnedProce
         pgid: identity.pgid,
         port,
         start_time: identity.start_time,
-        command: "groundhog node".into(),
+        command: "thruput node".into(),
     })
 }
 
@@ -1339,7 +1339,7 @@ mod tests {
             pgid: 12,
             port: 9545,
             start_time: "Wed May 27 12:00:00 2026".into(),
-            command: "groundhog node".into(),
+            command: "thruput node".into(),
         };
         let ownership = TargetOwnership::local(Some(process.clone()));
         let value = serde_json::to_value(&ownership).expect("ownership should serialize");
@@ -1369,7 +1369,7 @@ mod tests {
             pgid: 12,
             port: 9545,
             start_time: "Wed May 27 12:00:00 2026".into(),
-            command: "groundhog node".into(),
+            command: "thruput node".into(),
         };
 
         let encoded = serde_json::to_vec(&process).expect("process should serialize");
@@ -1512,23 +1512,23 @@ mod tests {
         let manifest = manifest(&json!({
             "provider": "local"
         }));
-        let missing = PathBuf::from("/tmp/groundhog-sim-missing-groundhog-binary");
+        let missing = PathBuf::from("/tmp/groundhog-sim-missing-thruput-binary");
 
         let error = LocalTargetProvider::new()
             .acquire(
                 &manifest,
                 TargetOverrides {
-                    groundhog_binary: Some(missing.clone()),
+                    thruput_binary: Some(missing.clone()),
                     ..TargetOverrides::default()
                 },
                 context(),
             )
             .await
-            .expect_err("local target should require a real groundhog binary");
+            .expect_err("local target should require a real thruput binary");
 
         assert!(matches!(
             error,
-            SimError::GroundhogBinaryNotFound { binary } if binary == missing.display().to_string()
+            SimError::ThruputBinaryNotFound { binary } if binary == missing.display().to_string()
         ));
     }
 
@@ -1923,7 +1923,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let args_log = dir.path().join("args.log");
         let runtime_manifest = dir.path().join("runtime-manifest.json");
-        let script = dir.path().join("groundhog");
+        let script = dir.path().join("thruput");
         let script_body = format!(
             r#"#!/bin/sh
 printf '%s\n' "$*" >> "{}"
@@ -1945,13 +1945,12 @@ while :; do sleep 1; done
             args_log.display(),
             runtime_manifest.display(),
         );
-        std::fs::write(&script, script_body).expect("fake groundhog should write");
+        std::fs::write(&script, script_body).expect("fake thruput should write");
         let mut permissions = std::fs::metadata(&script)
-            .expect("fake groundhog metadata should read")
+            .expect("fake thruput metadata should read")
             .permissions();
         permissions.set_mode(0o755);
-        std::fs::set_permissions(&script, permissions)
-            .expect("fake groundhog should be executable");
+        std::fs::set_permissions(&script, permissions).expect("fake thruput should be executable");
 
         let provider = LocalTargetProvider::new();
         let manifest = manifest(&json!({"provider": "local"}));
@@ -1959,7 +1958,7 @@ while :; do sleep 1; done
             .acquire(
                 &manifest,
                 TargetOverrides {
-                    groundhog_binary: Some(script),
+                    thruput_binary: Some(script),
                     port: Some(0),
                     startup_timeout_secs: Some(5),
                     ..TargetOverrides::default()

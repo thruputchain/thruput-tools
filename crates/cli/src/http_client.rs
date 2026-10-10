@@ -1,4 +1,4 @@
-//! Shared construction for HTTP(S) clients owned by the Groundhog CLI.
+//! Shared construction for HTTP(S) clients owned by the Thruput CLI.
 //!
 //! Both blocking requests and JSON-RPC use the same snapshot of the standard proxy environment.
 //! Keep future CLI-managed downloads on these constructors instead of adding command-specific

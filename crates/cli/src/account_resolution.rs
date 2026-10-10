@@ -436,8 +436,8 @@ pub(crate) fn resolve_local_bootstrap_account(
     let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? else {
         return Err(local_runtime_error(
             key_name,
-            "local bootstrap account resolution requires GROUNDHOG_RUNTIME_MANIFEST \
-             or profile.<name>.runtime_manifest from `groundhog node`",
+            "local bootstrap account resolution requires THRUPUT_RUNTIME_MANIFEST \
+             or profile.<name>.runtime_manifest from `thruput node`",
         ));
     };
     if manifest.kind != "hogd-dev-runtime" || manifest.schema_version != 4 {
@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn contract_target_reports_unknown_alias_with_profile_context() {
-        let source = std::path::PathBuf::from("/tmp/project/groundhog.toml");
+        let source = std::path::PathBuf::from("/tmp/project/thruput.toml");
         let mut profile = test_profile("alice", None, BTreeMap::new());
         profile.name = "local".into();
         profile.source = Some(source.clone());
@@ -648,7 +648,7 @@ mod tests {
             error
                 .hint()
                 .expect("hint expected")
-                .contains("groundhog config get local --sources")
+                .contains("thruput config get local --sources")
         );
     }
 

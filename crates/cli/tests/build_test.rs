@@ -7,8 +7,8 @@ use tempfile::TempDir;
 
 mod support;
 
-/// Minimal stand-in for the `.cargo/config.toml` that `groundhog new`
-/// scaffolds: the Groundhog RV32 target rustflags table, which is what the
+/// Minimal stand-in for the `.cargo/config.toml` that `thruput new`
+/// scaffolds: the Thruput RV32 target rustflags table, which is what the
 /// workspace-config guard requires at the cargo workspace root.
 fn write_scaffold_cargo_config(project_root: &Path) {
     fs::create_dir_all(project_root.join(".cargo")).unwrap();
@@ -21,7 +21,7 @@ fn write_scaffold_cargo_config(project_root: &Path) {
 }
 
 /// The `.cargo/contract.toml` overlay every contract build now requires at the
-/// cargo workspace root: `groundhog build` passes it as `--config`, so its
+/// cargo workspace root: `thruput build` passes it as `--config`, so its
 /// absence refuses the build before cargo runs.
 /// Contents are irrelevant to these tests — only the fake cargo sees them.
 fn write_contract_toml(workspace_root: &Path) {
@@ -31,7 +31,7 @@ fn write_contract_toml(workspace_root: &Path) {
 
 fn write_active_profile(project_root: &Path) {
     fs::write(
-        project_root.join("groundhog.toml"),
+        project_root.join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
     )
     .unwrap();
@@ -39,18 +39,18 @@ fn write_active_profile(project_root: &Path) {
 
 #[test]
 fn resolve_package_with_explicit_name() {
-    let meta = groundhog_cli::build::CargoMetadata {
+    let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/ws"),
         target_directory: PathBuf::from("/ws/target"),
         packages: vec![
-            groundhog_cli::build::MetadataPackage {
+            thruput_cli::build::MetadataPackage {
                 name: "alpha".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
                 metadata: None,
                 targets: Vec::new(),
             },
-            groundhog_cli::build::MetadataPackage {
+            thruput_cli::build::MetadataPackage {
                 name: "beta".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
@@ -60,16 +60,16 @@ fn resolve_package_with_explicit_name() {
         ],
     };
     let name =
-        groundhog_cli::build::resolve_package(&meta, Some("beta"), &PathBuf::from("/ws")).unwrap();
+        thruput_cli::build::resolve_package(&meta, Some("beta"), &PathBuf::from("/ws")).unwrap();
     assert_eq!(name, "beta");
 }
 
 #[test]
 fn resolve_package_explicit_name_not_found() {
-    let meta = groundhog_cli::build::CargoMetadata {
+    let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/ws"),
         target_directory: PathBuf::from("/ws/target"),
-        packages: vec![groundhog_cli::build::MetadataPackage {
+        packages: vec![thruput_cli::build::MetadataPackage {
             name: "alpha".into(),
             version: "0.1.0".into(),
             manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
@@ -77,25 +77,25 @@ fn resolve_package_explicit_name_not_found() {
             targets: Vec::new(),
         }],
     };
-    let err = groundhog_cli::build::resolve_package(&meta, Some("nope"), &PathBuf::from("/ws"))
+    let err = thruput_cli::build::resolve_package(&meta, Some("nope"), &PathBuf::from("/ws"))
         .unwrap_err();
     assert!(err.to_string().contains("nope"));
 }
 
 #[test]
 fn resolve_package_from_member_dir() {
-    let meta = groundhog_cli::build::CargoMetadata {
+    let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/ws"),
         target_directory: PathBuf::from("/ws/target"),
         packages: vec![
-            groundhog_cli::build::MetadataPackage {
+            thruput_cli::build::MetadataPackage {
                 name: "alpha".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
                 metadata: None,
                 targets: Vec::new(),
             },
-            groundhog_cli::build::MetadataPackage {
+            thruput_cli::build::MetadataPackage {
                 name: "beta".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
@@ -104,25 +104,25 @@ fn resolve_package_from_member_dir() {
             },
         ],
     };
-    let name = groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/ws/alpha/src"))
-        .unwrap();
+    let name =
+        thruput_cli::build::resolve_package(&meta, None, &PathBuf::from("/ws/alpha/src")).unwrap();
     assert_eq!(name, "alpha");
 }
 
 #[test]
 fn resolve_package_from_workspace_root_errors() {
-    let meta = groundhog_cli::build::CargoMetadata {
+    let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/ws"),
         target_directory: PathBuf::from("/ws/target"),
         packages: vec![
-            groundhog_cli::build::MetadataPackage {
+            thruput_cli::build::MetadataPackage {
                 name: "alpha".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
                 metadata: None,
                 targets: Vec::new(),
             },
-            groundhog_cli::build::MetadataPackage {
+            thruput_cli::build::MetadataPackage {
                 name: "beta".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
@@ -131,17 +131,16 @@ fn resolve_package_from_workspace_root_errors() {
             },
         ],
     };
-    let err =
-        groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/ws")).unwrap_err();
+    let err = thruput_cli::build::resolve_package(&meta, None, &PathBuf::from("/ws")).unwrap_err();
     assert!(err.to_string().contains("-p"));
 }
 
 #[test]
 fn resolve_package_standalone_project() {
-    let meta = groundhog_cli::build::CargoMetadata {
+    let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/proj"),
         target_directory: PathBuf::from("/proj/target"),
-        packages: vec![groundhog_cli::build::MetadataPackage {
+        packages: vec![thruput_cli::build::MetadataPackage {
             name: "my-contract".into(),
             version: "0.1.0".into(),
             manifest_path: PathBuf::from("/proj/Cargo.toml"),
@@ -150,16 +149,16 @@ fn resolve_package_standalone_project() {
         }],
     };
     let name =
-        groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/proj/src")).unwrap();
+        thruput_cli::build::resolve_package(&meta, None, &PathBuf::from("/proj/src")).unwrap();
     assert_eq!(name, "my-contract");
 }
 
 #[test]
 fn resolve_package_standalone_from_root() {
-    let meta = groundhog_cli::build::CargoMetadata {
+    let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/proj"),
         target_directory: PathBuf::from("/proj/target"),
-        packages: vec![groundhog_cli::build::MetadataPackage {
+        packages: vec![thruput_cli::build::MetadataPackage {
             name: "my-contract".into(),
             version: "0.1.0".into(),
             manifest_path: PathBuf::from("/proj/Cargo.toml"),
@@ -167,7 +166,7 @@ fn resolve_package_standalone_from_root() {
             targets: Vec::new(),
         }],
     };
-    let name = groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/proj")).unwrap();
+    let name = thruput_cli::build::resolve_package(&meta, None, &PathBuf::from("/proj")).unwrap();
     assert_eq!(name, "my-contract");
 }
 
@@ -199,8 +198,8 @@ fn cargo_metadata_uses_explicit_target_dir() {
     let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
-        groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let metadata = groundhog_cli::build::cargo_metadata_with_artifacts(&artifacts).unwrap();
+        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
+    let metadata = thruput_cli::build::cargo_metadata_with_artifacts(&artifacts).unwrap();
 
     assert_eq!(
         metadata.target_directory,
@@ -247,20 +246,20 @@ fn build_rejects_conflicting_target_dir_passthrough() {
     let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
-        groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = groundhog_cli::build::build_rv32_project(
+        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
+    let err = thruput_cli::build::build_rv32_project(
         Some("demo-contract"),
         &["--target-dir".into(), "nested".into()],
         &artifacts,
         None,
         None,
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
     assert!(
-        matches!(err, groundhog_cli::CliError::TargetDirConflict),
+        matches!(err, thruput_cli::CliError::TargetDirConflict),
         "expected TargetDirConflict, got: {err:?}"
     );
 }
@@ -298,20 +297,20 @@ fn build_prefers_metadata_failure_over_redundant_target_dir_precheck() {
     let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
-        groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = groundhog_cli::build::build_rv32_project(
+        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
+    let err = thruput_cli::build::build_rv32_project(
         Some("demo-contract"),
         &["--target-dir".into(), "nested".into()],
         &artifacts,
         None,
         None,
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
     assert!(
-        matches!(err, groundhog_cli::CliError::CargoMetadataFailed(_)),
+        matches!(err, thruput_cli::CliError::CargoMetadataFailed(_)),
         "expected CargoMetadataFailed, got: {err:?}"
     );
 }
@@ -361,20 +360,20 @@ fn build_resolves_relative_config_conflicts_from_workspace_root() {
     let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
-        groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = groundhog_cli::build::build_rv32_project(
+        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
+    let err = thruput_cli::build::build_rv32_project(
         Some("demo-contract"),
         &["--config".into(), "target-config.toml".into()],
         &artifacts,
         None,
         None,
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
     assert!(
-        matches!(err, groundhog_cli::CliError::TargetDirConflict),
+        matches!(err, thruput_cli::CliError::TargetDirConflict),
         "expected TargetDirConflict, got: {err:?}"
     );
 }
@@ -401,21 +400,21 @@ fn build_rejects_missing_active_profile_before_compiling() {
     write_fake_cargo_with_metadata(
         &fake_bin,
         &metadata_json,
-        CONFIG_GET_GROUNDHOG_SCRIPT,
+        CONFIG_GET_THRUPUT_SCRIPT,
         &format!(": > '{}'", compile_marker.display()),
     );
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fake_bin.as_os_str());
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
 
-    let error = groundhog_cli::build::build_rv32_project(
+    let error = thruput_cli::build::build_rv32_project(
         Some("demo-contract"),
         &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         None,
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .unwrap_err();
 
@@ -444,17 +443,15 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     let raw_elf = target_dir
         .join("riscv32im-unknown-none-elf/release")
         .join("demo_contract_rv32");
-    let processed_rv32 = target_dir
-        .join("groundhog")
-        .join("demo_contract_rv32.rv32a");
+    let processed_rv32 = target_dir.join("thruput").join("demo_contract_rv32.rv32a");
     let processed_metadata = target_dir
-        .join("groundhog")
+        .join("thruput")
         .join("demo_contract_rv32.rv32.json");
     let processed_spec_json = target_dir
-        .join("groundhog")
+        .join("thruput")
         .join("demo_contract_rv32.spec.json");
     let processed_spec_xdr = target_dir
-        .join("groundhog")
+        .join("thruput")
         .join("demo_contract_rv32.spec.xdr");
     let cargo_args_log = project_root.join("cargo-args.log");
     let elf_fixture = project_root.join("fixture.elf");
@@ -500,14 +497,14 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     let _cwd = CurrentDirGuard::enter(&project_root);
     let _path = PathGuard::set(fake_bin.as_os_str());
 
-    let result = groundhog_cli::build::build_rv32_project(
+    let result = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
         &["--locked".into()],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         None,
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .expect("bug: rv32 build should succeed");
 
@@ -533,7 +530,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     assert_eq!(spec_json["interfaces"][0]["name"], "Counter");
     assert_eq!(spec_json["interfaces"][0]["methods"][0]["name"], "get");
     let spec_xdr = fs::read(&processed_spec_xdr).unwrap();
-    let spec = groundhog_cli::contract_spec::load_contract_spec_from_xdr(&spec_xdr)
+    let spec = thruput_cli::contract_spec::load_contract_spec_from_xdr(&spec_xdr)
         .expect("bug: rv32 spec sidecar should decode");
     assert_eq!(spec.interfaces.len(), 1);
 
@@ -570,13 +567,13 @@ fn build_rv32_project_compiles_and_lowers_elf() {
 #[serial]
 fn build_rv32_project_warns_when_typescript_codegen_would_refuse_the_spec() {
     // The bindings reserve the `__gh_` prefix, so this contract builds but
-    // `groundhog codegen ts` would refuse its spec.
+    // `thruput codegen ts` would refuse its spec.
     let result = build_demo_contract_rv32(&encode_fragments(&counter_fragments("__gh_Counter")));
 
     let [warning] = result.warnings.as_slice() else {
         panic!("expected one warning, got {:?}", result.warnings);
     };
-    assert_eq!(warning.level, groundhog_cli::checks::FindingLevel::Warn);
+    assert_eq!(warning.level, thruput_cli::checks::FindingLevel::Warn);
     assert_eq!(warning.code, "ts_bindings_failed");
     assert!(
         warning
@@ -603,7 +600,7 @@ fn build_json_lists_a_typescript_codegen_refusal_under_warnings() {
         &encode_fragments(&counter_fragments("__gh_Counter")),
     );
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .current_dir(&project_root)
         .env("PATH", &fake_bin)
         .env("XDG_CONFIG_HOME", project_root.join("config-home"))
@@ -633,7 +630,7 @@ fn build_json_lists_a_typescript_codegen_refusal_under_warnings() {
 
 /// Build `demo-contract-rv32` through a stand-in cargo that emits an ELF
 /// carrying `raw_spec`, without requesting any bindings.
-fn build_demo_contract_rv32(raw_spec: &[u8]) -> groundhog_cli::build::BuildResult {
+fn build_demo_contract_rv32(raw_spec: &[u8]) -> thruput_cli::build::BuildResult {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
@@ -641,14 +638,14 @@ fn build_demo_contract_rv32(raw_spec: &[u8]) -> groundhog_cli::build::BuildResul
     let _cwd = CurrentDirGuard::enter(&project_root);
     let _path = PathGuard::set(fake_bin.as_os_str());
 
-    groundhog_cli::build::build_rv32_project(
+    thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
         &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         None,
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .expect("bug: rv32 build should succeed")
 }
@@ -731,7 +728,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
         .join("riscv32im-unknown-none-elf/release")
         .join("demo_contract_rv32");
     let processed_metadata = target_dir
-        .join("groundhog")
+        .join("thruput")
         .join("demo_contract_rv32.rv32.json");
     let cargo_args_log = project_root.join("cargo-args.log");
     let elf_fixture = project_root.join("fixture.elf");
@@ -772,14 +769,14 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
     let _cwd = CurrentDirGuard::enter(&project_root);
     let _path = PathGuard::set(fake_bin.as_os_str());
 
-    groundhog_cli::build::build_rv32_project(
+    thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
         &["--locked".into()],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         Some(0x6000),
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .expect("bug: rv32 build with --stack-size should succeed");
 
@@ -880,19 +877,19 @@ fn guest_memory_project(tmp: &TempDir, metadata_table: &str) -> GuestMemoryProje
 #[serial]
 fn build_rv32_project_sizes_guest_memory_from_package_metadata() {
     let tmp = TempDir::new().unwrap();
-    let project = guest_memory_project(&tmp, r#"{"groundhog":{"initial_memory_bytes":"128K"}}"#);
+    let project = guest_memory_project(&tmp, r#"{"thruput":{"initial_memory_bytes":"128K"}}"#);
 
     let _cwd = CurrentDirGuard::enter(&project.project_root);
     let _path = PathGuard::set(project.fake_bin.as_os_str());
 
-    let result = groundhog_cli::build::build_rv32_project(
+    let result = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
         &["--locked".into()],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         Some(0x6000),
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .expect("bug: rv32 build with initial_memory_bytes should succeed");
 
@@ -912,7 +909,7 @@ fn build_rv32_project_sizes_guest_memory_from_package_metadata() {
     assert_eq!(result.memory_bytes, 0x20000);
     let processed_metadata = project
         .target_dir
-        .join("groundhog")
+        .join("thruput")
         .join("demo_contract_rv32.rv32.json");
     let metadata: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
@@ -925,7 +922,7 @@ fn build_rv32_project_sizes_guest_memory_from_package_metadata() {
     let artifact = fs::read(
         project
             .target_dir
-            .join("groundhog")
+            .join("thruput")
             .join("demo_contract_rv32.rv32a"),
     )
     .expect("bug: artifact should be written");
@@ -940,19 +937,19 @@ fn build_rv32_project_sizes_guest_memory_from_package_metadata() {
 #[serial]
 fn build_rejects_an_unreadable_initial_memory_bytes_before_compiling() {
     let tmp = TempDir::new().unwrap();
-    let project = guest_memory_project(&tmp, r#"{"groundhog":{"initial_memory_bytes":"12X"}}"#);
+    let project = guest_memory_project(&tmp, r#"{"thruput":{"initial_memory_bytes":"12X"}}"#);
 
     let _cwd = CurrentDirGuard::enter(&project.project_root);
     let _path = PathGuard::set(project.fake_bin.as_os_str());
 
-    let error = groundhog_cli::build::build_rv32_project(
+    let error = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
         &["--locked".into()],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         None,
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .expect_err("bug: an unreadable initial_memory_bytes must refuse the build");
 
@@ -969,13 +966,13 @@ fn build_rejects_an_unreadable_initial_memory_bytes_before_compiling() {
 fn build_rejects_env_rustflags_before_running_cargo() {
     let tmp = TempDir::new().unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .arg("build")
         .current_dir(tmp.path())
         .env("RUSTFLAGS", "-C opt-level=2")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .output()
-        .expect("bug: groundhog binary should run");
+        .expect("bug: thruput binary should run");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "expected build to fail: {stderr}");
@@ -995,13 +992,13 @@ fn build_rejects_env_rustflags_before_running_cargo() {
 fn build_rejects_empty_cargo_encoded_rustflags() {
     let tmp = TempDir::new().unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .arg("build")
         .current_dir(tmp.path())
         .env("CARGO_ENCODED_RUSTFLAGS", "")
         .env_remove("RUSTFLAGS")
         .output()
-        .expect("bug: groundhog binary should run");
+        .expect("bug: thruput binary should run");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "expected build to fail: {stderr}");
@@ -1018,13 +1015,13 @@ fn build_rejects_empty_cargo_encoded_rustflags() {
 fn build_rv32_rejects_env_rustflags() {
     let tmp = TempDir::new().unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .arg("build")
         .current_dir(tmp.path())
         .env("RUSTFLAGS", "-C opt-level=2")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .output()
-        .expect("bug: groundhog binary should run");
+        .expect("bug: thruput binary should run");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "expected build to fail: {stderr}");
@@ -1035,10 +1032,10 @@ fn build_rv32_rejects_env_rustflags() {
 }
 
 /// `cargo config get` reply: the rustflags are not set (a workspace root
-/// without the Groundhog cargo config).
+/// without the Thruput cargo config).
 const CONFIG_GET_NOT_SET: &str = "echo 'error: config value `target.riscv32im-unknown-none-elf.rustflags` is not set' >&2\n  exit 101";
-/// `cargo config get` reply: rustflags carrying the Groundhog linker script.
-const CONFIG_GET_GROUNDHOG_SCRIPT: &str =
+/// `cargo config get` reply: rustflags carrying the Thruput linker script.
+const CONFIG_GET_THRUPUT_SCRIPT: &str =
     "printf '%s' '[\"-C\",\"link-arg=-Tgroundhog-rv32.ld\"]'\n  exit 0";
 /// `cargo config get` reply: rustflags selecting a custom linker script.
 const CONFIG_GET_CUSTOM_SCRIPT: &str = "printf '%s' '[\"-C\",\"link-arg=-Tcustom.ld\"]'\n  exit 0";
@@ -1072,7 +1069,7 @@ fn write_fake_cargo_with_metadata(
     }
 }
 
-/// A project generated by `groundhog new` and later wrapped into a parent
+/// A project generated by `thruput new` and later wrapped into a parent
 /// Cargo workspace, leaving `.cargo/` behind in the member directory. Cargo
 /// only reads `.cargo/config.toml` from its invocation directory upward, and
 /// the build runs cargo from the workspace root — so the member config is
@@ -1105,7 +1102,7 @@ fn write_bootstrapped_workspace(root: &Path, pkg_name: &str) -> (PathBuf, String
     (member, metadata_json)
 }
 
-/// Run the real `groundhog` binary with a fake cargo on `PATH` and an
+/// Run the real `thruput` binary with a fake cargo on `PATH` and an
 /// isolated `CARGO_HOME`, so the workspace-config warning is deterministic
 /// regardless of the developer's global cargo config.
 fn run_groundhog_with_fake_cargo(
@@ -1122,7 +1119,7 @@ fn run_groundhog_with_fake_cargo(
         }
         None => fake_bin.to_path_buf().into_os_string(),
     };
-    std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .args(args)
         .current_dir(cwd)
         .env("PATH", path)
@@ -1130,7 +1127,7 @@ fn run_groundhog_with_fake_cargo(
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .output()
-        .expect("bug: groundhog binary should run")
+        .expect("bug: thruput binary should run")
 }
 
 #[test]
@@ -1157,7 +1154,7 @@ fn build_rv32_refuses_missing_linker_script_naming_member_leftover() {
         "expected the missing-linker-script error, got: {stderr}"
     );
     // The member's leftover config is the strongest signal this workspace was
-    // bootstrapped on top of `groundhog new`; the hint must name it.
+    // bootstrapped on top of `thruput new`; the hint must name it.
     let member_config = member.join(".cargo/config.toml");
     assert!(
         stderr.contains(&member_config.display().to_string()),
@@ -1251,7 +1248,7 @@ fn build_rv32_link_failure_mentioning_script_gets_search_path_hint() {
     write_fake_cargo_with_metadata(
         &fake_bin,
         &metadata_json,
-        CONFIG_GET_GROUNDHOG_SCRIPT,
+        CONFIG_GET_THRUPUT_SCRIPT,
         "echo 'ld.lld: error: unable to find groundhog-rv32.ld' >&2\nexit 1",
     );
     let cargo_home = root.join("cargo-home");
@@ -1288,7 +1285,7 @@ fn build_rv32_passes_the_contract_toml_overlay_to_cargo() {
     write_fake_cargo_with_metadata(
         &fake_bin,
         &metadata_json,
-        CONFIG_GET_GROUNDHOG_SCRIPT,
+        CONFIG_GET_THRUPUT_SCRIPT,
         &format!("printf '%s\\n' \"$*\" > '{}'", cargo_args_log.display()),
     );
     let cargo_home = root.join("cargo-home");
@@ -1322,7 +1319,7 @@ fn build_rv32_refuses_a_missing_contract_toml() {
     let (member, metadata_json) = write_bootstrapped_workspace(&root, "demo-contract-rv32");
     write_active_profile(&root);
     let fake_bin = root.join("bin");
-    write_fake_cargo_with_metadata(&fake_bin, &metadata_json, CONFIG_GET_GROUNDHOG_SCRIPT, "");
+    write_fake_cargo_with_metadata(&fake_bin, &metadata_json, CONFIG_GET_THRUPUT_SCRIPT, "");
     let cargo_home = root.join("cargo-home");
     fs::create_dir_all(&cargo_home).unwrap();
 
@@ -1512,12 +1509,12 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
         None => fake_bin.clone().into_os_string(),
     };
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .args(["--show-cargo-commands", "build", "-p", "demo-contract"])
         .current_dir(&project_root)
         .env("PATH", path)
         .output()
-        .expect("bug: groundhog binary should run");
+        .expect("bug: thruput binary should run");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "build failed: {stderr}");
@@ -1533,7 +1530,7 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
 
 /// What cargo says while it reads the registry has to reach the user.
 ///
-/// The dependency-graph resolve is the first thing `groundhog build` runs
+/// The dependency-graph resolve is the first thing `thruput build` runs
 /// that touches the registry, and it used to be captured whole: a registry
 /// that was slow, or not answering at all, left the build printing nothing
 /// with no way to tell a stall from progress. Drives the real binary against
@@ -1581,7 +1578,7 @@ fn build_relays_what_cargo_reports_while_it_reads_the_registry() {
              \x20 case \" $* \" in\n\
              \x20   *\" --no-deps \"*) printf '%s' '{metadata_json}'; exit 0 ;;\n\
              \x20 esac\n\
-             \x20 echo '    Updating `groundhog` index' >&2\n\
+             \x20 echo '    Updating `thruput` index' >&2\n\
              \x20 echo '    Blocking waiting for file lock on package cache' >&2\n\
              \x20 printf '%s' '{{\"packages\":[],\"resolve\":{{\"nodes\":[]}}}}'\n\
              \x20 exit 0\n\
@@ -1619,17 +1616,17 @@ fn build_relays_what_cargo_reports_while_it_reads_the_registry() {
         None => fake_bin.clone().into_os_string(),
     };
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .args(["build", "-p", "demo-contract"])
         .current_dir(&project_root)
         .env("PATH", path)
         .output()
-        .expect("bug: groundhog binary should run");
+        .expect("bug: thruput binary should run");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "build failed: {stderr}");
     assert!(
-        stderr.contains("Updating `groundhog` index"),
+        stderr.contains("Updating `thruput` index"),
         "expected cargo's registry progress to be relayed, got: {stderr}"
     );
     assert!(
@@ -1640,7 +1637,7 @@ fn build_relays_what_cargo_reports_while_it_reads_the_registry() {
 
 /// A build that loses its stderr must take cargo down with it.
 ///
-/// `groundhog build 2>&1 | head` closes the relay's reader partway through,
+/// `thruput build 2>&1 | head` closes the relay's reader partway through,
 /// so the next write fails and the resolve ends early. Dropping the child
 /// there would neither kill nor reap it, leaving a `cargo metadata` holding
 /// the package-cache lock after the CLI has gone — the next build then waits
@@ -1686,7 +1683,7 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
              \x20 case \" $* \" in\n\
              \x20   *\" --no-deps \"*) printf '%s' '{metadata_json}'; exit 0 ;;\n\
              \x20 esac\n\
-             \x20 echo '    Updating `groundhog` index' >&2\n\
+             \x20 echo '    Updating `thruput` index' >&2\n\
              \x20 /bin/sleep 1\n\
              \x20 echo '    Blocking waiting for file lock on package cache' >&2\n\
              \x20 /bin/sleep 2\n\
@@ -1719,14 +1716,14 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
         None => fake_bin.clone().into_os_string(),
     };
 
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
         .args(["build", "-p", "demo-contract"])
         .current_dir(&project_root)
         .env("PATH", path)
         .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .spawn()
-        .expect("bug: groundhog binary should run");
+        .expect("bug: thruput binary should run");
 
     // Read until cargo's first relayed line, then close the reader — the
     // `| head` case. The build's next relayed write is the one that fails.
@@ -1738,7 +1735,7 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
     let relayed = lines
         .find(|line| {
             line.as_ref()
-                .is_ok_and(|line| line.contains("Updating `groundhog` index"))
+                .is_ok_and(|line| line.contains("Updating `thruput` index"))
         })
         .expect("bug: the build should relay cargo's registry output");
     relayed.expect("bug: reading the relayed line should succeed");
@@ -1766,10 +1763,10 @@ fn finalize_rv32_spec_err(elf_bytes: &[u8]) -> String {
     let elf = dir.path().join("contract.elf");
     fs::write(&elf, elf_bytes).unwrap();
 
-    groundhog_cli::contract_spec::finalize_rv32_spec(
+    thruput_cli::contract_spec::finalize_rv32_spec(
         &elf,
         &dir.path().join("contract.rv32a"),
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .expect_err("a raw spec format this build cannot read must be an error, not `no spec`")
     .to_string()
@@ -1900,14 +1897,14 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     let _cwd = CurrentDirGuard::enter(&project_root);
     let _path = PathGuard::set(fake_bin.as_os_str());
 
-    let error = groundhog_cli::build::build_rv32_project(
+    let error = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
         &["--locked".into()],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         None,
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .expect_err("a raw spec format this build cannot read must refuse the build");
 
@@ -1989,14 +1986,14 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
     let _cwd = CurrentDirGuard::enter(&project_root);
     let _path = PathGuard::set(fake_bin.as_os_str());
 
-    let error = groundhog_cli::build::build_rv32_project(
+    let error = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
         &["--locked".into()],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        &thruput_cli::artifacts::ArtifactOptions::default(),
         None,
         None,
         &[],
-        &groundhog_cli::Print::quiet(),
+        &thruput_cli::Print::quiet(),
     )
     .expect_err("the fake cargo produces no ELF, so the build fails downstream");
 

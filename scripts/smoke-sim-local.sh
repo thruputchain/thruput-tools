@@ -2,18 +2,18 @@
 # Simulator local-target smoke tests.
 #
 # Runs the ignored hogsim process-level smokes against a real hog-devnode binary:
-#   1. local provider launches groundhog node itself
+#   1. local provider launches thruput node itself
 #   2. local provider restarts its managed node through restart-target chaos
 #   3. sweeper reclaims an orphaned simulator-owned local target
-#   4. existing provider connects to a temporary groundhog node started here
+#   4. existing provider connects to a temporary thruput node started here
 #
 # For the broader scenario ladder, run scripts/smoke-sim-scenarios.sh.
 #
 # Required environment:
-#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode
 #
 # Optional environment:
-#   GROUNDHOG_BINARY=/path/to/groundhog
+#   THRUPUT_BINARY=/path/to/thruput
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
 #   KEEP_WORKDIR=1
 set -euo pipefail
@@ -34,7 +34,7 @@ expand_user_path() {
     esac
 }
 
-GROUNDHOG_BINARY="$(expand_user_path "${GROUNDHOG_BINARY:-$REPO_ROOT/target/debug/groundhog}")"
+THRUPUT_BINARY="$(expand_user_path "${THRUPUT_BINARY:-$REPO_ROOT/target/debug/thruput}")"
 
 log() {
     printf '==> %s\n' "$*" >&2
@@ -165,12 +165,12 @@ PY
 }
 
 find_hogd_dev_binary() {
-    if [[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]]; then
-        expand_user_path "$GROUNDHOG_DEVNODE_BINARY"
+    if [[ -n "${THRUPUT_DEVNODE_BINARY:-}" ]]; then
+        expand_user_path "$THRUPUT_DEVNODE_BINARY"
         return
     fi
 
-    die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
+    die "set THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/groundhog-sim-smoke.XXXXXX")"
@@ -198,39 +198,39 @@ if [[ -n "$HOGD_PROTOCOL" ]]; then
     log "using hogd protocol override: $HOGD_PROTOCOL"
 fi
 
-log "building groundhog"
-cargo build -p groundhog-cli
-[[ -x "$GROUNDHOG_BINARY" ]] || die "groundhog binary is not executable: $GROUNDHOG_BINARY"
+log "building thruput"
+cargo build -p thruput-cli
+[[ -x "$THRUPUT_BINARY" ]] || die "thruput binary is not executable: $THRUPUT_BINARY"
 
 log "running local-provider smoke"
-GROUNDHOG_DEVNODE_BINARY="$DEVNODE_BINARY" \
-GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
+THRUPUT_DEVNODE_BINARY="$DEVNODE_BINARY" \
+THRUPUT_SIM_CLI_BINARY="$THRUPUT_BINARY" \
     cargo test -p groundhog-sim --test local_target_smoke local_target_chain_tip_smoke -- --ignored --nocapture
 
 log "running local-provider restart smoke"
-GROUNDHOG_DEVNODE_BINARY="$DEVNODE_BINARY" \
-GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
+THRUPUT_DEVNODE_BINARY="$DEVNODE_BINARY" \
+THRUPUT_SIM_CLI_BINARY="$THRUPUT_BINARY" \
     cargo test -p groundhog-sim --test local_target_smoke local_restart_target_chain_tip_smoke -- --ignored --nocapture
 
 log "running local-provider sweeper smoke"
-GROUNDHOG_DEVNODE_BINARY="$DEVNODE_BINARY" \
-GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
+THRUPUT_DEVNODE_BINARY="$DEVNODE_BINARY" \
+THRUPUT_SIM_CLI_BINARY="$THRUPUT_BINARY" \
     cargo test -p groundhog-sim --test local_target_smoke local_target_sweep_orphan_smoke -- --ignored --nocapture
 
 NODE_STDOUT="$WORKDIR/groundhog-node.json"
 NODE_STDERR="$WORKDIR/groundhog-node.stderr"
 
-log "starting temporary groundhog node for existing-provider smoke"
+log "starting temporary thruput node for existing-provider smoke"
 NODE_ARGS=(--json node --hog-devnode-binary "$DEVNODE_BINARY" --port 0)
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
 fi
-"$GROUNDHOG_BINARY" "${NODE_ARGS[@]}" >"$NODE_STDOUT" 2>"$NODE_STDERR" &
+"$THRUPUT_BINARY" "${NODE_ARGS[@]}" >"$NODE_STDOUT" 2>"$NODE_STDERR" &
 NODE_PID="$!"
 
 if ! wait_for_node_json "$NODE_STDOUT"; then
     cat "$NODE_STDERR" >&2 || true
-    die "groundhog node did not emit startup JSON"
+    die "thruput node did not emit startup JSON"
 fi
 
 RPC_URL="$(json_field_from_file data.rpc_url "$NODE_STDOUT")"

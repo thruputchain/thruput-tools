@@ -132,7 +132,7 @@ pub fn create(
         )?;
     }
     let mut funding_command = format!(
-        "groundhog airdrop {} --profile={}",
+        "thruput airdrop {} --profile={}",
         crate::terminal::render_shell_arg(&binding.address),
         crate::terminal::render_shell_arg(&inputs.profile.name)
     );

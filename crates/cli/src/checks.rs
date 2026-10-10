@@ -188,7 +188,7 @@ pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliE
     let cargo_config_path = crate::config::cargo_config_path()?;
 
     let registry_configured = match std::fs::read_to_string(&cargo_config_path) {
-        Ok(contents) => contents.contains("[registries.groundhog]"),
+        Ok(contents) => contents.contains("[registries.thruput]"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => return Err(e.into()),
     };
@@ -246,7 +246,7 @@ pub fn check_project(
                         ),
                         hint: Some(Cow::Owned(format!(
                             "generate it with \
-                             `groundhog keys generate -- {}` \
+                             `thruput keys generate -- {}` \
                              or change the profile's default_key",
                             render_shell_arg(key_name),
                         ))),
@@ -299,7 +299,7 @@ pub fn check_project(
                 code: "no_active_profile",
                 message: "no active profile is selected".into(),
                 hint: Some(Cow::Borrowed(
-                    "run `groundhog init`, pass `--profile`, or set default_profile in project or global config",
+                    "run `thruput init`, pass `--profile`, or set default_profile in project or global config",
                 )),
             },
         )),
@@ -348,7 +348,7 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
                 profile.name
             ),
             hint: Some(Cow::Owned(format!(
-                "run `groundhog wallet use <NAME> --profile={}` to select a saved wallet",
+                "run `thruput wallet use <NAME> --profile={}` to select a saved wallet",
                 render_shell_arg(&profile.name),
             ))),
         });
@@ -394,7 +394,7 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
                 code: "default_wallet_key_unavailable",
                 message: format!("could not read public metadata for effective key `{key_name}`"),
                 hint: Some(Cow::Borrowed(
-                    "inspect stored keys with `groundhog keys ls` and repair the selected key metadata",
+                    "inspect stored keys with `thruput keys ls` and repair the selected key metadata",
                 )),
             });
             return;
@@ -467,9 +467,9 @@ fn add_environment_findings(
         findings.push(Finding {
             level: FindingLevel::Info,
             code: "no_registry",
-            message: "global Groundhog cargo registry not configured".into(),
+            message: "global Thruput cargo registry not configured".into(),
             hint: Some(Cow::Borrowed(
-                "new projects include project-local registry config; run `cargo login --registry groundhog` before building if needed; Cargo stores the token globally in CARGO_HOME",
+                "new projects include project-local registry config; run `cargo login --registry thruput` before building if needed; Cargo stores the token globally in CARGO_HOME",
             )),
         });
     }
@@ -484,7 +484,7 @@ fn add_environment_findings(
                 .clone()
                 .unwrap_or_else(|| "hog-devnode binary is unavailable".into()),
             hint: Some(Cow::Borrowed(
-                "run `groundhog toolchain install`, or set GROUNDHOG_DEVNODE_BINARY to an executable hog-devnode; fix or unset the variable if it points to an old path",
+                "run `thruput toolchain install`, or set THRUPUT_DEVNODE_BINARY to an executable hog-devnode; fix or unset the variable if it points to an old path",
             )),
         });
     } else if !environment.genesis_root_artifact.valid {
@@ -1392,8 +1392,8 @@ fn add_key_findings(
         {
             findings.push(missing_selected_key_finding(
                 selected,
-                "run `groundhog keys generate` to recreate \
-                 it or `groundhog keys use <name>` to \
+                "run `thruput keys generate` to recreate \
+                 it or `thruput keys use <name>` to \
                  choose another key",
             ));
         }
@@ -1405,7 +1405,7 @@ fn add_key_findings(
                       selected"
                 .into(),
             hint: Some(Cow::Borrowed(
-                "run `groundhog keys use <name>` to set a \
+                "run `thruput keys use <name>` to set a \
                  default",
             )),
         });
@@ -1415,8 +1415,8 @@ fn add_key_findings(
     {
         findings.push(missing_selected_key_finding(
             selected,
-            "run `groundhog keys ls` to inspect available \
-             keys and `groundhog keys use <name>` to \
+            "run `thruput keys ls` to inspect available \
+             keys and `thruput keys use <name>` to \
              pick one",
         ));
     }
@@ -1435,7 +1435,7 @@ fn add_missing_keys_finding(findings: &mut Vec<Finding>) {
         level: FindingLevel::Warn,
         code: "no_keys",
         message: "no signing keys found".into(),
-        hint: Some(Cow::Borrowed("run `groundhog keys generate` to create one")),
+        hint: Some(Cow::Borrowed("run `thruput keys generate` to create one")),
     });
 }
 
@@ -1495,7 +1495,7 @@ mod tests {
         assert_eq!(findings[0].code, "default_wallet_not_saved");
         assert_eq!(
             findings[0].hint.as_deref(),
-            Some("run `groundhog wallet use <NAME> --profile='dev&net'` to select a saved wallet")
+            Some("run `thruput wallet use <NAME> --profile='dev&net'` to select a saved wallet")
         );
     }
 
@@ -1627,7 +1627,7 @@ mod tests {
                 genesis_root_artifact: GenesisRootArtifactStatus {
                     available: true,
                     valid: true,
-                    path: Some(PathBuf::from("/usr/share/groundhog/genesis_root.rv32a")),
+                    path: Some(PathBuf::from("/usr/share/thruput/genesis_root.rv32a")),
                     sha256: Some("abc123".into()),
                     error: None,
                 },
@@ -1758,7 +1758,7 @@ mod tests {
             genesis_root_artifact: GenesisRootArtifactStatus {
                 available: true,
                 valid: true,
-                path: Some(PathBuf::from("/usr/share/groundhog/genesis_root.rv32a")),
+                path: Some(PathBuf::from("/usr/share/thruput/genesis_root.rv32a")),
                 sha256: Some("abc123".into()),
                 error: None,
             },
@@ -1766,7 +1766,7 @@ mod tests {
             cargo_config_path: PathBuf::from("/tmp/config.toml"),
         };
         let project = ProjectContext {
-            config_path: Some(PathBuf::from("/tmp/groundhog.toml")),
+            config_path: Some(PathBuf::from("/tmp/thruput.toml")),
             ..ProjectContext::default()
         };
         let mut findings = Vec::new();
@@ -1943,7 +1943,7 @@ mod tests {
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home"));
         }
-        let config = tmp.path().join("groundhog.toml");
+        let config = tmp.path().join("thruput.toml");
         std::fs::write(
             &config,
             "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://localhost\"\n",
@@ -1964,7 +1964,7 @@ mod tests {
     #[test]
     fn check_project_missing_profile_is_finding() {
         let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("groundhog.toml"), "[profile.default]\n").unwrap();
+        std::fs::write(tmp.path().join("thruput.toml"), "[profile.default]\n").unwrap();
 
         let context = check_project(tmp.path(), Some("staging")).unwrap();
         assert_eq!(
@@ -1987,7 +1987,7 @@ mod tests {
         let project = tmp.path().join("proj");
         std::fs::create_dir(&project).unwrap();
         std::fs::write(
-            project.join("groundhog.toml"),
+            project.join("thruput.toml"),
             "default_profile = \"default\"\n\n[profile.default]\ndefault_key = \"ghost;echo bad\"\n",
         )
         .unwrap();
@@ -2000,7 +2000,7 @@ mod tests {
             context.findings[0]
                 .hint
                 .as_deref()
-                .is_some_and(|hint| hint.contains("groundhog keys generate -- 'ghost;echo bad'"))
+                .is_some_and(|hint| hint.contains("thruput keys generate -- 'ghost;echo bad'"))
         );
 
         unsafe {
@@ -2025,7 +2025,7 @@ mod tests {
             ("dev-abc", true),
         ] {
             std::fs::write(
-                project.join("groundhog.toml"),
+                project.join("thruput.toml"),
                 format!("[profile.default]\ndefault_key = \"{key}\"\n"),
             )
             .unwrap();
@@ -2137,7 +2137,7 @@ mod tests {
                 genesis_root_artifact: GenesisRootArtifactStatus {
                     available: true,
                     valid: true,
-                    path: Some(PathBuf::from("/usr/share/groundhog/genesis_root.rv32a")),
+                    path: Some(PathBuf::from("/usr/share/thruput/genesis_root.rv32a")),
                     sha256: Some("abc123".into()),
                     error: None,
                 },
@@ -2197,7 +2197,7 @@ mod tests {
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         }
 
-        // No groundhog.toml, but an explicit profile selection.
+        // No thruput.toml, but an explicit profile selection.
         let context = check_project(tmp.path(), Some("staging")).unwrap();
         assert!(context.config_path.is_none());
         assert_eq!(context.profile_name.as_deref(), Some("staging"));

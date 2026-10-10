@@ -1,8 +1,8 @@
-use groundhog_cli::Print;
 use serial_test::serial;
 use std::env;
 use std::fs;
 use tempfile::TempDir;
+use thruput_cli::Print;
 
 mod support;
 
@@ -14,7 +14,7 @@ fn write_groundhog_registry_config(cargo_home: &std::path::Path) {
     fs::create_dir_all(cargo_home).unwrap();
     fs::write(
         cargo_home.join("config.toml"),
-        "[registries.groundhog]\nindex = \"sparse+https://crates.thruput.network/api/v1/crates/\"\n",
+        "[registries.thruput]\nindex = \"sparse+https://crates.thruput.network/api/v1/crates/\"\n",
     )
     .unwrap();
 }
@@ -30,20 +30,20 @@ fn status_succeeds_when_fully_configured() {
     unsafe {
         env::set_var("CARGO_HOME", &cargo_home);
         env::set_var("XDG_CONFIG_HOME", tmp.path());
-        env::set_var("GROUNDHOG_DEVNODE_BINARY", &devnode);
+        env::set_var("THRUPUT_DEVNODE_BINARY", &devnode);
     }
 
     write_groundhog_registry_config(&cargo_home);
 
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
-    groundhog_cli::config::initialize_global_profiles().unwrap();
+    thruput_cli::config::initialize_global_profiles().unwrap();
 
-    let result = groundhog_cli::status::run(tmp.path(), None, "status", &quiet());
+    let result = thruput_cli::status::run(tmp.path(), None, "status", &quiet());
     assert!(
         result.is_ok(),
         "{result:?}: {:?}",
-        groundhog_cli::checks::collect_report(tmp.path(), None)
+        thruput_cli::checks::collect_report(tmp.path(), None)
             .unwrap()
             .all_findings()
             .collect::<Vec<_>>()
@@ -52,7 +52,7 @@ fn status_succeeds_when_fully_configured() {
     unsafe {
         env::remove_var("CARGO_HOME");
         env::remove_var("XDG_CONFIG_HOME");
-        env::remove_var("GROUNDHOG_DEVNODE_BINARY");
+        env::remove_var("THRUPUT_DEVNODE_BINARY");
     }
 }
 
@@ -66,7 +66,7 @@ fn status_returns_error_when_missing_state() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    let result = groundhog_cli::status::run(tmp.path(), None, "status", &quiet());
+    let result = thruput_cli::status::run(tmp.path(), None, "status", &quiet());
     assert!(result.is_err());
 
     unsafe {
@@ -84,7 +84,7 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
 
     fs::create_dir(&project).unwrap();
     fs::write(
-        project.join("groundhog.toml"),
+        project.join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\ndefault_key = \"bob\"\n",
     )
     .unwrap();
@@ -96,10 +96,10 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
 
     write_groundhog_registry_config(&cargo_home);
 
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
-    groundhog_cli::keys::generate(&Some("bob".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(&Some("bob".into()), false, "keys.generate", &quiet()).unwrap();
 
-    let report = groundhog_cli::checks::collect_report(&project, None).unwrap();
+    let report = thruput_cli::checks::collect_report(&project, None).unwrap();
     assert_eq!(report.effective_default_key.as_deref(), Some("bob"));
     assert_eq!(report.effective_default_key_source, Some("profile"));
     let summary = report.effective_default_key_summary().unwrap();
@@ -120,7 +120,7 @@ fn collect_report_does_not_invent_builtin_key_without_active_local_runtime() {
 
     fs::create_dir(&project).unwrap();
     fs::write(
-        project.join("groundhog.toml"),
+        project.join("thruput.toml"),
         "default_profile = \"local\"\n\n[profile.local]\nnetwork = \"local\"\n",
     )
     .unwrap();
@@ -132,7 +132,7 @@ fn collect_report_does_not_invent_builtin_key_without_active_local_runtime() {
 
     write_groundhog_registry_config(&cargo_home);
 
-    let report = groundhog_cli::checks::collect_report(&project, None).unwrap();
+    let report = thruput_cli::checks::collect_report(&project, None).unwrap();
     assert_eq!(report.effective_default_key, None);
     assert_eq!(report.effective_default_key_source, None);
     assert!(
@@ -161,14 +161,12 @@ fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
 
     write_groundhog_registry_config(&cargo_home);
 
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
-    let alice_path = groundhog_cli::config::keys_dir()
-        .unwrap()
-        .join("alice.json");
+    let alice_path = thruput_cli::config::keys_dir().unwrap().join("alice.json");
     fs::remove_file(alice_path).unwrap();
 
-    let report = groundhog_cli::checks::collect_report(tmp.path(), None).unwrap();
+    let report = thruput_cli::checks::collect_report(tmp.path(), None).unwrap();
     assert_eq!(report.effective_default_key.as_deref(), Some("alice"));
     assert!(report.effective_default_key_summary().is_none());
     assert!(
@@ -193,9 +191,9 @@ fn collect_report_uses_effective_merged_project_profile_details() {
     let project_counter = format!("0x{}", "22".repeat(32));
 
     fs::create_dir(&project).unwrap();
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
-        tmp.path().join("groundhog/config.toml"),
+        tmp.path().join("thruput/config.toml"),
         format!(
             r#"
 default_profile = "local"
@@ -211,7 +209,7 @@ HOG = "{global_hog}"
     )
     .unwrap();
     fs::write(
-        project.join("groundhog.toml"),
+        project.join("thruput.toml"),
         format!(
             r#"
 [profile.local]
@@ -230,9 +228,9 @@ counter = "{project_counter}"
     }
 
     write_groundhog_registry_config(&cargo_home);
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
-    let report = groundhog_cli::checks::collect_report(&project, None).unwrap();
+    let report = thruput_cli::checks::collect_report(&project, None).unwrap();
     assert_eq!(report.project.profile_name.as_deref(), Some("local"));
     assert_eq!(
         report.project.rpc_url.as_deref(),
@@ -257,9 +255,9 @@ fn collect_report_shows_global_profile_details_outside_project() {
     let global_wallet = format!("0x{}", "22".repeat(32));
     let global_owner = format!("0x{}", "33".repeat(32));
 
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
-        tmp.path().join("groundhog/config.toml"),
+        tmp.path().join("thruput/config.toml"),
         format!(
             r#"
 default_profile = "local"
@@ -284,7 +282,7 @@ owner_public_key = "{global_owner}"
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    let report = groundhog_cli::checks::collect_report(tmp.path(), None).unwrap();
+    let report = thruput_cli::checks::collect_report(tmp.path(), None).unwrap();
     assert!(report.project.config_path.is_none());
     assert_eq!(report.project.profile_name.as_deref(), Some("local"));
     assert_eq!(

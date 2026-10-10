@@ -13,10 +13,10 @@ use groundhog_json_rpc_types::bootstrap_manifest::{
 use groundhog_json_rpc_types::{Ed25519PublicKey, NetworkHashHex};
 use groundhog_tx_validation::ConfigParamName;
 
-/// Default JSON-RPC listen address for `groundhog node`.
+/// Default JSON-RPC listen address for `thruput node`.
 pub const DEFAULT_RPC_LISTEN_ADDRESS: &str = "127.0.0.1:9545";
 
-/// Default maximum simultaneous public JSON-RPC connections for `groundhog node`.
+/// Default maximum simultaneous public JSON-RPC connections for `thruput node`.
 pub const DEFAULT_RPC_MAX_CONNECTIONS: u32 = 2_000;
 
 /// Default timeout for one hogd-dev `ViewGateway` execution RPC.

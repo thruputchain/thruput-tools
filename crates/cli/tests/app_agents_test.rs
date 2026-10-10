@@ -3,7 +3,7 @@ use std::fs;
 #[test]
 fn counter_app_guide_describes_the_generated_frontend_and_its_real_scripts() {
     let temp = tempfile::tempdir().unwrap();
-    groundhog_cli::scaffold::generate(temp.path(), "guide-app", Some("counter-app")).unwrap();
+    thruput_cli::scaffold::generate(temp.path(), "guide-app", Some("counter-app")).unwrap();
     let root = fs::read_to_string(temp.path().join("AGENTS.md")).unwrap();
     let web = fs::read_to_string(temp.path().join("web/AGENTS.md")).unwrap();
     let package: serde_json::Value =
@@ -11,7 +11,7 @@ fn counter_app_guide_describes_the_generated_frontend_and_its_real_scripts() {
 
     assert!(root.contains("web/AGENTS.md"));
     assert!(root.contains(&format!(
-        "Scaffolded with Groundhog {}, template `counter-app`",
+        "Scaffolded with Thruput {}, template `counter-app`",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(!root.contains("{{"));
@@ -28,7 +28,7 @@ fn counter_app_guide_describes_the_generated_frontend_and_its_real_scripts() {
         "web/main.tsx",
         "web/wallet.ts",
         "web/refresh-counter.ts",
-        "scripts/groundhog.mjs",
+        "scripts/thruput.mjs",
         "README.md",
     ] {
         assert!(temp.path().join(path).is_file());
@@ -45,7 +45,7 @@ fn counter_app_guide_describes_the_generated_frontend_and_its_real_scripts() {
 fn contract_only_templates_do_not_get_counter_app_guidance() {
     for template in [None, Some("counter")] {
         let temp = tempfile::tempdir().unwrap();
-        groundhog_cli::scaffold::generate(temp.path(), "guide-contract", template).unwrap();
+        thruput_cli::scaffold::generate(temp.path(), "guide-contract", template).unwrap();
         let guide = fs::read_to_string(temp.path().join("AGENTS.md")).unwrap();
         assert!(guide.contains(&format!("template `{}`", template.unwrap_or("minimal"))));
         assert!(!guide.contains("{{"));
