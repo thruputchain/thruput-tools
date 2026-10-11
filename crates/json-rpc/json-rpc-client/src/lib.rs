@@ -3,19 +3,19 @@
 // Re-exports json-rpc-types so consumers (SDK, CLI) only need this crate.
 pub use groundhog_json_rpc_types as types;
 
-pub use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
+pub mod receipt;
+
+pub use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient, LocalFundingApiClient};
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use jsonrpsee::core::client::ClientT;
 pub use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use std::time::Duration;
 
-// Keep the default wait window at roughly 30 seconds, but poll frequently
-// enough to observe indexer failure diagnostics that intentionally expire
-// after only a few blocks. Fast local and single-validator networks can
-// advance several blocks during a one-second polling interval.
-pub const DEFAULT_RECEIPT_POLL_ATTEMPTS: usize = 300;
-pub const DEFAULT_RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub use receipt::{
+    DEFAULT_RECEIPT_POLL_ATTEMPTS, DEFAULT_RECEIPT_POLL_INTERVAL, ReceiptPollConfig,
+    ReceiptPollError, ReceiptSource, poll_receipt,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SubmitTransactionError {
@@ -191,7 +191,7 @@ pub async fn poll_transaction_receipt(
 /// Poll an accepted transaction with explicit retry settings.
 ///
 /// Receipts are authoritative. When a receipt is not yet available, an
-/// An `Invalid` status ends polling early. A best-effort `RecentFailure`
+/// An `Invalid`, `Retry`, or `Dropped` status ends polling early. A best-effort `RecentFailure`
 /// diagnostic is retained while polling continues because the same transaction
 /// may still commit; if no receipt appears, the diagnostic is returned after
 /// polling is exhausted.
@@ -217,46 +217,27 @@ pub async fn poll_transaction_receipt_with_client_config<C: ClientT + Sync>(
     max_attempts: usize,
     poll_interval: Duration,
 ) -> Result<TransactionReceipt, PollTransactionReceiptError> {
-    let mut recent_failure = None;
-    let mut last_status = None;
-
-    for attempt in 0..max_attempts {
-        match client.get_transaction_receipt(tx_hash).await {
-            Ok(Some(receipt)) => return Ok(receipt),
-            Ok(None) => match client.get_transaction_status(tx_hash).await {
-                Ok(status @ TransactionStatus::Invalid { .. }) => {
-                    return Err(PollTransactionReceiptError::TransactionStatus { tx_hash, status });
-                }
-                Ok(status @ TransactionStatus::RecentFailure { .. }) => {
-                    recent_failure = Some(status);
-                    if attempt < max_attempts.saturating_sub(1) {
-                        tokio::time::sleep(poll_interval).await;
-                    }
-                }
-                // Status failures do not erase the last successful observation.
-                // Unknown remains advisory; a later receipt is authoritative.
-                result => {
-                    if let Ok(status) = result {
-                        last_status = Some(status);
-                    }
-                    if attempt < max_attempts.saturating_sub(1) {
-                        tokio::time::sleep(poll_interval).await;
-                    }
-                }
-            },
-            Err(source) => {
-                return Err(PollTransactionReceiptError::GetTransactionReceipt { tx_hash, source });
-            }
+    poll_receipt(
+        client,
+        tx_hash,
+        ReceiptPollConfig::attempts(max_attempts, poll_interval),
+    )
+    .await
+    .map_err(|error| match error {
+        ReceiptPollError::Lookup { tx_hash, source } => {
+            PollTransactionReceiptError::GetTransactionReceipt { tx_hash, source }
         }
-    }
-
-    if let Some(status) = recent_failure {
-        Err(PollTransactionReceiptError::TransactionStatus { tx_hash, status })
-    } else {
-        Err(PollTransactionReceiptError::ReceiptTimeout {
+        ReceiptPollError::Status { tx_hash, status } => {
+            PollTransactionReceiptError::TransactionStatus { tx_hash, status }
+        }
+        ReceiptPollError::Timeout {
             tx_hash,
-            attempts: max_attempts,
+            attempts,
             last_status,
-        })
-    }
+        } => PollTransactionReceiptError::ReceiptTimeout {
+            tx_hash,
+            attempts,
+            last_status,
+        },
+    })
 }

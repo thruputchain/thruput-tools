@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-realistic-soak-short",
   "seed": "sim-local-realistic-soak-short",
@@ -11,13 +11,6 @@
   },
   "client": {
     "maxConcurrentRequests": 512
-  },
-  "bootstrap": {
-    "accounts": 2,
-    "accountSeed": "sim-local-realistic-soak-short-accounts",
-    "initialStorageTokens": "1000000000",
-    "devWalletProfile": "default",
-    "storageCostProfile": "default"
   },
   "loadShape": [
     {
@@ -151,5 +144,13 @@
   },
   "observability": {
     "resourceSampleInterval": "5s"
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "sim-local-realistic-soak-short:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "deploymentCollateralRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

@@ -81,7 +81,7 @@ fn version_flag_reports_validated_release_identity() {
     let (_directory, manifest_path, _digest) = write_manifest(source_commit);
     let output = Command::new(env!("CARGO_BIN_EXE_hog-gateway"))
         .arg("--version")
-        .env("GROUNDHOG_BUNDLE_MANIFEST", manifest_path)
+        .env("THRUPUT_BUNDLE_MANIFEST", manifest_path)
         .output()
         .unwrap();
 
@@ -101,7 +101,7 @@ fn version_flag_reports_precise_manifest_mismatch_on_stderr() {
     let (_directory, manifest_path, _digest) = write_manifest("not-this-build");
     let output = Command::new(env!("CARGO_BIN_EXE_hog-gateway"))
         .arg("--version")
-        .env("GROUNDHOG_BUNDLE_MANIFEST", manifest_path)
+        .env("THRUPUT_BUNDLE_MANIFEST", manifest_path)
         .output()
         .unwrap();
 
@@ -138,7 +138,7 @@ fn startup_logs_validated_release_identity() {
         let mut command = Command::new(env!("CARGO_BIN_EXE_hog-gateway"));
         command
             .args(["--config", missing_config.to_str().unwrap()])
-            .env("GROUNDHOG_BUNDLE_MANIFEST", &manifest_path)
+            .env("THRUPUT_BUNDLE_MANIFEST", &manifest_path)
             .env_remove("RUST_LOG");
         if let Some(rust_log) = rust_log {
             command.env("RUST_LOG", rust_log);

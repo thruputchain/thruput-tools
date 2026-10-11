@@ -17,9 +17,6 @@ export type NetworkDescriptor = {
   airdrop: {
     rawAmount: string
   }
-  walletCreate: {
-    prefundRawAmount: string
-  }
 }
 
 export type AirdropSuccess = {
@@ -178,15 +175,16 @@ function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
   if (!isRecord(payload)) {
     throw new Error("Faucet metadata had an unexpected shape.")
   }
+  if (payload.schemaVersion !== 4 || payload.kind !== "groundhog-network") {
+    throw new Error("Faucet metadata uses an unsupported schema.")
+  }
   const endpoints = payload.endpoints
   const nativeHog = payload.nativeHog
   const airdrop = payload.airdrop
-  const walletCreate = payload.walletCreate
   if (
     !isRecord(endpoints) ||
     !isRecord(nativeHog) ||
-    !isRecord(airdrop) ||
-    !isRecord(walletCreate)
+    !isRecord(airdrop)
   ) {
     throw new Error("Faucet metadata is missing required sections.")
   }
@@ -205,12 +203,6 @@ function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
     },
     airdrop: {
       rawAmount: requireDecimalString(airdrop.rawAmount, "airdrop.rawAmount"),
-    },
-    walletCreate: {
-      prefundRawAmount: requireDecimalString(
-        walletCreate.prefundRawAmount,
-        "walletCreate.prefundRawAmount",
-      ),
     },
   }
   return descriptor

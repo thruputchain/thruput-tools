@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Gateway observability smoke against a real hog-devnode-backed local backend.
 #
-# Starts `groundhog node`, extracts its runtime manifest, starts a standalone
+# Starts `thruput node`, extracts its runtime manifest, starts a standalone
 # `hog-gateway` from that manifest, then validates private health, metrics, and
 # bounded tracing signals.
 #
 # Required environment:
-#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode
 #
 # Optional environment:
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$REPO_ROOT/target/debug/groundhog"
+CLI="$REPO_ROOT/target/debug/thruput"
 GATEWAY="$REPO_ROOT/target/debug/hog-gateway"
 
 NODE_STARTUP_TIMEOUT_SECS="${NODE_STARTUP_TIMEOUT_SECS:-60}"
@@ -178,12 +178,12 @@ PY
 }
 
 find_hogd_dev_binary() {
-    if [[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]]; then
-        printf '%s\n' "$GROUNDHOG_DEVNODE_BINARY"
+    if [[ -n "${THRUPUT_DEVNODE_BINARY:-}" ]]; then
+        printf '%s\n' "$THRUPUT_DEVNODE_BINARY"
         return
     fi
 
-    die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
+    die "set THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 detect_hogd_protocol() {
@@ -268,7 +268,7 @@ DEVNODE_BINARY="$(find_hogd_dev_binary)"
 HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
 log "Building CLI and gateway"
-cargo build -p groundhog-cli -p groundhog-json-rpc-gateway \
+cargo build -p thruput-cli -p groundhog-json-rpc-gateway \
     --manifest-path "$REPO_ROOT/Cargo.toml"
 
 WORK="$(mktemp -d)"
@@ -350,7 +350,7 @@ fi
 NODE_DESCENDANTS="$(collect_descendants "$NODE_PID" || true)"
 RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
 [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
-    || die "groundhog node did not report a runtime manifest path"
+    || die "thruput node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
 log "Runtime manifest: $RUNTIME_MANIFEST"
 

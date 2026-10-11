@@ -1,17 +1,10 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-calldata-heavy",
   "seed": "sim-local-calldata-heavy",
   "target": {
     "provider": "local"
-  },
-  "bootstrap": {
-    "accounts": 2,
-    "accountSeed": "sim-local-calldata-heavy-accounts",
-    "initialStorageTokens": "1000000000",
-    "devWalletProfile": "default",
-    "storageCostProfile": "default"
   },
   "loadShape": [
     {
@@ -49,5 +42,13 @@
   ],
   "assertions": {
     "maxErrorRate": 0.001
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "sim-local-calldata-heavy:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "deploymentCollateralRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

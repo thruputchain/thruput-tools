@@ -1,17 +1,10 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-multi-contract-soak",
   "seed": "sim-local-multi-contract-soak",
   "target": {
     "provider": "local"
-  },
-  "bootstrap": {
-    "accounts": 2,
-    "accountSeed": "sim-local-multi-contract-soak-accounts",
-    "initialStorageTokens": "1000000000",
-    "devWalletProfile": "default",
-    "storageCostProfile": "default"
   },
   "loadShape": [
     {
@@ -128,5 +121,13 @@
   },
   "observability": {
     "resourceSampleInterval": "5s"
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "sim-local-multi-contract-soak:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "deploymentCollateralRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

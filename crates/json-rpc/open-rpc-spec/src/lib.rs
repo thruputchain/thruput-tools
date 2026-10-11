@@ -1,5 +1,6 @@
+use groundhog_json_rpc_api::types::airdrop::LocalFundingErrorData;
 use groundhog_json_rpc_api::{
-    AirdropApiOpenRpc, GroundhogApiOpenRpc, WIRE_FORMAT_VERSION,
+    AirdropApiOpenRpc, GroundhogApiOpenRpc, LocalFundingApiOpenRpc, WIRE_FORMAT_VERSION,
     types::error::{ERROR_INFOS, RpcErrorInfo, TxInvalidDetail, codes, error_info_by_code},
 };
 use groundhog_open_rpc::{Project, ProjectInfo};
@@ -16,6 +17,7 @@ pub fn build_spec() -> serde_json::Value {
     });
     spec.module(GroundhogApiOpenRpc::module_doc);
     spec.module(AirdropApiOpenRpc::module_doc);
+    spec.module(LocalFundingApiOpenRpc::module_doc);
     let mut json = spec.to_json();
     add_error_docs(&mut json);
     canonicalize(json)
@@ -89,10 +91,18 @@ fn error_object(info: &RpcErrorInfo) -> serde_json::Value {
 /// JSON Schema of the structured `data` a documented error may carry.
 fn error_data_schema(code: i32) -> Option<serde_json::Value> {
     let schema = match code {
+        codes::VIEW_HEIGHT_UNAVAILABLE => SchemaSettings::draft2020_12()
+            .with(|settings| settings.meta_schema = None)
+            .into_generator()
+            .into_root_schema_for::<groundhog_json_rpc_api::types::view::ViewHeightUnavailable>(),
         codes::TX_INVALID => SchemaSettings::draft2020_12()
             .with(|settings| settings.meta_schema = None)
             .into_generator()
             .into_root_schema_for::<TxInvalidDetail>(),
+        codes::LOCAL_FUNDING_UNRESOLVED => SchemaSettings::draft2020_12()
+            .with(|settings| settings.meta_schema = None)
+            .into_generator()
+            .into_root_schema_for::<LocalFundingErrorData>(),
         _ => return None,
     };
     Some(serde_json::to_value(schema).expect("bug: schemars Schema serialization cannot fail"))
@@ -100,6 +110,14 @@ fn error_data_schema(code: i32) -> Option<serde_json::Value> {
 
 fn method_error_codes(method: &str) -> &'static [i32] {
     match method {
+        "groundhog_view" | "groundhog_viewBatch" => &[
+            codes::INVALID_PARAMS,
+            codes::VIEW_HEIGHT_UNAVAILABLE,
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+            codes::NOT_IMPLEMENTED,
+        ],
         "groundhog_sendRawTransaction" => &[
             codes::INVALID_PARAMS,
             codes::TX_INVALID,
@@ -126,10 +144,10 @@ fn method_error_codes(method: &str) -> &'static [i32] {
             codes::NOT_IMPLEMENTED,
         ],
         "groundhog_getBalance"
+        | "groundhog_getAddressAuthData"
         | "groundhog_getEvents"
         | "groundhog_getTransactionsByAddress"
-        | "groundhog_getStorageAt"
-        | "groundhog_view" => &[
+        | "groundhog_getStorageAt" => &[
             codes::INVALID_PARAMS,
             codes::BACKEND_UNAVAILABLE,
             codes::BACKEND_TIMEOUT,
@@ -142,7 +160,15 @@ fn method_error_codes(method: &str) -> &'static [i32] {
             codes::OVERLOADED,
             codes::NOT_IMPLEMENTED,
         ],
-        "groundhog_networkInfo" | "groundhog_version" => &[],
+        "groundhog_networkInfo" | "groundhog_serverLimits" | "groundhog_version" => &[],
+        "groundhog_fundAccount" => &[
+            codes::LOCAL_FUNDING_UNRESOLVED,
+            codes::INVALID_PARAMS,
+            codes::TX_REJECTED,
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+        ],
         "groundhog_requestAirdrop" => &[
             codes::INVALID_PARAMS,
             codes::TX_REJECTED,

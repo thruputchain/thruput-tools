@@ -1,12 +1,12 @@
 # Convenience wrapper around cargo for this workspace. Cargo stays
-# authoritative; every target here is the command CLAUDE.md already documents.
+# authoritative; run `make help` for the available targets.
 #
 #   make config     fetch dependencies (needs the private registry token)
-#   make cli        build just the groundhog CLI
+#   make cli        build just the thruput CLI
 #   make node       run a local node against a hog-devnode binary
 #   make help       list every target
 #
-# The local devnode path needs two repos: this one supplies `groundhog`, which
+# The local devnode path needs two repos: this one supplies `thruput`, which
 # serves the public JSON-RPC surface on 9545, and hogd supplies the hog-devnode
 # process it supervises.
 
@@ -24,8 +24,9 @@ PROFILE ?= release
 # assume ./target.
 TARGET_ROOT := $(or $(CARGO_TARGET_DIR),target)
 
-# `dev` and `debug` are the same profile under two names and both land in
-# $(TARGET_ROOT)/debug, so neither can be pasted into the directory as-is.
+# Cargo's reserved profiles share output directories: `dev` and `test` land in
+# debug, while `release` and `bench` land in release. `debug` is our alias for
+# `dev`, so profile names cannot always be pasted into the directory as-is.
 ifeq ($(PROFILE),release)
 CARGO_PROFILE_FLAG := --release
 TARGET_DIR := $(TARGET_ROOT)/release
@@ -35,6 +36,12 @@ TARGET_DIR := $(TARGET_ROOT)/debug
 else ifeq ($(PROFILE),dev)
 CARGO_PROFILE_FLAG :=
 TARGET_DIR := $(TARGET_ROOT)/debug
+else ifeq ($(PROFILE),bench)
+CARGO_PROFILE_FLAG := --profile $(PROFILE)
+TARGET_DIR := $(TARGET_ROOT)/release
+else ifeq ($(PROFILE),test)
+CARGO_PROFILE_FLAG := --profile $(PROFILE)
+TARGET_DIR := $(TARGET_ROOT)/debug
 else
 CARGO_PROFILE_FLAG := --profile $(PROFILE)
 TARGET_DIR := $(TARGET_ROOT)/$(PROFILE)
@@ -43,7 +50,7 @@ endif
 # Binaries `make install` copies. The workspace builds more (groundhog-bench,
 # rv32-lower, groundhog-open-rpc-spec, groundhog-faucet); add them here when a
 # deployment needs them rather than installing the whole target directory.
-BINS ?= groundhog hogsim hog-gateway
+BINS ?= thruput hogsim hog-gateway
 
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
@@ -59,12 +66,13 @@ TOOLCHAIN := $(shell grep -m1 '^channel' rust-toolchain.toml | tr -d '"' | awk '
 .PHONY: help
 help:
 	@echo "Setup"
-	@echo "  config        cargo fetch --locked; needs the groundhog registry token"
+	@echo "  config        cargo fetch --locked; needs the thruput registry token"
 	@echo ""
 	@echo "Build"
 	@echo "  build         the whole workspace ($(PROFILE))"
-	@echo "  cli           just the groundhog binary, all a local node needs"
-	@echo "  node          run groundhog node against DEVNODE_BINARY"
+	@echo "  build-native  local-only host-tuned workspace; NEVER use for release artifacts"
+	@echo "  cli           just the thruput binary, all a local node needs"
+	@echo "  node          run thruput node against DEVNODE_BINARY"
 	@echo ""
 	@echo "Verify"
 	@echo "  check         fmt-check, lint, and test together"
@@ -72,6 +80,7 @@ help:
 	@echo "  lint          clippy with -D warnings"
 	@echo "  fmt           rewrite formatting; fmt-check reports instead"
 	@echo "  version       workspace, toolchain, and built binary versions"
+	@echo "  check-native  count hardware SHA-256 instructions in portable/native BINS"
 	@echo ""
 	@echo "Install"
 	@echo "  install       copy $(BINS) to $(BINDIR)"
@@ -93,21 +102,58 @@ config:
 build:
 	$(CARGO) build --workspace $(CARGO_PROFILE_FLAG)
 
+# Local-only: target-cpu=native can fault on other cores; NEVER use for release artifacts.
+# A separate target directory keeps the portable build cache valid.
+.PHONY: build-native
+build-native:
+	RUSTFLAGS="-C target-cpu=native -C force-frame-pointers=yes" $(CARGO) build --workspace $(CARGO_PROFILE_FLAG) --target-dir "$(TARGET_ROOT)/native"
+
+# Advisory only: instruction presence does not prove runtime dispatch uses it.
+# Apple objdump adds a vector suffix (sha256h.4s); do not also count sha256h2.
+.PHONY: check-native
+check-native:
+	@set -o pipefail; \
+	case "$$(uname -m)" in \
+		aarch64|arm64) instruction=sha256h ;; \
+		x86_64|amd64) instruction=sha256rnds2 ;; \
+		*) echo "hardware SHA-256 check unavailable for this architecture"; exit 0 ;; \
+	esac; \
+	disassembler=""; \
+	for tool in llvm-objdump objdump; do \
+		if command -v "$$tool" >/dev/null 2>&1; then disassembler=$$tool; break; fi; \
+	done; \
+	if [ -z "$$disassembler" ]; then \
+		echo "hardware SHA-256 check unavailable: install llvm-objdump or objdump"; exit 0; \
+	fi; \
+	for dir in "$(TARGET_DIR)" "$(TARGET_ROOT)/native/$(notdir $(TARGET_DIR))"; do \
+		for b in $(BINS); do \
+			binary="$$dir/$$b"; \
+			if [ ! -f "$$binary" ]; then \
+				echo "$$binary: not built"; \
+			elif count=$$("$$disassembler" -d "$$binary" 2>/dev/null | \
+				awk -v op="$$instruction" '$$0 ~ "[[:space:]]" op "([.][[:alnum:]]+)?[[:space:]]" { n++ } END { print n+0 }'); then \
+				echo "$$binary: $$count $$instruction instructions"; \
+			else \
+				echo "$$binary: disassembly unavailable with $$disassembler"; \
+			fi; \
+		done; \
+	done
+
 .PHONY: cli
 cli:
-	$(CARGO) build -p groundhog-cli $(CARGO_PROFILE_FLAG)
+	$(CARGO) build -p thruput-cli $(CARGO_PROFILE_FLAG)
 
 # Runs the built binary rather than `cargo run` so an unbuilt tree says so
 # instead of starting a long compile with a node command tacked on the end.
 .PHONY: node
 node:
-	@test -x $(TARGET_DIR)/groundhog || { \
-		echo "no groundhog binary in $(TARGET_DIR); run 'make cli' first" >&2; exit 1; }
+	@test -x $(TARGET_DIR)/thruput || { \
+		echo "no thruput binary in $(TARGET_DIR); run 'make cli' first" >&2; exit 1; }
 	@test -x "$(DEVNODE_BINARY)" || { \
 		echo "no hog-devnode at $(DEVNODE_BINARY); build it in the hogd repo or set DEVNODE_BINARY" >&2; exit 1; }
-	GROUNDHOG_DEVNODE_BINARY="$(DEVNODE_BINARY)" $(TARGET_DIR)/groundhog node $(NODE_ARGS)
+	THRUPUT_DEVNODE_BINARY="$(DEVNODE_BINARY)" $(TARGET_DIR)/thruput node $(NODE_ARGS)
 
-# The pre-PR checklist in CLAUDE.md, in one target.
+# Core workspace format, lint, and test checks.
 .PHONY: check
 check: fmt-check lint test
 
@@ -142,7 +188,7 @@ version:
 		fi; \
 	done
 
-# cargo install --path crates/tools/cli is the other way to get the CLI on PATH;
+# cargo install --path crates/cli is the other way to get the CLI on PATH;
 # it rebuilds into ~/.cargo/bin. This copies what is already built, so the
 # binary installed is the one just tested.
 # Every binary in BINS has to be there. Skipping the missing ones and still

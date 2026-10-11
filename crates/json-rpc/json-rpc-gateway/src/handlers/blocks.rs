@@ -1,44 +1,45 @@
 //! `groundhog_chainTip`, `groundhog_getBlockByNumber`, and
 //! `groundhog_pendingTransactionCount` handlers.
 
-use groundhog_json_rpc_server::{RpcRequestContext, TipReading};
+use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError, TipReading};
 use groundhog_json_rpc_types::BlockHeight;
 use groundhog_json_rpc_types::block::BlockInfo;
 
 use crate::context::GatewayContext;
-use crate::error::{self, GatewayError};
 
 /// Current chain tip (height + block hash) with the network config it
 /// carries.
 ///
 /// Routes through the per-gateway `TipCoalescer` so that concurrent
-/// client requests share a single in-flight `schedgateway_get_tip` RPC.
+/// client requests share a fresh `dbgateway_get_config` RPC.
 /// See `crate::tip_coalescer` for the linearizable coalescing design.
 #[tracing::instrument(skip_all)]
 pub async fn chain_tip(
     ctx: &GatewayContext,
     context: RpcRequestContext,
-) -> Result<TipReading, GatewayError> {
+) -> Result<TipReading, RpcServerError> {
     ctx.tip_coalescer.tip_reading(context).await
 }
 
 /// Block data at a given height.
 ///
 /// **Deferred** — data source is an open question.
-/// See `docs/gateway/system-design.md` question #1.
+/// See `docs/gateway/system-design.md`, "Views and reads".
 #[tracing::instrument(skip_all, fields(height))]
 pub async fn get_block_by_number(
     _ctx: &GatewayContext,
     _height: BlockHeight,
-) -> Result<Option<BlockInfo>, GatewayError> {
-    Err(error::not_implemented("getBlockByNumber"))
+) -> Result<Option<BlockInfo>, RpcServerError> {
+    Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
 }
 
 /// Number of transactions in the mempool.
 ///
 /// **Deferred** — the scheduler-gateway RPC exists, but standalone handler
-/// plumbing remains deferred. See `docs/gateway/open-questions.md`.
+/// plumbing remains deferred. See `docs/gateway/system-design.md`, "Views and reads".
 #[tracing::instrument(skip_all)]
-pub async fn pending_transaction_count(_ctx: &GatewayContext) -> Result<u64, GatewayError> {
-    Err(error::not_implemented("pendingTransactionCount"))
+pub async fn pending_transaction_count(_ctx: &GatewayContext) -> Result<u64, RpcServerError> {
+    Err(RpcServerError::NotImplemented(
+        "pendingTransactionCount".into(),
+    ))
 }

@@ -1,8 +1,7 @@
 # Groundhog Faucet
 
-`groundhog-faucet` serves the hosted Devnet network descriptor, airdrops, and
-sponsored wallet creation. The signing key is loaded once at startup and never
-belongs in TOML config, process arguments, or logs.
+`groundhog-faucet` serves the hosted Devnet network descriptor and airdrops.
+The signing key is loaded once at startup and never belongs in TOML config, process arguments, or logs.
 
 ## Run Locally
 
@@ -34,7 +33,6 @@ Start from `faucet.example.toml`. The config includes:
 - `[network]` metadata served by `GET /v1/network`.
 - `[network.faucet]` public faucet wallet metadata.
 - `[airdrop]` transfer settings and `[airdrop.secret_key_source]`.
-- `[wallet_create]` sponsored wallet-create settings.
 - `[policy]` optional private-preview quota overrides. Defaults are used when omitted.
 
 Do not commit real faucet private keys.
@@ -52,9 +50,11 @@ variable = "GROUNDHOG_FAUCET_SECRET_KEY"
 Set the variable to the faucet account's 32-byte Ed25519 secret key as 64 hex
 characters, with an optional `0x` prefix. Its derived public key must equal
 `network.faucet.public_key`; startup fails before serving if they differ. The
-key must control the configured `network.faucet.wallet_address`. Local flows may
-use the seed-derived `dev-0` wallet that `groundhog` already treats as the
-fallback local faucet sponsor.
+configured `network.faucet.wallet_address` must equal the nonce-zero pubkey account
+derived from that public key; startup rejects a different address. Hosted Devnet retains its separate deterministic bootstrap configuration.
+A schema-4 local node owns a random private faucet credential in its chain
+directory and serves local funding directly; public runtime metadata cannot
+provide its signing key.
 
 ## Hosted AWS Key Source
 
@@ -63,7 +63,7 @@ Hosted Devnet loads the same hex string from AWS Secrets Manager:
 ```toml
 [airdrop.secret_key_source]
 type = "aws_secrets_manager"
-secret_id = "groundhog/devnet/faucet"
+secret_id = "thruput/devnet/faucet"
 version_id = "EXAMPLE_VERSION_ID"
 region = "us-west-2"
 ```
@@ -87,12 +87,10 @@ but never include the secret payload.
 ## API
 
 - `GET /health` reports service health.
-- `GET /v1/network` returns the public network descriptor.
+- `GET /v1/network` returns the schema-4 public network descriptor.
 - `POST /v1/airdrop` funds an existing address using the configured airdrop amount.
-- `POST /v1/create-wallet` prefunds and sponsors Devnet wallet creation.
 
 `POST /v1/airdrop` requires `clientNonce`, `networkId`, `networkHash`, and
-`genesisHash`. `POST /v1/create-wallet` requires `clientNonce`, `networkId`, and
 `genesisHash`. These identities scope retries to the network and chain instance
 the client validated.
 
@@ -110,10 +108,12 @@ each time an hourly quota resets. For example, 10,000 accepted attempts/hour
 needs at least 120,000 terminal records plus headroom. Increasing the bound
 increases memory use and policy-store scan costs; storage is allocated on demand.
 
-Accepted transactions remain pending until the backend reports a receipt or a
-definitive invalid status. Submission calls that return without a definitive
-acceptance result are also retained as ambiguous rather than resubmitted. Both
-count toward the bounded attempt capacity while their outcome is unresolved. At
+Signed transactions are retained in the policy store before broadcast. A later
+request with the same client nonce observes the original hash. Scheduler `retry`
+replays the same signed bytes at most once per request, after checking the original
+expiry. Receipts take precedence; `dropped` and `invalid` end the attempt. A lost
+submission response, backend error, or expiry without a receipt keeps the original
+attempt unresolved. These attempts count toward the bounded capacity. At
 capacity, the faucet rejects new attempt keys
 but continues serving existing keys. This fail-closed behavior prevents an
 expired idempotency record from submitting a second transfer. Operators should

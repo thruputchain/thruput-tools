@@ -28,6 +28,7 @@
 //! - `ReadPlane::contract_events`             → indexer
 //! - `ReadPlane::get_storage_at`              → `DbGateway1` contract-data reads
 //! - `ReadPlane::read_native_hog_balance`     → `DbGateway1` free native-token balance reads
+//! - `ReadPlane::read_address_auth_data`      → `DbGateway1` address auth-data reads
 //! - `ViewPlane::view`                        → view executor service (TBD)
 //!
 //! `GroundhogRpcServer::new` accepts per-plane adapter types, so a future
@@ -66,6 +67,7 @@
 use async_trait::async_trait;
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    address_auth::AddressAuthDataResponse,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
@@ -173,7 +175,7 @@ pub trait SubmitPlane: Send + Sync + 'static {
 /// One reading of the committed db tip: the public chain tip together with
 /// the execution parameters in force for the block that follows it.
 ///
-/// hogd returns both in a single `schedgateway_get_tip` reply, and the
+/// hogd returns these in a single `dbgateway_get_config` reply, and the
 /// shared server refreshes its cached network config from every reading it
 /// receives, so a backend never has to serve the config separately.
 #[derive(Debug, Clone)]
@@ -183,6 +185,8 @@ pub struct TipReading {
     pub tip: ChainTip,
     /// Network config the tip carries.
     pub network_config: NetworkConfig,
+    /// Effective limits and storage prices read with this committed tip.
+    pub execution: Option<groundhog_json_rpc_types::network_config::ExecutionConfig>,
 }
 
 impl TipReading {
@@ -191,7 +195,18 @@ impl TipReading {
         Self {
             tip,
             network_config,
+            execution: None,
         }
+    }
+
+    /// Attach the execution rules returned with this tip.
+    #[must_use]
+    pub fn with_execution(
+        mut self,
+        execution: groundhog_json_rpc_types::network_config::ExecutionConfig,
+    ) -> Self {
+        self.execution = Some(execution);
+        self
     }
 }
 
@@ -277,11 +292,32 @@ pub trait ReadPlane: Send + Sync + 'static {
         context: RpcRequestContext,
         address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError>;
+
+    /// Return the latest committed authorization configuration for one
+    /// address. This reads hogd's `AuthData` key, not contract storage. An
+    /// address with no registered configuration is a successful read with
+    /// `auth_data: None`, still labeled with the snapshot height.
+    async fn read_address_auth_data(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError>;
 }
 
 /// Backend plane for sandboxed contract simulation.
 #[async_trait]
 pub trait ViewPlane: Send + Sync + 'static {
+    /// Execute independent calls on one retained committed snapshot.
+    async fn view_batch(
+        &self,
+        _context: RpcRequestContext,
+        _request: groundhog_json_rpc_types::view::ViewBatchRequest,
+        _gas_limit: u64,
+        _limits: crate::ViewBatchConfig,
+    ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+        Err(RpcServerError::NotImplemented("viewBatch".into()))
+    }
+
     /// Execute a sandboxed contract simulation.
     ///
     /// `RootInvocationOutput::Abort` and `RootInvocationOutput::Fault`
@@ -289,8 +325,11 @@ pub trait ViewPlane: Send + Sync + 'static {
     /// here are reserved for transport, backend availability, and
     /// request-level failures.
     ///
-    /// `gas_limit` is the server-configured execution cap to put on the
-    /// root view invocation. It is not user supplied and no gas is charged.
+    /// `gas_limit` is the validated budget to put on the root view
+    /// invocation: the request's `gasLimit`, or the server's `view_gas_limit`
+    /// when the request names none. No gas is charged.
+    /// The shared server checks `min_height` against the returned execution
+    /// snapshot height. Adapters must not replace it with a later chain-tip sample.
     ///
     /// Backends should override this once they have a stable hogd view
     /// execution service. The default keeps the public method available
@@ -302,26 +341,5 @@ pub trait ViewPlane: Send + Sync + 'static {
         _gas_limit: u64,
     ) -> Result<ViewResponse, RpcServerError> {
         Err(RpcServerError::NotImplemented("view".into()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::RpcRequestContext;
-
-    #[test]
-    fn cap_from_start_does_not_reset_after_elapsed_work() {
-        let context = RpcRequestContext::new(Some(Duration::from_secs(10)));
-        let expected = context
-            .started_at()
-            .checked_add(Duration::from_secs(5))
-            .expect("test deadline should fit");
-
-        let capped = context.capped_from_start(Duration::from_secs(5));
-
-        assert_eq!(capped.started_at(), context.started_at());
-        assert_eq!(capped.deadline(), Some(expected));
     }
 }

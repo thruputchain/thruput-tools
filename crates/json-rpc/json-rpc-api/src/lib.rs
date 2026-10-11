@@ -11,25 +11,28 @@ use jsonrpsee::proc_macros::rpc;
 
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
-    airdrop::{AirdropAttemptResponse, AirdropRequest},
+    address_auth::AddressAuthDataResponse,
+    airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
+    decimal::Decimal,
     events::{EventPage, EventQuery},
     hex::HexBytes,
-    network_config::NetworkConfigParams,
+    network_config::ChainConfig,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
+    server_limits::ServerLimits,
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     version::VersionInfo,
-    view::{ViewRequest, ViewResponse},
+    view::{ViewBatchRequest, ViewBatchResponse, ViewRequest, ViewResponse},
 };
 
 /// Wire-format `SemVer` for the JSON-RPC surface.
 ///
-/// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
+/// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "5.3.0";
+pub const WIRE_FORMAT_VERSION: &str = "11.2.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -41,6 +44,20 @@ pub trait AirdropApi {
     /// other deployments return standard JSON-RPC `Method not found`.
     #[method(name = "requestAirdrop")]
     async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse>;
+}
+
+/// Funding API registered only by a supervised local node with submit/read planes.
+#[open_rpc(namespace = "groundhog", tag = "Local Funding API")]
+#[rpc(client, server, namespace = "groundhog")]
+pub trait LocalFundingApi {
+    /// Submit an explicit native HOG transfer using a retained caller nonce.
+    ///
+    /// Acceptance does not imply execution success. Observe the returned hash
+    /// through the ordinary status/receipt APIs. Retry an uncertain response
+    /// with exactly the same request; retain its chain identity and amount.
+    /// Hosted servers return standard JSON-RPC `Method not found`.
+    #[method(name = "fundAccount")]
+    async fn fund_account(&self, request: FundAccountRequest) -> RpcResult<FundAccountResponse>;
 }
 
 /// Phase 1: Core API — submit, query, poll.
@@ -64,10 +81,13 @@ pub trait GroundhogApi {
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>>;
 
-    /// Lightweight status check (mempool -> indexer -> unknown). `unknown` is only
-    /// returned after both the mempool and the indexer answered without a match; if
-    /// the mempool could not be consulted and the indexer has no record, the call
-    /// fails with `BackendUnavailable` because the transaction may still be pending.
+    /// Lightweight status check. Indexed commitment takes priority. Otherwise,
+    /// return the scheduler's pending, committed, retry, or dropped outcome;
+    /// an advisory indexer failure is returned only after a scheduler miss.
+    /// Scheduler and indexed commitments include the actual block height,
+    /// including block zero.
+    /// `unknown` requires successful misses from both backends; failed lookups
+    /// must not be interpreted as absence.
     #[method(name = "getTransactionStatus")]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus>;
 
@@ -75,12 +95,20 @@ pub trait GroundhogApi {
     #[method(name = "chainTip")]
     async fn chain_tip(&self) -> RpcResult<ChainTip>;
 
-    /// The execution parameters the chain's network config states. Only stated
-    /// parameters are reported; an unstated one is absent. Served from a tip reading
-    /// refreshed at most once per cache window. Fails with `BackendUnavailable` when no
-    /// reading is available or the config version is unreadable.
+    /// Stated execution parameters, plus an authoritative `execution` reading when
+    /// supported. Top-level omissions mean unspecified. `execution` pairs resolved
+    /// limits and storage prices with the committed tip observed during this request;
+    /// it is never served from a stale cache. Stated fields come from the same fresh
+    /// DB reading. Unavailable or unreadable readings fail with `BackendUnavailable`.
     #[method(name = "chainConfig")]
-    async fn chain_config(&self) -> RpcResult<NetworkConfigParams>;
+    async fn chain_config(&self) -> RpcResult<ChainConfig>;
+
+    /// Request bounds this endpoint enforces, such as the `view` gas ceiling.
+    /// These are local operator settings, not consensus parameters: they can
+    /// differ between endpoints serving the same chain. Answered without
+    /// contacting a backend.
+    #[method(name = "serverLimits")]
+    async fn server_limits(&self) -> RpcResult<ServerLimits>;
 
     /// Immutable protocol and genesis identity of the network this endpoint serves.
     #[method(name = "networkInfo")]
@@ -88,11 +116,14 @@ pub trait GroundhogApi {
 
     /// Block data at a given height.
     #[method(name = "getBlockByNumber")]
-    async fn get_block_by_number(&self, height: BlockHeight) -> RpcResult<Option<BlockInfo>>;
+    async fn get_block_by_number(
+        &self,
+        height: Decimal<BlockHeight>,
+    ) -> RpcResult<Option<BlockInfo>>;
 
     /// Number of transactions in the mempool.
     #[method(name = "pendingTransactionCount")]
-    async fn pending_transaction_count(&self) -> RpcResult<u64>;
+    async fn pending_transaction_count(&self) -> RpcResult<Decimal<u64>>;
 
     /// Paginated, filterable contract events. See `EventQuery` /
     /// `EventPage` for the Soroban-shaped filter / cursor / topic
@@ -127,9 +158,40 @@ pub trait GroundhogApi {
     #[method(name = "getBalance")]
     async fn get_balance(&self, address: ContractAddress) -> RpcResult<BalanceResponse>;
 
-    /// Execute a sandboxed contract simulation against committed state.
+    /// Authorization configuration (signer keys, their weights, and the required
+    /// weight) registered at any address, at the latest committed snapshot.
+    /// `authData` is `null` when the address has none; such an address accepts only
+    /// pubkey-signature claims, and one with auth data only source-address claims.
+    #[method(name = "getAddressAuthData")]
+    async fn get_address_auth_data(
+        &self,
+        address: ContractAddress,
+    ) -> RpcResult<AddressAuthDataResponse>;
+
+    /// Execute a sandboxed contract simulation against the latest committed state.
+    /// There is no way to select a past height; `height` in the response names the
+    /// snapshot the view ran against. `gasLimit` is optional: absent runs under the
+    /// endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is
+    /// rejected as an invalid parameter.
+    /// Optional `minHeight` requires that execution snapshot to be at least the
+    /// requested committed height. An older result returns `ViewHeightUnavailable`.
+    /// This is a freshness floor, not a historical selector, wait, or refresh request.
+    /// Optional `authClaim` is assumed without signature verification; contract
+    /// checks still run.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
+
+    /// Simulate independent calls against one committed snapshot.
+    /// Results preserve input order and include return, abort, or fault with events.
+    /// Calls do not observe each other's writes. Abandoned snapshots retry the whole
+    /// group, up to three attempts. There is no partial success or automatic chunking.
+    /// Operator limits are advertised by `serverLimits`. The response deadline is
+    /// strict, but running backend work may outlive it. The minimum height is a
+    /// freshness floor, not a wait or refresh request. The returned height is
+    /// committed H, with execution context H+1.
+    /// Each entry may supply its own optional `authClaim`, independently of caller.
+    #[method(name = "viewBatch")]
+    async fn view_batch(&self, request: ViewBatchRequest) -> RpcResult<ViewBatchResponse>;
 
     /// Version dimensions for this JSON-RPC server.
     #[method(name = "version")]

@@ -5,7 +5,7 @@
 //! gateway and the local hogd-dev supervisor.
 //!
 //! Real backend adapters live in `crates/json-rpc/json-rpc-gateway` and
-//! `crates/dev/node-supervisor`, both of which depend on this crate.
+//! `crates/node-supervisor`, both of which depend on this crate.
 //! To stay within the public surface
 //! and avoid circular deps, these tests use a programmable mock that can
 //! be configured to mimic each backend shape.
@@ -20,6 +20,7 @@ use groundhog_json_rpc_server::{
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
+    address_auth::{AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey, AuthSigner},
     block::{BlockInfo, ChainTip},
     error::codes,
     events::{
@@ -55,6 +56,8 @@ const MAX_VIEW_CALLDATA_BYTES: usize = 32;
 type StorageCall = (ContractAddress, [u8; 32]);
 type StorageCalls = Arc<Mutex<Vec<StorageCall>>>;
 type BalanceCalls = Arc<Mutex<Vec<ContractAddress>>>;
+type AuthDataCalls = Arc<Mutex<Vec<ContractAddress>>>;
+type ScriptedAuthDataRead = Arc<Mutex<Option<Result<AddressAuthDataResponse, RpcServerError>>>>;
 
 /// Mock backend that emulates a chosen production capability profile.
 ///
@@ -68,6 +71,8 @@ struct ScriptedBackend {
     get_storage_at_calls: StorageCalls,
     native_balance_calls: BalanceCalls,
     storage_read: Arc<Mutex<Option<Result<StorageItemRead, RpcServerError>>>>,
+    auth_data_calls: AuthDataCalls,
+    auth_data_read: ScriptedAuthDataRead,
 }
 
 #[derive(Clone)]
@@ -218,6 +223,19 @@ impl ReadPlane for ScriptedBackend {
             .clone()
             .unwrap_or_else(|| Err(RpcServerError::NotImplemented("getBalance".into())))
     }
+
+    async fn read_address_auth_data(
+        &self,
+        _context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        self.auth_data_calls.lock().await.push(address);
+        self.auth_data_read
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_else(|| Err(RpcServerError::NotImplemented("getAddressAuthData".into())))
+    }
 }
 
 #[async_trait]
@@ -235,6 +253,7 @@ impl ViewPlane for ScriptedViewBackend {
             output: self.output.clone(),
             events: vec![],
             height: BlockHeight::from(42),
+            gas_used: 0,
         })
     }
 }
@@ -417,6 +436,35 @@ async fn version_returns_shared_metadata_without_backend_dispatch_for_all_shapes
 }
 
 #[tokio::test]
+async fn event_filters_require_a_named_contract_for_all_shapes() {
+    for backend in all_shapes() {
+        let calls = backend.contract_events_calls.clone();
+        let svc = server(backend);
+        let mut empty = simple_query();
+        empty.filters.0.0.clear();
+        let mut no_contracts = simple_query();
+        no_contracts.filters.0.0[0].contract_addresses.0.0.clear();
+        let mut mixed = simple_query();
+        mixed.filters.0.0.push(no_contracts.filters.0.0[0].clone());
+        for query in [empty, no_contracts, mixed] {
+            let error = svc
+                .get_events(query)
+                .await
+                .expect_err("bug: empty event filters must be rejected");
+            assert_eq!(error.code(), codes::INVALID_PARAMS);
+        }
+        assert_eq!(*calls.lock().await, 0);
+        // No topic constraints is a valid wildcard within a named contract.
+        let page = svc
+            .get_events(simple_query())
+            .await
+            .expect("bug: a named contract with wildcard topics must be accepted");
+        assert!(page.events.is_empty());
+        assert_eq!(*calls.lock().await, 1);
+    }
+}
+
+#[tokio::test]
 async fn event_query_validation_runs_before_dispatch_for_all_shapes() {
     for backend in all_shapes() {
         let calls = backend.contract_events_calls.clone();
@@ -543,15 +591,85 @@ async fn get_balance_errors_for_unexpected_storage_item_kind() {
 }
 
 #[tokio::test]
+async fn get_address_auth_data_reads_auth_data_for_all_shapes() {
+    for backend in all_shapes() {
+        let address: ContractAddress =
+            Hex0x(groundhog_xdr::types::ContractAddress::from([10u8; 32]));
+        let read = AddressAuthDataResponse {
+            address,
+            height: BlockHeight::from(321),
+            auth_data: Some(AddressAuthDataInfo {
+                signers: vec![AuthSigner {
+                    key_id: 0,
+                    public_key: AuthPublicKey::Ed25519 {
+                        key: Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([3u8; 32])),
+                    },
+                    max_weight: 1,
+                }],
+                required_weight: 1,
+            }),
+        };
+        let backend = ScriptedBackend {
+            auth_data_read: Arc::new(Mutex::new(Some(Ok(read.clone())))),
+            ..backend
+        };
+        let storage_calls = backend.get_storage_at_calls.clone();
+        let balance_calls = backend.native_balance_calls.clone();
+        let auth_data_calls = backend.auth_data_calls.clone();
+
+        let response = server(backend)
+            .get_address_auth_data(address)
+            .await
+            .expect("bug: scripted auth data read should return successfully");
+
+        assert_eq!(response, read);
+        assert_eq!(*auth_data_calls.lock().await, vec![address]);
+        assert!(storage_calls.lock().await.is_empty());
+        assert!(balance_calls.lock().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn get_address_auth_data_maps_backend_failures_to_rpc_errors() {
+    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([11u8; 32]));
+    for (failure, code) in [
+        (
+            RpcServerError::BackendUnavailable("db_gateway item: kRPCUnrecoverable".into()),
+            codes::BACKEND_UNAVAILABLE,
+        ),
+        (RpcServerError::BackendTimeout, codes::BACKEND_TIMEOUT),
+        (
+            RpcServerError::NotImplemented("getAddressAuthData".into()),
+            codes::NOT_IMPLEMENTED,
+        ),
+    ] {
+        let backend = ScriptedBackend {
+            auth_data_read: Arc::new(Mutex::new(Some(Err(failure)))),
+            ..ScriptedBackend::default()
+        };
+
+        let err = server(backend)
+            .get_address_auth_data(address)
+            .await
+            .expect_err("bug: scripted auth data failure should surface");
+
+        assert_eq!(err.code(), code);
+    }
+}
+
+#[tokio::test]
 async fn view_entrypoint_length_validated_for_all_shapes() {
     for backend in all_shapes() {
         for entrypoint_len in [7, 9] {
             let svc = server(backend.clone());
             let request = ViewRequest {
+                auth_claim: None,
+                min_height: None,
                 contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
                 entrypoint: HexBytes(vec![0u8; entrypoint_len]),
                 calldata: HexBytes(vec![]),
                 caller: None,
+                gas_limit: None,
             };
 
             let err = svc
@@ -569,10 +687,13 @@ async fn view_calldata_length_validated_for_all_shapes() {
     for backend in all_shapes() {
         let svc = server(backend);
         let request = ViewRequest {
+            auth_claim: None,
+            min_height: None,
             contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![0u8; MAX_VIEW_CALLDATA_BYTES + 1]),
             caller: None,
+            gas_limit: None,
         };
 
         let err = svc
@@ -589,10 +710,13 @@ async fn view_returns_not_implemented_until_backend_support_lands_for_all_shapes
     for backend in all_shapes() {
         let svc = server(backend);
         let request = ViewRequest {
+            auth_claim: None,
+            min_height: None,
             contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
+            gas_limit: None,
         };
 
         let err = svc
@@ -620,10 +744,13 @@ async fn view_success_outputs_round_trip_for_all_shapes() {
         for output in cases.clone() {
             let svc = server_with_view(backend.clone(), ScriptedViewBackend::new(output.clone()));
             let request = ViewRequest {
+                auth_claim: None,
+                min_height: None,
                 contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
                 entrypoint: HexBytes(vec![0u8; 8]),
                 calldata: HexBytes(vec![]),
                 caller: None,
+                gas_limit: None,
             };
 
             let response = svc
@@ -662,7 +789,7 @@ async fn chain_config_dispatches_through_chain_plane_for_all_shapes() {
             .expect("bug: chain_config must dispatch through chain plane");
 
         // The mock's config states nothing, so no parameters come back.
-        assert_eq!(config.max_contract_size_bytes, None);
+        assert_eq!(config.stated.max_contract_size_bytes, None);
     }
 }
 
@@ -670,7 +797,7 @@ async fn chain_config_dispatches_through_chain_plane_for_all_shapes() {
 async fn get_block_by_number_is_not_implemented_for_all_shapes() {
     for backend in all_shapes() {
         let err = server(backend)
-            .get_block_by_number(BlockHeight::from(0))
+            .get_block_by_number(BlockHeight::from(0).into())
             .await
             .expect_err("bug: getBlockByNumber is not yet implemented");
 

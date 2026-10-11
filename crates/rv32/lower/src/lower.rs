@@ -1,9 +1,9 @@
 //! ELF validation and the top-level [`lower`] entry point.
 //!
-//! Validation rules follow `docs/rv32/rv32-vm-experimental-design.md`. v4
-//! dispatch lives in the guest (`_start` reads the method id seeded in
-//! registers), so the lowerer no longer scans the symbol table: the entry
-//! contract is `e_entry == 0` (enforced in [`elf::parse_elf`]) plus the
+//! ELF layout checks live here and in [`elf`]; output validation uses
+//! `groundhog-rv32-artifact`. Since v4, dispatch lives in the guest (`_start`
+//! reads the method id seeded in registers), so the lowerer no longer scans the
+//! symbol table: the entry contract is `e_entry == 0` (enforced in [`elf::parse_elf`]) plus the
 //! `.text` layout rules below. Stripped release builds are valid inputs.
 
 use std::collections::HashSet;
@@ -64,9 +64,20 @@ pub const NULL_GUARD_BYTES: u32 = 8;
 /// `spec_metadata_section_names_match_spec_tool`.
 pub const RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
 
-/// Name of the finalized contract-spec section, mirroring
-/// `groundhog_spec_tool::FINAL_SECTION_NAME`.
-pub const FINAL_SPEC_SECTION: &str = "groundhogspecv0";
+/// Name prefix shared by every version of the finalized contract-spec
+/// section.
+///
+/// Matched as a prefix for the reason the raw one is. The finalized name
+/// gained a version with `groundhogspecv1`, and an artifact carrying the
+/// older `groundhogspecv0` must still be stripped rather than reaching the
+/// "unexpected alloc section" path: these bytes are discarded either way, so
+/// a format bump is no reason to fail a lowering. Mirrors
+/// `groundhog_spec_tool::FINAL_SECTION_NAME`, which this is a prefix of, and
+/// is pinned to it by `spec_metadata_section_names_match_spec_tool`.
+pub const FINAL_SPEC_SECTION_PREFIX: &str = "groundhogspecv";
+
+/// Name of the finalized contract-spec section this SDK generation writes.
+pub const FINAL_SPEC_SECTION: &str = "groundhogspecv2";
 
 /// The product of lowering: the serialized artifact plus the pieces that went
 /// into it (handy for metadata and tests).
@@ -174,7 +185,7 @@ fn spans_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
 }
 
 fn is_spec_metadata_section(name: &str) -> bool {
-    name.starts_with(RAW_SPEC_SECTION_PREFIX) || name == FINAL_SPEC_SECTION
+    name.starts_with(RAW_SPEC_SECTION_PREFIX) || name.starts_with(FINAL_SPEC_SECTION_PREFIX)
 }
 
 /// Validate the interface table's shape and report duplicate ids.
@@ -255,6 +266,9 @@ fn validate_sections(
     if !text.is_exec() || !text.is_alloc() {
         return Err(invalid(".text must be alloc+exec"));
     }
+    if text.sh_type != elf::SHT_PROGBITS {
+        return Err(invalid(".text must be file-backed SHT_PROGBITS"));
+    }
     if text.addr != 0 {
         return Err(invalid(format!(
             ".text must start at vaddr 0, got {}",
@@ -271,6 +285,20 @@ fn validate_sections(
     let text_size = text.size as usize;
     if text_off + text_size > data.len() {
         return Err(invalid(".text extends past end of file"));
+    }
+    // Section alignment alone permits paired compressed encodings; check every boundary.
+    // Full opcode validation remains the runtime's responsibility.
+    for (index, instruction) in data[text_off..text_off + text_size]
+        .chunks_exact(4)
+        .enumerate()
+    {
+        if instruction[0] & 0b11 != 0b11 {
+            return Err(invalid(format!(
+                ".text contains a compressed instruction encoding at PC {:#x}; \
+                 build for riscv32im without the C extension",
+                index * 4
+            )));
+        }
     }
 
     let interface_table_has_reader = sections.iter().any(|section| {

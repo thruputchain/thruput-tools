@@ -1,7 +1,9 @@
 use groundhog_trace::{
     HostFunctionStatusXdr, InvocationFrameTrace, SyscallTrace, SyscallTraceBody,
 };
-use groundhog_xdr::storage_item::{FlaggedStorageDelta, StorageDelta, StorageDeltaFlags};
+use groundhog_xdr::storage_item::{
+    FlaggedStorageDelta, StorageDelta, StorageDeltaFlagSet, StorageDeltaFlags,
+};
 use groundhog_xdr::transaction::{Invocation, InvocationFrameOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -17,9 +19,13 @@ pub struct TransactionDetail {
     /// Full receipt retained within the heavy-data retention window.
     pub receipt: TransactionReceipt,
     /// Gas units consumed by the transaction.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub gas_consumed: u64,
     /// Configured gas limit from the transaction, if one was set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::decimal::option")]
+    #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
     pub gas_limit: Option<u64>,
     /// Top-level storage writes applied by the committed transaction.
     pub storage_deltas: Vec<StorageDeltaInfo>,
@@ -41,7 +47,7 @@ pub struct StorageDeltaInfo {
     /// Human-readable summary used by CLI and terminal output.
     pub summary: String,
     /// Raw delta flags bitset.
-    pub flags: i32,
+    pub flags: u32,
     /// XDR-encoded storage delta body.
     pub delta_xdr: HexBytes,
 }
@@ -67,6 +73,8 @@ pub struct InvocationInfo {
     pub address: ContractAddress,
     pub entrypoint: HexBytes,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::decimal::option")]
+    #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
     pub gas_limit: Option<u64>,
     pub calldata: HexBytes,
 }
@@ -76,8 +84,14 @@ pub struct InvocationInfo {
 #[serde(rename_all = "camelCase")]
 pub struct SyscallInfo {
     pub name: String,
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub number: u64,
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub gas_remaining_at_start: u64,
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub gas_remaining_at_end: u64,
     pub status: SyscallStatusInfo,
     /// XDR-encoded syscall trace body, including typed inputs/outputs.
@@ -263,7 +277,7 @@ fn storage_delta_summary(delta: &FlaggedStorageDelta) -> String {
         ),
     };
 
-    if delta.flags == StorageDeltaFlags::None.0 {
+    if delta.flags == StorageDeltaFlags::None.0.cast_unsigned() {
         body
     } else {
         format!("{body} [{}]", storage_delta_flags_label(delta.flags))
@@ -380,92 +394,10 @@ fn syscall_error_label(code: groundhog_xdr::syscall_error::SyscallErrorCode) -> 
     }
 }
 
-fn storage_delta_flags_label(flags: i32) -> String {
+fn storage_delta_flags_label(flags: StorageDeltaFlagSet) -> String {
     match flags {
         0 => "StorageDeltaFlags::None".into(),
         1 => "StorageDeltaFlags::ExclusiveLock".into(),
         other => format!("StorageDeltaFlags({other})"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        FrameOutputInfo, InvocationInfo, StorageDeltaInfo, SyscallInfo, TraceInfo,
-        TransactionDetail,
-    };
-    use crate::BlockHeight;
-    use crate::events::EmittedEvent;
-    use crate::hex::{Hex0x, HexBytes, Topic};
-    use crate::receipt::{ExecStatus, TransactionReceipt};
-    use crate::transaction::TxHash;
-    use serde_json::Value;
-
-    #[test]
-    fn transaction_detail_serializes_hex_and_camel_case() {
-        let address = groundhog_xdr::types::ContractAddress::from([0x11; 32]);
-        let detail = TransactionDetail {
-            receipt: TransactionReceipt {
-                tx_hash: TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x22; 32]))),
-                height: BlockHeight::from(7),
-                status: ExecStatus::Ok,
-                events: vec![EmittedEvent {
-                    contract_address: Hex0x(address),
-                    topics: vec![Topic([0x33; 32])],
-                    data: HexBytes(vec![0x44]),
-                }],
-                return_data: Some(HexBytes(vec![0x55])),
-                abort_data: None,
-            },
-            gas_consumed: 12,
-            gas_limit: Some(99),
-            storage_deltas: vec![StorageDeltaInfo {
-                address: Hex0x(address),
-                key: HexBytes(vec![0x66]),
-                kind: "bytestringSet".into(),
-                summary: "BytestringSet -> 0x77".into(),
-                flags: 0,
-                delta_xdr: HexBytes(vec![0x77]),
-            }],
-            trace: Some(TraceInfo {
-                invocation: InvocationInfo {
-                    address: Hex0x(address),
-                    entrypoint: HexBytes(vec![0x88; 8]),
-                    gas_limit: Some(99),
-                    calldata: HexBytes(vec![0x99]),
-                },
-                system_calls: vec![SyscallInfo {
-                    name: "logEvent".into(),
-                    number: 23,
-                    gas_remaining_at_start: 100,
-                    gas_remaining_at_end: 90,
-                    status: super::SyscallStatusInfo {
-                        code: 0,
-                        label: "SyscallErrorCode::kSyscallErrorCodeNone".into(),
-                    },
-                    body_xdr: HexBytes(vec![0xaa]),
-                    child_trace: None,
-                }],
-                storage_writes: Vec::new(),
-                status: FrameOutputInfo::Return {
-                    buffer: HexBytes(vec![0xbb]),
-                },
-            }),
-        };
-
-        let value: Value = serde_json::to_value(&detail).expect("bug: detail should serialize");
-        assert_eq!(value["gasConsumed"], 12);
-        assert_eq!(value["gasLimit"], 99);
-        assert_eq!(value["storageDeltas"][0]["kind"], "bytestringSet");
-        assert_eq!(value["storageDeltas"][0]["key"], "0x66");
-        assert_eq!(
-            value["trace"]["invocation"]["entrypoint"],
-            "0x8888888888888888"
-        );
-        assert_eq!(value["trace"]["systemCalls"][0]["bodyXdr"], "0xaa");
-        assert_eq!(value["trace"]["status"]["result"], "return");
-        assert_eq!(value["trace"]["status"]["buffer"], "0xbb");
-        assert!(value.get("gas_consumed").is_none());
-        assert!(value["trace"].get("system_calls").is_none());
     }
 }

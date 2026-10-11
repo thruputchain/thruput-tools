@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 4,
   "kind": "hogd-dev-runtime",
   "chainState": "fresh",
   "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -16,20 +16,14 @@
     "dbGateway": "127.0.0.1:61003",
     "viewGateway": "127.0.0.1:61004"
   },
-  "bootstrapAccountDerivation": {
-    "scheme": "groundhog-bootstrap-account-v1",
-    "seed": "groundhog-dev-accounts"
-  },
   "bootstrapAccounts": [
     {
-      "index": 0,
       "role": "faucet",
       "publicKey": "0x6161616161616161616161616161616161616161616161616161616161616161",
       "walletAddress": "0x7171717171717171717171717171717171717171717171717171717171717171",
       "initialStorageTokens": "10000000000000"
     },
     {
-      "index": 1,
       "role": "local_user",
       "publicKey": "0x6262626262626262626262626262626262626262626262626262626262626262",
       "walletAddress": "0x7272727272727272727272727272727272727272727272727272727272727272",
@@ -37,14 +31,6 @@
     }
   ],
   "bootstrap": {
-    "devWallet": {
-      "contentHash": "0x5151515151515151515151515151515151515151515151515151515151515151",
-      "deployedCodeHash": "0x5252525252525252525252525252525252525252525252525252525252525252",
-      "artifactHint": "contracts/dev_wallet.rv32a",
-      "deployEntrypoint": "0xadac498222148e4f",
-      "createWalletEntrypoint": "0x6372656174655761",
-      "doActionEntrypoint": "0x646f416374696f6e"
-    },
     "storageCostModel": {
       "hash": "0x5353535353535353535353535353535353535353535353535353535353535353",
       "baseDataItemCost": "12000",

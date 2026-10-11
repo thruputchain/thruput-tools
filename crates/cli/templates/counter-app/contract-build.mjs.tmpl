@@ -1,0 +1,10 @@
+import { buildContract, onShutdown } from "./thruput.mjs";
+
+onShutdown();
+try {
+  await buildContract();
+  console.log("Contract and TypeScript bindings built.");
+} catch (error) {
+  console.error(`Contract build failed: ${error.message}`);
+  process.exitCode = 1;
+}

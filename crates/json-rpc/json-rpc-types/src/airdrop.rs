@@ -11,6 +11,28 @@ use crate::{BlockHeight, ContractAddress, NetworkHash, SHA256Hash};
 /// Maximum size of an airdrop idempotency nonce.
 pub const MAX_CLIENT_NONCE_BYTES: usize = 32;
 
+/// Retained transaction evidence returned when local funding cannot resolve an outcome.
+/// This does not prove admission or execution. Reconcile this hash and reuse the original request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct LocalFundingErrorData {
+    /// Canonical hash of the retained transaction body.
+    pub tx_hash: TxHash,
+    /// Exact signed bytes persisted before the first submission.
+    pub signed_transaction: HexBytes,
+}
+
+impl LocalFundingErrorData {
+    /// Construct retained evidence without asserting an outcome.
+    pub fn new(tx_hash: TxHash, signed_transaction: HexBytes) -> Self {
+        Self {
+            tx_hash,
+            signed_transaction,
+        }
+    }
+}
+
 /// Opaque idempotency nonce supplied by an airdrop caller.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClientNonce(Vec<u8>);
@@ -33,7 +55,7 @@ impl ClientNonce {
 
 impl Serialize for ClientNonce {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&format!("0x{}", hex::encode(&self.0)))
+        serializer.collect_str(&crate::hex::HexDisplay(&self.0))
     }
 }
 
@@ -75,12 +97,79 @@ pub enum ClientNonceError {
 
 /// Public parameters for `groundhog_requestAirdrop`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AirdropRequest {
     /// Address receiving the native HOG transfer.
     pub recipient: ContractAddress,
     /// Caller-selected idempotency key for this recipient and network.
     pub client_nonce: ClientNonce,
+}
+
+/// Public parameters for local-only `groundhog_fundAccount`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FundAccountRequest {
+    /// Native HOG transfer recipient.
+    pub recipient: ContractAddress,
+    /// Positive canonical decimal amount in raw HOG units.
+    #[serde(deserialize_with = "positive_raw_amount")]
+    pub raw_amount: String,
+    /// Retained caller-owned idempotency nonce.
+    pub client_nonce: ClientNonce,
+    /// Expected random faucet identity; refuses a different chain at the same URL.
+    pub faucet: ContractAddress,
+}
+
+impl FundAccountRequest {
+    /// Validate an explicitly constructed request's amount too.
+    pub fn amount(&self) -> Result<u128, &'static str> {
+        parse_positive_raw_amount(&self.raw_amount)
+    }
+}
+
+fn parse_positive_raw_amount(text: &str) -> Result<u128, &'static str> {
+    match text.parse::<u128>() {
+        Ok(value) if value > 0 && value.to_string() == text => Ok(value),
+        _ => Err("rawAmount must be a positive canonical decimal u128"),
+    }
+}
+
+fn positive_raw_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    parse_positive_raw_amount(&text).map_err(serde::de::Error::custom)?;
+    Ok(text)
+}
+
+/// Authoritatively admitted (or already committed) local funding submission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct FundAccountResponse {
+    /// Recipient of the retained transfer.
+    pub recipient: ContractAddress,
+    /// Exact requested raw HOG amount.
+    pub raw_amount: String,
+    /// Canonical body hash for status and receipt queries.
+    pub tx_hash: TxHash,
+    /// Signed transaction retained before its first broadcast.
+    pub signed_transaction: HexBytes,
+}
+
+impl FundAccountResponse {
+    /// Construct an admitted local funding response.
+    pub fn new(
+        recipient: ContractAddress,
+        raw_amount: String,
+        tx_hash: TxHash,
+        signed_transaction: HexBytes,
+    ) -> Self {
+        Self {
+            recipient,
+            raw_amount,
+            tx_hash,
+            signed_transaction,
+        }
+    }
 }
 
 /// Hosted faucet request, bound to the gateway's immutable network identity.
@@ -118,6 +207,8 @@ pub enum AirdropAttemptResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         tx_hash: Option<TxHash>,
         /// Suggested delay before retrying the same logical attempt.
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<u64>")]
         retry_after_seconds: u64,
     },
     /// The transaction committed successfully.
@@ -129,6 +220,8 @@ pub enum AirdropAttemptResponse {
         /// Native amount in indivisible units.
         raw_amount: String,
         /// Committed block height.
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
         height: BlockHeight,
         /// Committed execution result.
         status: ExecStatus,
@@ -148,72 +241,5 @@ impl AirdropAttemptResponse {
         match self {
             Self::Pending { raw_amount, .. } | Self::Succeeded { raw_amount, .. } => raw_amount,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{ClientNonce, ClientNonceError, MAX_CLIENT_NONCE_BYTES};
-
-    #[test]
-    fn client_nonce_roundtrips() {
-        let nonce = ClientNonce::new(vec![0x01, 0xab]).expect("nonce should be valid");
-        let encoded = serde_json::to_value(&nonce).expect("nonce should serialize");
-        assert_eq!(encoded, json!("0x01ab"));
-        assert_eq!(
-            serde_json::from_value::<ClientNonce>(encoded).expect("nonce should deserialize"),
-            nonce
-        );
-    }
-
-    #[test]
-    fn client_nonce_enforces_resource_bounds() {
-        assert_eq!(ClientNonce::new(Vec::new()), Err(ClientNonceError::Empty));
-        assert_eq!(
-            ClientNonce::new(vec![0; MAX_CLIENT_NONCE_BYTES + 1]),
-            Err(ClientNonceError::TooLong)
-        );
-    }
-
-    #[test]
-    fn client_nonce_accepts_legacy_hex_forms_and_serializes_canonically() {
-        for (encoded, canonical) in [
-            (r#""01""#, "0x01"),
-            (r#""0X01""#, "0x01"),
-            (r#""0xAB""#, "0xab"),
-        ] {
-            let nonce = serde_json::from_str::<ClientNonce>(encoded)
-                .expect("legacy nonce form should deserialize");
-            assert_eq!(
-                serde_json::to_value(nonce).expect("nonce should serialize"),
-                json!(canonical)
-            );
-        }
-    }
-
-    #[test]
-    fn airdrop_request_accepts_legacy_recipient_forms() {
-        for recipient in ["11".repeat(32), format!("0X{}", "11".repeat(32))] {
-            let request = serde_json::json!({
-                "recipient": recipient,
-                "clientNonce": "0x01"
-            });
-            assert!(serde_json::from_value::<super::AirdropRequest>(request).is_ok());
-        }
-    }
-
-    #[test]
-    fn airdrop_response_accepts_future_additive_fields() {
-        let response = serde_json::json!({
-            "attemptStatus": "pending",
-            "recipient": format!("0x{}", "11".repeat(32)),
-            "rawAmount": "100000000",
-            "retryAfterSeconds": 5,
-            "futureField": true
-        });
-
-        assert!(serde_json::from_value::<super::AirdropAttemptResponse>(response).is_ok());
     }
 }

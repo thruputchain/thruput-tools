@@ -12,6 +12,7 @@ use groundhog_json_rpc_server::{
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
+    address_auth::{AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey, AuthSigner},
     block::{BlockInfo, ChainTip},
     events::{
         BlockAnchor, ContractAddressList, EmittedEvent, EventFilter, EventFilterList, EventPage,
@@ -227,6 +228,40 @@ impl ReadPlane for PopulatedReadBackend {
             }),
         })
     }
+
+    async fn read_address_auth_data(
+        &self,
+        _context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        Ok(AddressAuthDataResponse {
+            address,
+            height: BlockHeight::from(23),
+            auth_data: Some(canned_auth_data()),
+        })
+    }
+}
+
+fn canned_auth_data() -> AddressAuthDataInfo {
+    AddressAuthDataInfo {
+        signers: vec![
+            AuthSigner {
+                key_id: 0,
+                public_key: AuthPublicKey::Ed25519 {
+                    key: Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x31; 32])),
+                },
+                max_weight: 1,
+            },
+            AuthSigner {
+                key_id: 4,
+                public_key: AuthPublicKey::Ed25519 {
+                    key: Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x32; 32])),
+                },
+                max_weight: 2,
+            },
+        ],
+        required_weight: 3,
+    }
 }
 
 #[async_trait::async_trait]
@@ -388,6 +423,23 @@ async fn get_balance_roundtrips_a_decimal_string_balance() {
 }
 
 #[tokio::test]
+async fn get_address_auth_data_roundtrips_signers_and_threshold() {
+    let (client, handle) = start_server(PopulatedReadBackend::default()).await;
+    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0x65; 32]));
+
+    let read = client
+        .get_address_auth_data(address)
+        .await
+        .expect("bug: getAddressAuthData should succeed");
+
+    assert_eq!(read.address, address);
+    assert_eq!(*read.height, 23);
+    assert_eq!(read.auth_data, Some(canned_auth_data()));
+
+    stop(handle).await;
+}
+
+#[tokio::test]
 async fn chain_tip_roundtrips_height_and_hash() {
     let (client, handle) = start_server(PopulatedReadBackend::default()).await;
 
@@ -415,11 +467,11 @@ async fn chain_config_roundtrips_stated_parameters_only() {
         .expect("bug: chainConfig should succeed");
 
     assert_eq!(
-        config.max_contract_size_bytes,
+        config.stated.max_contract_size_bytes,
         Some(TIP_MAX_CONTRACT_SIZE_BYTES)
     );
     assert_eq!(
-        config.max_new_contracts_per_tx, None,
+        config.stated.max_new_contracts_per_tx, None,
         "an unstated parameter stays absent across the wire"
     );
 
@@ -431,7 +483,7 @@ async fn get_block_by_number_roundtrips_a_populated_block() {
     let (client, handle) = start_server(PopulatedReadBackend::default()).await;
 
     let block = client
-        .get_block_by_number(BlockHeight::from(33))
+        .get_block_by_number(BlockHeight::from(33).into())
         .await
         .expect("bug: getBlockByNumber should succeed")
         .expect("bug: scripted block should be present");
@@ -453,7 +505,7 @@ async fn get_block_by_number_roundtrips_a_populated_block() {
     assert_eq!(block.upgrades[1].0, vec![0x02, 0x03]);
 
     let missing = client
-        .get_block_by_number(BlockHeight::from(34))
+        .get_block_by_number(BlockHeight::from(34).into())
         .await
         .expect("bug: getBlockByNumber should succeed");
     assert!(missing.is_none());

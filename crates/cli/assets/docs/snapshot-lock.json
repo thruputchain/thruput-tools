@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "0ef4e3a19aa21cfa1487f7d3e59b19f902eaf72f",
+  "sourceDirty": false,
+  "agentGuideCliVersion": "0.19.0",
+  "archive": "snapshot.tar.gz",
+  "archiveBytes": 3042962,
+  "sha256": "163e3f927e2b1baa014b4471f526ef2edb4ca63359738641da75828d720bb29b",
+  "sourceArchiveSha256": "b992089cc45756b189f9e637a93d3b901dc482a33f51cb58b3bb11c622b14191"
+}

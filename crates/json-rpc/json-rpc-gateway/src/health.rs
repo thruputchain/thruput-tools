@@ -1,15 +1,10 @@
 use std::{collections::BTreeMap, future::Future, path::PathBuf, sync::Arc, time::Duration};
 
 use groundhog_build_info::BuildVersion;
-use groundhog_db_gateway::DbGatewayIntroOutcome;
-use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
-use groundhog_json_rpc_types::{
-    BlockHeight, NetworkHashHex,
-    block::{ChainTip, consensus_value_hash},
-};
-use groundhog_scheduler::{DbTip, ExpectedDBTip, RPCError};
+use groundhog_hogd_backend::{IntroOutcome, intro, scheduler as shared_scheduler};
+use groundhog_json_rpc_types::{BlockHeight, NetworkHashHex};
+use groundhog_scheduler::{DbTip, ExpectedDBTip};
 use groundhog_scp::network::ProtocolCommit as Protocol;
-use groundhog_view::ViewGatewayIntroOutcome;
 use groundhog_x23_transport::ConnectError;
 use serde::Serialize;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -19,10 +14,12 @@ use crate::{
     airdrop::HostedAirdrop,
     config::{GatewayConfig, HealthBackend},
     context::{
-        GatewayContext, QuarantinedScheduler, clear_scheduler_if_current,
+        BackendClient, DB_GATEWAY_NAMES, GatewayContext, INDEXER_NAMES, OptionalBackendNames,
+        QuarantinedScheduler, VIEW_GATEWAY_NAMES, clear_scheduler_if_current,
         connect_optional_db_gateway, connect_optional_indexer, connect_optional_scheduler,
-        connect_optional_view_gateway, db_gateway_pool_size, scheduler_pool_size,
+        connect_optional_view_gateway,
     },
+    handlers::SCHEDULER,
     metrics::{BackendReconnectOutcome, BackendRequestOutcome},
 };
 
@@ -34,7 +31,7 @@ pub struct GatewayHealth {
     updated: Arc<tokio::sync::Notify>,
     max_chain_tip_age_ms: u64,
     max_snapshot_age_ms: u64,
-    scheduler_required: bool,
+    db_gateway_required: bool,
     build_version: BuildVersion,
     commit_hash: Option<&'static str>,
     airdrop: Option<HostedAirdrop>,
@@ -71,7 +68,7 @@ impl GatewayHealth {
             updated: Arc::new(tokio::sync::Notify::new()),
             max_chain_tip_age_ms: config.health_chain_tip_max_age_ms,
             max_snapshot_age_ms: config.health_probe_interval_ms.saturating_mul(3).max(1),
-            scheduler_required: backend_required(config, HealthBackend::Scheduler),
+            db_gateway_required: backend_required(config, HealthBackend::DbGateway),
             build_version,
             commit_hash,
             airdrop,
@@ -84,7 +81,7 @@ impl GatewayHealth {
         snapshot.refresh(
             self.max_chain_tip_age_ms,
             self.max_snapshot_age_ms,
-            self.scheduler_required,
+            self.db_gateway_required,
         );
         snapshot
     }
@@ -227,7 +224,7 @@ impl HealthSnapshot {
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn chain_tip_height(&self) -> Option<f64> {
         let height = self.chain_tip.height.as_ref()?;
-        Some(serde_json::to_value(height).ok()?.as_i64()? as f64)
+        Some(**height as f64)
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -286,7 +283,7 @@ impl HealthSnapshot {
         &mut self,
         max_chain_tip_age_ms: u64,
         max_snapshot_age_ms: u64,
-        scheduler_required: bool,
+        db_gateway_required: bool,
     ) {
         let elapsed_ms = u64::try_from(self.snapshot_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.snapshot_age_ms = elapsed_ms;
@@ -295,7 +292,7 @@ impl HealthSnapshot {
         }
         if let Some(age_ms) = self.chain_tip.age_ms.as_mut() {
             *age_ms = age_ms.saturating_add(elapsed_ms);
-            if scheduler_required && *age_ms > max_chain_tip_age_ms {
+            if db_gateway_required && *age_ms > max_chain_tip_age_ms {
                 self.status = HealthStatus::Error;
             }
         }
@@ -536,9 +533,8 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
             let result = tokio::time::timeout(
                 reconnect_timeout,
                 connect_optional_scheduler(
+                    ctx.config.x23_multiplex_connections,
                     &ctx.config.scheduler_address,
-                    scheduler_pool_size(&ctx.config),
-                    ctx.config.scheduler_lookup_pool_size.get(),
                     ctx.protocol,
                     Some(&ctx.metrics),
                 ),
@@ -593,114 +589,74 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
     if ctx.config.indexer_address.is_some() && ctx.indexer.read().await.is_none() {
         let ctx = ctx.clone();
         spawn_once(&mut attempts.indexer, move || async move {
-            let result = connect_optional_indexer(
+            let connect = connect_optional_indexer(
+                ctx.config.x23_multiplex_connections,
                 ctx.config.indexer_address.as_deref(),
-                ctx.config.indexer_pool_size.get(),
                 Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
-            )
-            .await;
-            match result {
-                Ok(Some(client)) => {
-                    let mut slot = ctx.indexer.write().await;
-                    if slot.is_none() {
-                        *slot = Some(client);
-                        ctx.metrics.observe_backend_reconnect(
-                            HealthBackend::Indexer,
-                            BackendReconnectOutcome::Success,
-                        );
-                        tracing::info!(backend = "indexer", "backend reconnect completed");
-                    }
-                }
-                Ok(None) => ctx.metrics.observe_backend_reconnect(
-                    HealthBackend::Indexer,
-                    BackendReconnectOutcome::Error,
-                ),
-                Err(err) => {
-                    ctx.metrics.observe_backend_reconnect(
-                        HealthBackend::Indexer,
-                        reconnect_error_outcome(&err),
-                    );
-                    tracing::warn!(backend = "indexer", error = %err, "backend reconnect failed");
-                }
-            }
+            );
+            reconnect_optional_backend(&ctx, &INDEXER_NAMES, |ctx| &ctx.indexer, connect).await;
         });
     }
 
     if ctx.config.db_gateway_address.is_some() && ctx.db_gateway.read().await.is_none() {
         let ctx = ctx.clone();
         spawn_once(&mut attempts.db_gateway, move || async move {
-            let result = connect_optional_db_gateway(
+            let connect = connect_optional_db_gateway(
+                ctx.config.x23_multiplex_connections,
                 ctx.config.db_gateway_address.as_deref(),
-                db_gateway_pool_size(&ctx.config),
                 Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
-            )
-            .await;
-            match result {
-                Ok(Some(client)) => {
-                    let mut slot = ctx.db_gateway.write().await;
-                    if slot.is_none() {
-                        *slot = Some(client);
-                        ctx.metrics.observe_backend_reconnect(
-                            HealthBackend::DbGateway,
-                            BackendReconnectOutcome::Success,
-                        );
-                        tracing::info!(backend = "db_gateway", "backend reconnect completed");
-                    }
-                }
-                Ok(None) => ctx.metrics.observe_backend_reconnect(
-                    HealthBackend::DbGateway,
-                    BackendReconnectOutcome::Error,
-                ),
-                Err(err) => {
-                    ctx.metrics.observe_backend_reconnect(
-                        HealthBackend::DbGateway,
-                        reconnect_error_outcome(&err),
-                    );
-                    tracing::warn!(backend = "db_gateway", error = %err, "backend reconnect failed");
-                }
-            }
+            );
+            reconnect_optional_backend(&ctx, &DB_GATEWAY_NAMES, |ctx| &ctx.db_gateway, connect)
+                .await;
         });
     }
 
     if ctx.config.view_gateway_address.is_some() && ctx.view_gateway.read().await.is_none() {
         let ctx = ctx.clone();
         spawn_once(&mut attempts.view_gateway, move || async move {
-            let result = connect_optional_view_gateway(
+            let connect = connect_optional_view_gateway(
+                ctx.config.x23_multiplex_connections,
                 ctx.config.view_gateway_address.as_deref(),
                 Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
-            )
-            .await;
-            match result {
-                Ok(Some(client)) => {
-                    let mut slot = ctx.view_gateway.write().await;
-                    if slot.is_none() {
-                        *slot = Some(client);
-                        ctx.metrics.observe_backend_reconnect(
-                            HealthBackend::ViewGateway,
-                            BackendReconnectOutcome::Success,
-                        );
-                        tracing::info!(backend = "view_gateway", "backend reconnect completed");
-                    }
-                }
-                Ok(None) => ctx.metrics.observe_backend_reconnect(
-                    HealthBackend::ViewGateway,
-                    BackendReconnectOutcome::Error,
-                ),
-                Err(err) => {
-                    ctx.metrics.observe_backend_reconnect(
-                        HealthBackend::ViewGateway,
-                        reconnect_error_outcome(&err),
-                    );
-                    tracing::warn!(backend = "view_gateway", error = %err, "backend reconnect failed");
-                }
-            }
+            );
+            reconnect_optional_backend(&ctx, &VIEW_GATEWAY_NAMES, |ctx| &ctx.view_gateway, connect)
+                .await;
         });
+    }
+}
+
+/// Publish a reconnected optional backend into its slot, unless a
+/// concurrent path already filled it, and meter the attempt's outcome.
+async fn reconnect_optional_backend<C>(
+    ctx: &GatewayContext,
+    names: &OptionalBackendNames,
+    slot: fn(&GatewayContext) -> &RwLock<Option<BackendClient<C>>>,
+    connect: impl Future<Output = Result<Option<BackendClient<C>>, ConnectError>>,
+) {
+    match connect.await {
+        Ok(Some(client)) => {
+            let mut slot = slot(ctx).write().await;
+            if slot.is_none() {
+                *slot = Some(client);
+                ctx.metrics
+                    .observe_backend_reconnect(names.backend, BackendReconnectOutcome::Success);
+                tracing::info!(backend = names.service, "backend reconnect completed");
+            }
+        }
+        Ok(None) => ctx
+            .metrics
+            .observe_backend_reconnect(names.backend, BackendReconnectOutcome::Error),
+        Err(err) => {
+            ctx.metrics
+                .observe_backend_reconnect(names.backend, reconnect_error_outcome(&err));
+            tracing::warn!(backend = names.service, error = %err, "backend reconnect failed");
+        }
     }
 }
 
@@ -730,13 +686,8 @@ async fn probe_once(
     let view_gateway = probes.view_gateway.result;
     let faucet = probes.faucet.result;
 
-    if let Some(tip) = scheduler.tip.as_ref() {
-        state.last_tip = Some((
-            tip.height.clone(),
-            scheduler
-                .tip_observed_at
-                .expect("successful scheduler tip should record its observation time"),
-        ));
+    if let Some(tip) = db_gateway.tip.as_ref() {
+        state.last_tip = Some(tip.clone());
     }
     let chain_tip = state.last_tip.as_ref().map_or(
         ChainTipHealth {
@@ -905,18 +856,18 @@ async fn probe_faucet(airdrop: Option<&HostedAirdrop>, timeout: Duration) -> Pro
     ProbeResult {
         up: result.up,
         error: result.error.map(bounded_error),
+        tip: None,
     }
 }
 
 struct ProbeResult {
     up: bool,
     error: Option<String>,
+    tip: Option<(BlockHeight, Instant)>,
 }
 
 struct SchedulerProbeResult {
     up: bool,
-    tip: Option<ChainTip>,
-    tip_observed_at: Option<Instant>,
     error: Option<String>,
     identity_status: SchedulerIdentityStatus,
 }
@@ -948,13 +899,7 @@ async fn probe_scheduler(
         if let Some(result) = probe_quarantined_scheduler(ctx, probe_timeout, state).await {
             return result;
         }
-        return SchedulerProbeResult {
-            up: false,
-            tip: None,
-            tip_observed_at: None,
-            error: Some("scheduler not connected".to_string()),
-            identity_status: state.identity_status,
-        };
+        return scheduler_probe_failure(state, "scheduler not connected");
     };
     let generation = client.generation();
     if state
@@ -980,13 +925,10 @@ async fn probe_scheduler(
             pending.handle.abort();
             let _ = pending.handle.await;
             state.timeout_streak = 0;
-            return SchedulerProbeResult {
-                up: false,
-                tip: None,
-                tip_observed_at: None,
-                error: Some("scheduler probe repeatedly timed out; reconnecting".to_string()),
-                identity_status: state.identity_status,
-            };
+            return scheduler_probe_failure(
+                state,
+                "scheduler probe repeatedly timed out; reconnecting",
+            );
         }
     } else {
         let started_at = Instant::now();
@@ -1011,17 +953,12 @@ async fn probe_scheduler(
                 started_at,
                 generation,
             });
-            return SchedulerProbeResult {
-                up: false,
-                tip: None,
-                tip_observed_at: None,
-                error: Some("scheduler probe timed out".to_string()),
-                identity_status: state.identity_status,
-            };
+            return scheduler_probe_failure(state, "scheduler probe timed out");
         }
     };
-    let outcome = match &rpc_result {
-        Ok(ExpectedDBTip::kRPCNone { .. }) => BackendRequestOutcome::Ok,
+    let answer = rpc_result.map(|result| shared_scheduler::tip_answer(SCHEDULER, result));
+    let outcome = match &answer {
+        Ok(Ok(shared_scheduler::TipAnswer::Tip(_))) => BackendRequestOutcome::Ok,
         Ok(_) => BackendRequestOutcome::Rejected,
         Err(_) => BackendRequestOutcome::Error,
     };
@@ -1034,45 +971,22 @@ async fn probe_scheduler(
         );
     }
 
-    match rpc_result {
-        Ok(ExpectedDBTip::kRPCNone { db_tip }) => {
-            state.timeout_streak = 0;
+    state.timeout_streak = 0;
+    match answer {
+        Ok(Ok(shared_scheduler::TipAnswer::Tip(db_tip))) => {
             let result = successful_scheduler_probe(&db_tip, state);
             if result.identity_status == SchedulerIdentityStatus::Mismatch {
                 clear_scheduler_if_current(&ctx.scheduler, generation).await;
             }
             result
         }
-        Ok(ExpectedDBTip::Default { error }) if RPCError(error) == RPCError::kRPCNotFound => {
-            state.timeout_streak = 0;
-            SchedulerProbeResult {
-                up: false,
-                tip: None,
-                tip_observed_at: None,
-                error: Some("scheduler returned no committed blocks".to_string()),
-                identity_status: state.identity_status,
-            }
+        Ok(Ok(shared_scheduler::TipAnswer::NoCommittedBlock)) => {
+            scheduler_probe_failure(state, "scheduler returned no committed blocks")
         }
-        Ok(other) => {
-            state.timeout_streak = 0;
-            SchedulerProbeResult {
-                up: false,
-                tip: None,
-                tip_observed_at: None,
-                error: Some(format!("unexpected scheduler tip result: {other:?}")),
-                identity_status: state.identity_status,
-            }
-        }
+        Ok(Err(error)) => scheduler_probe_failure(state, error.to_string()),
         Err(err) => {
-            state.timeout_streak = 0;
             clear_scheduler_if_current(&ctx.scheduler, generation).await;
-            SchedulerProbeResult {
-                up: false,
-                tip: None,
-                tip_observed_at: None,
-                error: Some(bounded_error(err.to_string())),
-                identity_status: state.identity_status,
-            }
+            scheduler_probe_failure(state, err.to_string())
         }
     }
 }
@@ -1081,14 +995,14 @@ fn successful_scheduler_probe(
     db_tip: &DbTip,
     state: &mut SchedulerProbeState,
 ) -> SchedulerProbeResult {
-    let observed = canonical_network_hash(
+    let observed = NetworkHashHex::from(
         db_tip
             .value
             .proposal_header
             .network_hash
             .clone()
             .into_inner()
-            .as_ref(),
+            .into_inner(),
     );
     if let Some(expected) = state.expected_network_hash.as_ref() {
         if expected != &observed {
@@ -1098,48 +1012,26 @@ fn successful_scheduler_probe(
                 observed_network_hash = %observed,
                 "scheduler network identity mismatch"
             );
-            return SchedulerProbeResult {
-                up: false,
-                tip: None,
-                tip_observed_at: None,
-                error: Some(format!(
+            return scheduler_probe_failure(
+                state,
+                format!(
                     "scheduler network hash mismatch: expected {expected}, observed {observed}"
-                )),
-                identity_status: SchedulerIdentityStatus::Mismatch,
-            };
+                ),
+            );
         }
     } else {
         state.expected_network_hash = Some(observed);
     }
     state.identity_status = SchedulerIdentityStatus::Validated;
 
-    match consensus_value_hash(&db_tip.value) {
-        Ok(block_hash) => SchedulerProbeResult {
+    match shared_scheduler::chain_tip(SCHEDULER, &db_tip.value) {
+        Ok(_) => SchedulerProbeResult {
             up: true,
-            tip: Some(ChainTip {
-                height: db_tip.value.proposal_header.block_height.clone(),
-                block_hash,
-            }),
-            tip_observed_at: Some(Instant::now()),
             error: None,
             identity_status: SchedulerIdentityStatus::Validated,
         },
-        Err(error) => SchedulerProbeResult {
-            up: false,
-            tip: None,
-            tip_observed_at: None,
-            error: Some(format!(
-                "scheduler returned an unencodable consensus value: {error}"
-            )),
-            identity_status: SchedulerIdentityStatus::Validated,
-        },
+        Err(error) => scheduler_probe_failure(state, error.to_string()),
     }
-}
-
-fn canonical_network_hash(bytes: &[u8]) -> NetworkHashHex {
-    let mut hash = [0; 32];
-    hash.copy_from_slice(bytes);
-    NetworkHashHex::from(hash)
 }
 
 async fn probe_quarantined_scheduler(
@@ -1170,22 +1062,16 @@ async fn probe_quarantined_scheduler(
     );
     if !matches!(pending_count_result, Ok(Ok(_))) {
         *ctx.scheduler_quarantine.write().await = None;
-        return Some(SchedulerProbeResult {
-            up: false,
-            tip: None,
-            tip_observed_at: None,
-            error: Some("quarantined scheduler connection unavailable".to_string()),
-            identity_status: state.identity_status,
-        });
+        return Some(scheduler_probe_failure(
+            state,
+            "quarantined scheduler connection unavailable",
+        ));
     }
     if Instant::now() < quarantined.ready_at {
-        return Some(SchedulerProbeResult {
-            up: false,
-            tip: None,
-            tip_observed_at: None,
-            error: Some("scheduler reconnect readiness grace active".to_string()),
-            identity_status: state.identity_status,
-        });
+        return Some(scheduler_probe_failure(
+            state,
+            "scheduler reconnect readiness grace active",
+        ));
     }
 
     probe_quarantined_scheduler_tip(ctx, quarantined, probe_timeout, state).await
@@ -1204,9 +1090,11 @@ async fn probe_quarantined_scheduler_tip(
         quarantined.client.probe_client().schedgateway_get_tip(),
     )
     .await;
-    let outcome = match &rpc_result {
+    let answer = rpc_result
+        .map(|result| result.map(|result| shared_scheduler::tip_answer(SCHEDULER, result)));
+    let outcome = match &answer {
         Err(_) => BackendRequestOutcome::Timeout,
-        Ok(Ok(ExpectedDBTip::kRPCNone { .. })) => BackendRequestOutcome::Ok,
+        Ok(Ok(Ok(shared_scheduler::TipAnswer::Tip(_)))) => BackendRequestOutcome::Ok,
         Ok(Ok(_)) => BackendRequestOutcome::Rejected,
         Ok(Err(_)) => BackendRequestOutcome::Error,
     };
@@ -1217,7 +1105,7 @@ async fn probe_quarantined_scheduler_tip(
         started_at.elapsed(),
     );
 
-    let db_tip = match rpc_result {
+    let db_tip = match answer {
         Err(_) => {
             clear_quarantined_scheduler_if_current(ctx, generation).await;
             return Some(scheduler_probe_failure(
@@ -1232,19 +1120,19 @@ async fn probe_quarantined_scheduler_tip(
                 format!("scheduler quarantine tip probe failed: {error}"),
             ));
         }
-        Ok(Ok(ExpectedDBTip::kRPCNone { db_tip })) => db_tip,
-        Ok(Ok(ExpectedDBTip::Default { error })) if RPCError(error) == RPCError::kRPCNotFound => {
+        Ok(Ok(Ok(shared_scheduler::TipAnswer::Tip(db_tip)))) => db_tip,
+        Ok(Ok(Ok(shared_scheduler::TipAnswer::NoCommittedBlock))) => {
             clear_quarantined_scheduler_if_current(ctx, generation).await;
             return Some(scheduler_probe_failure(
                 state,
                 "scheduler quarantine returned no committed blocks",
             ));
         }
-        Ok(Ok(other)) => {
+        Ok(Ok(Err(error))) => {
             clear_quarantined_scheduler_if_current(ctx, generation).await;
             return Some(scheduler_probe_failure(
                 state,
-                format!("unexpected scheduler quarantine tip result: {other:?}"),
+                format!("scheduler quarantine: {error}"),
             ));
         }
     };
@@ -1305,10 +1193,83 @@ fn scheduler_probe_failure(
 ) -> SchedulerProbeResult {
     SchedulerProbeResult {
         up: false,
-        tip: None,
-        tip_observed_at: None,
         error: Some(bounded_error(message.into())),
         identity_status: state.identity_status,
+    }
+}
+
+/// One optional backend as the health loop sees it: how it is named and
+/// where its client lives.
+struct OptionalSlot<'a, C> {
+    names: &'static OptionalBackendNames,
+    slot: &'a RwLock<Option<BackendClient<C>>>,
+}
+
+/// Re-run an optional backend's intro handshake as its liveness probe.
+///
+/// A transport failure drops the client so the reconnect loop replaces
+/// it; a timeout does so only once it repeats, since one slow answer is
+/// not evidence the connection is gone.
+async fn probe_optional_backend<C: Clone, O>(
+    ctx: &GatewayContext,
+    target: OptionalSlot<'_, C>,
+    protocol: &Protocol,
+    probe_timeout: Duration,
+    timeout_streak: &mut u8,
+    intro: impl AsyncFnOnce(&C, &Protocol) -> Result<O, rpc_driver::RpcError>,
+    classify: fn(O) -> IntroOutcome,
+) -> ProbeResult {
+    let names = target.names;
+    let current_client = { target.slot.read().await.clone() };
+    let Some(client) = current_client else {
+        *timeout_streak = 0;
+        return failed_probe(format!("{} not connected", names.service));
+    };
+    let started_at = Instant::now();
+    let rpc_result = tokio::time::timeout(probe_timeout, intro(client.probe_client(), protocol))
+        .await
+        .map(|result| result.map(classify));
+    let outcome = match &rpc_result {
+        Err(_) => BackendRequestOutcome::Timeout,
+        Ok(Ok(outcome)) if outcome.accepted() => BackendRequestOutcome::Ok,
+        Ok(Ok(_)) => BackendRequestOutcome::Rejected,
+        Ok(Err(_)) => BackendRequestOutcome::Error,
+    };
+    ctx.metrics.observe_backend_request(
+        names.backend,
+        names.intro_service,
+        outcome,
+        started_at.elapsed(),
+    );
+    match rpc_result {
+        Ok(Ok(outcome)) if outcome.accepted() => {
+            *timeout_streak = 0;
+            ok_probe()
+        }
+        Ok(Ok(outcome)) => {
+            *timeout_streak = 0;
+            failed_probe(format!(
+                "{} intro rejected: {}",
+                names.service,
+                outcome.name()
+            ))
+        }
+        Ok(Err(err)) => {
+            *timeout_streak = 0;
+            *target.slot.write().await = None;
+            failed_probe(format!("{} intro failed: {err}", names.service))
+        }
+        Err(_) => {
+            let reconnecting = repeated_probe_timeout(timeout_streak);
+            if reconnecting {
+                *target.slot.write().await = None;
+            }
+            failed_probe(if reconnecting {
+                format!("{} probe repeatedly timed out; reconnecting", names.service)
+            } else {
+                format!("{} probe timed out", names.service)
+            })
+        }
     }
 }
 
@@ -1318,110 +1279,74 @@ async fn probe_indexer(
     probe_timeout: Duration,
     timeout_streak: &mut u8,
 ) -> ProbeResult {
-    let current_client = { ctx.indexer.read().await.clone() };
-    let Some(client) = current_client else {
-        *timeout_streak = 0;
-        return failed_probe("indexer not connected");
-    };
-    let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(
+    probe_optional_backend(
+        ctx,
+        OptionalSlot {
+            names: &INDEXER_NAMES,
+            slot: &ctx.indexer,
+        },
+        protocol,
         probe_timeout,
-        client.probe_client().indexer_block_explorer_intro(protocol),
+        timeout_streak,
+        async |client, protocol| client.indexer_block_explorer_intro(protocol).await,
+        intro::indexer_block_explorer,
     )
-    .await;
-    let outcome = match &rpc_result {
-        Err(_) => BackendRequestOutcome::Timeout,
-        Ok(Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)) => BackendRequestOutcome::Ok,
-        Ok(Ok(_)) => BackendRequestOutcome::Rejected,
-        Ok(Err(_)) => BackendRequestOutcome::Error,
-    };
-    ctx.metrics.observe_backend_request(
-        HealthBackend::Indexer,
-        "indexer_block_explorer_intro",
-        outcome,
-        started_at.elapsed(),
-    );
-    match rpc_result {
-        Ok(Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)) => {
-            *timeout_streak = 0;
-            ok_probe()
-        }
-        Ok(Ok(outcome)) => {
-            *timeout_streak = 0;
-            failed_probe(format!("indexer intro rejected: {outcome}"))
-        }
-        Ok(Err(err)) => {
-            *timeout_streak = 0;
-            *ctx.indexer.write().await = None;
-            failed_probe(format!("indexer intro failed: {err}"))
-        }
-        Err(_) => {
-            let reconnecting = repeated_probe_timeout(timeout_streak);
-            if reconnecting {
-                *ctx.indexer.write().await = None;
-            }
-            failed_probe(if reconnecting {
-                "indexer probe repeatedly timed out; reconnecting"
-            } else {
-                "indexer probe timed out"
-            })
-        }
-    }
+    .await
 }
 
 async fn probe_db_gateway(
     ctx: &GatewayContext,
-    protocol: &Protocol,
+    _protocol: &Protocol,
     probe_timeout: Duration,
     timeout_streak: &mut u8,
 ) -> ProbeResult {
-    let current_client = { ctx.db_gateway.read().await.clone() };
-    let Some(client) = current_client else {
-        *timeout_streak = 0;
+    let Some(client) = ctx.db_gateway.read().await.clone() else {
         return failed_probe("db_gateway not connected");
     };
+    let generation = client.generation();
     let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(
-        probe_timeout,
-        client.probe_client().dbgateway_intro(protocol),
-    )
-    .await;
-    let outcome = match &rpc_result {
-        Err(_) => BackendRequestOutcome::Timeout,
-        Ok(Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)) => BackendRequestOutcome::Ok,
+    let result =
+        tokio::time::timeout(probe_timeout, client.probe_client().dbgateway_get_config()).await;
+    let outcome = match &result {
+        Ok(Ok(groundhog_db_gateway::DbGatewayConfigResult::kRPCNone { .. })) => {
+            BackendRequestOutcome::Ok
+        }
         Ok(Ok(_)) => BackendRequestOutcome::Rejected,
         Ok(Err(_)) => BackendRequestOutcome::Error,
+        Err(_) => BackendRequestOutcome::Timeout,
     };
     ctx.metrics.observe_backend_request(
         HealthBackend::DbGateway,
-        "dbgateway_intro",
+        "dbgateway_get_config",
         outcome,
         started_at.elapsed(),
     );
-    match rpc_result {
-        Ok(Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)) => {
+    match result {
+        Ok(Ok(result)) => {
             *timeout_streak = 0;
-            ok_probe()
+            match groundhog_hogd_backend::db_gateway::tip_reading(
+                "db_gateway",
+                result,
+                ctx.config.network_hash.as_ref(),
+            ) {
+                Ok(reading) => ProbeResult {
+                    up: true,
+                    error: None,
+                    tip: Some((reading.tip.height, Instant::now())),
+                },
+                Err(error) => failed_probe(error.to_string()),
+            }
         }
-        Ok(Ok(outcome)) => {
+        Ok(Err(error)) => {
             *timeout_streak = 0;
-            failed_probe(format!("db_gateway intro rejected: {outcome}"))
-        }
-        Ok(Err(err)) => {
-            *timeout_streak = 0;
-            *ctx.db_gateway.write().await = None;
-            failed_probe(format!("db_gateway intro failed: {err}"))
+            crate::context::clear_db_gateway_if_current(&ctx.db_gateway, generation).await;
+            failed_probe(format!("db_gateway configuration probe failed: {error}"))
         }
         Err(_) => {
-            let reconnecting = repeated_probe_timeout(timeout_streak);
-            if reconnecting {
-                *ctx.db_gateway.write().await = None;
+            if repeated_probe_timeout(timeout_streak) {
+                crate::context::clear_db_gateway_if_current(&ctx.db_gateway, generation).await;
             }
-            failed_probe(if reconnecting {
-                "db_gateway probe repeatedly timed out; reconnecting"
-            } else {
-                "db_gateway probe timed out"
-            })
+            failed_probe("db_gateway configuration probe timed out")
         }
     }
 }
@@ -1432,61 +1357,26 @@ async fn probe_view_gateway(
     probe_timeout: Duration,
     timeout_streak: &mut u8,
 ) -> ProbeResult {
-    let current_client = { ctx.view_gateway.read().await.clone() };
-    let Some(client) = current_client else {
-        *timeout_streak = 0;
-        return failed_probe("view_gateway not connected");
-    };
-    let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(
+    probe_optional_backend(
+        ctx,
+        OptionalSlot {
+            names: &VIEW_GATEWAY_NAMES,
+            slot: &ctx.view_gateway,
+        },
+        protocol,
         probe_timeout,
-        client.probe_client().viewgateway_intro(protocol),
+        timeout_streak,
+        async |client, protocol| client.viewgateway_intro(protocol).await,
+        intro::view_gateway,
     )
-    .await;
-    let outcome = match &rpc_result {
-        Err(_) => BackendRequestOutcome::Timeout,
-        Ok(Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)) => BackendRequestOutcome::Ok,
-        Ok(Ok(_)) => BackendRequestOutcome::Rejected,
-        Ok(Err(_)) => BackendRequestOutcome::Error,
-    };
-    ctx.metrics.observe_backend_request(
-        HealthBackend::ViewGateway,
-        "viewgateway_intro",
-        outcome,
-        started_at.elapsed(),
-    );
-    match rpc_result {
-        Ok(Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)) => {
-            *timeout_streak = 0;
-            ok_probe()
-        }
-        Ok(Ok(outcome)) => {
-            *timeout_streak = 0;
-            failed_probe(format!("view_gateway intro rejected: {outcome}"))
-        }
-        Ok(Err(err)) => {
-            *timeout_streak = 0;
-            *ctx.view_gateway.write().await = None;
-            failed_probe(format!("view_gateway intro failed: {err}"))
-        }
-        Err(_) => {
-            let reconnecting = repeated_probe_timeout(timeout_streak);
-            if reconnecting {
-                *ctx.view_gateway.write().await = None;
-            }
-            failed_probe(if reconnecting {
-                "view_gateway probe repeatedly timed out; reconnecting"
-            } else {
-                "view_gateway probe timed out"
-            })
-        }
-    }
+    .await
 }
 
 fn ok_probe() -> ProbeResult {
     ProbeResult {
         up: true,
         error: None,
+        tip: None,
     }
 }
 
@@ -1494,6 +1384,7 @@ fn failed_probe(message: impl Into<String>) -> ProbeResult {
     ProbeResult {
         up: false,
         error: Some(bounded_error(message.into())),
+        tip: None,
     }
 }
 
@@ -1551,7 +1442,7 @@ fn readiness_status(
         return HealthStatus::Error;
     }
 
-    if backend_required(config, HealthBackend::Scheduler)
+    if backend_required(config, HealthBackend::DbGateway)
         && chain_tip
             .age_ms
             .is_none_or(|age| age > config.health_chain_tip_max_age_ms)
@@ -1612,16 +1503,19 @@ fn bounded_error(message: String) -> String {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use groundhog_db_gateway::DbGatewayIntroOutcome;
     use groundhog_db_gateway::{
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher,
         DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
     };
+    use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
     use groundhog_indexer::{
         AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPageResult,
         EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, TransactionPageResult,
         TransactionQuery, TransactionRefPageResult, TxInfoOutcome, TxInfoResult,
     };
+    use groundhog_json_rpc_server::RpcServerError;
     use groundhog_json_rpc_server::{ChainPlane, ReadPlane, RpcRequestContext, ViewPlane};
     use groundhog_json_rpc_types::{
         ContractAddress as RpcContractAddress,
@@ -1632,8 +1526,10 @@ mod tests {
     use groundhog_scheduler::{
         ConsensusValue, DbTip, ParallelSignedTransactionBatch, PendingTxCount, ProposalTxsHash,
         RPCError, SchedGatewayIntroOutcome, SchedGatewaySubmitOutcomeBatch,
+        SchedulerTransactionOutcomeBatch,
         sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
     };
+    use groundhog_view::ViewGatewayIntroOutcome;
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
         ViewGatewayResult,
@@ -1670,10 +1566,10 @@ mod tests {
 
     use crate::{
         backend::GatewayBackend,
-        error::GatewayError,
+        config::X23MultiplexConnections,
         metrics::GatewayMetrics,
         observability::spawn_observability_server,
-        tip_coalescer::{SchedulerTipSink, TipSink},
+        tip_coalescer::{DbTipSink, TipSink},
     };
 
     use super::*;
@@ -1697,7 +1593,10 @@ mod tests {
     }
 
     struct SaturatedIndexer(HandlerGate);
-    struct SaturatedDbGateway(HandlerGate);
+    struct SaturatedDbGateway {
+        gate: HandlerGate,
+        block_config: bool,
+    }
     struct SaturatedViewGateway(HandlerGate);
 
     #[async_trait]
@@ -1752,6 +1651,14 @@ mod tests {
 
     #[async_trait]
     impl DbGateway_DbGateway1 for SaturatedDbGateway {
+        async fn dbgateway_get_config(
+            &self,
+        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+            if self.block_config {
+                self.gate.wait().await;
+            }
+            Ok(test_db_config())
+        }
         async fn dbgateway_intro(
             &self,
             _protocol: Protocol,
@@ -1763,13 +1670,19 @@ mod tests {
             &self,
             _batch: AddressAndKeyBatch,
         ) -> Result<DbGatewayResult, ProgramError> {
-            self.0.wait().await;
+            self.gate.wait().await;
             Err(ProgramError::msg("released db_gateway handler"))
         }
     }
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for SaturatedViewGateway {
+        async fn viewgateway_view_batch(
+            &self,
+            _: groundhog_view::ViewGatewayBatchQuery,
+        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            panic!("batch is not used by this health test")
+        }
         async fn viewgateway_intro(
             &self,
             _protocol: Protocol,
@@ -1809,6 +1722,27 @@ mod tests {
         tip_behavior: TipBehavior,
         null_behavior: NullBehavior,
         lookup_gate: Option<HandlerGate>,
+    }
+
+    fn test_db_config() -> groundhog_db_gateway::DbGatewayConfigResult {
+        let tip = test_db_tip([0x41; 32]);
+        groundhog_db_gateway::DbGatewayConfigResult::kRPCNone {
+            config: groundhog_db_gateway::DbGatewayConfig {
+                effective_config: tip.network_config.clone(),
+                tip,
+                storage_cost_model: groundhog_xdr::storage_cost::StorageCostModelXdr {
+                    ext: ExtensionPoint::_0,
+                    base_data_item_cost: 12_000,
+                    bytestring_cost_per_byte: 10,
+                    base_contract_deployment_cost: 12_000,
+                    contract_deployment_cost_per_byte: 10,
+                    auth_per_key_cost: 1111,
+                    rcq_cost_per_entry: 8,
+                    replay_cache_cost_per_entry: 7,
+                    balance_cost: 1234,
+                },
+            },
+        }
     }
 
     fn test_db_tip(network_hash: [u8; 32]) -> DbTip {
@@ -1854,6 +1788,69 @@ mod tests {
     }
 
     #[test]
+    fn db_snapshot_preserves_tip_effective_limits_and_exact_prices() {
+        use groundhog_db_gateway::DbGatewayConfigResult;
+        use groundhog_hogd_backend::db_gateway::tip_reading;
+        use groundhog_xdr::network_config::{ConfigParam, NetworkConfigV0};
+
+        let DbGatewayConfigResult::kRPCNone { mut config } = test_db_config() else {
+            panic!("expected fixture configuration");
+        };
+        config.effective_config = NetworkConfig::_0 {
+            v0: NetworkConfigV0 {
+                params: vec![ConfigParam::kConfigParamMaxSHA256Buffers {
+                    max_sha256_buffers: 17,
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        };
+        config.storage_cost_model.base_data_item_cost = u64::MAX;
+        let expected_tip = shared_scheduler::chain_tip("test", &config.tip.value).unwrap();
+        let stated = config.tip.network_config.clone();
+        let reading = tip_reading(
+            "test",
+            DbGatewayConfigResult::kRPCNone { config },
+            Some(&NetworkHashHex::from([0x41; 32])),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&reading.tip).unwrap(),
+            serde_json::to_value(&expected_tip).unwrap()
+        );
+        assert_eq!(reading.network_config, stated);
+        let execution = reading.execution.unwrap();
+        assert_eq!(
+            serde_json::to_value(&execution.observed_tip).unwrap(),
+            serde_json::to_value(&expected_tip).unwrap()
+        );
+        assert_eq!(execution.effective_limits.max_sha256_buffers, Some(17));
+        assert_eq!(
+            execution.storage_costs.base_data_item_cost,
+            u64::MAX.to_string()
+        );
+    }
+
+    #[test]
+    fn db_snapshot_rejects_wrong_network_and_uncommitted_tip() {
+        use groundhog_db_gateway::DbGatewayConfigResult;
+        use groundhog_hogd_backend::db_gateway::tip_reading;
+        assert!(
+            tip_reading(
+                "test",
+                test_db_config(),
+                Some(&NetworkHashHex::from([0x42; 32]))
+            )
+            .is_err()
+        );
+        let DbGatewayConfigResult::kRPCNone { mut config } = test_db_config() else {
+            panic!("expected fixture configuration");
+        };
+        config.tip.value.proposal_header.block_height = (-1).into();
+        assert!(tip_reading("test", DbGatewayConfigResult::kRPCNone { config }, None).is_err());
+    }
+
+    #[test]
     fn scheduler_network_hash_matching_pin_is_healthy() {
         let expected = NetworkHashHex::from([0x41; 32]);
         let mut state = SchedulerProbeState::with_expected_network_hash(Some(expected.clone()));
@@ -1874,7 +1871,6 @@ mod tests {
         let result = successful_scheduler_probe(&test_db_tip([0x41; 32]), &mut state);
 
         assert!(!result.up);
-        assert!(result.tip.is_none());
         assert_eq!(result.identity_status, SchedulerIdentityStatus::Mismatch);
         assert_eq!(
             result.error.as_deref(),
@@ -1973,6 +1969,34 @@ mod tests {
             Ok(VecM(vec![None; hashes.0.len()]))
         }
 
+        async fn schedgateway_lookup_transaction_outcomes(
+            &self,
+            hashes: TransactionHashBatch,
+        ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
+            use groundhog_scheduler::{
+                SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
+                SchedulerTransactionStatus,
+            };
+            let results = self.schedgateway_lookup_tx(hashes).await?;
+            Ok(VecM(
+                results
+                    .0
+                    .into_iter()
+                    .map(|tx| SchedulerTransactionOutcome {
+                        status: if tx.is_some() {
+                            SchedulerTransactionStatus::SchedulerTransactionPending
+                        } else {
+                            SchedulerTransactionStatus::SchedulerTransactionNotFound
+                        },
+                        error_source:
+                            SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
+                        error_code: 0,
+                        height: 42.into(),
+                    })
+                    .collect(),
+            ))
+        }
+
         async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
             self.calls.null.fetch_add(1, Ordering::SeqCst);
             if let NullBehavior::Wait(gate) = &self.null_behavior {
@@ -2039,6 +2063,11 @@ mod tests {
 
     #[async_trait]
     impl DbGateway_DbGateway1 for LifecycleDbGateway {
+        async fn dbgateway_get_config(
+            &self,
+        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+            Ok(test_db_config())
+        }
         async fn dbgateway_intro(
             &self,
             _protocol: Protocol,
@@ -2071,6 +2100,12 @@ mod tests {
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for LifecycleViewGateway {
+        async fn viewgateway_view_batch(
+            &self,
+            _: groundhog_view::ViewGatewayBatchQuery,
+        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            panic!("batch is not used by this health test")
+        }
         async fn viewgateway_intro(
             &self,
             _protocol: Protocol,
@@ -2084,6 +2119,7 @@ mod tests {
         ) -> Result<ViewGatewayResult, ProgramError> {
             Ok(ViewGatewayResult::ViewGatewayOk {
                 payload: ViewGatewayPayload {
+                    gas_consumed: 0,
                     height: 42.into(),
                     output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![1, 2, 3]),
@@ -2348,7 +2384,9 @@ mod tests {
         (addr, handle, gate)
     }
 
-    async fn start_saturated_db_gateway() -> (
+    async fn start_saturated_db_gateway(
+        block_config: bool,
+    ) -> (
         std::net::SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
         HandlerGate,
@@ -2362,7 +2400,10 @@ mod tests {
         let gate = HandlerGate::default();
         let mut services = ServiceMap::new();
         services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
-            SaturatedDbGateway(gate.clone()),
+            SaturatedDbGateway {
+                gate: gate.clone(),
+                block_config,
+            },
         ))));
         let handle = RpcServer::new(listener, services).start().await;
         (addr, handle, gate)
@@ -2404,7 +2445,7 @@ mod tests {
                 },
             },
             forwarded_tokens: VecM(vec![]),
-            invoke_flags: InvokeFlag::None.0,
+            invoke_flags: InvokeFlag::None.0.cast_unsigned(),
         }
     }
 
@@ -2555,10 +2596,13 @@ mod tests {
 
     fn lifecycle_view_request() -> ViewRequest {
         ViewRequest {
+            auth_claim: None,
+            min_height: None,
             contract: lifecycle_contract_address(),
             entrypoint: HexBytes(vec![0x77; 8]),
             calldata: HexBytes(vec![0x88]),
             caller: None,
+            gas_limit: None,
         }
     }
 
@@ -2660,6 +2704,64 @@ mod tests {
             db.last_error.as_deref(),
             Some("required backend is not configured")
         );
+    }
+
+    #[tokio::test]
+    async fn default_readiness_requires_db_gateway() {
+        assert_db_gateway_readiness(GatewayConfig::default(), 503).await;
+    }
+
+    #[tokio::test]
+    async fn explicit_partial_service_policy_allows_db_gateway_outage() {
+        let config = GatewayConfig {
+            health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
+            ..GatewayConfig::default()
+        };
+        assert_db_gateway_readiness(config, 200).await;
+    }
+
+    async fn assert_db_gateway_readiness(mut config: GatewayConfig, unavailable_status: u16) {
+        config.indexer_address = Some("127.0.0.1:1".into());
+        config.db_gateway_address = Some("127.0.0.1:2".into());
+        config.view_gateway_address = None;
+        let health = GatewayHealth::new(&config, BuildVersion::new("test", None), None);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = spawn_observability_server(
+            "127.0.0.1:0",
+            health.clone(),
+            GatewayMetrics::for_tests(),
+            shutdown_rx,
+        )
+        .await
+        .expect("observability server should start");
+
+        for (db_up, expected_status) in [(false, unavailable_status), (true, 200)] {
+            let mut snapshot =
+                HealthSnapshot::starting(&config, BuildVersion::new("test", None), None);
+            for backend in [
+                HealthBackend::Scheduler,
+                HealthBackend::Indexer,
+                HealthBackend::DbGateway,
+            ] {
+                let state = snapshot.backends.get_mut(backend.as_str()).unwrap();
+                state.up = backend != HealthBackend::DbGateway || db_up;
+                state.scheduler_identity = SchedulerIdentityStatus::Validated;
+            }
+            // A prior fresh tip must not hide a currently unavailable required DB.
+            snapshot.chain_tip = ChainTipHealth {
+                height: Some(42.into()),
+                age_ms: Some(0),
+            };
+            snapshot.status = readiness_status(&config, &snapshot.backends, &snapshot.chain_tip);
+            health.update_for_test(snapshot).await;
+            assert_eq!(
+                http_status(server.local_addr, "/readyz").await,
+                expected_status
+            );
+        }
+
+        shutdown_tx.send(()).unwrap();
+        server.handle.await.unwrap().unwrap();
     }
 
     #[test]
@@ -2839,11 +2941,15 @@ mod tests {
     async fn slow_optional_reconnect_keeps_degraded_readiness_fresh() {
         let (scheduler_addr, _scheduler_server, _) =
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
-        let scheduler =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("scheduler connection should succeed")
-                .expect("scheduler should be connected");
+        let scheduler = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &scheduler_addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .expect("scheduler connection should succeed")
+        .expect("scheduler should be connected");
         let (indexer_addr, _indexer_server, intros, release) = start_slow_intro_indexer().await;
         let config = Arc::new(GatewayConfig {
             scheduler_address: scheduler_addr.to_string(),
@@ -2945,78 +3051,90 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scheduler_request_deadline_fails_closed_before_worker_cancellation() {
-        let (scheduler_addr, _server, calls) =
-            start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
-        let client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("scheduler connection should succeed")
-                .expect("scheduler should be connected");
+    async fn db_request_deadline_fails_closed_before_worker_cancellation() {
+        let (db_addr, _server, gate) = start_saturated_db_gateway(true).await;
+        let client = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
+            Some(&db_addr.to_string()),
+            Some(PROTOCOL_VERSION),
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .expect("DB connection should succeed")
+        .expect("DB should be connected");
         let metrics = GatewayMetrics::for_tests();
-        let scheduler = Arc::new(RwLock::new(Some(client)));
-        let sink =
-            SchedulerTipSink::new(scheduler.clone(), metrics.clone(), Duration::from_secs(1));
+        let db = Arc::new(RwLock::new(Some(client)));
+        let sink = DbTipSink::new(db.clone(), metrics.clone(), Duration::from_secs(1), None);
 
         assert!(matches!(
             sink.get_tip(std::time::Instant::now() + Duration::from_millis(25))
                 .await,
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
-        assert!(scheduler.read().await.is_none());
-        assert_eq!(calls.tip.load(Ordering::SeqCst), 1);
+        assert!(db.read().await.is_none());
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
 
         let snapshot = HealthSnapshot::for_test(HealthStatus::Error, None, &[]);
         let body = metrics.gather(&snapshot).expect("metrics should encode");
         assert!(body.contains(
-            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_get_tip\",outcome=\"timeout\"} 1"
+            "groundhog_gateway_backend_requests_total{backend=\"db_gateway\",operation=\"dbgateway_get_config\",outcome=\"timeout\"} 1"
         ));
     }
 
     #[tokio::test]
-    async fn old_scheduler_timeout_does_not_clear_new_generation() {
-        let (scheduler_addr, _server, calls) =
-            start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
-        let old_client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("old scheduler connection should succeed")
-                .expect("old scheduler should be connected");
-        let new_client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("new scheduler connection should succeed")
-                .expect("new scheduler should be connected");
+    async fn old_db_timeout_does_not_clear_new_generation() {
+        let (db_addr, _server, gate) = start_saturated_db_gateway(true).await;
+        let old_client = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
+            Some(&db_addr.to_string()),
+            Some(PROTOCOL_VERSION),
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .expect("old DB connection should succeed")
+        .expect("old DB should be connected");
+        let new_client = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
+            Some(&db_addr.to_string()),
+            Some(PROTOCOL_VERSION),
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .expect("new DB connection should succeed")
+        .expect("new DB should be connected");
         let new_generation = new_client.generation();
-        let scheduler = Arc::new(RwLock::new(Some(old_client)));
-        let sink = Arc::new(SchedulerTipSink::new(
-            scheduler.clone(),
+        let db = Arc::new(RwLock::new(Some(old_client)));
+        let sink = Arc::new(DbTipSink::new(
+            db.clone(),
             GatewayMetrics::for_tests(),
             Duration::from_millis(25),
+            None,
         ));
         let call = tokio::spawn(async move {
             sink.get_tip(std::time::Instant::now() + Duration::from_secs(1))
                 .await
         });
         tokio::time::timeout(Duration::from_secs(1), async {
-            while calls.tip.load(Ordering::SeqCst) == 0 {
+            while gate.calls.load(Ordering::SeqCst) == 0 {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("old scheduler call should reach the backend");
-        *scheduler.write().await = Some(new_client);
+        .expect("old DB call should reach the backend");
+        *db.write().await = Some(new_client);
 
         assert!(matches!(
             call.await.unwrap(),
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(
-            scheduler
-                .read()
+            db.read()
                 .await
                 .as_ref()
-                .expect("new scheduler generation should remain installed")
+                .expect("new DB generation should remain installed")
                 .generation(),
             new_generation
         );
@@ -3285,11 +3403,15 @@ mod tests {
             view_gateway_address: None,
             ..GatewayConfig::default()
         });
-        let client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("scheduler connection should succeed")
-                .expect("scheduler should be connected");
+        let client = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &scheduler_addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .expect("scheduler connection should succeed")
+        .expect("scheduler should be connected");
         let ctx = GatewayContext::assemble(
             PROTOCOL_VERSION,
             Arc::new(RwLock::new(Some(client))),
@@ -3322,11 +3444,15 @@ mod tests {
             ..GatewayConfig::default()
         });
         let metrics = GatewayMetrics::for_tests();
-        let client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("scheduler connection should succeed")
-                .expect("scheduler should be connected");
+        let client = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &scheduler_addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .expect("scheduler connection should succeed")
+        .expect("scheduler should be connected");
         let ctx = GatewayContext::assemble(
             PROTOCOL_VERSION,
             Arc::new(RwLock::new(Some(client.clone()))),
@@ -3368,13 +3494,13 @@ mod tests {
     {
         let (indexer_addr, _indexer_server, indexer_gate) = start_saturated_indexer().await;
         let (db_gateway_addr, _db_gateway_server, db_gateway_gate) =
-            start_saturated_db_gateway().await;
+            start_saturated_db_gateway(false).await;
         let (view_gateway_addr, _view_gateway_server, view_gateway_gate) =
             start_saturated_view_gateway().await;
         let startup_timeout = Duration::from_secs(1);
         let indexer = connect_optional_indexer(
+            X23MultiplexConnections::default(),
             Some(&indexer_addr.to_string()),
-            32,
             None,
             startup_timeout,
             None,
@@ -3383,8 +3509,8 @@ mod tests {
         .expect("bug: indexer connection should succeed")
         .expect("bug: indexer should be connected");
         let db_gateway = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
             Some(&db_gateway_addr.to_string()),
-            1,
             None,
             startup_timeout,
             None,
@@ -3393,6 +3519,7 @@ mod tests {
         .expect("bug: db_gateway connection should succeed")
         .expect("bug: db_gateway should be connected");
         let view_gateway = connect_optional_view_gateway(
+            X23MultiplexConnections::default(),
             Some(&view_gateway_addr.to_string()),
             None,
             startup_timeout,
@@ -3403,7 +3530,6 @@ mod tests {
         .expect("bug: view_gateway should be connected");
         let config = Arc::new(GatewayConfig {
             indexer_address: Some(indexer_addr.to_string()),
-            indexer_pool_size: 32.try_into().unwrap(),
             scheduler_address: "127.0.0.1:0".into(),
             db_gateway_address: Some(db_gateway_addr.to_string()),
             view_gateway_address: Some(view_gateway_addr.to_string()),
@@ -3671,8 +3797,8 @@ mod tests {
             backend
                 .chain_tip(RpcRequestContext::unbounded())
                 .await
-                .is_err(),
-            "scheduler-backed calls should remain unavailable during quarantine"
+                .is_ok(),
+            "DB-backed tip reads should recover during scheduler quarantine"
         );
 
         ctx.scheduler_quarantine

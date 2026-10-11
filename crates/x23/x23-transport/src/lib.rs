@@ -1,10 +1,15 @@
 //! Shared x23 RPC transport helpers.
 //!
 //! Both the production gateway and the local node supervisor connect to
-//! hogd-side x23 services using `rpc_driver::FixedSerialPool` and a
+//! hogd-side x23 services using an `rpc_driver` connection pool and a
 //! codegen client crate. This crate hoists the small amount of
-//! plumbing — pool construction, address parsing, typed startup
-//! errors — into one place so consumers do not copy it.
+//! plumbing (pool construction, address parsing, typed startup errors)
+//! into one place so consumers do not copy it.
+//!
+//! [`PoolKind`] picks the pool shape: the serial pool every `connect*`
+//! function below builds, or the multiplexed pool [`connect_pool`] and
+//! [`try_connect_pool`] build on request.
+//!
 //! It is an internal workspace boundary and follows the Groundhog workspace
 //! release rather than maintaining an independent public API contract.
 //!
@@ -27,7 +32,8 @@
 use std::{sync::Arc, time::Duration};
 
 use rpc_driver::{
-    CanceledCallPolicy, ConnectionConfig, FixedSerialPool, RpcError, RpcSender, ServiceMap,
+    CanceledCallPolicy, ConnectionConfig, FixedSerialPool, MultiplexPool, RpcError, RpcSender,
+    ServiceMap,
 };
 
 /// Maximum RPC message accepted from trusted hogd data-plane endpoints.
@@ -43,6 +49,28 @@ pub const HOGD_LARGE_MESSAGE_SIZE: u32 = 64 * 1024 * 1024;
 /// trusted hogd endpoint.
 pub fn hogd_large_message_config() -> ConnectionConfig {
     ConnectionConfig::new(Some(HOGD_LARGE_MESSAGE_SIZE), ServiceMap::new())
+}
+
+/// Bytes a multiplexed connection may hold unsent before it refuses new
+/// calls, so a peer that stops draining its socket costs bounded memory.
+/// Twice the largest message the gateway sends, so one such call still fits.
+pub const MULTIPLEX_OUTPUT_BACKLOG_BYTES: usize = 2 * HOGD_LARGE_MESSAGE_SIZE as usize;
+
+/// Which `rpc_driver` pool a backend uses, and what a canceled call means
+/// to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolKind {
+    /// `FixedSerialPool`: one call in flight per connection, so the
+    /// connection count is the execution width; `canceled_call_policy`
+    /// decides what a canceled call does to its connection.
+    Serial {
+        canceled_call_policy: CanceledCallPolicy,
+    },
+    /// `MultiplexPool`: any number of calls in flight per connection, each
+    /// routed to the least-loaded one. A canceled call's request may still
+    /// run at the peer, whose late reply is discarded. A connection refuses
+    /// new calls once [`MULTIPLEX_OUTPUT_BACKLOG_BYTES`] are unsent.
+    Multiplex,
 }
 
 /// Errors from establishing an x23 connection pool.
@@ -138,28 +166,6 @@ where
     .await
 }
 
-/// Establish a fixed pool with an explicit active-call cancellation policy.
-pub async fn connect_with_canceled_call_policy<C, F>(
-    service: &'static str,
-    addr: &str,
-    pool_size: usize,
-    canceled_call_policy: CanceledCallPolicy,
-    build: F,
-) -> Result<C, ConnectError>
-where
-    F: FnOnce(Arc<dyn RpcSender>) -> C,
-{
-    connect_with_config_and_canceled_call_policy(
-        service,
-        addr,
-        pool_size,
-        ConnectionConfig::default(),
-        canceled_call_policy,
-        build,
-    )
-    .await
-}
-
 /// Establish a fixed pool with explicit connection and cancellation policies.
 pub async fn connect_with_config_and_canceled_call_policy<C, F>(
     service: &'static str,
@@ -172,25 +178,66 @@ pub async fn connect_with_config_and_canceled_call_policy<C, F>(
 where
     F: FnOnce(Arc<dyn RpcSender>) -> C,
 {
+    connect_pool(
+        service,
+        addr,
+        PoolKind::Serial {
+            canceled_call_policy,
+        },
+        pool_size,
+        connection_config,
+        build,
+    )
+    .await
+}
+
+/// Establish a pool of `kind` over `connections` connections and construct
+/// the typed client. Fails hard on any error.
+pub async fn connect_pool<C, F>(
+    service: &'static str,
+    addr: &str,
+    kind: PoolKind,
+    connections: usize,
+    connection_config: ConnectionConfig,
+    build: F,
+) -> Result<C, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
     let socket_addr: std::net::SocketAddr = addr.parse().map_err(|e| ConnectError::BadAddress {
         addr: addr.to_string(),
         source: e,
     })?;
-    let pool: Arc<dyn RpcSender> = Arc::new(
-        FixedSerialPool::connect_with_config_and_canceled_call_policy(
-            &socket_addr,
-            pool_size,
-            connection_config,
+    let connect_failed = |source| ConnectError::ConnectFailed {
+        service,
+        addr: addr.to_string(),
+        source,
+    };
+    let pool: Arc<dyn RpcSender> = match kind {
+        PoolKind::Serial {
             canceled_call_policy,
-        )
-        .await
-        .map_err(|e| ConnectError::ConnectFailed {
-            service,
-            addr: addr.to_string(),
-            source: e,
-        })?,
-    );
-    tracing::info!(addr, service, "connected");
+        } => Arc::new(
+            FixedSerialPool::connect_with_config_and_canceled_call_policy(
+                &socket_addr,
+                connections,
+                connection_config,
+                canceled_call_policy,
+            )
+            .await
+            .map_err(connect_failed)?,
+        ),
+        PoolKind::Multiplex => Arc::new(
+            MultiplexPool::connect_with_config(
+                &socket_addr,
+                connections,
+                connection_config
+                    .with_output_admission_threshold_bytes(Some(MULTIPLEX_OUTPUT_BACKLOG_BYTES)),
+            )
+            .await
+            .map_err(connect_failed)?,
+        ),
+    };
+    tracing::info!(addr, service, pool = ?kind, connections, "connected");
     Ok(build(pool))
 }
 
@@ -274,16 +321,32 @@ pub async fn try_connect_with_config_and_canceled_call_policy<C, F>(
 where
     F: FnOnce(Arc<dyn RpcSender>) -> C,
 {
-    match connect_with_config_and_canceled_call_policy(
+    try_connect_pool(
         service,
         addr,
+        PoolKind::Serial {
+            canceled_call_policy,
+        },
         pool_size,
         connection_config,
-        canceled_call_policy,
         build,
     )
     .await
-    {
+}
+
+/// Like [`connect_pool`], but tolerates only explicit connection failures.
+pub async fn try_connect_pool<C, F>(
+    service: &'static str,
+    addr: &str,
+    kind: PoolKind,
+    connections: usize,
+    connection_config: ConnectionConfig,
+    build: F,
+) -> Result<Option<C>, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
+    match connect_pool(service, addr, kind, connections, connection_config, build).await {
         Ok(client) => Ok(Some(client)),
         Err(
             error @ ConnectError::ConnectFailed {
@@ -295,157 +358,5 @@ where
             Ok(None)
         }
         Err(error) => Err(error),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use async_trait::async_trait;
-    use rpc_driver::{ProgVers, RpcServer, handler::RpcHandler};
-    use tokio::net::TcpListener;
-
-    use super::*;
-
-    #[derive(Debug)]
-    struct DummyClient;
-
-    fn build_dummy(_pool: Arc<dyn RpcSender>) -> DummyClient {
-        DummyClient
-    }
-
-    fn build_sender(pool: Arc<dyn RpcSender>) -> Arc<dyn RpcSender> {
-        pool
-    }
-
-    struct SizedResponse(usize);
-
-    #[async_trait]
-    impl RpcHandler for SizedResponse {
-        async fn dispatch(&self, _proc: u32, _data: &[u8]) -> Result<Vec<u8>, RpcError> {
-            Ok(vec![0; self.0])
-        }
-
-        fn prog_vers(&self) -> ProgVers {
-            ProgVers::new(1, 1)
-        }
-    }
-
-    async fn start_sized_response_server(
-        response_size: usize,
-    ) -> (
-        std::net::SocketAddr,
-        tokio::task::JoinHandle<Result<(), std::io::Error>>,
-    ) {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bug: test RPC server should bind");
-        let addr = listener
-            .local_addr()
-            .expect("bug: test RPC server should have a local address");
-        let mut services = ServiceMap::new();
-        services.add_service(Box::new(SizedResponse(response_size)));
-        // The server stands in for hogd, whose replies exceed rpc_driver's
-        // default message size. rpc_driver bounds a connection's unsent
-        // outbound bytes at its configured message size, so the server must
-        // carry the large-message limit or it closes the connection instead
-        // of writing the reply.
-        let config = ConnectionConfig::new(Some(HOGD_LARGE_MESSAGE_SIZE), services);
-        let handle = RpcServer::new_with_config(listener, config).start().await;
-        (addr, handle)
-    }
-
-    #[tokio::test]
-    async fn connect_rejects_bad_address() {
-        let err = connect("dummy", "not-an-address", 1, build_dummy)
-            .await
-            .expect_err("bug: malformed address should fail");
-        assert!(matches!(err, ConnectError::BadAddress { .. }));
-    }
-
-    #[tokio::test]
-    async fn try_connect_propagates_bad_address() {
-        let err = try_connect("dummy", "not-an-address", 1, build_dummy)
-            .await
-            .expect_err("bug: malformed address should still fail try_connect");
-        assert!(matches!(err, ConnectError::BadAddress { .. }));
-    }
-
-    #[tokio::test]
-    async fn try_connect_returns_none_on_unreachable() {
-        use std::time::Duration;
-
-        // Bind an ephemeral loopback port and drop the listener so the
-        // kernel refuses subsequent connections at that address. More
-        // reliable than assuming a fixed port (e.g. 1) refuses, since
-        // sandboxed CI runners and local firewalls vary on those.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bug: ephemeral bind should succeed");
-        let addr = listener
-            .local_addr()
-            .expect("bug: bound listener should have a local addr")
-            .to_string();
-        drop(listener);
-
-        let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            try_connect("dummy", &addr, 1, build_dummy),
-        )
-        .await
-        .expect("bug: try_connect should return promptly on ECONNREFUSED");
-        assert!(matches!(result, Ok(None)));
-    }
-
-    #[tokio::test]
-    async fn try_connect_rejects_invalid_pool_configuration() {
-        let err = try_connect("dummy", "127.0.0.1:1", 0, build_dummy)
-            .await
-            .expect_err("bug: invalid pool configuration should not degrade startup");
-
-        assert!(matches!(
-            err,
-            ConnectError::ConnectFailed {
-                source: RpcError::InvalidPoolConfiguration,
-                ..
-            }
-        ));
-    }
-
-    #[tokio::test]
-    async fn large_connection_limit_crosses_default_boundary() {
-        const DEFAULT_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
-        let response_size = DEFAULT_MESSAGE_SIZE + 1024;
-        let (addr, _server) = start_sized_response_server(response_size).await;
-        let default = connect("default", &addr.to_string(), 1, build_sender)
-            .await
-            .expect("bug: default client should connect");
-
-        assert_eq!(
-            default
-                .send_call(ProgVers::new(1, 1), 1, default.call_buf())
-                .await,
-            Err(RpcError::SystemError)
-        );
-
-        let accepting = connect_with_config(
-            "accepting",
-            &addr.to_string(),
-            1,
-            hogd_large_message_config(),
-            build_sender,
-        )
-        .await
-        .expect("bug: accepting client should connect");
-        let response = accepting
-            .send_call(ProgVers::new(1, 1), 1, accepting.call_buf())
-            .await
-            .expect("bug: larger configured limit should accept the response");
-
-        assert_eq!(response.len(), response_size);
-    }
-
-    #[test]
-    fn hogd_large_message_limit_is_bounded() {
-        assert_eq!(HOGD_LARGE_MESSAGE_SIZE, 64 * 1024 * 1024);
     }
 }

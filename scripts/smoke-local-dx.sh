@@ -2,33 +2,39 @@
 # Real local-DX smoke test.
 #
 # Exercises the user-facing CLI path against a real hog-devnode binary:
-#   groundhog new -> build -> persistent node -> dev-1 deploy/call/view/storage
-#   -> dev-1/dev-2 transfer with recipient and sender balance validation
+#   thruput new -> build -> persistent node -> smoke-sender deploy/call/view/storage
+#   -> smoke-sender/smoke-recipient transfer with recipient and sender balance validation
 #   -> transaction show and bounded sender-history pagination
 #   -> raw/spec-decoded counter events and canonical token transfer history
-#   -> key generate -> wallet create -> airdrop -> saved-wallet deploy/call
+#   -> ordinary native key -> explicit airdrop -> atomic deploy/init -> save identity
+#   -> empty wallet create -> explicit airdrop -> atomic deploy/init/call/transfer
 #   -> stop -> dump/restore -> restart -> verify state and continued progress
 #
 # Required environment:
-#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode
 #
 # Optional environment:
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hog-gateway
 #   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
 #   SMOKE_PROTOCOL_RS_PATH=/path/to/protocol-rs  # defaults to sdk_rs sibling
+#   CARGO_TARGET_DIR=/absolute/path/to/build-output
+#   SMOKE_NETWORK_HASH=<64 lowercase hex digits, optionally 0x-prefixed>
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$REPO_ROOT/target/debug/groundhog"
-GATEWAY="$REPO_ROOT/target/debug/hog-gateway"
+BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+[[ "$BUILD_TARGET_DIR" = /* ]] || BUILD_TARGET_DIR="$REPO_ROOT/$BUILD_TARGET_DIR"
+export CARGO_TARGET_DIR="$BUILD_TARGET_DIR"
+CLI="$BUILD_TARGET_DIR/debug/thruput"
+GATEWAY="$BUILD_TARGET_DIR/debug/hog-gateway"
 PROJECT_NAME="smoke-counter"
 SMOKE_PROFILE="local"
 INITIAL_VALUE=7
 INCREMENT_AMOUNT=5
-CUSTOM_DEV_ACCOUNT_HOG="1234567.0000001"
-CUSTOM_DEV_ACCOUNT_RAW="12345670000001"
+CUSTOM_ACCOUNT_HOG="1234567.0000001"
+CUSTOM_ACCOUNT_RAW="12345670000001"
 FIXED_FAUCET_RAW="10000000000000"
 
 log() {
@@ -76,6 +82,24 @@ for part in path:
         break
     value = value.get(part) if isinstance(value, dict) else value[int(part)]
 print(len(value) if value is not None else 0)
+PY
+}
+
+assert_rpc_network_identity() {
+    python3 - "$1" "$EXPECTED_NETWORK_HASH" <<'PY'
+import json
+import sys
+import urllib.request
+
+endpoint, expected = sys.argv[1:]
+request = urllib.request.Request(
+    endpoint,
+    data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "groundhog_networkInfo", "params": []}).encode(),
+    headers={"Content-Type": "application/json"},
+)
+with urllib.request.urlopen(request, timeout=10) as response:
+    payload = json.load(response)
+assert payload["result"]["networkHash"] == "0x" + expected, payload
 PY
 }
 
@@ -256,12 +280,12 @@ PY
 }
 
 find_hogd_dev_binary() {
-    if [[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]]; then
-        printf '%s\n' "$GROUNDHOG_DEVNODE_BINARY"
+    if [[ -n "${THRUPUT_DEVNODE_BINARY:-}" ]]; then
+        printf '%s\n' "$THRUPUT_DEVNODE_BINARY"
         return
     fi
 
-    die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
+    die "set THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 detect_hogd_protocol() {
@@ -477,7 +501,7 @@ assert_transaction_committed() {
 display_command() {
     local parts=("$@")
     if [[ "${parts[0]}" == "$CLI" ]]; then
-        parts[0]="groundhog"
+        parts[0]="thruput"
     fi
     python3 - "${parts[@]}" <<'PY'
 import sys
@@ -575,26 +599,32 @@ HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     log "Building CLI and standalone gateway"
-    cargo build -p groundhog-cli -p groundhog-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --locked -p thruput-cli -p groundhog-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
 else
     log "Building CLI"
-    cargo build -p groundhog-cli --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --locked -p thruput-cli --manifest-path "$REPO_ROOT/Cargo.toml"
 fi
 
 WORK="$(mktemp -d)"
 export XDG_CONFIG_HOME="$WORK/config"
 export XDG_CACHE_HOME="$WORK/cache"
 NODE_DATA_DIR="$WORK/node-data"
-NODE_ARGS=(
+NODE_BASE_ARGS=(
     --json node
     --port 0
-    --dev-account-count 3
+    --bootstrap-accounts "$WORK/bootstrap-accounts.json"
     --hog-devnode-binary "$DEVNODE_BINARY"
     --data-dir "$NODE_DATA_DIR"
 )
 if [[ -n "$HOGD_PROTOCOL" ]]; then
-    NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
+    NODE_BASE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"
+fi
+EXPECTED_NETWORK_HASH="${SMOKE_NETWORK_HASH:-0000000000000000000000000000000000000000000000000000000000000000}"
+EXPECTED_NETWORK_HASH="${EXPECTED_NETWORK_HASH#0x}"
+NODE_INIT_ARGS=("${NODE_BASE_ARGS[@]}")
+if [[ -n "${SMOKE_NETWORK_HASH:-}" ]]; then
+    NODE_INIT_ARGS+=(--init-network-hash "$SMOKE_NETWORK_HASH")
 fi
 NODE_PID=""
 NODE_DESCENDANTS=""
@@ -632,7 +662,19 @@ cd "$WORK"
 log "Scaffolding counter contract"
 "$CLI" new "$PROJECT_NAME" --template counter
 cd "$PROJECT_NAME"
-export GROUNDHOG_PROFILE="$SMOKE_PROFILE"
+export THRUPUT_PROFILE="$SMOKE_PROFILE"
+
+# Exercise this checkout's RPC client before its matching registry release,
+# just as the generated-project CI job does. SDK dependencies remain published.
+python3 - "$REPO_ROOT/crates/json-rpc/json-rpc-client" <<'PYCLIENT'
+import json
+import pathlib
+import sys
+
+with pathlib.Path(".cargo/config.toml").open("a", encoding="utf-8") as config:
+    config.write('\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\n')
+    config.write(f'groundhog-json-rpc-client = {{ path = {json.dumps(sys.argv[1])} }}\n')
+PYCLIENT
 
 if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
     log "Using local SDK path: $SMOKE_SDK_PATH"
@@ -647,8 +689,24 @@ COUNTER_SPEC_XDR="$(json_field data.specXdr "$COUNTER_BUILD_JSON")"
 [[ "$COUNTER_SPEC_XDR" != "null" && -r "$COUNTER_SPEC_XDR" ]] \
     || die "counter build did not return a readable specXdr path: $COUNTER_SPEC_XDR"
 
+log "Creating stored smoke keys and public bootstrap allocations"
+for name in smoke-sender smoke-recipient smoke-third; do
+    "$CLI" --json keys generate "$name" > "$WORK/$name.json"
+done
+"$CLI" keys use smoke-sender
+python3 - "$WORK" "$CUSTOM_ACCOUNT_RAW" <<'ALLOCATIONS'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+allocations = [
+    {"publicKey":json.loads((root / f"{name}.json").read_text())["data"]["key"]["public_key"],
+     "initialStorageTokens":sys.argv[2]}
+    for name in ("smoke-sender", "smoke-recipient", "smoke-third")
+]
+(root / "bootstrap-accounts.json").write_text(json.dumps(allocations))
+ALLOCATIONS
+
 log "Starting local node"
-"$CLI" "${NODE_ARGS[@]}" --dev-account-hog "$CUSTOM_DEV_ACCOUNT_HOG" \
+"$CLI" "${NODE_INIT_ARGS[@]}" \
     > "$WORK/node.json" 2> "$WORK/node.err" &
 NODE_PID=$!
 if ! wait_for_node_json "$WORK/node.json"; then
@@ -670,10 +728,22 @@ log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
     || die "initial node chain_state was $CHAIN_STATE, expected fresh"
 [[ "$VIEW_PLANE" == "view_gateway" ]] || die "node view plane was $VIEW_PLANE, expected view_gateway"
 [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
-    || die "groundhog node did not report a runtime manifest path"
+    || die "thruput node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
 RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
-[[ "$(json_len bootstrapAccounts "$RUNTIME_JSON")" == "4" ]] \
+[[ "$(json_field networkHash "$RUNTIME_JSON")" == "$EXPECTED_NETWORK_HASH" ]] \
+    || die "runtime identity differs from selected network hash"
+[[ "$(json_field data.chain "$NODE_JSON")" == "$EXPECTED_NETWORK_HASH" ]] \
+    || die "startup identity differs from selected network hash"
+assert_rpc_network_identity "$RPC_URL"
+python3 - "$RUNTIME_MANIFEST" <<'MANIFEST'
+import json, sys
+m = json.load(open(sys.argv[1]))
+assert m["schemaVersion"] == 4
+assert "bootstrapAccountDerivation" not in m
+assert all("index" not in a for a in m["bootstrapAccounts"])
+MANIFEST
+[[  "$(json_len bootstrapAccounts "$RUNTIME_JSON")" == "4" ]] \
     || die "runtime manifest did not contain exactly four bootstrap accounts"
 [[ "$(json_field bootstrapAccounts.0.role "$RUNTIME_JSON")" == "faucet" ]] \
     || die "runtime manifest account 0 was not the faucet"
@@ -681,13 +751,11 @@ RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
     || die "runtime manifest faucet did not retain its fixed allocation"
 [[ "$(json_field bootstrapAccounts.1.role "$RUNTIME_JSON")" == "local_user" ]] \
     || die "runtime manifest account 1 was not a local user"
-[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_DEV_ACCOUNT_RAW" ]] \
+[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_ACCOUNT_RAW" ]] \
     || die "runtime manifest did not propagate custom local-user HOG allocation"
 for index in 0 1 2 3; do
-    [[ "$(json_field bootstrapAccounts.$index.index "$RUNTIME_JSON")" == "$index" ]] \
-        || die "runtime manifest account position $index did not advertise index $index"
     expected_role="local_user"
-    expected_tokens="$CUSTOM_DEV_ACCOUNT_RAW"
+    expected_tokens="$CUSTOM_ACCOUNT_RAW"
     if (( index == 0 )); then
         expected_role="faucet"
         expected_tokens="$FIXED_FAUCET_RAW"
@@ -697,26 +765,26 @@ for index in 0 1 2 3; do
     [[ "$(json_field bootstrapAccounts.$index.initialStorageTokens "$RUNTIME_JSON")" == "$expected_tokens" ]] \
         || die "runtime manifest account $index did not advertise funding $expected_tokens"
 done
-NODE_PROFILE="$(toml_field groundhog.toml default_profile)"
+NODE_PROFILE="$(toml_field thruput.toml default_profile)"
 [[ "$NODE_PROFILE" == "$SMOKE_PROFILE" ]] \
     || die "default_profile was $NODE_PROFILE, expected $SMOKE_PROFILE"
-PROFILE_RPC_URL="$(toml_profile_field groundhog.toml "$NODE_PROFILE" rpc_url)"
-PROFILE_RUNTIME_MANIFEST="$(toml_profile_field groundhog.toml "$NODE_PROFILE" runtime_manifest)"
+PROFILE_RPC_URL="$(toml_profile_field thruput.toml "$NODE_PROFILE" rpc_url)"
+PROFILE_RUNTIME_MANIFEST="$(toml_profile_field thruput.toml "$NODE_PROFILE" runtime_manifest)"
 [[ "$PROFILE_RPC_URL" == "null" ]] \
     || die "project profile.$NODE_PROFILE.rpc_url was dirtied: $PROFILE_RPC_URL"
 [[ "$PROFILE_RUNTIME_MANIFEST" == "null" ]] \
     || die "project profile.$NODE_PROFILE.runtime_manifest was dirtied: $PROFILE_RUNTIME_MANIFEST"
-GLOBAL_CONFIG="$XDG_CONFIG_HOME/groundhog/config.toml"
+GLOBAL_CONFIG="$XDG_CONFIG_HOME/thruput/config.toml"
 GLOBAL_RPC_URL="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.rpc_url)"
 GLOBAL_RUNTIME_MANIFEST="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.runtime_manifest)"
 [[ "$GLOBAL_RPC_URL" == "$RPC_URL" ]] \
     || die "local_runtime_state.rpc_url was $GLOBAL_RPC_URL, expected $RPC_URL"
 [[ "$GLOBAL_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
     || die "local_runtime_state.runtime_manifest was $GLOBAL_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
-unset GROUNDHOG_RUNTIME_MANIFEST
+unset THRUPUT_RUNTIME_MANIFEST
 
-TRANSFER_SENDER="dev-1"
-TRANSFER_RECIPIENT="dev-2"
+TRANSFER_SENDER="smoke-sender"
+TRANSFER_RECIPIENT="smoke-recipient"
 TRANSFER_AMOUNT="0.0000001"
 TRANSFER_RAW_AMOUNT="1"
 
@@ -866,9 +934,19 @@ if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
         cat "$WORK/gateway.err" >&2 || true
         die "standalone gateway did not answer groundhog_version"
     fi
+    assert_rpc_network_identity "$GATEWAY_RPC_URL"
 fi
 
-DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy --force)"
+FUNDING_JSON="$(run_json "deployment funding estimate" "$CLI" --json deploy --estimate)"
+MINIMUM_DEPLOY_JSON="$(run_json "minimum-funded deployment" "$CLI" --json deploy --force --fund minimum --alias minimum-counter)"
+[[ "$(json_field data.nativeDeployment.fundingRawAmount "$MINIMUM_DEPLOY_JSON")" == "$(json_field data.minimumFundingRaw "$FUNDING_JSON")" ]] \
+    || die "minimum-funded deployment did not use the quoted storage collateral"
+MINIMUM_ADDRESS="$(json_field data.address "$MINIMUM_DEPLOY_JSON")"
+MINIMUM_BALANCE="$(run_json "minimum-funded contract balance" "$CLI" --json balance "$MINIMUM_ADDRESS")"
+[[ "$(json_field data.rawBalance "$MINIMUM_BALANCE")" == "0" ]] \
+    || die "minimum funding should leave zero free balance after storage collateral"
+
+DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy --force --fund 10)"
 CONTRACT_ADDRESS="$(json_field data.address "$DEPLOY_JSON")"
 [[ "$CONTRACT_ADDRESS" != "null" && -n "$CONTRACT_ADDRESS" ]] \
     || die "deploy did not return a contract address"
@@ -920,11 +998,11 @@ DECODED_EVENTS_JSON="$(run_json "decoded counter events" "$CLI" --json events li
     || die "counter ping decoded as the wrong event"
 log "counter event result: tx=$PING_TX_HASH raw+decoded"
 
-VIEW_FROM="dev-1"
+VIEW_FROM="smoke-sender"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC to standalone gateway for view/storage checks"
-    export GROUNDHOG_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
-    update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$GATEWAY_RPC_URL"
+    export THRUPUT_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
+    update_rpc_url thruput.toml "$SMOKE_PROFILE" "$GATEWAY_RPC_URL"
 fi
 
 EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))
@@ -985,7 +1063,7 @@ log "view ping result: height=$(json_field data.height "$PING_VIEW_JSON") events
 contract=$PING_EVENT_CONTRACT topic0=$PING_EVENT_TOPIC0 data=$PING_EVENT_DATA"
 
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
-    log "Skipping call get through standalone gateway because local block driving is owned by groundhog node"
+    log "Skipping call get through standalone gateway because local block driving is owned by thruput node"
 else
     GET_JSON="$(run_json "call get" "$CLI" --json call --force "$PROJECT_NAME" get)"
     assert_call_succeeded "get" "$GET_JSON"
@@ -1008,84 +1086,120 @@ log "storage args: address=$CONTRACT_ADDRESS key=$COUNTER_VALUE_KEY"
 log "storage result: height=$(json_field data.blockHeight "$STORAGE_JSON") kind=$STORAGE_KIND value=$STORAGE_VALUE"
 
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
-    log "Switching project RPC back to groundhog node for wallet-create write checks"
-    update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
+    log "Switching project RPC back to thruput node for wallet-create write checks"
+    update_rpc_url thruput.toml "$SMOKE_PROFILE" "$RPC_URL"
 fi
+
+# An ordinary key without a saved binding already resolves to its empty native
+# account. Saving it later must preserve its funded identity without a transaction.
+UNSAVED_KEY="smoke-unsaved"
+"$CLI" keys generate "$UNSAVED_KEY"
+"$CLI" keys use "$UNSAVED_KEY"
+UNSAVED_EMPTY_JSON="$(run_json "unsaved native account balance" "$CLI" --json balance)"
+UNSAVED_ADDRESS="$(json_field data.address "$UNSAVED_EMPTY_JSON")"
+[[ "$(json_field data.rawBalance "$UNSAVED_EMPTY_JSON")" == "0" ]] \
+    || die "new ordinary key did not resolve to an empty native account"
+UNSAVED_AIRDROP_JSON="$(run_json "explicitly fund unsaved native account" "$CLI" --json airdrop --force --amount 100)"
+[[ "$(json_field data.status.result "$UNSAVED_AIRDROP_JSON")" == "ok" ]] \
+    || die "unsaved native account airdrop did not commit"
+UNSAVED_DEPLOY_JSON="$(run_json "unsaved native atomic deploy and initialize" "$CLI" --json deploy --force --fund 10 --init initialize --init-arg 21)"
+[[ "$(json_field data.nativeDeployment.sender "$UNSAVED_DEPLOY_JSON")" == "$UNSAVED_ADDRESS" ]] \
+    || die "unsaved native deploy used a different account"
+UNSAVED_GET_JSON="$(run_json "unsaved native call" "$CLI" --json call --force "$PROJECT_NAME" get)"
+assert_call_succeeded "unsaved native get" "$UNSAVED_GET_JSON"
+[[ "$(json_field data.returnValue "$UNSAVED_GET_JSON")" == "21" ]] \
+    || die "atomic initializer did not set the unsaved account's contract value"
+UNSAVED_BALANCE_BEFORE_JSON="$(run_json "unsaved balance before saving" "$CLI" --json balance)"
+UNSAVED_WALLET_JSON="$(run_json "save funded native identity" "$CLI" --json wallet create --force --key "$UNSAVED_KEY")"
+[[ "$(json_field data.wallet "$UNSAVED_WALLET_JSON")" == "$UNSAVED_ADDRESS" ]] \
+    || die "saving a wallet changed the unsaved account identity"
+UNSAVED_BALANCE_AFTER_JSON="$(run_json "saved native identity balance" "$CLI" --json balance "$UNSAVED_KEY")"
+[[ "$(json_field data.rawBalance "$UNSAVED_BALANCE_AFTER_JSON")" == "$(json_field data.rawBalance "$UNSAVED_BALANCE_BEFORE_JSON")" ]] \
+    || die "saving the native binding changed its balance"
+[[ "$(json_field data.height "$UNSAVED_BALANCE_AFTER_JSON")" == "$(json_field data.height "$UNSAVED_BALANCE_BEFORE_JSON")" ]] \
+    || die "saving the native binding advanced the chain"
 
 USER_KEY="smoke-user"
 log "Generating non-dev signing key: $USER_KEY"
 "$CLI" keys generate "$USER_KEY"
-
-WALLET_JSON="$(run_json "wallet create" "$CLI" --json wallet create --force --key "$USER_KEY")"
-WALLET_ADDRESS="$(json_field data.wallet "$WALLET_JSON")"
-[[ "$WALLET_ADDRESS" != "null" && -n "$WALLET_ADDRESS" ]] \
-    || die "wallet create did not return a wallet address"
-WALLET_PREFUND="$(json_field data.prefund_raw_amount "$WALLET_JSON")"
-[[ "$WALLET_PREFUND" == "10000000" ]] \
-    || die "wallet create prefund was $WALLET_PREFUND, expected 10000000"
-[[ "$(json_field data.prefund_tx_hash "$WALLET_JSON")" != "null" ]] \
-    || die "wallet create did not return a prefund transaction hash"
-[[ "$(json_field data.create_tx_hash "$WALLET_JSON")" != "null" ]] \
-    || die "wallet create did not return a create transaction hash"
-log "wallet create result: address=$WALLET_ADDRESS prefund=$WALLET_PREFUND"
+# Dry-run derives the address without selecting or saving it.
+WALLET_DRY_RUN_JSON="$(run_json "derive empty native wallet" "$CLI" --json wallet create --key "$USER_KEY" --dry-run)"
+WALLET_ADDRESS="$(json_field data.wallet "$WALLET_DRY_RUN_JSON")"
+WALLET_BEFORE_JSON="$(run_json "empty wallet balance before saving" "$CLI" --json balance "$WALLET_ADDRESS")"
+WALLET_JSON="$(run_json "save empty native wallet" "$CLI" --json wallet create --force --key "$USER_KEY")"
+[[ "$(json_field data.wallet "$WALLET_JSON")" == "$WALLET_ADDRESS" ]] \
+    || die "wallet creation changed the dry-run address"
+[[ "$(json_field data.kind "$WALLET_JSON")" == "native" && "$(json_field data.accountNonce "$WALLET_JSON")" == "0" ]] \
+    || die "wallet create did not save a nonce-zero native binding"
+[[ "$(json_field data.saved "$WALLET_JSON")" == "true" && "$(json_field data.created "$WALLET_JSON")" == "true" ]] \
+    || die "wallet create did not insert the new binding"
+for field in prefund_tx_hash create_tx_hash txHash; do
+    [[ "$(json_field "data.$field" "$WALLET_JSON")" == "null" ]] \
+        || die "offline wallet creation reported a transaction: $field"
+done
+WALLET_EMPTY_JSON="$(run_json "empty saved wallet balance" "$CLI" --json balance "$USER_KEY")"
+[[ "$(json_field data.rawBalance "$WALLET_EMPTY_JSON")" == "0" ]] \
+    || die "wallet creation implicitly funded the account"
+[[ "$(json_field data.height "$WALLET_EMPTY_JSON")" == "$(json_field data.height "$WALLET_BEFORE_JSON")" ]] \
+    || die "wallet creation advanced the chain"
 
 "$CLI" keys use "$USER_KEY"
-# Wallet creation leaves the default 1 HOG prefund just below the transaction
-# gas limit. Add 1 HOG so this deploy reaches execution and exercises the
-# receipt-level insufficient-funding guidance instead of scheduler rejection.
-SCHEDULABLE_AIRDROP_JSON="$(run_json "fund saved wallet above scheduler gas floor" "$CLI" --json airdrop --force "$USER_KEY" --amount 1)"
-[[ "$(json_field data.status.result "$SCHEDULABLE_AIRDROP_JSON")" == "ok" ]] \
-    || die "scheduler-floor airdrop did not commit successfully"
-UNDERFUNDED_DEPLOY_JSON="$(run_json_failure "underfunded saved-wallet deploy" "$CLI" --json deploy --force)"
-UNDERFUNDED_CODE="$(json_field error.code "$UNDERFUNDED_DEPLOY_JSON")"
-case "$UNDERFUNDED_CODE" in
-    transaction_insufficient_funds)
-        [[ "$(json_field error.details.reason "$UNDERFUNDED_DEPLOY_JSON")" == "nativeHogTransferOverdraft" ]] \
-            || die "underfunded deploy did not report a native HOG transfer overdraft"
-        ;;
-    transaction_recent_failure)
-        [[ "$(json_field error.details.conflict.code "$UNDERFUNDED_DEPLOY_JSON")" == "boundsExceeded" ]] \
-            || die "underfunded deploy did not report boundsExceeded"
-        ;;
-    *) die "underfunded deploy returned non-actionable error code: $UNDERFUNDED_CODE" ;;
-esac
-UNDERFUNDED_HINT="$(json_field error.hint "$UNDERFUNDED_DEPLOY_JSON")"
-[[ "$UNDERFUNDED_HINT" == *"groundhog airdrop"* ]] \
-    || die "underfunded deploy did not provide airdrop guidance"
-log "underfunded saved-wallet deploy returned actionable airdrop guidance: $UNDERFUNDED_CODE"
-
-WALLET_BALANCE_BEFORE_JSON="$(run_json "saved-wallet balance before airdrop" "$CLI" --json balance "$USER_KEY")"
-WALLET_BALANCE_BEFORE="$(json_field data.rawBalance "$WALLET_BALANCE_BEFORE_JSON")"
-AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdrop --force "$USER_KEY" --amount 10)"
+"$CLI" wallet use --profile "$SMOKE_PROFILE" "$USER_KEY"
+AIRDROP_JSON="$(run_json "explicitly fund empty native wallet" "$CLI" --json airdrop --force "$USER_KEY" --amount 100)"
 [[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
     || die "saved-wallet airdrop did not commit successfully"
-[[ "$(json_field data.faucet.key "$AIRDROP_JSON")" == "dev-0" ]] \
-    || die "saved-wallet airdrop JSON did not identify faucet key dev-0"
-[[ "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
-    || die "saved-wallet airdrop JSON did not identify role faucet"
-WALLET_BALANCE_AFTER_JSON="$(run_json "saved-wallet balance after airdrop" "$CLI" --json balance "$USER_KEY")"
-WALLET_BALANCE_AFTER="$(json_field data.rawBalance "$WALLET_BALANCE_AFTER_JSON")"
-AIRDROP_RAW_AMOUNT="$(json_field data.rawAmount "$AIRDROP_JSON")"
-assert_exact_balance_increase "$WALLET_BALANCE_BEFORE" "$WALLET_BALANCE_AFTER" "$AIRDROP_RAW_AMOUNT"
-log "saved-wallet airdrop result: balance=$WALLET_BALANCE_BEFORE->$WALLET_BALANCE_AFTER raw=$AIRDROP_RAW_AMOUNT height=$(json_field data.height "$AIRDROP_JSON") tx=$(json_field data.txHash "$AIRDROP_JSON")"
+[[ "$(json_field data.faucet.address "$AIRDROP_JSON")" == "$(json_field bootstrapAccounts.0.walletAddress "$RUNTIME_JSON")" && "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
+    || die "saved-wallet airdrop did not identify the local faucet"
+WALLET_FUNDED_JSON="$(run_json "explicitly funded native balance" "$CLI" --json balance "$USER_KEY")"
+# A first transfer creates storage, so free balance can be below the exact
+# transfer amount. Check the returned raw amount separately from free balance.
+[[ "$(json_field data.rawAmount "$AIRDROP_JSON")" == "1000000000" ]] \
+    || die "airdrop did not transfer the requested 100 HOG"
+python3 - "$(json_field data.rawBalance "$WALLET_FUNDED_JSON")" <<'BALANCE'
+import sys
+balance = int(sys.argv[1])
+if not 0 < balance <= 1_000_000_000:
+    raise SystemExit(f"explicit funding returned an invalid free balance: {balance}")
+BALANCE
 
-USER_DEPLOY_JSON="$(run_json "saved-wallet deploy after airdrop" "$CLI" --json deploy --force)"
+USER_DEPLOY_JSON="$(run_json "saved native atomic deploy and initialize" "$CLI" --json deploy --force --fund 10 --init initialize --init-arg 11)"
 USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
 [[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy did not return a contract address"
-log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.txHash "$USER_DEPLOY_JSON")"
-SAVED_ALIAS="$(toml_field groundhog.toml "profile.$SMOKE_PROFILE.contracts.$PROJECT_NAME")"
+[[ "$(json_field data.nativeDeployment.sender "$USER_DEPLOY_JSON")" == "$WALLET_ADDRESS" ]] \
+    || die "native deployment changed the wallet identity"
+[[ "$(json_field data.nativeDeployment.fundingRawAmount "$USER_DEPLOY_JSON")" == "100000000" ]] \
+    || die "native deployment did not record the exact 10 HOG funding"
+SAVED_ALIAS="$(toml_field thruput.toml "profile.$SMOKE_PROFILE.contracts.$PROJECT_NAME")"
 [[ "$SAVED_ALIAS" == "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy alias was $SAVED_ALIAS, expected $USER_CONTRACT_ADDRESS"
-
-USER_INITIALIZE_JSON="$(run_json "saved-wallet initialize" "$CLI" --json call --force "$PROJECT_NAME" initialize 11)"
-assert_call_succeeded "saved-wallet initialize" "$USER_INITIALIZE_JSON"
-USER_INCREMENT_JSON="$(run_json "saved-wallet increment" "$CLI" --json call --force "$PROJECT_NAME" increment 2)"
+USER_GET_JSON="$(run_json "read atomic initializer value" "$CLI" --json call --force "$PROJECT_NAME" get)"
+assert_call_succeeded "native initialized get" "$USER_GET_JSON"
+[[ "$(json_field data.returnValue "$USER_GET_JSON")" == "11" ]] \
+    || die "atomic initializer did not set the saved wallet's contract value"
+USER_INCREMENT_JSON="$(run_json "saved native increment" "$CLI" --json call --force "$PROJECT_NAME" increment 2)"
 assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
-log "saved-wallet call result: status=$(json_field data.statusSummary "$USER_INCREMENT_JSON") height=$(json_field data.height "$USER_INCREMENT_JSON") tx=$(json_field data.txHash "$USER_INCREMENT_JSON")"
 
-unset GROUNDHOG_RUNTIME_MANIFEST
-VIEW_FROM="dev-1"
+NATIVE_SENDER_BEFORE_JSON="$(run_json "native transfer sender before" "$CLI" --json balance "$USER_KEY")"
+NATIVE_RECIPIENT_BEFORE_JSON="$(run_json "native transfer recipient before" "$CLI" --json balance smoke-recipient)"
+NATIVE_TRANSFER_JSON="$(run_json "native transfer to bootstrap dev account" "$CLI" --json transfer --force smoke-recipient 1)"
+[[ "$(json_field data.status.result "$NATIVE_TRANSFER_JSON")" == "ok" ]] \
+    || die "native transfer did not commit"
+[[ "$(json_field data.sender "$NATIVE_TRANSFER_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.recipient "$NATIVE_TRANSFER_JSON")" == "$RECIPIENT_ADDRESS" ]] \
+    || die "native transfer changed a native or bootstrap identity"
+NATIVE_SENDER_AFTER_JSON="$(run_json "native transfer sender after" "$CLI" --json balance "$USER_KEY")"
+NATIVE_RECIPIENT_AFTER_JSON="$(run_json "native transfer recipient after" "$CLI" --json balance smoke-recipient)"
+assert_transfer_balance_deltas \
+    "$(json_field data.rawBalance "$NATIVE_SENDER_BEFORE_JSON")" \
+    "$(json_field data.rawBalance "$NATIVE_SENDER_AFTER_JSON")" \
+    "$(json_field data.rawBalance "$NATIVE_RECIPIENT_BEFORE_JSON")" \
+    "$(json_field data.rawBalance "$NATIVE_RECIPIENT_AFTER_JSON")" \
+    "10000000" >/dev/null
+WALLET_BALANCE_BEFORE_RESTART="$(json_field data.rawBalance "$NATIVE_SENDER_AFTER_JSON")"
+log "native wallet flow passed: address=$WALLET_ADDRESS contract=$USER_CONTRACT_ADDRESS"
+
+unset THRUPUT_RUNTIME_MANIFEST
+VIEW_FROM="smoke-sender"
 PERSISTED_VIEW_BEFORE="$(run_view_json "view before persistent restart" "$PROJECT_NAME" get)"
 PERSISTED_VALUE_BEFORE="$(json_field data.returnValue "$PERSISTED_VIEW_BEFORE")"
 [[ "$PERSISTED_VALUE_BEFORE" != "null" ]] \
@@ -1124,7 +1238,7 @@ CHAIN_RESTORE_JSON="$(run_json "chain restore" "$CLI" --json chain restore --for
 log "Restarting persistent local node with the original allocation"
 : > "$WORK/node.json"
 : > "$WORK/node.err"
-"$CLI" "${NODE_ARGS[@]}" --dev-account-hog "$CUSTOM_DEV_ACCOUNT_HOG" \
+"$CLI" "${NODE_BASE_ARGS[@]}" \
     > "$WORK/node.json" 2> "$WORK/node.err" &
 NODE_PID=$!
 if ! wait_for_node_json "$WORK/node.json"; then
@@ -1142,13 +1256,26 @@ REPORTED_DATA_DIR="$(json_field data.data_dir "$NODE_JSON")"
 [[ "$CHAIN_STATE" == "recovered" ]] \
     || die "restarted node chain_state was $CHAIN_STATE, expected recovered"
 RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
+[[ "$(json_field networkHash "$RUNTIME_JSON")" == "$EXPECTED_NETWORK_HASH" ]] \
+    || die "restarted runtime identity differs from selected network hash"
+assert_rpc_network_identity "$RPC_URL"
 [[ "$(json_field bootstrapAccounts.0.initialStorageTokens "$RUNTIME_JSON")" == "$FIXED_FAUCET_RAW" ]] \
     || die "restarted runtime manifest faucet did not retain its fixed allocation"
-[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_DEV_ACCOUNT_RAW" ]] \
+[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_ACCOUNT_RAW" ]] \
     || die "restarted runtime manifest did not retain custom local-user HOG allocation"
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
-    update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
+    update_rpc_url thruput.toml "$SMOKE_PROFILE" "$RPC_URL"
 fi
+
+WALLET_AFTER_RESTART_JSON="$(run_json "native wallet balance after restart" "$CLI" --json balance "$USER_KEY")"
+[[ "$(json_field data.address "$WALLET_AFTER_RESTART_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.rawBalance "$WALLET_AFTER_RESTART_JSON")" == "$WALLET_BALANCE_BEFORE_RESTART" ]] \
+    || die "native wallet identity or balance changed across restart"
+REPEATED_WALLET_JSON="$(run_json "repeat native wallet creation after restart" "$CLI" --json wallet create --force --key "$USER_KEY")"
+[[ "$(json_field data.wallet "$REPEATED_WALLET_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.created "$REPEATED_WALLET_JSON")" == "false" ]] \
+    || die "repeated creation did not retain the saved native identity"
+DEV_RECIPIENT_RESTART_JSON="$(run_json "bootstrap dev identity after restart" "$CLI" --json balance smoke-recipient)"
+[[ "$(json_field data.address "$DEV_RECIPIENT_RESTART_JSON")" == "$RECIPIENT_ADDRESS" ]] \
+    || die "manifest-backed smoke-recipient changed identity across restart"
 
 PERSISTED_VIEW_AFTER="$(run_view_json "view after persistent restart" "$PROJECT_NAME" get)"
 PERSISTED_VALUE_AFTER="$(json_field data.returnValue "$PERSISTED_VIEW_AFTER")"

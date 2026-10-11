@@ -1,17 +1,10 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-fibonacci-events-query-smoke",
   "seed": "sim-local-fibonacci-events-query-smoke",
   "target": {
     "provider": "local"
-  },
-  "bootstrap": {
-    "accounts": 1,
-    "accountSeed": "sim-local-fibonacci-events-query-smoke-accounts",
-    "initialStorageTokens": "1000000000",
-    "devWalletProfile": "default",
-    "storageCostProfile": "default"
   },
   "loadShape": [
     {
@@ -50,5 +43,13 @@
   ],
   "assertions": {
     "maxErrorRate": 0.001
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "sim-local-fibonacci-events-query-smoke:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "deploymentCollateralRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

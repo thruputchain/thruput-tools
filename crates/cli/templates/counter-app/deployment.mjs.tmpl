@@ -1,0 +1,56 @@
+import { readFile } from "node:fs/promises";
+import {
+  createGroundhogClient,
+  hashFromHex,
+  localnet,
+} from "@groundhogchain/client";
+
+export async function readDeployment() {
+  let config;
+  try {
+    config = JSON.parse(await readFile(".thruput/app.json", "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT")
+      throw new Error(
+        "No saved deployment. Run npm run contract:deploy first.",
+      );
+    if (error instanceof SyntaxError)
+      throw new Error(
+        "Invalid saved deployment. Run npm run contract:deploy again.",
+      );
+    throw new Error(`Could not read .thruput/app.json: ${error.message}`);
+  }
+  if (
+    !config ||
+    typeof config !== "object" ||
+    typeof config.contractAddress !== "string" ||
+    !/^0x[0-9a-f]{64}$/.test(config.contractAddress) ||
+    typeof config.txHash !== "string" ||
+    !/^0x[0-9a-f]{64}$/.test(config.txHash) ||
+    typeof config.rpcUrl !== "string" ||
+    !URL.canParse(config.rpcUrl) ||
+    !["http:", "https:"].includes(new URL(config.rpcUrl).protocol)
+  )
+    throw new Error(
+      "Invalid saved deployment. Run npm run contract:deploy again.",
+    );
+  return config;
+}
+
+export async function checkDeployment(config) {
+  let receipt;
+  try {
+    const client = await createGroundhogClient({
+      cluster: localnet({ rpcUrl: config.rpcUrl }),
+    });
+    receipt = await client.getTransactionReceipt(hashFromHex(config.txHash));
+  } catch (error) {
+    throw new Error(
+      `Could not check the saved deployment: ${error.message}. Run thruput node in another terminal and check the saved RPC endpoint.`,
+    );
+  }
+  if (!receipt)
+    throw new Error(
+      "Saved deployment is unavailable on this node. Run npm run contract:deploy again, then reload the browser.",
+    );
+}

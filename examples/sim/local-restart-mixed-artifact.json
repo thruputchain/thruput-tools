@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-restart-mixed-artifact",
   "seed": "local-restart-mixed-artifact-v2",
@@ -38,5 +38,12 @@
     "maxReceiptTimeoutRate": 1.0,
     "maxChainStall": "10s",
     "p99SubmitLatencyMs": 750
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "local-restart-mixed-artifact-v2:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

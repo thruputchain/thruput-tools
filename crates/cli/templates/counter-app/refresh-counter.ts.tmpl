@@ -1,0 +1,24 @@
+// A successful receipt can arrive before views reach that block. Retry only
+// the read, and stop as soon as it catches up or the short read budget expires.
+export async function refreshCounter(
+  read: (signal: AbortSignal) => Promise<{ value: bigint; height: bigint }>,
+  minimumHeight: bigint,
+  timeoutMs = 5_000,
+): Promise<bigint> {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new Error("Counter view did not catch up in time.")),
+    timeoutMs,
+  );
+  try {
+    while (!controller.signal.aborted) {
+      const result = await read(controller.signal);
+      controller.signal.throwIfAborted();
+      if (result.height >= minimumHeight) return result.value;
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    }
+    throw controller.signal.reason;
+  } finally {
+    clearTimeout(timeout);
+  }
+}

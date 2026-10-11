@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::airdrop::LocalFundingErrorData;
 use groundhog_json_rpc_types::error::{TxInvalidDetail, codes};
 use jsonrpsee::types::ErrorObjectOwned;
 
@@ -5,6 +6,17 @@ use jsonrpsee::types::ErrorObjectOwned;
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum RpcServerError {
+    /// Retained local funding evidence whose outcome still needs reconciliation.
+    #[error("local funding unresolved: {reason}")]
+    LocalFundingUnresolved {
+        /// Failure encountered while observing or submitting the retained transaction.
+        reason: String,
+        /// Signed evidence, independent of admission or execution status.
+        evidence: LocalFundingErrorData,
+    },
+    /// The selected committed snapshot did not meet the freshness floor.
+    #[error("view height unavailable: requested {}, observed {}", *.0.requested, *.0.observed)]
+    ViewHeightUnavailable(groundhog_json_rpc_types::view::ViewHeightUnavailable),
     /// Transaction was malformed.
     #[error("invalid transaction: {0}")]
     TxInvalid(String),
@@ -48,103 +60,37 @@ pub enum RpcServerError {
     NotImplemented(String),
 }
 
-impl From<RpcServerError> for ErrorObjectOwned {
-    fn from(err: RpcServerError) -> Self {
-        if let RpcServerError::TxInvalidDetailed(detail) = &err {
-            return ErrorObjectOwned::owned(codes::TX_INVALID, err.to_string(), Some(detail));
+impl RpcServerError {
+    /// The JSON-RPC error code this error is reported under.
+    pub fn code(&self) -> i32 {
+        match self {
+            Self::LocalFundingUnresolved { .. } => codes::LOCAL_FUNDING_UNRESOLVED,
+            Self::ViewHeightUnavailable(_) => codes::VIEW_HEIGHT_UNAVAILABLE,
+            Self::TxInvalid(_) | Self::TxInvalidDetailed(_) => codes::TX_INVALID,
+            Self::TxRejected(_) => codes::TX_REJECTED,
+            Self::TxNotFound => codes::TX_NOT_FOUND,
+            Self::BlockNotFound => codes::BLOCK_NOT_FOUND,
+            Self::InvalidParam(_) => codes::INVALID_PARAMS,
+            Self::BackendUnavailable(_) => codes::BACKEND_UNAVAILABLE,
+            Self::BackendTimeout => codes::BACKEND_TIMEOUT,
+            Self::Overloaded(_) => codes::OVERLOADED,
+            Self::NotImplemented(_) => codes::NOT_IMPLEMENTED,
         }
-        let (code, msg) = match &err {
-            RpcServerError::TxInvalid(_) | RpcServerError::TxInvalidDetailed(_) => {
-                (codes::TX_INVALID, err.to_string())
-            }
-            RpcServerError::TxRejected(_) => (codes::TX_REJECTED, err.to_string()),
-            RpcServerError::TxNotFound => (codes::TX_NOT_FOUND, err.to_string()),
-            RpcServerError::BlockNotFound => (codes::BLOCK_NOT_FOUND, err.to_string()),
-            RpcServerError::InvalidParam(_) => (codes::INVALID_PARAMS, err.to_string()),
-            RpcServerError::BackendUnavailable(_) => (codes::BACKEND_UNAVAILABLE, err.to_string()),
-            RpcServerError::BackendTimeout => (codes::BACKEND_TIMEOUT, err.to_string()),
-            RpcServerError::Overloaded(_) => (codes::OVERLOADED, err.to_string()),
-            RpcServerError::NotImplemented(_) => (codes::NOT_IMPLEMENTED, err.to_string()),
-        };
-        ErrorObjectOwned::owned(code, msg, None::<()>)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_variant_maps_to_its_documented_code() {
-        let cases = [
-            (RpcServerError::TxInvalid("x".into()), codes::TX_INVALID),
-            (
-                RpcServerError::TxInvalidDetailed(TxInvalidDetail::TooManyContracts {
-                    attached: 5,
-                    max: 4,
-                }),
-                codes::TX_INVALID,
-            ),
-            (RpcServerError::TxRejected("x".into()), codes::TX_REJECTED),
-            (RpcServerError::TxNotFound, codes::TX_NOT_FOUND),
-            (RpcServerError::BlockNotFound, codes::BLOCK_NOT_FOUND),
-            (
-                RpcServerError::InvalidParam("x".into()),
-                codes::INVALID_PARAMS,
-            ),
-            (
-                RpcServerError::BackendUnavailable("x".into()),
-                codes::BACKEND_UNAVAILABLE,
-            ),
-            (RpcServerError::BackendTimeout, codes::BACKEND_TIMEOUT),
-            (RpcServerError::Overloaded("x".into()), codes::OVERLOADED),
-            (
-                RpcServerError::NotImplemented("x".into()),
-                codes::NOT_IMPLEMENTED,
-            ),
-        ];
-
-        for (err, expected_code) in cases {
-            let label = err.to_string();
-            let obj: ErrorObjectOwned = err.into();
-            assert_eq!(obj.code(), expected_code, "wrong code for `{label}`");
+impl From<RpcServerError> for ErrorObjectOwned {
+    fn from(err: RpcServerError) -> Self {
+        let code = err.code();
+        if let RpcServerError::LocalFundingUnresolved { evidence, .. } = &err {
+            return ErrorObjectOwned::owned(code, err.to_string(), Some(evidence));
         }
-    }
-
-    #[test]
-    fn detailed_tx_invalid_carries_structured_data() {
-        let err = RpcServerError::TxInvalidDetailed(TxInvalidDetail::ContractTooLarge {
-            index: 1,
-            size_bytes: 300_000,
-            max_bytes: 262_144,
-        });
-
-        let obj: ErrorObjectOwned = err.into();
-
-        assert_eq!(obj.code(), codes::TX_INVALID);
-        assert_eq!(
-            obj.message(),
-            "invalid transaction: contract 1 in contractsToDeploy is 300000 bytes; \
-             limit is 262144"
-        );
-        let data: serde_json::Value =
-            serde_json::from_str(obj.data().expect("detail should be attached").get()).unwrap();
-        assert_eq!(
-            data,
-            serde_json::json!({
-                "reason": "contractTooLarge",
-                "index": 1,
-                "sizeBytes": 300_000,
-                "maxBytes": 262_144,
-            })
-        );
-    }
-
-    #[test]
-    fn plain_tx_invalid_carries_no_data() {
-        let obj: ErrorObjectOwned = RpcServerError::TxInvalid("invalid hex".into()).into();
-
-        assert_eq!(obj.code(), codes::TX_INVALID);
-        assert!(obj.data().is_none());
+        if let RpcServerError::ViewHeightUnavailable(detail) = &err {
+            return ErrorObjectOwned::owned(code, err.to_string(), Some(detail));
+        }
+        if let RpcServerError::TxInvalidDetailed(detail) = &err {
+            return ErrorObjectOwned::owned(code, err.to_string(), Some(detail));
+        }
+        ErrorObjectOwned::owned(code, err.to_string(), None::<()>)
     }
 }

@@ -5,20 +5,26 @@ on:
   pull_request:
     paths:
       - '.github/workflows/release.yml'
+      - 'scripts/split-release-debuginfo.sh'
+      - 'scripts/split-release-dsym.sh'
+      - 'scripts/test_split_release_dsym.py'
+      - 'Cargo.toml'
+      - '.cargo/config.toml'
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  CARGO_REGISTRIES_GROUNDHOG_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+  CARGO_REGISTRIES_THRUPUT_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
   CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
-  CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
-  CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
+  CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
+  CARGO_REGISTRIES_THRUPUT_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
   RELEASE_CRATES: >-
     groundhog-bundle-identity
-    groundhog-cli
+    thruput-cli
     groundhog-rv32-lower
 
 permissions:
-  contents: write
+  # The publish job raises this to "write"
+  contents: read
 
 jobs:
   build:
@@ -32,30 +38,31 @@ jobs:
             release_target: x86_64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-2604
             artifact_name: groundhog-rpc-x86_64-release-artifacts
-            release_apps: hog-gateway groundhog rv32-lower hogsim groundhog-faucet
+            release_apps: hog-gateway thruput rv32-lower hogsim groundhog-faucet
           - architecture: arm64
             machine: aarch64
             platform: linux
             release_target: aarch64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-arm64
             artifact_name: groundhog-rpc-arm64-release-artifacts
-            release_apps: hog-gateway groundhog rv32-lower hogsim groundhog-faucet
+            release_apps: hog-gateway thruput rv32-lower hogsim groundhog-faucet
           - architecture: arm64
             machine: arm64
             platform: macos
             release_target: aarch64-apple-darwin
             runner: namespace-profile-hogd-arm64-macos
             artifact_name: groundhog-rpc-macos-arm64-release-artifacts
-            release_apps: groundhog
+            release_apps: thruput
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
       - uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
-        with:
-          toolchain: 1.96.0
+      - name: Set up Rust 1.96.0
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal --no-self-update
+          rustup default 1.96.0
 
       - uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
@@ -63,10 +70,13 @@ jobs:
 
       - name: Read crate version
         run: |
-          crate_id=$(cargo pkgid --locked -p groundhog-cli)
+          crate_id=$(cargo pkgid --locked -p thruput-cli)
           crate_version=${crate_id##*[@#]}
           test -n "$crate_version"
           echo "CRATE_VERSION=$crate_version" >> "$GITHUB_ENV"
+
+      - name: Test macOS debuginfo packaging
+        run: python3 -m unittest discover -s scripts -p test_split_release_dsym.py
 
       - name: Verify native architecture
         run: test "$(uname -m)" = "${{ matrix.machine }}"
@@ -94,8 +104,8 @@ jobs:
             exit 1
           fi
           for crate in $RELEASE_CRATES; do
-            cargo info "${crate}@${VERSION}" --registry groundhog >/dev/null
-            echo "OK: ${crate}@${VERSION} exists in the groundhog registry"
+            cargo info "${crate}@${VERSION}" --registry thruput >/dev/null
+            echo "OK: ${crate}@${VERSION} exists in the thruput registry"
           done
 
       - name: Verify component version and source wiring
@@ -105,15 +115,15 @@ jobs:
           export GROUNDHOG_SOURCE_COMMIT="$source_commit"
           cargo build --locked --release \
             -p groundhog-json-rpc-gateway \
-            -p groundhog-cli \
+            -p thruput-cli \
             -p groundhog-rv32-lower \
             -p groundhog-sim \
             -p groundhog-faucet \
             --bins
 
-          for app in hog-gateway groundhog rv32-lower hogsim groundhog-faucet; do
+          for app in hog-gateway thruput rv32-lower hogsim groundhog-faucet; do
             app_version="$CRATE_VERSION"
-            if [ "$app" = groundhog ] || [ "$app" = hog-gateway ]; then
+            if [ "$app" = thruput ] || [ "$app" = hog-gateway ]; then
               app_version="$CRATE_VERSION (commit ${source_commit:0:8})"
             fi
             test "$(target/release/$app --version)" = "$app $app_version"
@@ -137,7 +147,7 @@ jobs:
           for app in $RELEASE_APPS; do
             case "$app" in
               hog-gateway) package_args+=(-p groundhog-json-rpc-gateway) ;;
-              groundhog) package_args+=(-p groundhog-cli) ;;
+              thruput) package_args+=(-p thruput-cli) ;;
               rv32-lower) package_args+=(-p groundhog-rv32-lower) ;;
               hogsim) package_args+=(-p groundhog-sim) ;;
               groundhog-faucet) package_args+=(-p groundhog-faucet) ;;
@@ -150,27 +160,21 @@ jobs:
 
           cargo build --locked --release "${package_args[@]}" --bins
 
-      - name: Verify release agent guidance
-        run: |
-          cargo run --locked -p groundhog-agent-knowledge -- check
-          target/release/groundhog --skill > agent-guide.md
-          cmp agent-guide.md crates/tools/cli/assets/groundhog/knowledge/generated/agent-guide.md
-
       - name: Verify macOS CLI portability
         if: matrix.platform == 'macos'
         run: |
           set -euo pipefail
 
-          file target/release/groundhog | grep -q 'Mach-O 64-bit executable arm64'
-          codesign --verify --strict --verbose=4 target/release/groundhog
+          file target/release/thruput | grep -q 'Mach-O 64-bit executable arm64'
+          codesign --verify --strict --verbose=4 target/release/thruput
 
           unexpected_deps=$(
-            otool -L target/release/groundhog \
+            otool -L target/release/thruput \
               | tail -n +2 \
               | awk '$1 !~ /^\/System\/Library\// && $1 !~ /^\/usr\/lib\// { print $1 }'
           )
           if [ -n "$unexpected_deps" ]; then
-            echo "groundhog has non-system macOS dependencies:" >&2
+            echo "thruput has non-system macOS dependencies:" >&2
             echo "$unexpected_deps" >&2
             exit 1
           fi
@@ -190,10 +194,14 @@ jobs:
             archive="artifacts/${archive_base}.tar.gz"
             mkdir -p "$package_dir"
             cp "target/release/${app}" "$package_dir/"
-            cp README.md LICENSE "$package_dir/"
-            if [ "$app" = groundhog ]; then
-              cp agent-guide.md "$package_dir/"
+            debug_root="package/${archive_base}-debuginfo"
+            debug_archive="artifacts/${archive_base}-debuginfo.tar.gz"
+            if [ "${{ matrix.platform }}" = linux ]; then
+              bash scripts/split-release-debuginfo.sh "$package_dir/$app" "$debug_root" "$debug_archive"
+            else
+              bash scripts/split-release-dsym.sh "$package_dir/$app" "$debug_root" "$debug_archive"
             fi
+            cp README.md LICENSE "$package_dir/"
             chmod +x "$package_dir/$app"
             tar -czf "$archive" -C package "$archive_base"
 
@@ -203,27 +211,19 @@ jobs:
             test -x "$verify_dir/$archive_base/$app"
             test -f "$verify_dir/$archive_base/README.md"
             test -f "$verify_dir/$archive_base/LICENSE"
-            if [ "$app" = groundhog ]; then
-              "$verify_dir/$archive_base/$app" --skill > "$verify_dir/rendered-guide.md"
-              cmp "$verify_dir/rendered-guide.md" "$verify_dir/$archive_base/agent-guide.md"
-            fi
             expected_version=${EXPECTED_BINARY_VERSION}
-            if [ "$app" = groundhog ] || [ "$app" = hog-gateway ]; then
+            if [ "$app" = thruput ] || [ "$app" = hog-gateway ]; then
               expected_version="$CRATE_VERSION (commit ${EXPECTED_SOURCE_COMMIT:0:8})"
             fi
             test "$("$verify_dir/$archive_base/$app" --version)" = "$app $expected_version"
           done
-
-      - name: Stage standalone agent guide
-        if: matrix.platform == 'linux' && matrix.architecture == 'x86_64'
-        run: cp agent-guide.md artifacts/agent-guide.md
 
       # Explicit target keeps CI host features out of the artifact contract.
       # Runtime qualification belongs on a Zen 5 deployment host.
       - name: Build and package Zen 5 gateway
         if: matrix.platform == 'linux' && matrix.architecture == 'x86_64'
         env:
-          RUSTFLAGS: "-C target-cpu=znver5"
+          RUSTFLAGS: "-C target-cpu=znver5 -C force-frame-pointers=yes -C link-arg=-Wl,--build-id=sha1"
           CARGO_TARGET_DIR: target/znver5
         run: |
           set -euo pipefail
@@ -235,6 +235,8 @@ jobs:
           archive_base="hog-gateway-${release_ref}-x86_64-unknown-linux-gnu-znver5"
           mkdir -p "package/$archive_base"
           cp target/znver5/x86_64-unknown-linux-gnu/release/hog-gateway README.md LICENSE "package/$archive_base/"
+          bash scripts/split-release-debuginfo.sh "package/$archive_base/hog-gateway" \
+            "package/${archive_base}-debuginfo" "artifacts/${archive_base}-debuginfo.tar.gz"
           tar -czf "artifacts/$archive_base.tar.gz" -C package "$archive_base"
 
       - name: Upload release artifacts
@@ -243,7 +245,6 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: |
             artifacts/*.tar.gz
-            artifacts/agent-guide.md
           if-no-files-found: error
 
   assemble:
@@ -275,12 +276,11 @@ jobs:
           set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
-          test "${#archives[@]}" -eq 12
+          test "${#archives[@]}" -eq 24
           for archive in "${archives[@]}"; do
             test -s "$archive"
           done
-          test -s agent-guide.md
-          sha256sum -- "${archives[@]}" agent-guide.md > SHA256SUMS
+          sha256sum -- "${archives[@]}" > SHA256SUMS
 
       - name: Upload assembled release artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -289,7 +289,6 @@ jobs:
           path: |
             artifacts/*.tar.gz
             artifacts/SHA256SUMS
-            artifacts/agent-guide.md
           if-no-files-found: error
 
   publish:
@@ -311,7 +310,6 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/SHA256SUMS
-            artifacts/agent-guide.md
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-receipt-poll-smoke",
   "seed": "local-receipt-poll-smoke-v1",
@@ -27,5 +27,12 @@
     "maxErrorRate": 0.001,
     "maxReceiptTimeoutRate": 1.0,
     "p99SubmitLatencyMs": 750
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "local-receipt-poll-smoke-v1:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

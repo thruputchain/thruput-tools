@@ -24,25 +24,12 @@ transfer_entrypoint = "0x63285b3523f9dc3f"
 wallet_address = "0x0000000000000000000000000000000000000000000000000000000000000000"
 public_key = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
-[network.wallet_create]
-prefund_raw_amount = "10000000"
-wallet_contract_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
-
-[network.dev_wallet]
-deploy_entrypoint = "0xf969542572bd6860"
-do_action_entrypoint = "0xa0fff94c64fbaf3c"
-
 [airdrop]
 raw_amount = "1000000000"
-wallet_do_action_entrypoint = "0x646f416374696f6e"
 
 [airdrop.secret_key_source]
 type = "environment"
 variable = "GROUNDHOG_FAUCET_SECRET_KEY"
-
-[wallet_create]
-create_wallet_entrypoint = "0x6372656174655761"
-wallet_artifact_path = "contracts/dev_wallet.rv32a"
 
 [policy.airdrop]
 # Global retained idempotency records; see README Policy State for sizing.

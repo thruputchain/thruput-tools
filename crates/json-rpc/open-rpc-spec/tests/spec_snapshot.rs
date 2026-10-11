@@ -18,7 +18,71 @@ const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
 // `errors: []` array. Add a method here only when it has no backend
 // dispatch and cannot fail. Both current methods are sourced from immutable
 // process state.
-const INFALLIBLE_METHODS: &[&str] = &["groundhog_networkInfo", "groundhog_version"];
+const INFALLIBLE_METHODS: &[&str] = &[
+    "groundhog_networkInfo",
+    "groundhog_serverLimits",
+    "groundhog_version",
+];
+
+fn find_wide_json_number(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    match value {
+        serde_json::Value::Object(fields) => {
+            let is_integer = match fields.get("type") {
+                Some(serde_json::Value::String(ty)) => ty == "integer",
+                Some(serde_json::Value::Array(types)) => types.iter().any(|ty| ty == "integer"),
+                _ => false,
+            };
+            if is_integer
+                && matches!(
+                    fields.get("format").and_then(serde_json::Value::as_str),
+                    Some("int64" | "uint64" | "int128" | "uint128")
+                )
+            {
+                return Some(value);
+            }
+            fields.values().find_map(find_wide_json_number)
+        }
+        serde_json::Value::Array(values) => values.iter().find_map(find_wide_json_number),
+        _ => None,
+    }
+}
+
+#[test]
+fn public_schemas_never_expose_wide_json_numbers() {
+    if let Some(value) = find_wide_json_number(&build_spec()) {
+        panic!("wide integer must be a decimal string: {value}");
+    }
+}
+
+#[test]
+fn wide_number_guard_detects_scalar_and_nullable_integers() {
+    for format in ["int64", "uint64", "int128", "uint128"] {
+        for ty in [
+            serde_json::json!("integer"),
+            serde_json::json!(["integer", "null"]),
+        ] {
+            let number = serde_json::json!({"type": ty, "format": format});
+            let schema = serde_json::json!({"properties": {"value": {"anyOf": [number]}}});
+            assert_eq!(find_wide_json_number(&schema), Some(&number));
+        }
+    }
+}
+
+#[test]
+fn wide_number_guard_detects_generated_optional_u64_schema() {
+    let schema = serde_json::to_value(schemars::schema_for!(Option<u64>)).unwrap();
+    assert!(find_wide_json_number(&schema).is_some(), "{schema}");
+}
+
+#[test]
+fn wide_number_guard_accepts_narrow_numbers_and_decimal_strings() {
+    for schema in [
+        serde_json::to_value(schemars::schema_for!(Option<u32>)).unwrap(),
+        serde_json::json!({"type": ["string", "null"], "format": "uint64"}),
+    ] {
+        assert_eq!(find_wide_json_number(&schema), None);
+    }
+}
 
 #[test]
 fn openrpc_spec_matches_snapshot() {
@@ -316,13 +380,30 @@ fn assert_error_data_schemas_are_wired(errors: &serde_json::Map<String, serde_js
         ],
         "TxInvalid data variants should be discriminated by camelCase reason tags"
     );
+    let funding = &errors["LocalFundingUnresolved"]["x-data-schema"];
+    assert_eq!(funding["type"], "object");
+    assert_eq!(
+        funding["required"],
+        serde_json::json!(["txHash", "signedTransaction"])
+    );
+    assert_eq!(funding["properties"]["txHash"]["$ref"], "#/$defs/TxHash");
+    assert_eq!(
+        funding["properties"]["signedTransaction"]["$ref"],
+        "#/$defs/HexBytes"
+    );
     assert!(
         errors
             .values()
-            .filter(|error| error["x-name"] != "TxInvalid")
+            .filter(|error| !matches!(
+                error["x-name"].as_str(),
+                Some("TxInvalid" | "LocalFundingUnresolved" | "ViewHeightUnavailable")
+            ))
             .all(|error| error["x-data-schema"].is_null()),
-        "only TxInvalid documents a structured data payload today"
+        "only transaction validation, unresolved funding, and view height errors document structured data"
     );
+    let height_data = &errors["ViewHeightUnavailable"]["x-data-schema"];
+    assert!(height_data["properties"]["requested"].is_object());
+    assert!(height_data["properties"]["observed"].is_object());
 }
 
 fn snapshot_path() -> PathBuf {

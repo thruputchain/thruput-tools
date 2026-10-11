@@ -1,21 +1,18 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 4,
   "kind": "groundhog-bootstrap",
   "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "profile": "local-dev",
-  "devWallet": {
-    "profile": "hog-devnode-default"
-  },
   "bootstrapFaucet": {
-    "index": 0,
+    "publicKey": "0x6161616161616161616161616161616161616161616161616161616161616161",
     "initialStorageTokens": "10000000000000"
   },
-  "bootstrapAccounts": {
-    "count": 10,
-    "firstIndex": 1,
-    "seed": "groundhog-dev-accounts",
-    "initialStorageTokens": "1000000000"
-  },
+  "bootstrapAccounts": [
+    {
+      "publicKey": "0x6262626262626262626262626262626262626262626262626262626262626262",
+      "initialStorageTokens": "1000000000"
+    }
+  ],
   "storageCostModel": {
     "profile": "hogd-default"
   }

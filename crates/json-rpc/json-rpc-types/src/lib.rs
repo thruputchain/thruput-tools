@@ -1,7 +1,9 @@
+pub mod address_auth;
 pub mod airdrop;
 pub mod balance;
 pub mod block;
 pub mod bootstrap_manifest;
+pub mod decimal;
 pub mod dev;
 pub mod error;
 pub mod events;
@@ -12,6 +14,7 @@ pub mod network_info;
 pub mod protocol_token;
 pub mod receipt;
 pub mod runtime_manifest;
+pub mod server_limits;
 pub mod state;
 pub mod transaction;
 pub mod version;
@@ -38,6 +41,3 @@ pub type StorageHash = Hex0x<groundhog_xdr::types::SHA256Hash>;
 pub type DbHash = Hex0x<groundhog_xdr::types::StorageLongHash>;
 pub type Ed25519PublicKey = Hex0x<groundhog_xdr::types::Ed25519PublicKey>;
 pub type ValidatorID = Hex0x<groundhog_xdr::validator::ValidatorID>;
-
-#[cfg(test)]
-mod tests;

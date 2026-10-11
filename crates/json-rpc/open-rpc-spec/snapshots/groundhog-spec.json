@@ -25,6 +25,45 @@
         "x-description": "One or more JSON-RPC parameters are malformed, out of range, or otherwise invalid.",
         "x-name": "InvalidParams"
       },
+      "LocalFundingUnresolved": {
+        "code": -32003,
+        "message": "Local funding unresolved",
+        "x-data-schema": {
+          "$defs": {
+            "Hex0x_SHA256Hash": {
+              "pattern": "^0x[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "HexBytes": {
+              "pattern": "^0x[0-9a-f]*$",
+              "type": "string"
+            },
+            "TxHash": {
+              "$ref": "#/$defs/Hex0x_SHA256Hash",
+              "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as `\"0x...\"` hex string (64 hex chars)."
+            }
+          },
+          "description": "Retained transaction evidence returned when local funding cannot resolve an outcome.\nThis does not prove admission or execution. Reconcile this hash and reuse the original request.",
+          "properties": {
+            "signedTransaction": {
+              "$ref": "#/$defs/HexBytes",
+              "description": "Exact signed bytes persisted before the first submission."
+            },
+            "txHash": {
+              "$ref": "#/$defs/TxHash",
+              "description": "Canonical hash of the retained transaction body."
+            }
+          },
+          "required": [
+            "txHash",
+            "signedTransaction"
+          ],
+          "title": "LocalFundingErrorData",
+          "type": "object"
+        },
+        "x-description": "Local funding retained a signed transaction but could not resolve its outcome. Data contains its transaction hash and exact signed bytes, not proof of admission or execution. Reconcile that hash and retry the original request; do not create a replacement transfer.",
+        "x-name": "LocalFundingUnresolved"
+      },
       "NotImplemented": {
         "code": -32052,
         "message": "Not implemented",
@@ -216,10 +255,96 @@
         "message": "Transaction rejected",
         "x-description": "The submitted transaction is well-formed but was rejected by the scheduler or execution backend.",
         "x-name": "TxRejected"
+      },
+      "ViewHeightUnavailable": {
+        "code": -32011,
+        "message": "View height unavailable",
+        "x-data-schema": {
+          "$defs": {
+            "DecimalBlockHeight": {
+              "description": "Canonical decimal integer in the inclusive range -9223372036854775808 to 9223372036854775807.",
+              "maxLength": 20,
+              "pattern": "^(0|-?[1-9][0-9]*)(?![\\s\\S])",
+              "type": "string",
+              "x-integer-maximum": "9223372036854775807",
+              "x-integer-minimum": "-9223372036854775808"
+            }
+          },
+          "description": "Requested minimum height and the committed height of the selected snapshot.",
+          "properties": {
+            "observed": {
+              "$ref": "#/$defs/DecimalBlockHeight"
+            },
+            "requested": {
+              "$ref": "#/$defs/DecimalBlockHeight"
+            }
+          },
+          "required": [
+            "requested",
+            "observed"
+          ],
+          "title": "ViewHeightUnavailable",
+          "type": "object"
+        },
+        "x-description": "The selected committed snapshot is below minHeight. Data contains requested and observed heights. The request does not wait or force a snapshot refresh.",
+        "x-name": "ViewHeightUnavailable"
       }
     },
     "schemas": {
+      "AddressAuthDataInfo": {
+        "description": "The signer set and weight threshold registered at an address.",
+        "properties": {
+          "requiredWeight": {
+            "description": "Minimum total signer weight required to authorize a transaction\nfrom this address.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signers": {
+            "description": "Occupied key slots in ascending `keyId` order. Unoccupied slots are\nomitted, so `keyId` values need not be contiguous.",
+            "items": {
+              "$ref": "#/components/schemas/AuthSigner"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "signers",
+          "requiredWeight"
+        ],
+        "type": "object"
+      },
+      "AddressAuthDataResponse": {
+        "description": "Authorization configuration registered at one address, read from the\nlatest committed snapshot.",
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Address whose authorization configuration was read."
+          },
+          "authData": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AddressAuthDataInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The registered configuration, or `null` when the address has none.\n\nThe two cases take different auth claims. An address without auth\ndata accepts only `kPubkeySignature` claims whose preimage derives\nthe address. An address with auth data accepts only\n`kSourceAddressAuthData` claims, signed by keys listed here."
+          },
+          "height": {
+            "$ref": "#/components/schemas/DecimalBlockHeight",
+            "description": "Committed block height used for the read, reported whether or not\nthe address has a registered configuration."
+          }
+        },
+        "required": [
+          "address",
+          "height"
+        ],
+        "type": "object"
+      },
       "AddressTransactionQuery": {
+        "additionalProperties": false,
         "description": "`getTransactionsByAddress` request: the transaction history of\n`address`, walked in `order` from `anchor`.\n\nA transaction is part of an address's history when its root\ninvocation targets that address; transactions that merely touch the\naddress mid-execution do not match.",
         "properties": {
           "address": {
@@ -230,7 +355,7 @@
           },
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
-            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off; `order` and `anchor` in the request are\nignored when a cursor is supplied — the cursor carries them."
+            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off. `order` and `anchor` remain required request fields,\nbut the cursor supplies continuation state. Keep the same address.\nA cursor continues one historical walk, not blocks added after it began."
           },
           "limit": {
             "description": "Values above the server's per-page cap (default 200) are\nrejected as invalid params; `0` means server default (50).",
@@ -270,10 +395,8 @@
                 "description": "Address receiving the native HOG transfer."
               },
               "retryAfterSeconds": {
-                "description": "Suggested delay before retrying the same logical attempt.",
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
+                "$ref": "#/components/schemas/DecimalU64",
+                "description": "Suggested delay before retrying the same logical attempt."
               },
               "txHash": {
                 "anyOf": [
@@ -303,7 +426,7 @@
                 "type": "string"
               },
               "height": {
-                "$ref": "#/components/schemas/BlockHeight",
+                "$ref": "#/components/schemas/DecimalBlockHeight",
                 "description": "Committed block height."
               },
               "rawAmount": {
@@ -336,6 +459,7 @@
         ]
       },
       "AirdropRequest": {
+        "additionalProperties": false,
         "description": "Public parameters for `groundhog_requestAirdrop`.",
         "properties": {
           "clientNonce": {
@@ -353,6 +477,75 @@
         ],
         "type": "object"
       },
+      "AuthPublicKey": {
+        "description": "A registered public key, tagged by its cryptographic scheme.",
+        "oneOf": [
+          {
+            "description": "An Ed25519 public key.",
+            "properties": {
+              "key": {
+                "$ref": "#/components/schemas/Hex0x_Ed25519PublicKey",
+                "description": "The 32-byte public key."
+              },
+              "scheme": {
+                "const": "ed25519",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scheme",
+              "key"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A scheme unknown to this server build. The key is registered, but\nthis server cannot describe it.",
+            "properties": {
+              "scheme": {
+                "const": "unknown",
+                "type": "string"
+              },
+              "schemeId": {
+                "description": "Raw protocol scheme id of the unrecognized key.",
+                "format": "int32",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "scheme",
+              "schemeId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AuthSigner": {
+        "description": "One registered key slot.",
+        "properties": {
+          "keyId": {
+            "description": "Slot index. A signature by this key names it as `publicKeyId`, and a\nsource-address claim admits it by setting this bit in `allowedKeys`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxWeight": {
+            "description": "Weight this key contributes toward `requiredWeight`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "publicKey": {
+            "$ref": "#/components/schemas/AuthPublicKey",
+            "description": "The registered public key."
+          }
+        },
+        "required": [
+          "keyId",
+          "publicKey",
+          "maxWeight"
+        ],
+        "type": "object"
+      },
       "BalanceResponse": {
         "description": "Native HOG balance read from committed chain state.",
         "properties": {
@@ -361,7 +554,7 @@
             "description": "Address whose native HOG balance was read."
           },
           "height": {
-            "$ref": "#/components/schemas/BlockHeight",
+            "$ref": "#/components/schemas/DecimalBlockHeight",
             "description": "Committed block height used for the read."
           },
           "rawBalance": {
@@ -380,6 +573,7 @@
         "description": "Where to begin iteration on the initial call.",
         "oneOf": [
           {
+            "additionalProperties": false,
             "properties": {
               "kind": {
                 "const": "atBeginning",
@@ -392,6 +586,7 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "kind": {
                 "const": "atEnd",
@@ -404,9 +599,10 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "height": {
-                "$ref": "#/components/schemas/BlockHeight"
+                "$ref": "#/components/schemas/DecimalBlockHeight"
               },
               "kind": {
                 "const": "atHeight",
@@ -421,11 +617,6 @@
           }
         ]
       },
-      "BlockHeight": {
-        "description": "BlockHeight is the height of a block, measured as the number of blocks since the genesis of the chain.\nThe first block of transactions is at height 0.\nIt is signed to prevent overflows in\ncalculations.",
-        "format": "int64",
-        "type": "integer"
-      },
       "BlockInfo": {
         "description": "Block data returned by getBlockByNumber.\n\nMaps the XDR `ConsensusValue` to RPC-friendly serialization\n(camelCase fields, `0x`-prefixed hex). Add RPC-specific fields\nhere without modifying the wire type.",
         "properties": {
@@ -434,10 +625,12 @@
             "description": "Canonical SHA-256 hash of the complete XDR-encoded consensus value."
           },
           "blockHeight": {
-            "$ref": "#/components/schemas/BlockHeight"
+            "$ref": "#/components/schemas/DecimalBlockHeight",
+            "description": "Signed protocol block height, encoded as a decimal string."
           },
           "blockTimepoint": {
-            "$ref": "#/components/schemas/TimePoint"
+            "$ref": "#/components/schemas/DecimalTimePoint",
+            "description": "Unix time in nanoseconds since 1970-01-01 UTC, encoded as a decimal string."
           },
           "configHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash",
@@ -492,6 +685,104 @@
         ],
         "type": "object"
       },
+      "ChainConfig": {
+        "description": "Chain configuration with an optional authoritative execution reading.",
+        "properties": {
+          "execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent when the backend cannot supply authoritative execution rules."
+          },
+          "maxAuthTokenDepth": {
+            "description": "Levels of node nesting an auth token may carry.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxBytestringLen": {
+            "description": "Bytes one bytestring storage item may hold.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxContractSizeBytes": {
+            "description": "Bytes one attached contract's code blob may hold. The protocol fixes\n`kDefaultMaxContractSizeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxCrossInvokeDepth": {
+            "description": "Invocation frames one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxNewContractsPerTx": {
+            "description": "Contracts one transaction may attach in `contractsToDeploy`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32CodeBytes": {
+            "description": "Code bytes an RV32 artifact may carry to be attached. The protocol\nfixes `kDefaultMaxRv32CodeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32MemoryBytes": {
+            "description": "Guest data memory bytes an RV32 artifact may declare to be attached.\nThe protocol fixes `kDefaultMaxRv32MemoryBytes` as the value in force\nwhen unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSavepointDepth": {
+            "description": "Storage savepoints one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSha256Buffers": {
+            "description": "Concurrently open incremental SHA-256 buffers permitted per\ninvocation frame.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ChainTip": {
         "description": "Current chain tip. Returned by chainTip.",
         "properties": {
@@ -499,7 +790,8 @@
             "$ref": "#/components/schemas/Hex0x_SHA256Hash"
           },
           "height": {
-            "$ref": "#/components/schemas/BlockHeight"
+            "$ref": "#/components/schemas/DecimalBlockHeight",
+            "description": "Signed protocol block height, encoded as a decimal string."
           }
         },
         "required": [
@@ -556,6 +848,11 @@
             "type": "string"
           },
           {
+            "const": "insufficientFunds",
+            "description": "The native HOG balance at the diagnostic's address cannot cover the\ndebits in this block, or a newly created balance item cannot cover\nits own storage cost. Storage written under a contract's address is\ncharged to that contract's balance, so a deployment reports this at\nthe new contract's address when it holds no HOG.",
+            "type": "string"
+          },
+          {
             "const": "other",
             "description": "Unrecognized conflict code. Check for gateway updates.",
             "type": "string"
@@ -591,7 +888,60 @@
           "$ref": "#/components/schemas/Hex0x_ContractAddress"
         },
         "maxItems": 5,
+        "minItems": 1,
         "type": "array"
+      },
+      "ContractRejectCode": {
+        "description": "Reason the executor refused a contract attachment.",
+        "oneOf": [
+          {
+            "enum": [
+              "tooMany",
+              "blobTooLarge",
+              "notDeployable",
+              "duplicate",
+              "malformedArtifact",
+              "unsupportedFormat",
+              "unsupportedAbi",
+              "gasScheduleMismatch",
+              "memoryTooLarge",
+              "codeSizeInvalid",
+              "initialMemoryInvalid",
+              "digestMismatch",
+              "invalidProgram"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "Unrecognized rejection code from a newer node.",
+            "type": "string"
+          }
+        ]
+      },
+      "DecimalBlockHeight": {
+        "description": "Canonical decimal integer in the inclusive range -9223372036854775808 to 9223372036854775807.",
+        "maxLength": 20,
+        "pattern": "^(0|-?[1-9][0-9]*)(?![\\s\\S])",
+        "type": "string",
+        "x-integer-maximum": "9223372036854775807",
+        "x-integer-minimum": "-9223372036854775808"
+      },
+      "DecimalTimePoint": {
+        "description": "Canonical decimal integer in the inclusive range 0 to 18446744073709551615.",
+        "maxLength": 20,
+        "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+        "type": "string",
+        "x-integer-maximum": "18446744073709551615",
+        "x-integer-minimum": "0"
+      },
+      "DecimalU64": {
+        "description": "Canonical decimal integer in the inclusive range 0 to 18446744073709551615.",
+        "maxLength": 20,
+        "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+        "type": "string",
+        "x-integer-maximum": "18446744073709551615",
+        "x-integer-minimum": "0"
       },
       "EmittedEvent": {
         "description": "A single emitted event, as stored by the hogd indexer.\n\nThe gateway parses hogd's `TxEmittedEvent.serialized_event` into\nseparate topics and data. The serialized format is:\n`topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.\n`num_topics` (0–3) determines the split point. Max total 1024 bytes.\n\nSee `docs/gateway/system-design.md` \"Event Parsing\" for details.",
@@ -620,6 +970,7 @@
         "type": "object"
       },
       "EventFilter": {
+        "additionalProperties": false,
         "description": "A single event-filter predicate: events must be emitted by one of\n`contractAddresses` AND match the topic constraints. Required\nnon-empty `contractAddresses` — the indexer has no topic-indexed\ncolumn family and can't efficiently serve \"any contract\" scans.\n(When such an index is added, the gateway relaxes the non-empty\ncheck; the wire contract stays the same.)",
         "properties": {
           "contractAddresses": {
@@ -641,10 +992,11 @@
           "$ref": "#/components/schemas/EventFilter"
         },
         "maxItems": 5,
+        "minItems": 1,
         "type": "array"
       },
       "EventPage": {
-        "description": "One page of events returned by `getEvents`.\n\nTo fetch the next page, send the same query back with `cursor`\nset to the value returned here.  An empty `cursor` means the\nstream is exhausted in the requested direction.",
+        "description": "One page of events returned by `getEvents`.\n\nOpaque cursors continue one historical walk; an empty cursor ends it.\nFor restart rules, see the\n[pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).",
         "properties": {
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
@@ -658,11 +1010,11 @@
             "type": "array"
           },
           "latestBlock": {
-            "$ref": "#/components/schemas/BlockHeight",
-            "description": "Highest block height the indexer has processed at response time.\nCompare to last-seen heights to decide caught-up state."
+            "$ref": "#/components/schemas/DecimalBlockHeight",
+            "description": "Highest block height indexed at response time, not an application checkpoint."
           },
           "oldestBlock": {
-            "$ref": "#/components/schemas/BlockHeight",
+            "$ref": "#/components/schemas/DecimalBlockHeight",
             "description": "Oldest block height the indexer still retains data for at\nresponse time.  Today always 0; meaningful once retention/\npruning lands."
           }
         },
@@ -675,6 +1027,7 @@
         "type": "object"
       },
       "EventQuery": {
+        "additionalProperties": false,
         "description": "`getEvents` request. A candidate event matches the query iff it\nmatches at least one `EventFilter` in `filters` (OR across filters,\nAND within each filter).",
         "properties": {
           "anchor": {
@@ -682,10 +1035,11 @@
           },
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
-            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off; `order` and `anchor` in the request are\nignored when a cursor is supplied — the cursor carries them."
+            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off. `order` and `anchor` remain required request fields,\nbut the cursor supplies continuation state. Keep the same filters.\nA cursor continues one historical walk, not blocks added after it began."
           },
           "filters": {
-            "$ref": "#/components/schemas/EventFilterList"
+            "$ref": "#/components/schemas/EventFilterList",
+            "description": "At least one filter is required. Empty lists are not all-contract scans."
           },
           "limit": {
             "description": "Values above the server's per-page cap (default 200) are\nrejected as invalid params; `0` means server default (50).",
@@ -707,6 +1061,7 @@
         "type": "object"
       },
       "EventTopicFilter": {
+        "additionalProperties": false,
         "description": "Positional topic filter. For each topic position (0, 1, 2):\n  - An empty list means \"match anything at this position.\"\n  - A non-empty list means \"match if the event's topic at this\n    position is in this list.\" OR within a position, AND across\n    positions.\n\nPartial match: a filter that specifies only topic0 matches events\nwith more topics. Extra topics on the event past the filter's\nspecified positions are ignored. (This is the ethereum getLogs /\nstellar-rpc post-#358 semantics.)",
         "properties": {
           "topic0": {
@@ -821,7 +1176,96 @@
           }
         ]
       },
+      "ExecutionConfig": {
+        "description": "Rules fetched during this request, without stale-cache fallback.\nApply to execution following `observedTip`; later inclusion can use newer rules.",
+        "properties": {
+          "configHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "description": "Consensus commitment to the stated configuration and storage model."
+          },
+          "effectiveLimits": {
+            "$ref": "#/components/schemas/NetworkConfigParams",
+            "description": "Runtime-resolved limits; omissions are unavailable, never zero."
+          },
+          "observedTip": {
+            "$ref": "#/components/schemas/ChainTip",
+            "description": "Committed snapshot read together with these rules."
+          },
+          "storageCosts": {
+            "$ref": "#/components/schemas/StorageCosts",
+            "description": "Active storage collateral schedule in native-HOG base units."
+          }
+        },
+        "required": [
+          "observedTip",
+          "configHash",
+          "effectiveLimits",
+          "storageCosts"
+        ],
+        "type": "object"
+      },
+      "FundAccountRequest": {
+        "additionalProperties": false,
+        "description": "Public parameters for local-only `groundhog_fundAccount`.",
+        "properties": {
+          "clientNonce": {
+            "$ref": "#/components/schemas/ClientNonce",
+            "description": "Retained caller-owned idempotency nonce."
+          },
+          "faucet": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Expected random faucet identity; refuses a different chain at the same URL."
+          },
+          "rawAmount": {
+            "description": "Positive canonical decimal amount in raw HOG units.",
+            "type": "string"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Native HOG transfer recipient."
+          }
+        },
+        "required": [
+          "recipient",
+          "rawAmount",
+          "clientNonce",
+          "faucet"
+        ],
+        "type": "object"
+      },
+      "FundAccountResponse": {
+        "description": "Authoritatively admitted (or already committed) local funding submission.",
+        "properties": {
+          "rawAmount": {
+            "description": "Exact requested raw HOG amount.",
+            "type": "string"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Recipient of the retained transfer."
+          },
+          "signedTransaction": {
+            "$ref": "#/components/schemas/HexBytes",
+            "description": "Signed transaction retained before its first broadcast."
+          },
+          "txHash": {
+            "$ref": "#/components/schemas/TxHash",
+            "description": "Canonical body hash for status and receipt queries."
+          }
+        },
+        "required": [
+          "recipient",
+          "rawAmount",
+          "txHash",
+          "signedTransaction"
+        ],
+        "type": "object"
+      },
       "Hex0x_ContractAddress": {
+        "pattern": "^0x[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "Hex0x_Ed25519PublicKey": {
         "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
       },
@@ -841,7 +1285,7 @@
         "description": "Event with provenance — includes which tx emitted it.\nReturned by `getEvents`.",
         "properties": {
           "blockHeight": {
-            "$ref": "#/components/schemas/BlockHeight",
+            "$ref": "#/components/schemas/DecimalBlockHeight",
             "description": "Block height at which the event was emitted."
           },
           "event": {
@@ -1037,6 +1481,147 @@
           }
         ]
       },
+      "SchedulerTransactionError": {
+        "additionalProperties": false,
+        "description": "A scheduler processing failure. The source identifies the protocol enum of `code`.",
+        "properties": {
+          "code": {
+            "description": "`AuthErrorCode`, `SchedulerErrorCode`, or `ExecResult` for the indicated source.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SchedulerTransactionErrorSource",
+            "description": "Subsystem that reported the failure."
+          }
+        },
+        "required": [
+          "source",
+          "code"
+        ],
+        "type": "object"
+      },
+      "SchedulerTransactionErrorSource": {
+        "description": "Subsystem whose protocol error enum supplies a scheduler failure code.",
+        "oneOf": [
+          {
+            "const": "auth",
+            "description": "Authentication subsystem (`AuthErrorCode`).",
+            "type": "string"
+          },
+          {
+            "const": "scheduler",
+            "description": "Mempool scheduler (`SchedulerErrorCode`).",
+            "type": "string"
+          },
+          {
+            "const": "executor",
+            "description": "Executor (`ExecResult`).",
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "A source added by a newer server.",
+            "type": "string"
+          }
+        ]
+      },
+      "ServerLimits": {
+        "description": "Request bounds this JSON-RPC endpoint enforces. Returned by\n`serverLimits`.\n\nThese are operator settings local to the serving endpoint, not consensus\nparameters: two endpoints for the same chain may report different values,\nand a value may change when the endpoint is reconfigured. Consensus-checked\nexecution parameters are reported by `chainConfig`.",
+        "properties": {
+          "maxCursorBytes": {
+            "$ref": "#/components/schemas/DecimalU64",
+            "description": "Longest opaque pagination cursor accepted, in bytes."
+          },
+          "maxEventsPerPage": {
+            "description": "Largest `limit` a `getEvents` page may ask for.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxTransactionsPerPage": {
+            "description": "Largest `limit` a `getTransactionsByAddress` page may ask for.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxViewCalldataBytes": {
+            "$ref": "#/components/schemas/DecimalU64",
+            "description": "Largest `view` calldata, in bytes."
+          },
+          "maxViewGas": {
+            "$ref": "#/components/schemas/DecimalU64",
+            "description": "Largest `gasLimit` a `view` request may ask for, and the budget a view\nruns under when it names none."
+          },
+          "viewBatch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ViewBatchLimits"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent on servers that do not advertise shared-read limits."
+          }
+        },
+        "required": [
+          "maxViewGas",
+          "maxViewCalldataBytes",
+          "maxEventsPerPage",
+          "maxTransactionsPerPage",
+          "maxCursorBytes"
+        ],
+        "type": "object"
+      },
+      "StorageCosts": {
+        "description": "Integer native-HOG base units (10,000,000 per HOG), encoded as decimal strings.\nStorage collateral is separate from gas capacity. A first credit pays the\nrecipient's balance deposit; code storage is charged to the deployed address.",
+        "properties": {
+          "authPerKeyCost": {
+            "description": "Added to the ordinary base for each authorization key.",
+            "type": "string"
+          },
+          "balanceCost": {
+            "description": "Entire balance-item deposit, deducted once from the first credit (no ordinary base).",
+            "type": "string"
+          },
+          "baseContractDeploymentCost": {
+            "description": "RV32 deployment base; does not include the new address's balance deposit.",
+            "type": "string"
+          },
+          "baseDataItemCost": {
+            "description": "Base charge for an ordinary data item; balance and deployment have separate bases.",
+            "type": "string"
+          },
+          "bytestringCostPerByte": {
+            "description": "Added to the ordinary base for each byte of a bytestring value (u32).",
+            "type": "string"
+          },
+          "contractDeploymentCostPerByte": {
+            "description": "Added per byte of ContractBlob.data, including the full RV32 artifact.",
+            "type": "string"
+          },
+          "rcqCostPerEntry": {
+            "description": "Added to the ordinary base per live queue entry; an empty queue costs zero.",
+            "type": "string"
+          },
+          "replayCacheCostPerEntry": {
+            "description": "Added to the ordinary base per replay-cache entry, charged to its owner.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "baseDataItemCost",
+          "bytestringCostPerByte",
+          "baseContractDeploymentCost",
+          "contractDeploymentCostPerByte",
+          "authPerKeyCost",
+          "rcqCostPerEntry",
+          "replayCacheCostPerEntry",
+          "balanceCost"
+        ],
+        "type": "object"
+      },
       "StorageItemInfo": {
         "description": "Latest-committed value at a single storage location, presented as\na tagged union so machine consumers can switch on `kind` without\nrunning an XDR codec for the common cases.",
         "oneOf": [
@@ -1077,7 +1662,7 @@
             "type": "object"
           },
           {
-            "description": "Authorization data is registered at this address.  Presence\nindicator only — querying signer details requires a contract\ninvocation.",
+            "description": "Authorization data is registered at this address.  Presence\nindicator only; `getAddressAuthData` returns the signer set.",
             "properties": {
               "kind": {
                 "const": "authData",
@@ -1171,7 +1756,7 @@
         "description": "Outcome of reading one storage location at the latest committed\nsnapshot.  `block_height` is always set to the snapshot the read\nwas performed against, even when no item exists at the requested\nkey — that lets callers compare against `chainTip` to gauge\nfreshness.",
         "properties": {
           "blockHeight": {
-            "$ref": "#/components/schemas/BlockHeight",
+            "$ref": "#/components/schemas/DecimalBlockHeight",
             "description": "Committed block height the snapshot was read at."
           },
           "item": {
@@ -1191,12 +1776,6 @@
         ],
         "type": "object"
       },
-      "TimePoint": {
-        "description": "uint64_t, Unix time as nanoseconds elapsed since\nJanuary 1, 1970 UTC",
-        "format": "uint64",
-        "minimum": 0,
-        "type": "integer"
-      },
       "Topic": {
         "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
@@ -1209,8 +1788,67 @@
         "maxItems": 16,
         "type": "array"
       },
+      "TransactionFailureCause": {
+        "description": "Why a recent proposal attempt failed. This diagnostic is advisory, not final.",
+        "oneOf": [
+          {
+            "description": "Two-phase commit could not apply a storage delta.",
+            "properties": {
+              "conflict": {
+                "$ref": "#/components/schemas/ConflictDiagnostic"
+              },
+              "kind": {
+                "const": "dbConflict",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "conflict"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The executor refused a contract attachment before execution.",
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/ContractRejectCode"
+              },
+              "contractIndex": {
+                "description": "Position in the transaction's contracts-to-deploy list.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "contractRejected",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "contractIndex",
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A cause added by a newer server.",
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "TransactionReceipt": {
-        "description": "Full transaction receipt. Returned by `getTransactionReceipt`.\n\nDesign notes:\n- `status` maps from `TxEventLog.exec_result` in the indexer.\n  Committed blocks include both successful and deterministically-failed\n  txs (reverts, OOG). If a receipt exists, the tx was committed.\n- No `blockHash`: SCP instant finality, height is sufficient.\n- No `gasUsed`/`gasPrice`, `transactionIndex`, `logsBloom`.\n\n`storage_delta` (net HOG locked/unlocked) is deferred — hogd's\n`TxInfo` doesn't include it. Will be added when indexer support lands.",
+        "description": "Full transaction receipt. Returned by `getTransactionReceipt`.\n\nDesign notes:\n- `status` maps from `TxEventLog.exec_result` in the indexer.\n  Committed blocks include both successful and deterministically-failed\n  txs (reverts, OOG). If a receipt exists, the tx was committed.\n- No `blockHash`: SCP instant finality, height is sufficient.\n- No `gasPrice`, `transactionIndex`, `logsBloom`.\n- `gasUsed` is committed by consensus as part of the transaction's event\n  log (`TxEventLog.gas_consumed`).\n\n`storage_delta` (net HOG locked/unlocked) is deferred — hogd's\n`TxInfo` doesn't include it. Will be added when indexer support lands.",
         "properties": {
           "abortData": {
             "anyOf": [
@@ -1230,8 +1868,12 @@
             },
             "type": "array"
           },
+          "gasUsed": {
+            "$ref": "#/components/schemas/DecimalU64",
+            "description": "Gas the transaction consumed: the root frame, every frame it invoked,\nand the pre-execution validation of attached contracts. On an\nout-of-gas fault it equals the transaction's gas limit.\n\nCommitted by consensus as part of the event log, so every node\nreports the same figure."
+          },
           "height": {
-            "$ref": "#/components/schemas/BlockHeight",
+            "$ref": "#/components/schemas/DecimalBlockHeight",
             "description": "Block height at which this transaction was committed."
           },
           "returnData": {
@@ -1258,7 +1900,8 @@
           "txHash",
           "height",
           "status",
-          "events"
+          "events",
+          "gasUsed"
         ],
         "type": "object"
       },
@@ -1266,7 +1909,7 @@
         "description": "Lightweight reference to a transaction: its hash plus the block it\nexecuted in.  Hydrate the full body via `getTransactionReceipt`.",
         "properties": {
           "height": {
-            "$ref": "#/components/schemas/BlockHeight"
+            "$ref": "#/components/schemas/DecimalBlockHeight"
           },
           "txHash": {
             "$ref": "#/components/schemas/TxHash"
@@ -1279,18 +1922,18 @@
         "type": "object"
       },
       "TransactionRefPage": {
-        "description": "`getTransactionsByAddress` response: transaction refs in the\nrequested order.",
+        "description": "`getTransactionsByAddress` response: transaction refs in the\nrequested order.\n\nOpaque cursors continue one historical walk; an empty cursor ends it.\nFor restart rules, see the\n[pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).",
         "properties": {
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
             "description": "Empty when the stream has been exhausted in the requested\ndirection.  Non-empty: pass back in the next call's `cursor`\nargument."
           },
           "latestBlock": {
-            "$ref": "#/components/schemas/BlockHeight",
-            "description": "Highest block height the indexer has processed at response time."
+            "$ref": "#/components/schemas/DecimalBlockHeight",
+            "description": "Highest block height indexed at response time, not an application checkpoint."
           },
           "oldestBlock": {
-            "$ref": "#/components/schemas/BlockHeight",
+            "$ref": "#/components/schemas/DecimalBlockHeight",
             "description": "Oldest block height the indexer still retains data for at\nresponse time."
           },
           "refs": {
@@ -1310,7 +1953,7 @@
         "type": "object"
       },
       "TransactionStatus": {
-        "description": "Lightweight transaction status from the mempool and indexer.\n\nPending reports mempool presence; Committed reports an indexed record.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
+        "description": "Lightweight transaction status from the mempool and indexer.\n\nPending reports mempool presence; Committed reports scheduler success or an indexed record.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
         "oneOf": [
           {
             "description": "In the mempool, not yet in a committed block.",
@@ -1329,7 +1972,8 @@
             "description": "Included in a committed block. SCP finality = done.\nNo `block_hash`: SCP instant finality means no forks/reorgs,\nso height alone is sufficient for confirmation.",
             "properties": {
               "height": {
-                "$ref": "#/components/schemas/BlockHeight"
+                "$ref": "#/components/schemas/DecimalBlockHeight",
+                "description": "Committed block height supplied by the scheduler or indexer."
               },
               "status": {
                 "const": "committed",
@@ -1360,15 +2004,15 @@
             "type": "object"
           },
           {
-            "description": "No committed record, but the transaction failed\nnondeterministically during two-phase commit within the last few\nblocks and the indexer still holds the diagnostic.\n\nBest-effort and advisory: reports are dropped freely under load,\nonly the proposing node's indexers hear them, and a later retry\nof the same transaction may still commit (at which point\n`Committed` wins). Absence of this status proves nothing.",
+            "description": "No committed record, but a recent proposal attempt failed and the\nindexer still holds its diagnostic. This includes storage conflicts\nduring two-phase commit and contract attachments refused before execution.\n\nBest-effort and advisory: reports are dropped freely under load,\nonly the proposing node's indexers hear them, and a later retry\nof the same transaction may still commit (at which point\n`Committed` wins). Absence of this status proves nothing.",
             "properties": {
               "attemptHeight": {
-                "$ref": "#/components/schemas/BlockHeight",
+                "$ref": "#/components/schemas/DecimalBlockHeight",
                 "description": "Executing block height of the failed attempt."
               },
-              "conflict": {
-                "$ref": "#/components/schemas/ConflictDiagnostic",
-                "description": "First conflicting storage op reported for the failed attempt."
+              "cause": {
+                "$ref": "#/components/schemas/TransactionFailureCause",
+                "description": "First storage conflict or refused contract attachment."
               },
               "status": {
                 "const": "recentFailure",
@@ -1378,12 +2022,46 @@
             "required": [
               "status",
               "attemptHeight",
-              "conflict"
+              "cause"
             ],
             "type": "object"
           },
           {
-            "description": "Not found in mempool or indexer.",
+            "description": "Scheduler processing failed; resubmitting the transaction may succeed.",
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/SchedulerTransactionError"
+              },
+              "status": {
+                "const": "retry",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Scheduler processing failed permanently; modify the transaction before resubmitting.",
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/SchedulerTransactionError"
+              },
+              "status": {
+                "const": "dropped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Not found in the scheduler's retained outcomes or indexer.",
             "properties": {
               "status": {
                 "const": "unknown",
@@ -1460,9 +2138,236 @@
         ],
         "type": "object"
       },
+      "ViewAuthClaim": {
+        "description": "Authorization assumed during sandboxed execution. Signatures are not checked;\ncontracts still inspect and validate this claim through their normal code.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "allowedKeys": {
+                "description": "Bitmap of source-address authorization keys allowed by this claim.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "sourceAddress",
+                "type": "string"
+              },
+              "requiredWeight": {
+                "description": "Required source-address authorization weight assumed by this claim.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "allowedKeys",
+              "requiredWeight"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "pubkeySignature",
+                "type": "string"
+              },
+              "nonce": {
+                "$ref": "#/components/schemas/DecimalU64"
+              },
+              "publicKey": {
+                "$ref": "#/components/schemas/Hex0x_Ed25519PublicKey",
+                "description": "Ed25519 public key (32 bytes). This is public information, not a signature."
+              }
+            },
+            "required": [
+              "kind",
+              "publicKey",
+              "nonce"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ViewBatchLimits": {
+        "description": "Endpoint limits for one shared-snapshot read. Per-call view limits also apply.",
+        "properties": {
+          "maxCalldataBytes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxCalls": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxGas": {
+            "$ref": "#/components/schemas/DecimalU64"
+          },
+          "maxResponseBytes": {
+            "description": "Maximum encoded backend result including events, before JSON encoding.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timeoutMs": {
+            "$ref": "#/components/schemas/DecimalU64",
+            "description": "Upper bound on the response wait; transport and backend limits also apply."
+          }
+        },
+        "required": [
+          "maxCalls",
+          "maxCalldataBytes",
+          "maxGas",
+          "maxResponseBytes",
+          "timeoutMs"
+        ],
+        "type": "object"
+      },
+      "ViewBatchRequest": {
+        "additionalProperties": false,
+        "description": "Independent simulations against one committed snapshot, in request order.",
+        "properties": {
+          "calls": {
+            "description": "Nonempty calls bounded by the endpoint's advertised batch limits.",
+            "items": {
+              "$ref": "#/components/schemas/ViewCall"
+            },
+            "type": "array"
+          },
+          "minHeight": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecimalBlockHeight"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Freshness floor on the selected snapshot. Does not wait or request a refresh."
+          }
+        },
+        "required": [
+          "calls"
+        ],
+        "type": "object"
+      },
+      "ViewBatchResponse": {
+        "description": "Ordered simulation results from a single committed snapshot.",
+        "properties": {
+          "height": {
+            "$ref": "#/components/schemas/DecimalBlockHeight"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ViewCallResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "height",
+          "results"
+        ],
+        "type": "object"
+      },
+      "ViewCall": {
+        "additionalProperties": false,
+        "description": "One batch entry. Freshness belongs to the group, never to an individual call.",
+        "properties": {
+          "authClaim": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ViewAuthClaim"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional assumed authorization for this independent call only."
+          },
+          "calldata": {
+            "$ref": "#/components/schemas/HexBytes"
+          },
+          "caller": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hex0x_ContractAddress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contract": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+          },
+          "entrypoint": {
+            "$ref": "#/components/schemas/HexBytes",
+            "description": "Contract entrypoint id. Must be exactly 8 bytes."
+          },
+          "gasLimit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecimalU64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional per-call gas budget. The endpoint's per-call and aggregate limits apply."
+          }
+        },
+        "required": [
+          "contract",
+          "entrypoint",
+          "calldata"
+        ],
+        "type": "object"
+      },
+      "ViewCallResult": {
+        "description": "One independent simulation's output and events; writes never reach another call.",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EmittedEvent"
+            },
+            "type": "array"
+          },
+          "gasUsed": {
+            "$ref": "#/components/schemas/DecimalU64",
+            "description": "Gas consumed by this independent simulation."
+          },
+          "output": {
+            "$ref": "#/components/schemas/RootInvocationOutput"
+          }
+        },
+        "required": [
+          "output",
+          "events",
+          "gasUsed"
+        ],
+        "type": "object"
+      },
       "ViewRequest": {
+        "additionalProperties": false,
         "description": "Request for sandboxed contract simulation against the latest committed state.",
         "properties": {
+          "authClaim": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ViewAuthClaim"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional assumed authorization; omission preserves the unauthenticated default."
+          },
           "calldata": {
             "$ref": "#/components/schemas/HexBytes",
             "description": "Opaque call input bytes."
@@ -1485,6 +2390,28 @@
           "entrypoint": {
             "$ref": "#/components/schemas/HexBytes",
             "description": "Contract entrypoint id. Must be exactly 8 bytes."
+          },
+          "gasLimit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecimalU64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional gas budget for the root invocation. Absent selects the\nserver's `maxViewGas` (see `serverLimits`); a value above it, or zero,\nis rejected as an invalid parameter. No gas is charged for a view."
+          },
+          "minHeight": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecimalBlockHeight"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Minimum committed snapshot height. Does not wait or force a refresh."
           }
         },
         "required": [
@@ -1504,8 +2431,12 @@
             },
             "type": "array"
           },
+          "gasUsed": {
+            "$ref": "#/components/schemas/DecimalU64",
+            "description": "Gas the invocation consumed: the root frame and every frame it\ninvoked. On an out-of-gas fault it equals the gas limit the view ran\nwith. Matches the `gasUsed` a transaction with no attached contracts\nmaking the same invocation would report; out-of-gas is checked\nstrictly, so size a transaction's limit above this figure."
+          },
           "height": {
-            "$ref": "#/components/schemas/BlockHeight",
+            "$ref": "#/components/schemas/DecimalBlockHeight",
             "description": "Block height of the committed snapshot used for the view."
           },
           "output": {
@@ -1516,7 +2447,8 @@
         "required": [
           "output",
           "events",
-          "height"
+          "height",
+          "gasUsed"
         ],
         "type": "object"
       }
@@ -1524,7 +2456,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "5.3.0"
+    "version": "11.2.0"
   },
   "methods": [
     {
@@ -1662,7 +2594,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check (mempool -> indexer -> unknown). `unknown` is only returned after both the mempool and the indexer answered without a match; if the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
+      "summary": "Lightweight status check. Indexed commitment takes priority. Otherwise, return the scheduler's pending, committed, retry, or dropped outcome; an advisory indexer failure is returned only after a scheduler miss. Scheduler and indexed commitments include the actual block height, including block zero. `unknown` requires successful misses from both backends; failed lookups must not be interpreted as absence.",
       "tags": [
         {
           "name": "Core API"
@@ -1717,12 +2649,29 @@
       "name": "groundhog_chainConfig",
       "params": [],
       "result": {
-        "name": "NetworkConfigParams",
+        "name": "ChainConfig",
         "schema": {
-          "$ref": "#/components/schemas/NetworkConfigParams"
+          "$ref": "#/components/schemas/ChainConfig"
         }
       },
-      "summary": "The execution parameters the chain's network config states. Only stated parameters are reported; an unstated one is absent. Served from a tip reading refreshed at most once per cache window. Fails with `BackendUnavailable` when no reading is available or the config version is unreadable.",
+      "summary": "Stated execution parameters, plus an authoritative `execution` reading when supported. Top-level omissions mean unspecified. `execution` pairs resolved limits and storage prices with the committed tip observed during this request; it is never served from a stale cache. Stated fields come from the same fresh DB reading. Unavailable or unreadable readings fail with `BackendUnavailable`.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [],
+      "name": "groundhog_serverLimits",
+      "params": [],
+      "result": {
+        "name": "ServerLimits",
+        "schema": {
+          "$ref": "#/components/schemas/ServerLimits"
+        }
+      },
+      "summary": "Request bounds this endpoint enforces, such as the `view` gas ceiling. These are local operator settings, not consensus parameters: they can differ between endpoints serving the same chain. Answered without contacting a backend.",
       "tags": [
         {
           "name": "Core API"
@@ -1773,7 +2722,7 @@
           "name": "height",
           "required": true,
           "schema": {
-            "$ref": "#/components/schemas/BlockHeight"
+            "$ref": "#/components/schemas/DecimalBlockHeight"
           }
         }
       ],
@@ -1815,11 +2764,9 @@
       "name": "groundhog_pendingTransactionCount",
       "params": [],
       "result": {
-        "name": "u64",
+        "name": "Decimal",
         "schema": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/components/schemas/DecimalU64"
         }
       },
       "summary": "Number of transactions in the mempool.",
@@ -2018,6 +2965,50 @@
           "$ref": "#/components/errors/NotImplemented"
         }
       ],
+      "name": "groundhog_getAddressAuthData",
+      "params": [
+        {
+          "name": "address",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+          }
+        }
+      ],
+      "result": {
+        "name": "AddressAuthDataResponse",
+        "schema": {
+          "$ref": "#/components/schemas/AddressAuthDataResponse"
+        }
+      },
+      "summary": "Authorization configuration (signer keys, their weights, and the required weight) registered at any address, at the latest committed snapshot. `authData` is `null` when the address has none; such an address accepts only pubkey-signature claims, and one with auth data only source-address claims.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/ViewHeightUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_view",
       "params": [
         {
@@ -2034,7 +3025,51 @@
           "$ref": "#/components/schemas/ViewResponse"
         }
       },
-      "summary": "Execute a sandboxed contract simulation against committed state.",
+      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against. `gasLimit` is optional: absent runs under the endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is rejected as an invalid parameter. Optional `minHeight` requires that execution snapshot to be at least the requested committed height. An older result returns `ViewHeightUnavailable`. This is a freshness floor, not a historical selector, wait, or refresh request. Optional `authClaim` is assumed without signature verification; contract checks still run.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/ViewHeightUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_viewBatch",
+      "params": [
+        {
+          "name": "request",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ViewBatchRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "ViewBatchResponse",
+        "schema": {
+          "$ref": "#/components/schemas/ViewBatchResponse"
+        }
+      },
+      "summary": "Simulate independent calls against one committed snapshot. Results preserve input order and include return, abort, or fault with events. Calls do not observe each other's writes. Abandoned snapshots retry the whole group, up to three attempts. There is no partial success or automatic chunking. Operator limits are advertised by `serverLimits`. The response deadline is strict, but running backend work may outlive it. The minimum height is a freshness floor, not a wait or refresh request. The returned height is committed H, with execution context H+1. Each entry may supply its own optional `authClaim`, independently of caller.",
       "tags": [
         {
           "name": "Core API"
@@ -2096,6 +3131,50 @@
       "tags": [
         {
           "name": "Airdrop API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/LocalFundingUnresolved"
+        },
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/TxRejected"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        }
+      ],
+      "name": "groundhog_fundAccount",
+      "params": [
+        {
+          "name": "request",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/FundAccountRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "FundAccountResponse",
+        "schema": {
+          "$ref": "#/components/schemas/FundAccountResponse"
+        }
+      },
+      "summary": "Submit an explicit native HOG transfer using a retained caller nonce.  Acceptance does not imply execution success. Observe the returned hash through the ordinary status/receipt APIs. Retry an uncertain response with exactly the same request; retain its chain identity and amount. Hosted servers return standard JSON-RPC `Method not found`.",
+      "tags": [
+        {
+          "name": "Local Funding API"
         }
       ]
     }

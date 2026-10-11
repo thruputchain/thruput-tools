@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -17,9 +18,12 @@ use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
+use groundhog_signing::default_wallet::{
+    BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction,
+};
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
-    build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
+    DEFAULT_TX_GAS_LIMIT, LocalSigner, PubkeyAccount, SignTransactionParams,
+    sign_and_encode_transaction_hex, transaction_hash,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -90,9 +94,9 @@ impl AirdropService {
         }
         let key = AirdropAttemptKey {
             network_id: request.network_id.clone(),
-            genesis_hash: hex_string(request.genesis_hash.0),
-            recipient: hex_string(request.recipient.0),
-            client_nonce: hex_encode(request.client_nonce.as_bytes()),
+            genesis_hash: prefixed_hex(request.genesis_hash.0),
+            recipient: prefixed_hex(request.recipient.0),
+            client_nonce: hex::encode(request.client_nonce.as_bytes()),
         };
         let now = SystemTime::now();
         if let Err(error) = self.policy_store.expire(now) {
@@ -116,6 +120,7 @@ impl AirdropService {
             status: AirdropAttemptStatus::Pending,
             execution_id: 0,
             tx_hash: None,
+            transaction: None,
             height: None,
             error_code: None,
             created_at: now,
@@ -126,7 +131,7 @@ impl AirdropService {
         };
         let quota_checks = [
             QuotaCheck {
-                key: QuotaKey::AirdropRecipient(hex_string(request.recipient.0)),
+                key: QuotaKey::AirdropRecipient(prefixed_hex(request.recipient.0)),
                 max: 1,
                 window: Duration::from_secs(self.policy_config.airdrop.recipient_cooldown_secs),
             },
@@ -379,54 +384,62 @@ impl AirdropService {
         mut attempt: AirdropAttempt,
     ) -> Response {
         let key = attempt.key.clone();
-        attempt.error_code = None;
-        match self.submitter.submit_airdrop(request.recipient).await {
-            Ok(accepted) => {
-                let amount_matches =
-                    accepted.raw_amount.parse::<u128>().ok() == Some(self.submitter.raw_amount());
-                attempt.tx_hash = Some(hex_string(accepted.tx_hash.0.0));
-                // An accepted transaction must not age out while its receipt is unresolved;
-                // otherwise the same idempotency key could submit a second transaction.
-                attempt.expires_at = None;
-                if !amount_matches {
-                    attempt.error_code = Some(AIRDROP_SUBMIT_AMOUNT_MISMATCH.into());
-                    attempt.status = AirdropAttemptStatus::Pending;
-                }
-                attempt.updated_at = SystemTime::now();
-                let attempt = match self.replace_executing_attempt(attempt) {
-                    Ok(attempt) => attempt,
-                    Err(error) => {
-                        return self.replace_attempt_error_response(request.recipient, &key, error);
-                    }
-                };
-                if !amount_matches {
-                    return submit_amount_mismatch_response();
-                }
-                self.poll_airdrop_attempt(request.recipient, attempt).await
-            }
+        let prepared = match self.submitter.prepare_airdrop(request.recipient).await {
+            Ok(prepared) => prepared,
             Err(error) => {
-                let submission_outcome_is_ambiguous =
-                    matches!(&error, AirdropSubmitError::Submit(_));
-                attempt.status = if submission_outcome_is_ambiguous {
-                    AirdropAttemptStatus::Ambiguous
-                } else {
-                    AirdropAttemptStatus::FailedRetryable
-                };
-                attempt.error_code = Some(airdrop_error_code(&error).into());
-                let now = SystemTime::now();
-                attempt.updated_at = now;
-                attempt.expires_at = (!submission_outcome_is_ambiguous).then(|| {
-                    now.checked_add(Duration::from_secs(
-                        self.policy_config.airdrop.recipient_cooldown_secs,
-                    ))
-                    .unwrap_or(now)
-                });
-                match self.replace_executing_attempt(attempt) {
-                    Ok(_) => error.into_response(),
-                    Err(replace_error) => {
-                        self.replace_attempt_error_response(request.recipient, &key, replace_error)
-                    }
-                }
+                attempt.status = AirdropAttemptStatus::FailedRetryable;
+                attempt.expires_at = terminal_attempt_expiry(
+                    SystemTime::now(),
+                    self.policy_config.airdrop.recipient_cooldown_secs,
+                );
+                return self.finish_airdrop_error(request.recipient, attempt, error);
+            }
+        };
+        let amount_matches =
+            prepared.raw_amount.parse::<u128>().ok() == Some(self.submitter.raw_amount());
+        attempt.tx_hash = Some(prefixed_hex(prepared.tx_hash.0.0));
+        attempt.transaction = Some(prepared.clone());
+        attempt.error_code = None;
+        attempt.expires_at = None;
+        attempt.updated_at = SystemTime::now();
+        if !amount_matches {
+            attempt.error_code = Some(AIRDROP_SUBMIT_AMOUNT_MISMATCH.into());
+            attempt.status = AirdropAttemptStatus::FailedTerminal;
+            attempt.expires_at = terminal_attempt_expiry(
+                attempt.updated_at,
+                self.policy_config.airdrop.recipient_cooldown_secs,
+            );
+        }
+        // Retain the original identity before any broadcast, including a lost response.
+        let mut attempt = match self.replace_executing_attempt(attempt) {
+            Ok(attempt) => attempt,
+            Err(error) => {
+                return self.replace_attempt_error_response(request.recipient, &key, error);
+            }
+        };
+        if !amount_matches {
+            return submit_amount_mismatch_response();
+        }
+        if let Err(error) = self.submitter.submit_airdrop(&prepared, false).await {
+            attempt.status = AirdropAttemptStatus::Pending;
+            return self.finish_airdrop_error(request.recipient, attempt, error);
+        }
+        self.poll_airdrop_attempt(request.recipient, attempt).await
+    }
+
+    fn finish_airdrop_error(
+        &self,
+        recipient: ContractAddress,
+        mut attempt: AirdropAttempt,
+        error: AirdropSubmitError,
+    ) -> Response {
+        let key = attempt.key.clone();
+        attempt.error_code = Some(airdrop_error_code(&error).into());
+        attempt.updated_at = SystemTime::now();
+        match self.replace_executing_attempt(attempt) {
+            Ok(_) => error.into_response(),
+            Err(replace_error) => {
+                self.replace_attempt_error_response(recipient, &key, replace_error)
             }
         }
     }
@@ -608,6 +621,30 @@ impl AirdropService {
         }
     }
 
+    async fn retry_airdrop_attempt(
+        &self,
+        recipient: ContractAddress,
+        mut attempt: AirdropAttempt,
+        missing_evidence_error: AirdropSubmitError,
+    ) -> Response {
+        let key = attempt.key.clone();
+        let result = match &attempt.transaction {
+            Some(prepared) => self.submitter.submit_airdrop(prepared, true).await,
+            None => Err(missing_evidence_error),
+        };
+        attempt.status = AirdropAttemptStatus::Pending;
+        attempt.expires_at = None;
+        attempt.updated_at = SystemTime::now();
+        if let Err(error) = result {
+            return self.finish_airdrop_error(recipient, attempt, error);
+        }
+        attempt.error_code = None;
+        match self.replace_executing_attempt(attempt) {
+            Ok(attempt) => response_from_attempt(StatusCode::ACCEPTED, recipient, attempt),
+            Err(error) => self.replace_attempt_error_response(recipient, &key, error),
+        }
+    }
+
     async fn poll_airdrop_attempt(
         &self,
         recipient: ContractAddress,
@@ -662,12 +699,15 @@ impl AirdropService {
                     Err(error) => self.replace_attempt_error_response(recipient, &key, error),
                 }
             }
-            Err(AirdropSubmitError::Poll(
-                groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
-                    status: TransactionStatus::Invalid { .. },
-                    ..
-                },
-            )) => {
+            Err(
+                error @ AirdropSubmitError::Poll(
+                    groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                        status:
+                            TransactionStatus::Invalid { .. } | TransactionStatus::Dropped { .. },
+                        ..
+                    },
+                ),
+            ) => {
                 attempt.status = AirdropAttemptStatus::FailedTerminal;
                 attempt.error_code = Some("airdrop_transaction_failed".into());
                 let now = SystemTime::now();
@@ -677,10 +717,18 @@ impl AirdropService {
                     self.policy_config.airdrop.recipient_cooldown_secs,
                 );
                 match self.replace_executing_attempt(attempt) {
-                    Ok(_) => AirdropSubmitError::TransactionFailed { tx_hash }.into_response(),
+                    Ok(_) => error.into_response(),
                     Err(error) => self.replace_attempt_error_response(recipient, &key, error),
                 }
             }
+            Err(
+                error @ AirdropSubmitError::Poll(
+                    groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                        status: TransactionStatus::Retry { .. },
+                        ..
+                    },
+                ),
+            ) => self.retry_airdrop_attempt(recipient, attempt, error).await,
             Err(AirdropSubmitError::Poll(
                 groundhog_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout { .. },
             )) => {
@@ -693,14 +741,7 @@ impl AirdropService {
             }
             Err(error) => {
                 attempt.status = AirdropAttemptStatus::Pending;
-                attempt.error_code = Some(airdrop_error_code(&error).into());
-                attempt.updated_at = SystemTime::now();
-                match self.replace_executing_attempt(attempt) {
-                    Ok(_) => error.into_response(),
-                    Err(replace_error) => {
-                        self.replace_attempt_error_response(recipient, &key, replace_error)
-                    }
-                }
+                self.finish_airdrop_error(recipient, attempt, error)
             }
         }
     }
@@ -772,8 +813,7 @@ fn policy_store_error_response(error: &PolicyStoreError) -> Response {
             "airdrop_already_pending",
             "airdrop attempt is already in progress",
         ),
-        PolicyStoreError::AttemptNotFound
-        | PolicyStoreError::InvalidWalletCreateTransition { .. } => error_response(
+        PolicyStoreError::AttemptNotFound => error_response(
             StatusCode::CONFLICT,
             "airdrop_attempt_conflict",
             "airdrop attempt state changed while processing",
@@ -801,23 +841,8 @@ fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
     }
 }
 
-fn hex_string(bytes: impl AsRef<[u8]>) -> String {
-    format!("0x{}", hex_encode(bytes.as_ref()))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
-}
-
-fn parse_tx_hash(value: &str) -> Option<TxHash> {
-    let value = value.strip_prefix("0x").unwrap_or(value);
-    let bytes: [u8; 32] = hex::decode(value).ok()?.try_into().ok()?;
+pub(crate) fn parse_tx_hash(value: &str) -> Option<TxHash> {
+    let bytes = decode_fixed_hex(value).ok()?;
     Some(TxHash(SHA256Hash::from(
         groundhog_xdr::types::SHA256Hash::from(bytes),
     )))
@@ -849,24 +874,37 @@ pub trait AirdropSubmitter: Send + Sync + 'static {
     /// Raw HOG units transferred by this submitter.
     fn raw_amount(&self) -> u128;
 
-    /// Submit an airdrop to `recipient` and return once the transaction is accepted.
-    async fn submit_airdrop(
+    /// Build and sign an airdrop without broadcasting it.
+    async fn prepare_airdrop(
         &self,
         recipient: ContractAddress,
-    ) -> Result<AcceptedAirdrop, AirdropSubmitError>;
+    ) -> Result<PreparedAirdrop, AirdropSubmitError>;
+
+    /// Submit the retained transaction without signing a replacement.
+    /// Set `check_expiry` for replays; freshly prepared first submissions already
+    /// used the current tip. Return only after admission of the expected hash.
+    async fn submit_airdrop(
+        &self,
+        transaction: &PreparedAirdrop,
+        check_expiry: bool,
+    ) -> Result<(), AirdropSubmitError>;
 
     /// Poll a previously accepted airdrop transaction.
     async fn poll_airdrop(&self, tx_hash: TxHash)
     -> Result<TransactionReceipt, AirdropSubmitError>;
 }
 
-/// Faucet airdrop accepted by the transaction submission endpoint.
-#[derive(Debug, Clone)]
-pub struct AcceptedAirdrop {
+/// Faucet transaction ready to retain before broadcast.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedAirdrop {
     /// Raw HOG units reported by the submitter.
     pub raw_amount: String,
-    /// Submitted transaction hash.
+    /// Canonical transaction hash, computed before submission.
     pub tx_hash: TxHash,
+    /// Original signed transaction, encoded as hexadecimal.
+    pub signed_transaction: String,
+    /// Original transaction expiry; replay must not extend it.
+    pub block_expiry_height: i64,
 }
 
 /// Errors produced while submitting a faucet airdrop.
@@ -901,7 +939,26 @@ pub enum AirdropSubmitError {
 impl AirdropSubmitError {
     fn into_response(self) -> Response {
         match self {
-            Self::TransactionFailed { .. } => error_response(
+            Self::Poll(
+                groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                    status: TransactionStatus::Dropped { error },
+                    ..
+                },
+            ) => error_response(
+                StatusCode::BAD_GATEWAY,
+                "airdrop_transaction_failed",
+                format!(
+                    "airdrop transaction dropped: {:?} code {}",
+                    error.source, error.code
+                ),
+            ),
+            Self::TransactionFailed { .. }
+            | Self::Poll(
+                groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                    status: TransactionStatus::Invalid { .. },
+                    ..
+                },
+            ) => error_response(
                 StatusCode::BAD_GATEWAY,
                 "airdrop_transaction_failed",
                 "airdrop transaction did not commit successfully",
@@ -926,8 +983,6 @@ impl AirdropSubmitError {
 pub struct AirdropRuntimeConfig {
     /// Raw HOG units transferred for each airdrop request.
     pub raw_amount: u128,
-    /// Faucet wallet `doAction` entrypoint.
-    pub wallet_do_action_entrypoint: ContractEntrypointID,
     /// 32-byte faucet signing secret key.
     pub faucet_secret_key: Zeroizing<[u8; 32]>,
 }
@@ -936,10 +991,6 @@ impl std::fmt::Debug for AirdropRuntimeConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AirdropRuntimeConfig")
             .field("raw_amount", &self.raw_amount)
-            .field(
-                "wallet_do_action_entrypoint",
-                &self.wallet_do_action_entrypoint,
-            )
             .field("faucet_secret_key", &format_args!("<redacted>"))
             .finish()
     }
@@ -951,16 +1002,18 @@ pub enum AirdropRuntimeConfigError {
     /// The configured raw airdrop amount was missing, invalid, or zero.
     #[error("airdrop raw amount must be greater than zero")]
     EmptyAmount,
-    /// The configured wallet `doAction` entrypoint was not 8 bytes.
-    #[error("airdrop wallet doAction entrypoint must be 8 bytes, got {0}")]
-    InvalidDoActionEntrypoint(usize),
+    /// The native HOG transfer selector must be eight bytes.
+    #[error("native HOG transfer entrypoint must be 8 bytes, got {0}")]
+    InvalidTransferEntrypoint(usize),
+    /// The signing key must control the advertised native faucet account.
+    #[error("faucet wallet address does not match the signing key nonce-zero pubkey account")]
+    FaucetAddressMismatch,
 }
 
 impl AirdropRuntimeConfig {
     /// Validate wire-format config values into runtime airdrop config.
     pub fn from_wire(
         raw_amount: &str,
-        wallet_do_action_entrypoint: HexBytes,
         faucet_secret_key: Zeroizing<[u8; 32]>,
     ) -> Result<Self, AirdropRuntimeConfigError> {
         let raw_amount = raw_amount
@@ -968,14 +1021,8 @@ impl AirdropRuntimeConfig {
             .ok()
             .filter(|amount| *amount > 0)
             .ok_or(AirdropRuntimeConfigError::EmptyAmount)?;
-        let entrypoint_len = wallet_do_action_entrypoint.0.len();
-        let wallet_do_action_entrypoint: [u8; 8] = wallet_do_action_entrypoint
-            .0
-            .try_into()
-            .map_err(|_| AirdropRuntimeConfigError::InvalidDoActionEntrypoint(entrypoint_len))?;
         Ok(Self {
             raw_amount,
-            wallet_do_action_entrypoint: ContractEntrypointID::from(wallet_do_action_entrypoint),
             faucet_secret_key,
         })
     }
@@ -985,9 +1032,8 @@ pub struct RpcAirdropSubmitter {
     rpc_url: String,
     raw_amount: u128,
     network_hash: groundhog_xdr::types::NetworkHash,
-    faucet_wallet_address: groundhog_xdr::types::ContractAddress,
+    faucet_account: PubkeyAccount,
     faucet_signer: LocalSigner,
-    wallet_do_action_entrypoint: ContractEntrypointID,
     hog_token_address: groundhog_xdr::types::ContractAddress,
     hog_transfer_entrypoint: ContractEntrypointID,
 }
@@ -999,13 +1045,18 @@ impl RpcAirdropSubmitter {
         config: &AirdropRuntimeConfig,
         network_hash: groundhog_xdr::types::NetworkHash,
     ) -> Result<Self, AirdropRuntimeConfigError> {
+        let faucet_signer = LocalSigner::from_secret_key(*config.faucet_secret_key);
+        let faucet_account =
+            PubkeyAccount::from_public_key_bytes(faucet_signer.verifying_key_bytes(), 0);
+        if faucet_account.address() != descriptor.faucet.wallet_address.0 {
+            return Err(AirdropRuntimeConfigError::FaucetAddressMismatch);
+        }
         Ok(Self {
             rpc_url: descriptor.endpoints.rpc_url.clone(),
             raw_amount: config.raw_amount,
             network_hash,
-            faucet_wallet_address: descriptor.faucet.wallet_address.0,
-            faucet_signer: LocalSigner::from_secret_key(*config.faucet_secret_key),
-            wallet_do_action_entrypoint: config.wallet_do_action_entrypoint,
+            faucet_account,
+            faucet_signer,
             hog_token_address: descriptor.native_hog.token_address.0,
             hog_transfer_entrypoint: ContractEntrypointID::from(entrypoint_bytes(
                 &descriptor.native_hog.transfer_entrypoint,
@@ -1013,7 +1064,7 @@ impl RpcAirdropSubmitter {
         })
     }
 
-    async fn block_expiry_height(&self) -> Result<i64, AirdropSubmitError> {
+    async fn chain_height(&self) -> Result<i64, AirdropSubmitError> {
         let client = HttpClientBuilder::default()
             .build(&self.rpc_url)
             .map_err(|error| AirdropSubmitError::RpcConnect(error.to_string()))?;
@@ -1021,7 +1072,7 @@ impl RpcAirdropSubmitter {
             .chain_tip()
             .await
             .map_err(|error| AirdropSubmitError::ChainTip(error.to_string()))?;
-        Ok((*tip.height).saturating_add(DEFAULT_BLOCK_EXPIRY_OFFSET))
+        Ok(*tip.height)
     }
 }
 
@@ -1031,17 +1082,19 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
         self.raw_amount
     }
 
-    async fn submit_airdrop(
+    async fn prepare_airdrop(
         &self,
         recipient: ContractAddress,
-    ) -> Result<AcceptedAirdrop, AirdropSubmitError> {
-        let block_expiry_height = self.block_expiry_height().await?;
+    ) -> Result<PreparedAirdrop, AirdropSubmitError> {
+        let block_expiry_height = self
+            .chain_height()
+            .await?
+            .saturating_add(DEFAULT_BLOCK_EXPIRY_OFFSET);
         let transfer_calldata = encode_transfer_calldata(&recipient.0, self.raw_amount)?;
         let nonce = next_nonce()
             .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;
-        let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-            wallet_address: self.faucet_wallet_address,
-            wallet_entrypoint: self.wallet_do_action_entrypoint,
+        let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
+            account: &self.faucet_account,
             target_address: self.hog_token_address,
             target_entrypoint: self.hog_transfer_entrypoint,
             target_calldata: transfer_calldata.as_slice(),
@@ -1051,6 +1104,11 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
             nonce,
         })
         .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;
+        let tx_hash = TxHash(
+            transaction_hash(&tx)
+                .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?
+                .into(),
+        );
         let tx_hex = sign_and_encode_transaction_hex(
             tx,
             &self.faucet_signer,
@@ -1058,13 +1116,33 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
             &self.network_hash,
         )
         .map_err(|error| AirdropSubmitError::SignTransaction(error.to_string()))?;
-        let tx_hash = submit_transaction(&self.rpc_url, &tx_hex)
-            .await
-            .map_err(|error| AirdropSubmitError::Submit(error.to_string()))?;
-        Ok(AcceptedAirdrop {
+        Ok(PreparedAirdrop {
             raw_amount: self.raw_amount.to_string(),
             tx_hash,
+            signed_transaction: tx_hex,
+            block_expiry_height,
         })
+    }
+
+    async fn submit_airdrop(
+        &self,
+        transaction: &PreparedAirdrop,
+        check_expiry: bool,
+    ) -> Result<(), AirdropSubmitError> {
+        if check_expiry && self.chain_height().await? >= transaction.block_expiry_height {
+            return Err(AirdropSubmitError::Submit(
+                "retained transaction has expired; awaiting its original receipt".into(),
+            ));
+        }
+        let actual = submit_transaction(&self.rpc_url, &transaction.signed_transaction)
+            .await
+            .map_err(|error| AirdropSubmitError::Submit(error.to_string()))?;
+        if actual != transaction.tx_hash {
+            return Err(AirdropSubmitError::Submit(
+                "returned transaction hash differs from retained transaction".into(),
+            ));
+        }
+        Ok(())
     }
 
     async fn poll_airdrop(
@@ -1081,16 +1159,16 @@ fn entrypoint_bytes(entrypoint: &HexBytes) -> Result<[u8; 8], AirdropRuntimeConf
     let len = entrypoint.0.len();
     entrypoint
         .0
-        .clone()
+        .as_slice()
         .try_into()
-        .map_err(|_| AirdropRuntimeConfigError::InvalidDoActionEntrypoint(len))
+        .map_err(|_| AirdropRuntimeConfigError::InvalidTransferEntrypoint(len))
 }
 
 fn encode_transfer_calldata(
     recipient: &groundhog_xdr::types::ContractAddress,
     raw_amount: u128,
 ) -> Result<Vec<u8>, AirdropSubmitError> {
-    xdrs::cxs::encode(&(recipient, raw_amount))
+    groundhog_signing::native_hog_transfer_calldata(recipient, raw_amount)
         .map_err(|error| AirdropSubmitError::EncodeTransferCalldata(error.to_string()))
 }
 
@@ -1098,7 +1176,6 @@ fn encode_transfer_calldata(
 mod tests {
     use std::time::{Duration, SystemTime};
 
-    use groundhog_json_rpc_types::hex::HexBytes;
     use serde_json::json;
     use zeroize::Zeroizing;
 
@@ -1120,12 +1197,8 @@ mod tests {
 
     #[test]
     fn airdrop_runtime_config_debug_redacts_faucet_secret_key() {
-        let config = AirdropRuntimeConfig::from_wire(
-            "100000000",
-            HexBytes(vec![0x64; 8]),
-            Zeroizing::new([0xAB; 32]),
-        )
-        .expect("bug: runtime config should validate");
+        let config = AirdropRuntimeConfig::from_wire("100000000", Zeroizing::new([0xAB; 32]))
+            .expect("bug: runtime config should validate");
 
         let debug = format!("{config:?}");
 

@@ -1,0 +1,61 @@
+import { createServer } from "vite";
+import { checkDeployment, readDeployment } from "./deployment.mjs";
+import { onShutdown } from "./thruput.mjs";
+
+let server;
+onShutdown(async () => {
+  await server?.close();
+});
+
+try {
+  const config = await readDeployment();
+  await checkDeployment(config);
+  const rpcUrl = new URL(config.rpcUrl);
+  server = await createServer({
+    root: "web",
+    server: {
+      host: "127.0.0.1",
+      port: Number(process.env.PORT ?? 5173),
+      strictPort: true,
+      proxy: {
+        "/rpc": {
+          target: config.rpcUrl,
+          prependPath: false,
+          rewrite: () => rpcUrl.pathname + rpcUrl.search,
+        },
+      },
+    },
+    plugins: [
+      {
+        name: "local-counter-config",
+        configureServer(vite) {
+          vite.middlewares.use(
+            "/deployment.json",
+            async (_request, response) => {
+              response.setHeader("Content-Type", "application/json");
+              response.setHeader("Cache-Control", "no-store");
+              try {
+                const current = await readDeployment();
+                if (current.rpcUrl !== config.rpcUrl)
+                  throw new Error(
+                    "Deployment RPC endpoint changed. Restart npm run dev.",
+                  );
+                await checkDeployment(current);
+                response.end(JSON.stringify(current));
+              } catch (error) {
+                response.statusCode = 503;
+                response.end(JSON.stringify({ error: error.message }));
+              }
+            },
+          );
+        },
+      },
+    ],
+  });
+  await server.listen();
+  server.printUrls();
+} catch (error) {
+  console.error(`App startup failed: ${error.message}`);
+  await server?.close();
+  process.exitCode = 1;
+}

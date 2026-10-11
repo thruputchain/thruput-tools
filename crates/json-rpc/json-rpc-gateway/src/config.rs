@@ -10,55 +10,10 @@ use groundhog_json_rpc_types::{
     },
 };
 
-/// Indexer data connections (1..=256, default 16).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(try_from = "usize")]
-pub struct IndexerPoolSize(std::num::NonZeroUsize);
-
-impl IndexerPoolSize {
-    /// Return the validated connection count.
-    pub const fn get(self) -> usize {
-        self.0.get()
-    }
-}
-
-impl Default for IndexerPoolSize {
-    fn default() -> Self {
-        Self(std::num::NonZeroUsize::new(16).expect("bug: default indexer pool size is nonzero"))
-    }
-}
-
-impl TryFrom<usize> for IndexerPoolSize {
-    type Error = InvalidIndexerPoolSize;
-
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
-        match std::num::NonZeroUsize::new(value) {
-            Some(value) if value.get() <= 256 => Ok(Self(value)),
-            _ => Err(InvalidIndexerPoolSize),
-        }
-    }
-}
-
-impl FromStr for IndexerPoolSize {
-    type Err = InvalidIndexerPoolSize;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value
-            .parse::<usize>()
-            .map_err(|_| InvalidIndexerPoolSize)?
-            .try_into()
-    }
-}
-
-/// An indexer connection count outside the supported resource bound.
-#[derive(Debug, thiserror::Error)]
-#[error("indexer pool size must be in 1..=256")]
-pub struct InvalidIndexerPoolSize;
-
 // Total lookup admission is independent of the configurable execution width.
 pub(crate) const SCHEDULER_LOOKUP_MAX_OUTSTANDING: usize = 68;
 
-/// Scheduler lookup connections (1..=68, default 16).
+/// Scheduler lookup execution permits (1..=68, default 16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "usize")]
 pub struct SchedulerLookupPoolSize(std::num::NonZeroUsize);
@@ -101,10 +56,61 @@ impl FromStr for SchedulerLookupPoolSize {
     }
 }
 
-/// A scheduler lookup connection count outside the supported resource bound.
+/// A scheduler lookup execution permit count outside the supported resource bound.
 #[derive(Debug, thiserror::Error)]
 #[error("scheduler lookup pool size must be in 1..=68")]
 pub struct InvalidSchedulerLookupPoolSize;
+
+/// Most connections a single x23 data pool may open.
+pub(crate) const X23_MULTIPLEX_MAX_CONNECTIONS: usize = 64;
+
+/// Connections per x23 data pool (1..=[`X23_MULTIPLEX_MAX_CONNECTIONS`], default 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "usize")]
+pub struct X23MultiplexConnections(std::num::NonZeroUsize);
+
+impl X23MultiplexConnections {
+    /// Return the validated connection count.
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl Default for X23MultiplexConnections {
+    fn default() -> Self {
+        Self(
+            std::num::NonZeroUsize::new(4)
+                .expect("bug: default x23 multiplex connection count is nonzero"),
+        )
+    }
+}
+
+impl TryFrom<usize> for X23MultiplexConnections {
+    type Error = InvalidX23MultiplexConnections;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match std::num::NonZeroUsize::new(value) {
+            Some(value) if value.get() <= X23_MULTIPLEX_MAX_CONNECTIONS => Ok(Self(value)),
+            _ => Err(InvalidX23MultiplexConnections),
+        }
+    }
+}
+
+impl FromStr for X23MultiplexConnections {
+    type Err = InvalidX23MultiplexConnections;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value
+            .parse::<usize>()
+            .map_err(|_| InvalidX23MultiplexConnections)?
+            .try_into()
+    }
+}
+
+/// A multiplexed connection count outside the supported resource bound.
+#[derive(Debug, thiserror::Error)]
+#[error("x23 multiplex connections must be in 1..=64")]
+pub struct InvalidX23MultiplexConnections;
 
 /// Backend names used by readiness policy.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -200,18 +206,6 @@ pub struct AdaptiveBatchConfig {
     pub ingress_queue_depth: usize,
 }
 
-impl AdaptiveBatchConfig {
-    /// Maximum number of backend RPCs this batcher can have in flight
-    /// at once: `shards × max_inflight_batches`.  Use this to size
-    /// transport-layer connection pools so that the batcher's own
-    /// `Overloaded` is the saturation signal, not transport queuing.
-    pub fn max_concurrent_rpcs(&self) -> usize {
-        self.shards
-            .max(1)
-            .saturating_mul(self.max_inflight_batches.max(1) as usize)
-    }
-}
-
 impl Default for AdaptiveBatchConfig {
     fn default() -> Self {
         Self {
@@ -223,10 +217,10 @@ impl Default for AdaptiveBatchConfig {
     }
 }
 
-/// Request-coalescing config for `chainTip`.
+/// Request-coalescing config for `chainTip` and `chainConfig`.
 ///
-/// A single task serializes backend `schedgateway_get_tip` calls. While
-/// one call is in flight, subsequent `chainTip` requests accumulate in
+/// A single task coordinates backend `dbgateway_get_config` calls. While
+/// one call is in flight, subsequent tip/config requests accumulate in
 /// a waiter list; when the call returns, every waiter receives the
 /// same `BlockTip` via fanout. Linearizable: each waiter's result
 /// comes from an RPC initiated strictly after they arrived.
@@ -285,7 +279,7 @@ pub struct GatewayConfig {
     /// Private health/metrics HTTP listener.
     pub observability_listen: String,
 
-    /// Backends required for readiness status `ok`.
+    /// Backends required for readiness; defaults to scheduler, indexer, and DB gateway.
     pub health_required_backends: Vec<HealthBackend>,
 
     /// Maximum allowed age of the last successful chain-tip probe.
@@ -324,20 +318,19 @@ pub struct GatewayConfig {
     /// indexer return `BackendUnavailable`.
     pub indexer_address: Option<String>,
 
-    /// Number of serial x23 data connections to the indexer (1..=256, default 16).
-    ///
-    /// Applies at startup and reconnect. The separate health connection is
-    /// excluded; each data connection handles one ordinary RPC at a time.
-    pub indexer_pool_size: IndexerPoolSize,
-
-    /// Dedicated scheduler lookup connections and execution permits (1..=68, default 16).
+    /// Dedicated scheduler lookup execution permits (1..=68, default 16).
     /// Total lookup admission remains fixed at 68, including executing requests.
     pub scheduler_lookup_pool_size: SchedulerLookupPoolSize,
 
+    /// Connections per x23 data pool (1..=64, default 4); see "x23 data
+    /// pools" in `docs/gateway/system-design.md`.
+    pub x23_multiplex_connections: X23MultiplexConnections,
+
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
     ///
-    /// Serves `groundhog_getStorageAt`. Optional: when absent the
-    /// gateway starts in degraded mode and `getStorageAt` returns
+    /// Serves `groundhog_getStorageAt`, `groundhog_getBalance`, and
+    /// `groundhog_getAddressAuthData`. Optional: when absent the gateway
+    /// starts in degraded mode and those methods return
     /// `BackendUnavailable`.
     pub db_gateway_address: Option<String>,
 
@@ -352,6 +345,8 @@ pub struct GatewayConfig {
 
     /// Maximum time to wait for one `ViewGateway` execution RPC.
     pub view_timeout_ms: u64,
+    /// Aggregate limits shared with the embedded JSON-RPC server.
+    pub view_batch: groundhog_json_rpc_server::ViewBatchConfig,
 
     /// Optional protocol string used for hogd intro handshakes.
     ///
@@ -381,7 +376,8 @@ pub struct GatewayConfig {
     /// Adaptive batching for `sendRawTransaction`.
     pub batch: AdaptiveBatchConfig,
 
-    /// Adaptive batching for `getStorageAt`.
+    /// Adaptive batching for `DbGateway1` reads (`getStorageAt`,
+    /// `getBalance`, and `getAddressAuthData`).
     pub storage: AdaptiveBatchConfig,
 
     /// Request coalescing for `chainTip`.
@@ -400,7 +396,11 @@ impl Default for GatewayConfig {
             max_connections: 2000,
             rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
             observability_listen: "127.0.0.1:9646".into(),
-            health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
+            health_required_backends: vec![
+                HealthBackend::Scheduler,
+                HealthBackend::Indexer,
+                HealthBackend::DbGateway,
+            ],
             health_chain_tip_max_age_ms: 30_000,
             health_probe_interval_ms: 5_000,
             backend_connect_timeout_ms: 30_000,
@@ -408,11 +408,12 @@ impl Default for GatewayConfig {
             shutdown_grace_ms: 10_000,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: Some("127.0.0.1:9001".into()),
-            indexer_pool_size: IndexerPoolSize::default(),
             scheduler_lookup_pool_size: SchedulerLookupPoolSize::default(),
+            x23_multiplex_connections: X23MultiplexConnections::default(),
             db_gateway_address: None,
             view_gateway_address: None,
             view_timeout_ms: 30_000,
+            view_batch: groundhog_json_rpc_server::ViewBatchConfig::default(),
             hogd_protocol_override: None,
             max_view_calldata_bytes: 64 * 1024,
             view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
@@ -476,9 +477,11 @@ impl GatewayConfig {
         &mut self,
         manifest: &RuntimeManifest,
     ) -> Result<(), RuntimeManifestConfigError> {
-        if manifest.schema_version
-            != groundhog_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION
-        {
+        let expected_schema = match manifest.kind.as_str() {
+            HOSTED_DEVNET_RUNTIME_MANIFEST_KIND => 3,
+            _ => groundhog_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION,
+        };
+        if manifest.schema_version != expected_schema {
             return Err(RuntimeManifestConfigError::UnsupportedSchemaVersion {
                 actual: manifest.schema_version,
             });
@@ -614,6 +617,29 @@ pub enum RuntimeManifestConfigError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn batch_policy_is_operator_configurable_with_shared_defaults() {
+        let config: super::GatewayConfig = toml::from_str(
+            "view_timeout_ms = 60000\n[view_batch]\nmax_calls = 32\nmax_calldata_bytes = 131072\nmax_gas = 320000000\nmax_response_bytes = 2097152\n",
+        ).unwrap();
+        assert_eq!(config.view_timeout_ms, 60_000);
+        assert_eq!(
+            config.view_batch,
+            groundhog_json_rpc_server::ViewBatchConfig {
+                max_calls: 32,
+                max_calldata_bytes: 131_072,
+                max_gas: 320_000_000,
+                max_response_bytes: 2_097_152,
+            }
+        );
+        let partial: super::GatewayConfig = toml::from_str("[view_batch]\nmax_calls = 4").unwrap();
+        assert_eq!(partial.view_batch.max_calls, 4);
+        assert_eq!(
+            partial.view_batch.max_gas,
+            groundhog_json_rpc_server::ViewBatchConfig::default().max_gas
+        );
+        assert!(toml::from_str::<super::GatewayConfig>("[view_batch]\nmax_call = 4").is_err());
+    }
     use std::time::Duration;
 
     use groundhog_json_rpc_types::{NetworkHashHex, hex::Hex0x, runtime_manifest::RuntimeManifest};
@@ -835,7 +861,7 @@ network_hash = "0x1234"
             "scheduler": "127.0.0.1:1000",
             "schedulerGateway": "127.0.0.1:1010",
         }));
-        manifest.schema_version = 3;
+        manifest.schema_version = 2;
 
         let err = config
             .apply_runtime_manifest(&manifest)
@@ -843,7 +869,7 @@ network_hash = "0x1234"
 
         assert_eq!(
             err,
-            RuntimeManifestConfigError::UnsupportedSchemaVersion { actual: 3 }
+            RuntimeManifestConfigError::UnsupportedSchemaVersion { actual: 2 }
         );
     }
 
@@ -881,6 +907,13 @@ network_hash = "0x1234"
             "viewGateway": "127.0.0.1:1003",
         }));
         manifest.kind = "hosted-devnet-runtime".into();
+        manifest.schema_version = 3;
+        manifest.bootstrap_account_derivation = Some(
+            serde_json::from_value(json!({
+                "scheme": "groundhog-bootstrap-account-v1", "seed": "hosted-test-fixtures"
+            }))
+            .expect("bug: hosted derivation fixture should parse"),
+        );
         manifest.chain_state = None;
 
         config
@@ -964,7 +997,7 @@ network_hash = "0x1234"
 
     fn manifest_with_endpoints(endpoints: &serde_json::Value) -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 2,
+            "schemaVersion": 4,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -975,20 +1008,8 @@ network_hash = "0x1234"
                 "commitHash": "abcdef0",
             },
             "endpoints": endpoints,
-            "bootstrapAccountDerivation": {
-                "scheme": "groundhog-bootstrap-account-v1",
-                "seed": "groundhog-dev-accounts",
-            },
             "bootstrapAccounts": [],
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": hash(0x51),
-                    "deployedCodeHash": hash(0x52),
-                    "artifactHint": "./dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e",
-                },
                 "storageCostModel": {
                     "hash": hash(0x53),
                     "baseDataItemCost": "12000",

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 3,
+  "kind": "hosted-devnet-runtime",
+  "chainState": "fresh",
+  "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "protocol": "hogp/020ed23d4e2f",
+  "producer": {
+    "binary": "hog-devnode",
+    "version": "0.0.1",
+    "commitHash": "abcdef0123456789"
+  },
+  "endpoints": {
+    "scheduler": "127.0.0.1:61000",
+    "schedulerGateway": "127.0.0.1:61001",
+    "indexer": "127.0.0.1:61002",
+    "dbGateway": "127.0.0.1:61003",
+    "viewGateway": "127.0.0.1:61004"
+  },
+  "bootstrapAccountDerivation": {
+    "scheme": "groundhog-bootstrap-account-v1",
+    "seed": "groundhog-dev-accounts"
+  },
+  "bootstrapAccounts": [
+    {
+      "index": 0,
+      "role": "faucet",
+      "publicKey": "0x6161616161616161616161616161616161616161616161616161616161616161",
+      "walletAddress": "0x7171717171717171717171717171717171717171717171717171717171717171",
+      "initialStorageTokens": "10000000000000"
+    },
+    {
+      "index": 1,
+      "role": "local_user",
+      "publicKey": "0x6262626262626262626262626262626262626262626262626262626262626262",
+      "walletAddress": "0x7272727272727272727272727272727272727272727272727272727272727272",
+      "initialStorageTokens": "1000000000"
+    }
+  ],
+  "bootstrap": {
+    "storageCostModel": {
+      "hash": "0x5353535353535353535353535353535353535353535353535353535353535353",
+      "baseDataItemCost": "12000",
+      "bytestringCostPerByte": "10",
+      "baseContractDeploymentCost": "12000",
+      "contractDeploymentCostPerByte": "10",
+      "authPerKeyCost": "1111",
+      "rcqCostPerEntry": "8",
+      "replayCacheCostPerEntry": "7",
+      "balanceCost": "1234"
+    }
+  }
+}

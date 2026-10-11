@@ -170,7 +170,7 @@ def main():
                 "logging": {"filter": "info" if trace else args.gateway_log_filter, "sink": "bounded-pipe" if trace else args.gateway_log_sink, "spanEvents": "close" if trace else "none"}},
             "backend": {"artifactSha256": binary_hashes[str(args.devnode)],
                 "commitHash": runtime["producer"].get("commitHash"), "host": host,
-                "effectiveConfig": {"ramdbBytes": 2147483648, "devAccountCount": 100, "blockDriver": "interval", "blockIntervalMs": 500}}}
+                "effectiveConfig": {"ramdbBytes": 2147483648, "initialAllocationCount": len(allocations), "allocationFileSha256": digest(allocation_path), "blockDriver": "interval", "blockIntervalMs": 500}}}
         if diagnostic:
             info["diagnostic"] = args.diagnostic
         target = out / f"{name}-target.json"
@@ -186,7 +186,7 @@ def main():
         if platform.system() == "Linux":
             argv += ["--gateway-pid", str(process.pid)]
         if seed:
-            argv += ["--seed-count", str(args.count), "--seed-output", corpus, "--accounts", "100", "--force"]
+            argv += ["--seed-count", str(args.count), "--seed-output", corpus, "--accounts", "100", "--account-seed", fixture_seed, "--force"]
         else:
             argv += ["--hashes-file", corpus]
         marker = out / "load-start"
@@ -209,9 +209,20 @@ def main():
             raise RuntimeError(f"invalid trial {name}")
         return result
 
+    fixture_seed = "read-confirmed-fixtures-v1"
+    allocations = []
+    for index in range(100):
+        seed = hashlib.sha256(f"groundhog-bench:{fixture_seed}:account-{index}".encode()).hexdigest()
+        imported = subprocess.run([str(args.cli), "--json", "--non-interactive", "keys", "import", f"bench-{index}"],
+                                  input=seed + "\n", text=True, env=env, capture_output=True, check=True)
+        key = json.loads(imported.stdout)["data"]["key"]
+        allocations.append(dict(publicKey=key["publicKey"], initialStorageTokens="1000000000"))
+    allocation_path = out / "bootstrap-accounts.json"
+    write(allocation_path, allocations)
+
     try:
         node = launch([args.cli, "--json", "node", "--port", "0", "--hog-devnode-binary", args.devnode,
-            "--data-dir", out / "node", "--ramdb-bytes", "2147483648", "--dev-account-count", "100",
+            "--data-dir", out / "node", "--ramdb-bytes", "2147483648", "--bootstrap-accounts", allocation_path,
             "--block-driver", "interval", "--block-interval-ms", "500"], "node")
         wait_until(node, lambda: manifest.exists() and (out / "node.stdout").stat().st_size, 120)
         process, target = gateway(args.gateway, pools[0], "seed-gateway")

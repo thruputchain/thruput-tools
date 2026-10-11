@@ -16,6 +16,8 @@ use crate::{BlockHeight, SHA256Hash};
 #[serde(rename_all = "camelCase")]
 pub struct StorageItemRead {
     /// Committed block height the snapshot was read at.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub block_height: BlockHeight,
     /// The item stored at the requested key, or `null` if the key
     /// has no committed value at this snapshot.
@@ -42,8 +44,7 @@ pub enum StorageItemInfo {
     },
 
     /// Authorization data is registered at this address.  Presence
-    /// indicator only — querying signer details requires a contract
-    /// invocation.
+    /// indicator only; `getAddressAuthData` returns the signer set.
     AuthData,
 
     /// A retrocausal queue is registered at this address.  Presence

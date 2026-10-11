@@ -26,6 +26,7 @@ workspace = true
 [dependencies]
 groundhog-build-info = { workspace = true }
 groundhog-bundle-identity = { workspace = true }
+groundhog-hogd-backend = { workspace = true }
 groundhog-json-rpc-api = { workspace = true }
 groundhog-json-rpc-types = { workspace = true }
 groundhog-json-rpc-server = { workspace = true }
@@ -54,7 +55,7 @@ time = { workspace = true }
 clap = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true, features = ["json"] }
 
 [build-dependencies]
 serde_json = { workspace = true }

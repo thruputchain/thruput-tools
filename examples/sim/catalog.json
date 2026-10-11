@@ -39,7 +39,7 @@
       "id": "local-wallet-submit-smoke",
       "path": "local-wallet-submit-smoke.json",
       "title": "Local Wallet Submit Smoke",
-      "summary": "Fast managed-local write-path sanity check using dev-wallet submit traffic.",
+      "summary": "Fast managed-local write-path sanity check using native-wallet submit traffic.",
       "provider": "local",
       "tier": "smoke",
       "tags": ["local", "write", "wallet-submit", "smoke"],

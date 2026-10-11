@@ -5,10 +5,10 @@ on:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  CARGO_REGISTRIES_GROUNDHOG_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+  CARGO_REGISTRIES_THRUPUT_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
   CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
-  CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
-  CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
+  CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
+  CARGO_REGISTRIES_THRUPUT_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
   PUBLISH_PACKAGES: >-
     groundhog-build-info
     groundhog-bundle-identity
@@ -21,18 +21,25 @@ env:
     groundhog-rv32-artifact
     groundhog-tx-validation
     groundhog-json-rpc-server
+    groundhog-hogd-backend
     groundhog-json-rpc-client
     groundhog-signing
     groundhog-client
     groundhog-node-supervisor
     groundhog-rv32-lower
     groundhog-toolchain
-    groundhog-cli
+    groundhog-cli-macros
+    thruput-cli
     groundhog-testkit
+
+permissions:
+  contents: read
 
 jobs:
   publish:
     runs-on: namespace-profile-hogd-linux-2604
+    permissions:
+      contents: read
 
     steps:
       - name: Setup SSH Agent
@@ -49,11 +56,12 @@ jobs:
           git config --global url."git@github.com:".insteadOf "https://github.com/"
 
       - name: Checkout actions repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: groundhogchain/actions
+          persist-credentials: false
           path: actions
-          ref: b2409b8655be03b1a8667b7cf7e8b31bfe311e07
+          ref: 16e3402eca906d0771f171ee95fcba8a0be8b0aa # configurable dry-run registry
 
       - name: Configure Namespace Cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
@@ -68,4 +76,5 @@ jobs:
       - name: publish dry run
         uses: ./actions/cargo-publish-dry-run
         with:
+          registry-name: thruput
           packages: ${{ env.PUBLISH_PACKAGES }}

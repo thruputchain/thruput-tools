@@ -7,6 +7,7 @@ use groundhog_json_rpc_server::{
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    address_auth::AddressAuthDataResponse,
     block::BlockInfo,
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
@@ -15,7 +16,7 @@ use groundhog_json_rpc_types::{
     view::{ViewRequest, ViewResponse},
 };
 
-use crate::{context::GatewayContext, error::GatewayError, handlers};
+use crate::{context::GatewayContext, handlers};
 
 /// Production gateway backend adapter for the shared RPC server.
 #[derive(Clone)]
@@ -36,7 +37,7 @@ impl GatewayBackend {
     async fn with_deadline<T>(
         &self,
         context: RpcRequestContext,
-        future: impl Future<Output = Result<T, GatewayError>>,
+        future: impl Future<Output = Result<T, RpcServerError>>,
     ) -> Result<T, RpcServerError> {
         let remaining = context
             .remaining()
@@ -44,7 +45,6 @@ impl GatewayBackend {
         tokio::time::timeout(remaining, future)
             .await
             .map_err(|_| RpcServerError::BackendTimeout)?
-            .map_err(Into::into)
     }
 }
 
@@ -190,10 +190,37 @@ impl ReadPlane for GatewayBackend {
         )
         .await
     }
+
+    #[tracing::instrument(skip_all, fields(?address))]
+    async fn read_address_auth_data(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            self.ctx
+                .storage_batcher
+                .read_address_auth_data(context, address),
+        )
+        .await
+    }
 }
 
 #[async_trait]
 impl ViewPlane for GatewayBackend {
+    #[tracing::instrument(skip_all)]
+    async fn view_batch(
+        &self,
+        context: RpcRequestContext,
+        request: groundhog_json_rpc_types::view::ViewBatchRequest,
+        gas_limit: u64,
+        limits: groundhog_json_rpc_server::ViewBatchConfig,
+    ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+        handlers::view::view_batch(&self.ctx, context, request, gas_limit, limits).await
+    }
+
     #[tracing::instrument(skip_all)]
     async fn view(
         &self,
@@ -207,21 +234,5 @@ impl ViewPlane for GatewayBackend {
             handlers::view::view(&self.ctx, context, request, gas_limit),
         )
         .await
-    }
-}
-
-impl From<GatewayError> for RpcServerError {
-    fn from(err: GatewayError) -> Self {
-        match err {
-            GatewayError::TxInvalid(msg) => Self::TxInvalid(msg),
-            GatewayError::TxRejected(msg) => Self::TxRejected(msg),
-            GatewayError::TxNotFound => Self::TxNotFound,
-            GatewayError::BlockNotFound => Self::BlockNotFound,
-            GatewayError::InvalidParam(msg) => Self::InvalidParam(msg),
-            GatewayError::BackendUnavailable(msg) => Self::BackendUnavailable(msg),
-            GatewayError::BackendTimeout => Self::BackendTimeout,
-            GatewayError::Overloaded(msg) => Self::Overloaded(msg),
-            GatewayError::NotImplemented(method) => Self::NotImplemented(method),
-        }
     }
 }
