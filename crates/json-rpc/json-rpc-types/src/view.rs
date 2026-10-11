@@ -5,6 +5,57 @@ use crate::events::EmittedEvent;
 use crate::hex::HexBytes;
 use crate::{BlockHeight, ContractAddress};
 
+/// Authorization assumed during sandboxed execution. Signatures are not checked;
+/// contracts still inspect and validate this claim through their normal code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ViewAuthClaim {
+    SourceAddress {
+        /// Bitmap of source-address authorization keys allowed by this claim.
+        allowed_keys: u32,
+        /// Required source-address authorization weight assumed by this claim.
+        required_weight: u32,
+    },
+    PubkeySignature {
+        /// Ed25519 public key (32 bytes). This is public information, not a signature.
+        public_key: crate::Ed25519PublicKey,
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<u64>")]
+        nonce: u64,
+    },
+}
+
+impl From<ViewAuthClaim> for groundhog_xdr::auth_claim::AuthClaim {
+    fn from(claim: ViewAuthClaim) -> Self {
+        use groundhog_xdr::auth_claim::{AuthClaim_source_address_claim, PubkeyAccountPreimage};
+        match claim {
+            ViewAuthClaim::SourceAddress {
+                allowed_keys,
+                required_weight,
+            } => Self::kSourceAddressAuthData {
+                source_address_claim: AuthClaim_source_address_claim {
+                    allowed_keys,
+                    required_weight,
+                },
+            },
+            ViewAuthClaim::PubkeySignature { public_key, nonce } => Self::kPubkeySignature {
+                pubkey_preimage: PubkeyAccountPreimage {
+                    pubkey: groundhog_xdr::types::PublicKey::Ed25519 {
+                        ed25519: public_key.0,
+                    },
+                    nonce,
+                },
+            },
+        }
+    }
+}
+
 /// Independent simulations against one committed snapshot, in request order.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -56,6 +107,9 @@ pub struct ViewHeightUnavailable {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ViewRequest {
+    /// Optional assumed authorization; omission preserves the unauthenticated default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_claim: Option<ViewAuthClaim>,
     /// Contract address to execute.
     pub contract: ContractAddress,
 
@@ -90,6 +144,9 @@ pub struct ViewRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ViewCall {
+    /// Optional assumed authorization for this independent call only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_claim: Option<ViewAuthClaim>,
     pub contract: ContractAddress,
     /// Contract entrypoint id. Must be exactly 8 bytes.
     pub entrypoint: HexBytes,
@@ -109,6 +166,7 @@ pub struct ViewCall {
 impl From<ViewCall> for ViewRequest {
     fn from(call: ViewCall) -> Self {
         let ViewCall {
+            auth_claim,
             contract,
             entrypoint,
             calldata,
@@ -116,6 +174,7 @@ impl From<ViewCall> for ViewRequest {
             gas_limit,
         } = call;
         Self {
+            auth_claim,
             contract,
             entrypoint,
             calldata,

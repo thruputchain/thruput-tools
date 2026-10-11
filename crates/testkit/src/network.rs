@@ -330,6 +330,7 @@ impl Network {
         caller: Option<ContractAddress>,
     ) -> Result<ViewResponse> {
         let request = ViewRequest {
+            auth_claim: None,
             min_height: None,
             contract: Hex0x(contract),
             entrypoint: HexBytes(entrypoint.into_inner().to_vec()),

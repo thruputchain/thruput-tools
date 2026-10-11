@@ -2,8 +2,8 @@
 //!
 //! A view is a sandboxed root invocation: hogd's viewing mode is what keeps
 //! writes from committing, so the query carries no special flags and the
-//! auth claim grants nothing. Events are still produced, which is what lets
-//! a wallet preview show what a real submit would emit.
+//! auth claim is assumed, never signature-verified. Events are still produced,
+//! which lets a wallet preview show what a real submit would emit.
 
 use groundhog_json_rpc_server::RpcServerError;
 use groundhog_json_rpc_types::{
@@ -157,7 +157,9 @@ pub fn view_query(
             calldata: BytesM(request.calldata.0),
         },
         parent_address: request.caller.map(|caller| caller.0),
-        auth_claim: public_view_auth_claim(),
+        auth_claim: request
+            .auth_claim
+            .map_or_else(public_view_auth_claim, Into::into),
         forwarded_tokens: VecM(vec![]),
         // Root invocations carry no flags (`invoke_flag.x:9-10`). Hogd's
         // `ViewingModeData` is what sandboxes the run — writes don't commit,
@@ -260,6 +262,7 @@ mod batch_tests {
         view_batch_query(
             ViewBatchRequest {
                 calls: vec![groundhog_json_rpc_types::view::ViewCall {
+                    auth_claim: None,
                     gas_limit: Some(123),
                     contract: groundhog_xdr::types::ContractAddress::from([7; 32]).into(),
                     entrypoint: HexBytes(vec![0; 8]),

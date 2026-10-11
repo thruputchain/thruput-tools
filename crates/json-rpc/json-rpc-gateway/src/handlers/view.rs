@@ -200,6 +200,11 @@ mod tests {
                     },
                 });
             }
+            assert_ne!(
+                query.calls.0[0].auth_claim,
+                shared_view::public_view_auth_claim()
+            );
+            assert_ne!(query.calls.0[0].auth_claim, query.calls.0[1].auth_claim);
             Ok(ViewGatewayBatchResult::ViewGatewayBatchOk {
                 payload: ViewGatewayBatchPayload {
                     height: 42.into(),
@@ -271,6 +276,7 @@ mod tests {
 
     fn request(caller: Option<ContractAddress>) -> ViewRequest {
         ViewRequest {
+            auth_claim: None,
             min_height: None,
             contract: ContractAddress::from(XdrContractAddress::from([7; 32])),
             entrypoint: HexBytes(vec![8; 8]),
@@ -366,6 +372,7 @@ mod tests {
         for min_height in ["42", "43"] {
             let calls: Vec<_> = [("0x01", "123"), ("0x02", "456")].into_iter().map(|(calldata, gas)| serde_json::json!({
                 "contract": format!("0x{}", "07".repeat(32)), "entrypoint": "0x0808080808080808",
+                "authClaim": {"kind":"sourceAddress", "allowedKeys":5, "requiredWeight": if calldata == "0x01" { 3 } else { 4 }},
                 "calldata": calldata, "gasLimit": gas,
             })).collect();
             let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"groundhog_viewBatch", "params":[{"calls":calls,"minHeight":min_height}]}).to_string();
@@ -489,6 +496,7 @@ mod tests {
                 RpcRequestContext::unbounded(),
                 ViewBatchRequest {
                     calls: vec![ViewCall {
+                        auth_claim: None,
                         contract: request(None).contract,
                         entrypoint: HexBytes(vec![8; 8]),
                         calldata: HexBytes(vec![]),

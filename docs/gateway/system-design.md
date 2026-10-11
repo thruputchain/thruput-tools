@@ -32,6 +32,15 @@ services. Production topology comes from gateway configuration.
 
 ## Shared-snapshot reads
 
+Single views and individual batch entries accept optional `authClaim` (wire
+11.2). A claim is assumed without signatures; normal contract checks still run
+and writes never commit. Omission supplies the existing zero-key, zero-weight
+source-address claim. `caller` separately identifies an optional parent contract.
+
+Claims use `kind: "sourceAddress"` with uint32 `allowedKeys` / `requiredWeight`,
+or `kind: "pubkeySignature"` with an Ed25519 `publicKey` (32-byte hex) and a
+decimal-string uint64 `nonce`. No private key or signature is accepted.
+
 Single `groundhog_view` calls also accept `minHeight`. The shared RPC server
 checks the height returned by the existing single-view execution path and rejects
 an older result with `ViewHeightUnavailable`. Omitting the option preserves the

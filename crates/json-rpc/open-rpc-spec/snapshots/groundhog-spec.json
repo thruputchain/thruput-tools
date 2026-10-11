@@ -2138,6 +2138,60 @@
         ],
         "type": "object"
       },
+      "ViewAuthClaim": {
+        "description": "Authorization assumed during sandboxed execution. Signatures are not checked;\ncontracts still inspect and validate this claim through their normal code.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "allowedKeys": {
+                "description": "Bitmap of source-address authorization keys allowed by this claim.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "sourceAddress",
+                "type": "string"
+              },
+              "requiredWeight": {
+                "description": "Required source-address authorization weight assumed by this claim.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "allowedKeys",
+              "requiredWeight"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "pubkeySignature",
+                "type": "string"
+              },
+              "nonce": {
+                "$ref": "#/components/schemas/DecimalU64"
+              },
+              "publicKey": {
+                "$ref": "#/components/schemas/Hex0x_Ed25519PublicKey",
+                "description": "Ed25519 public key (32 bytes). This is public information, not a signature."
+              }
+            },
+            "required": [
+              "kind",
+              "publicKey",
+              "nonce"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ViewBatchLimits": {
         "description": "Endpoint limits for one shared-snapshot read. Per-call view limits also apply.",
         "properties": {
@@ -2225,6 +2279,17 @@
         "additionalProperties": false,
         "description": "One batch entry. Freshness belongs to the group, never to an individual call.",
         "properties": {
+          "authClaim": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ViewAuthClaim"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional assumed authorization for this independent call only."
+          },
           "calldata": {
             "$ref": "#/components/schemas/HexBytes"
           },
@@ -2292,6 +2357,17 @@
         "additionalProperties": false,
         "description": "Request for sandboxed contract simulation against the latest committed state.",
         "properties": {
+          "authClaim": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ViewAuthClaim"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional assumed authorization; omission preserves the unauthenticated default."
+          },
           "calldata": {
             "$ref": "#/components/schemas/HexBytes",
             "description": "Opaque call input bytes."
@@ -2380,7 +2456,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "11.1.0"
+    "version": "11.2.0"
   },
   "methods": [
     {
@@ -2949,7 +3025,7 @@
           "$ref": "#/components/schemas/ViewResponse"
         }
       },
-      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against. `gasLimit` is optional: absent runs under the endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is rejected as an invalid parameter. Optional `minHeight` requires that execution snapshot to be at least the requested committed height. An older result returns `ViewHeightUnavailable`. This is a freshness floor, not a historical selector, wait, or refresh request.",
+      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against. `gasLimit` is optional: absent runs under the endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is rejected as an invalid parameter. Optional `minHeight` requires that execution snapshot to be at least the requested committed height. An older result returns `ViewHeightUnavailable`. This is a freshness floor, not a historical selector, wait, or refresh request. Optional `authClaim` is assumed without signature verification; contract checks still run.",
       "tags": [
         {
           "name": "Core API"
@@ -2993,7 +3069,7 @@
           "$ref": "#/components/schemas/ViewBatchResponse"
         }
       },
-      "summary": "Simulate independent calls against one committed snapshot. Results preserve input order and include return, abort, or fault with events. Calls do not observe each other's writes. Abandoned snapshots retry the whole group, up to three attempts. There is no partial success or automatic chunking. Operator limits are advertised by `serverLimits`. The response deadline is strict, but running backend work may outlive it. The minimum height is a freshness floor, not a wait or refresh request. The returned height is committed H, with execution context H+1.",
+      "summary": "Simulate independent calls against one committed snapshot. Results preserve input order and include return, abort, or fault with events. Calls do not observe each other's writes. Abandoned snapshots retry the whole group, up to three attempts. There is no partial success or automatic chunking. Operator limits are advertised by `serverLimits`. The response deadline is strict, but running backend work may outlive it. The minimum height is a freshness floor, not a wait or refresh request. The returned height is committed H, with execution context H+1. Each entry may supply its own optional `authClaim`, independently of caller.",
       "tags": [
         {
           "name": "Core API"
