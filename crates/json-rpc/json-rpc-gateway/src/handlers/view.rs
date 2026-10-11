@@ -35,9 +35,6 @@ pub async fn view_batch(
             RpcServerError::NotImplemented("viewBatch".into())
         }
     })?;
-    if request.calls.iter().any(|call| call.auth_claim.is_some()) {
-        check_auth_claim_support(&client, &ctx.metrics, deadline).await?;
-    }
     let query = shared_view::view_batch_query(
         request,
         gas_limit,
@@ -97,38 +94,11 @@ pub async fn view(
         }
     })?;
 
-    let explicit_auth = request.auth_claim.is_some();
     let query = shared_view::view_query(request, gas_limit)?;
     let timeout =
         Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
     let deadline = backend_deadline(context, timeout)?;
-    if explicit_auth {
-        check_auth_claim_support(&client, &ctx.metrics, deadline).await?;
-    }
     view_response_from_client(&client, &ctx.metrics, &query, deadline).await
-}
-
-async fn check_auth_claim_support(
-    client: &groundhog_view::ViewGateway_ViewGateway1_Client,
-    metrics: &GatewayMetrics,
-    deadline: Instant,
-) -> Result<(), RpcServerError> {
-    let outcome = timed_backend_call(
-        metrics,
-        HealthBackend::ViewGateway,
-        "viewgateway_intro",
-        VIEW_GATEWAY,
-        deadline,
-        client.viewgateway_intro(&shared_view::VIEW_AUTH_CLAIMS_PROTOCOL),
-        |_| true,
-    )
-    .await
-    .inspect_err(|error| {
-        if matches!(error, RpcServerError::BackendTimeout) {
-            metrics.observe_view_timeout();
-        }
-    })?;
-    shared_view::require_auth_claim_support(outcome)
 }
 
 async fn view_response_from_client(
@@ -174,7 +144,6 @@ fn view_response_from_gateway_result(
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
-    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use groundhog_json_rpc_types::ContractAddress;
@@ -198,17 +167,11 @@ mod tests {
     enum FakeViewGatewayMode {
         Slow,
         Batch,
-        Legacy,
         BatchOutcome(i32),
-        Timed {
-            probe_millis: u64,
-            execution_millis: u64,
-        },
     }
 
     struct FakeViewGateway {
         mode: FakeViewGatewayMode,
-        query_budgets: Arc<Mutex<Vec<u32>>>,
     }
 
     #[async_trait]
@@ -220,36 +183,28 @@ mod tests {
             use groundhog_view::{
                 ViewGatewayBatchPayload, ViewGatewayBatchResult, ViewGatewayHeightUnavailable,
             };
-            self.query_budgets.lock().unwrap().push(query.budget_millis);
-            if let FakeViewGatewayMode::Timed {
-                execution_millis, ..
-            } = self.mode
-            {
-                tokio::time::sleep(Duration::from_millis(execution_millis)).await;
-            } else {
-                if let FakeViewGatewayMode::BatchOutcome(outcome) = self.mode {
-                    return Ok(ViewGatewayBatchResult::Default { outcome });
-                }
-                if self.mode == FakeViewGatewayMode::Slow {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                    return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
-                }
-                assert!(query.budget_millis > 30_000);
-                assert_eq!(query.max_response_bytes, 256);
-                if let Some(requested) = query.min_height.filter(|height| **height > 42) {
-                    return Ok(ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
-                        height_unavailable: ViewGatewayHeightUnavailable {
-                            requested,
-                            observed: 42.into(),
-                        },
-                    });
-                }
-                assert_ne!(
-                    query.calls.0[0].auth_claim,
-                    shared_view::public_view_auth_claim()
-                );
-                assert_ne!(query.calls.0[0].auth_claim, query.calls.0[1].auth_claim);
+            if let FakeViewGatewayMode::BatchOutcome(outcome) = self.mode {
+                return Ok(ViewGatewayBatchResult::Default { outcome });
             }
+            if self.mode == FakeViewGatewayMode::Slow {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
+            }
+            assert!(query.budget_millis > 30_000);
+            assert_eq!(query.max_response_bytes, 256);
+            if let Some(requested) = query.min_height.filter(|height| **height > 42) {
+                return Ok(ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
+                    height_unavailable: ViewGatewayHeightUnavailable {
+                        requested,
+                        observed: 42.into(),
+                    },
+                });
+            }
+            assert_ne!(
+                query.calls.0[0].auth_claim,
+                shared_view::public_view_auth_claim()
+            );
+            assert_ne!(query.calls.0[0].auth_claim, query.calls.0[1].auth_claim);
             Ok(ViewGatewayBatchResult::ViewGatewayBatchOk {
                 payload: ViewGatewayBatchPayload {
                     height: 42.into(),
@@ -272,18 +227,8 @@ mod tests {
         }
         async fn viewgateway_intro(
             &self,
-            protocol: Protocol,
+            _arg0: Protocol,
         ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
-            if protocol == shared_view::VIEW_AUTH_CLAIMS_PROTOCOL
-                && let FakeViewGatewayMode::Timed { probe_millis, .. } = self.mode
-            {
-                tokio::time::sleep(Duration::from_millis(probe_millis)).await;
-            }
-            if self.mode == FakeViewGatewayMode::Legacy
-                && protocol == shared_view::VIEW_AUTH_CLAIMS_PROTOCOL
-            {
-                return Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol);
-            }
             Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)
         }
 
@@ -291,13 +236,6 @@ mod tests {
             &self,
             query: TransactionViewQuery,
         ) -> Result<ViewGatewayResult, ProgramError> {
-            self.query_budgets.lock().unwrap().push(0);
-            if let FakeViewGatewayMode::Timed {
-                execution_millis, ..
-            } = self.mode
-            {
-                tokio::time::sleep(Duration::from_millis(execution_millis)).await;
-            }
             if self.mode == FakeViewGatewayMode::Slow {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
@@ -321,16 +259,6 @@ mod tests {
         SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
     ) {
-        start_observed_view_gateway(mode, Arc::default()).await
-    }
-
-    async fn start_observed_view_gateway(
-        mode: FakeViewGatewayMode,
-        query_budgets: Arc<Mutex<Vec<u32>>>,
-    ) -> (
-        SocketAddr,
-        tokio::task::JoinHandle<Result<(), std::io::Error>>,
-    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bug: test ViewGateway should bind");
@@ -339,137 +267,11 @@ mod tests {
             .expect("bug: test ViewGateway should have local addr");
         let mut services = ServiceMap::new();
         services.add_service(Box::new(ViewGateway_ViewGateway1_Dispatcher::new(
-            Box::new(FakeViewGateway {
-                mode,
-                query_budgets,
-            }),
+            Box::new(FakeViewGateway { mode }),
         )));
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
         (addr, handle)
-    }
-
-    #[tokio::test]
-    async fn auth_probe_and_execution_share_one_timeout_and_count_it_once() {
-        use crate::health::{GatewayHealthSnapshot, HealthStatus};
-        use crate::{config::GatewayConfig, context::BackendClient};
-        use groundhog_json_rpc_server::ViewBatchConfig;
-        use groundhog_json_rpc_types::view::{ViewAuthClaim, ViewBatchRequest, ViewCall};
-        use tokio::sync::RwLock;
-
-        for (probe_millis, execution_millis) in [(1_500, 0), (700, 700)] {
-            for batch in [false, true] {
-                let queries = Arc::new(Mutex::new(Vec::new()));
-                let (addr, server) = start_observed_view_gateway(
-                    FakeViewGatewayMode::Timed {
-                        probe_millis,
-                        execution_millis,
-                    },
-                    queries.clone(),
-                )
-                .await;
-                let socket = FixedSerialPool::connect(&addr, 1).await.unwrap();
-                let client = ViewGateway_ViewGateway1_Client::new(Arc::new(socket));
-                let context = GatewayContext::assemble(
-                    groundhog_xdr::PROTOCOL_VERSION,
-                    Arc::new(RwLock::new(None)),
-                    Arc::new(RwLock::new(None)),
-                    Arc::new(RwLock::new(Some(BackendClient::new(
-                        client.clone(),
-                        client,
-                    )))),
-                    Arc::new(RwLock::new(None)),
-                    Arc::new(GatewayConfig {
-                        view_timeout_ms: 1_000,
-                        ..Default::default()
-                    }),
-                    GatewayMetrics::for_tests(),
-                );
-                let mut input = request(None);
-                input.auth_claim = Some(ViewAuthClaim::SourceAddress {
-                    allowed_keys: 0,
-                    required_weight: 0,
-                });
-                let result = if batch {
-                    let entry: ViewCall =
-                        serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
-                    view_batch(
-                        &context,
-                        RpcRequestContext::unbounded(),
-                        ViewBatchRequest {
-                            calls: vec![entry],
-                            min_height: None,
-                        },
-                        123,
-                        ViewBatchConfig::default(),
-                    )
-                    .await
-                    .map(|_| ())
-                } else {
-                    view(&context, RpcRequestContext::unbounded(), input, 123)
-                        .await
-                        .map(|_| ())
-                };
-                assert!(
-                    matches!(result, Err(RpcServerError::BackendTimeout)),
-                    "{result:?}"
-                );
-                let budgets = queries.lock().unwrap().clone();
-                if probe_millis > 1_000 {
-                    assert!(
-                        budgets.is_empty(),
-                        "a failed probe must not send a view query"
-                    );
-                } else {
-                    assert_eq!(budgets.len(), 1);
-                    if batch {
-                        assert!((1..=300).contains(&budgets[0]), "{budgets:?}");
-                    }
-                }
-                let metrics = context
-                    .metrics
-                    .gather(&GatewayHealthSnapshot::for_test(
-                        HealthStatus::Starting,
-                        None,
-                        &[],
-                    ))
-                    .unwrap();
-                assert!(
-                    metrics
-                        .lines()
-                        .any(|line| line == "groundhog_gateway_view_timeouts_total 1"),
-                    "{metrics}"
-                );
-                server.abort();
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn explicit_auth_probe_distinguishes_legacy_and_capable_backends() {
-        for mode in [FakeViewGatewayMode::Legacy, FakeViewGatewayMode::Batch] {
-            let (addr, server) = start_fake_view_gateway(mode).await;
-            let client = groundhog_x23_transport::connect(
-                "view",
-                &addr.to_string(),
-                1,
-                ViewGateway_ViewGateway1_Client::new,
-            )
-            .await
-            .unwrap();
-            let result = check_auth_claim_support(
-                &client,
-                &GatewayMetrics::for_tests(),
-                Instant::now() + Duration::from_secs(1),
-            )
-            .await;
-            if mode == FakeViewGatewayMode::Legacy {
-                assert!(matches!(result, Err(RpcServerError::NotImplemented(_))));
-            } else {
-                assert!(result.is_ok());
-            }
-            server.abort();
-        }
     }
 
     fn request(caller: Option<ContractAddress>) -> ViewRequest {

@@ -22,23 +22,6 @@ use xdr_common::{BytesM, VecM};
 
 use crate::event::parse_emitted_events;
 
-/// Probe after the normal protocol introduction, before sending an explicit
-/// claim. Older runtimes reject this token instead of silently ignoring auth.
-pub const VIEW_AUTH_CLAIMS_PROTOCOL: [u8; 20] = *b"view-auth-claims-v1_";
-
-/// Reject an explicit claim when the backend does not accept the capability token.
-pub fn require_auth_claim_support(
-    outcome: groundhog_view::ViewGatewayIntroOutcome,
-) -> Result<(), RpcServerError> {
-    if outcome == groundhog_view::ViewGatewayIntroOutcome::ViewGatewayIntroSuccess {
-        Ok(())
-    } else {
-        Err(RpcServerError::NotImplemented(
-            "view authClaim requires an authorization-aware ViewGateway".into(),
-        ))
-    }
-}
-
 /// Build a batch with the remaining caller budget, rounded down to milliseconds.
 pub fn view_batch_query(
     request: groundhog_json_rpc_types::view::ViewBatchRequest,

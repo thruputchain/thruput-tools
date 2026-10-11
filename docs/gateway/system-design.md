@@ -41,14 +41,6 @@ Claims use `kind: "sourceAddress"` with uint32 `allowedKeys` / `requiredWeight`,
 or `kind: "pubkeySignature"` with an Ed25519 `publicKey` (32-byte hex) and a
 decimal-string uint64 `nonce`. No private key or signature is accepted.
 
-After normal protocol introduction, requests with explicit claims probe
-`viewgateway_intro` with the fixed 20-byte token `view-auth-claims-v1_`. A new
-runtime accepts that capability token; older runtimes reject it. The adapters
-return `NotImplemented` before sending the invocation if support is absent.
-The probe shares the request deadline and is repeated on explicit-claim requests
-so a replaced backend cannot inherit a stale capability result. Requests without
-claims need no extra RPC. The capability probe does not replace schema negotiation.
-
 Single `groundhog_view` calls also accept `minHeight`. The shared RPC server
 checks the height returned by the existing single-view execution path and rejects
 an older result with `ViewHeightUnavailable`. Omitting the option preserves the

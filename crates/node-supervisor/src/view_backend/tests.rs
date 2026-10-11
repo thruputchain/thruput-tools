@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -59,16 +58,10 @@ enum FakeViewGatewayMode {
     IntroRejected,
     ViewSlow,
     Batch,
-    Legacy,
-    Timed {
-        probe_millis: u64,
-        execution_millis: u64,
-    },
 }
 
 struct FakeViewGateway {
     mode: FakeViewGatewayMode,
-    query_budgets: Arc<Mutex<Vec<u32>>>,
 }
 
 #[async_trait]
@@ -80,33 +73,25 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
         use groundhog_view::{
             ViewGatewayBatchPayload, ViewGatewayBatchResult, ViewGatewayHeightUnavailable,
         };
-        self.query_budgets.lock().unwrap().push(query.budget_millis);
-        if let FakeViewGatewayMode::Timed {
-            execution_millis, ..
-        } = self.mode
-        {
-            tokio::time::sleep(Duration::from_millis(execution_millis)).await;
-        } else {
-            assert!(query.budget_millis > 0);
-            if self.mode != FakeViewGatewayMode::Batch {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
-            }
-            assert!(query.budget_millis > 30_000);
-            assert_eq!(query.max_response_bytes, 256);
-            assert_ne!(
-                query.calls.0[0].auth_claim,
-                shared_view::public_view_auth_claim()
-            );
-            assert_ne!(query.calls.0[0].auth_claim, query.calls.0[1].auth_claim);
-            if let Some(requested) = query.min_height.filter(|height| **height > 42) {
-                return Ok(ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
-                    height_unavailable: ViewGatewayHeightUnavailable {
-                        requested,
-                        observed: 42.into(),
-                    },
-                });
-            }
+        assert!(query.budget_millis > 0);
+        if self.mode != FakeViewGatewayMode::Batch {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
+        }
+        assert!(query.budget_millis > 30_000);
+        assert_eq!(query.max_response_bytes, 256);
+        assert_ne!(
+            query.calls.0[0].auth_claim,
+            shared_view::public_view_auth_claim()
+        );
+        assert_ne!(query.calls.0[0].auth_claim, query.calls.0[1].auth_claim);
+        if let Some(requested) = query.min_height.filter(|height| **height > 42) {
+            return Ok(ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
+                height_unavailable: ViewGatewayHeightUnavailable {
+                    requested,
+                    observed: 42.into(),
+                },
+            });
         }
         Ok(ViewGatewayBatchResult::ViewGatewayBatchOk {
             payload: ViewGatewayBatchPayload {
@@ -130,19 +115,9 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
     }
     async fn viewgateway_intro(
         &self,
-        protocol: Protocol,
+        _arg0: Protocol,
     ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
-        if protocol == shared_view::VIEW_AUTH_CLAIMS_PROTOCOL
-            && let FakeViewGatewayMode::Timed { probe_millis, .. } = self.mode
-        {
-            tokio::time::sleep(Duration::from_millis(probe_millis)).await;
-        }
         if self.mode == FakeViewGatewayMode::IntroRejected {
-            return Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol);
-        }
-        if self.mode == FakeViewGatewayMode::Legacy
-            && protocol == shared_view::VIEW_AUTH_CLAIMS_PROTOCOL
-        {
             return Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol);
         }
         Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)
@@ -152,13 +127,6 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
         &self,
         query: TransactionViewQuery,
     ) -> Result<ViewGatewayResult, ProgramError> {
-        self.query_budgets.lock().unwrap().push(0);
-        if let FakeViewGatewayMode::Timed {
-            execution_millis, ..
-        } = self.mode
-        {
-            tokio::time::sleep(Duration::from_millis(execution_millis)).await;
-        }
         if self.mode == FakeViewGatewayMode::ViewSlow {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
@@ -182,16 +150,6 @@ async fn start_fake_view_gateway(
     SocketAddr,
     tokio::task::JoinHandle<Result<(), std::io::Error>>,
 ) {
-    start_observed_view_gateway(mode, Arc::default()).await
-}
-
-async fn start_observed_view_gateway(
-    mode: FakeViewGatewayMode,
-    query_budgets: Arc<Mutex<Vec<u32>>>,
-) -> (
-    SocketAddr,
-    tokio::task::JoinHandle<Result<(), std::io::Error>>,
-) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bug: test ViewGateway should bind");
@@ -200,10 +158,7 @@ async fn start_observed_view_gateway(
         .expect("bug: test ViewGateway should have local addr");
     let mut services = ServiceMap::new();
     services.add_service(Box::new(ViewGateway_ViewGateway1_Dispatcher::new(
-        Box::new(FakeViewGateway {
-            mode,
-            query_budgets,
-        }),
+        Box::new(FakeViewGateway { mode }),
     )));
     let server = RpcServer::new(listener, services);
     let handle = server.start().await;
@@ -220,126 +175,6 @@ fn request(caller: Option<ContractAddress>) -> ViewRequest {
         caller,
         gas_limit: None,
     }
-}
-
-#[tokio::test]
-async fn auth_probe_and_execution_share_one_timeout() {
-    use groundhog_json_rpc_server::ViewBatchConfig;
-    use groundhog_json_rpc_types::view::{ViewAuthClaim, ViewBatchRequest, ViewCall};
-
-    for (probe_millis, execution_millis) in [(1_500, 0), (700, 700)] {
-        for batch in [false, true] {
-            let queries = Arc::new(Mutex::new(Vec::new()));
-            let (addr, server) = start_observed_view_gateway(
-                FakeViewGatewayMode::Timed {
-                    probe_millis,
-                    execution_millis,
-                },
-                queries.clone(),
-            )
-            .await;
-            let backend = HogdDevViewBackend::connect_optional(
-                Some(addr),
-                &protocol_text(&PROTOCOL_VERSION),
-                None,
-                Duration::from_secs(1),
-            )
-            .await
-            .unwrap();
-            let mut input = request(None);
-            input.auth_claim = Some(ViewAuthClaim::SourceAddress {
-                allowed_keys: 0,
-                required_weight: 0,
-            });
-            let result = if batch {
-                let entry: ViewCall =
-                    serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
-                backend
-                    .view_batch(
-                        RpcRequestContext::unbounded(),
-                        ViewBatchRequest {
-                            calls: vec![entry],
-                            min_height: None,
-                        },
-                        123,
-                        ViewBatchConfig::default(),
-                    )
-                    .await
-                    .map(|_| ())
-            } else {
-                backend
-                    .view(RpcRequestContext::unbounded(), input, 123)
-                    .await
-                    .map(|_| ())
-            };
-            assert!(
-                matches!(result, Err(RpcServerError::BackendTimeout)),
-                "{result:?}"
-            );
-            let budgets = queries.lock().unwrap().clone();
-            if probe_millis > 1_000 {
-                assert!(
-                    budgets.is_empty(),
-                    "a failed probe must not send a view query"
-                );
-            } else {
-                assert_eq!(budgets.len(), 1);
-                if batch {
-                    assert!((1..=300).contains(&budgets[0]), "{budgets:?}");
-                }
-            }
-            server.abort();
-        }
-    }
-}
-
-#[tokio::test]
-async fn explicit_claims_fail_closed_on_legacy_backends() {
-    use groundhog_json_rpc_server::ViewBatchConfig;
-    use groundhog_json_rpc_types::view::{ViewAuthClaim, ViewBatchRequest, ViewCall};
-
-    let (addr, server) = start_fake_view_gateway(FakeViewGatewayMode::Legacy).await;
-    let backend = HogdDevViewBackend::connect_optional(
-        Some(addr),
-        &protocol_text(&PROTOCOL_VERSION),
-        None,
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap();
-    let mut input = request(None);
-    assert!(
-        backend
-            .view(RpcRequestContext::new(None), input.clone(), 123)
-            .await
-            .is_ok()
-    );
-    input.auth_claim = Some(ViewAuthClaim::SourceAddress {
-        allowed_keys: 0,
-        required_weight: 0,
-    });
-    assert!(matches!(
-        backend
-            .view(RpcRequestContext::new(None), input.clone(), 123)
-            .await,
-        Err(RpcServerError::NotImplemented(_))
-    ));
-    let entry: ViewCall = serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
-    assert!(matches!(
-        backend
-            .view_batch(
-                RpcRequestContext::new(None),
-                ViewBatchRequest {
-                    calls: vec![entry],
-                    min_height: None
-                },
-                123,
-                ViewBatchConfig::default()
-            )
-            .await,
-        Err(RpcServerError::NotImplemented(_))
-    ));
-    server.abort();
 }
 
 #[tokio::test]

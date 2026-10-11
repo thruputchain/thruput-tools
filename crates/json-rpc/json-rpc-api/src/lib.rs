@@ -177,7 +177,7 @@ pub trait GroundhogApi {
     /// requested committed height. An older result returns `ViewHeightUnavailable`.
     /// This is a freshness floor, not a historical selector, wait, or refresh request.
     /// Optional `authClaim` is assumed without signature verification; contract
-    /// checks still run. An older backend that cannot preserve it is rejected.
+    /// checks still run.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
 
