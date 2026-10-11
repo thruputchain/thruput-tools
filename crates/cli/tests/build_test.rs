@@ -1805,31 +1805,37 @@ fn rv32_raw_spec_section_older_than_this_build_reports_skew() {
 #[test]
 #[serial]
 fn rv32_build_refuses_a_newer_contract_spec_format_before_compiling() {
-    let message =
-        rv32_build_with_declared_raw_spec_format(groundhog_spec_tool::RAW_SPEC_FORMAT + 1);
-
-    assert!(
-        message.contains("newer Groundhog SDK"),
-        "expected a version-skew diagnosis, got: {message}"
-    );
+    for package in ["thruput-contract-spec", "groundhog-contract-spec"] {
+        let message = rv32_build_with_declared_raw_spec_format(
+            package,
+            groundhog_spec_tool::RAW_SPEC_FORMAT + 1,
+        );
+        assert!(
+            message.contains("newer Groundhog SDK"),
+            "expected a version-skew diagnosis for {package}, got: {message}"
+        );
+    }
 }
 
 #[test]
 #[serial]
 fn rv32_build_refuses_an_older_contract_spec_format_before_compiling() {
-    let message =
-        rv32_build_with_declared_raw_spec_format(groundhog_spec_tool::RAW_SPEC_FORMAT - 1);
-
-    assert!(
-        message.contains("older Groundhog SDK"),
-        "expected a version-skew diagnosis, got: {message}"
-    );
+    for package in ["thruput-contract-spec", "groundhog-contract-spec"] {
+        let message = rv32_build_with_declared_raw_spec_format(
+            package,
+            groundhog_spec_tool::RAW_SPEC_FORMAT - 1,
+        );
+        assert!(
+            message.contains("older Groundhog SDK"),
+            "expected a version-skew diagnosis for {package}, got: {message}"
+        );
+    }
 }
 
-/// Run an rv32 build whose resolved `groundhog-contract-spec` declares
+/// Run an rv32 build whose resolved contract-spec package declares
 /// `declared`, asserting it refuses before cargo is asked to compile
 /// anything. Returns the error message for the caller to inspect.
-fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
+fn rv32_build_with_declared_raw_spec_format(package: &str, declared: u32) -> String {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
@@ -1855,12 +1861,12 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
         project_root.join("Cargo.toml").display()
     );
     // Shaped like a real contract graph: the member reaches
-    // `groundhog-contract-spec` through `sdk`, not directly.
+    // the contract-spec package through `sdk`, not directly.
     let dep_graph_metadata = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[
             {{"id":"member","name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","metadata":null}},
             {{"id":"sdk","name":"sdk","version":"0.1.0","manifest_path":"{}","metadata":null}},
-            {{"id":"spec","name":"groundhog-contract-spec","version":"0.1.0","manifest_path":"{}","metadata":{{"groundhog":{{"raw_spec_format":{declared}}}}}}}
+            {{"id":"spec","name":"{package}","version":"0.1.0","manifest_path":"{}","metadata":{{"groundhog":{{"raw_spec_format":{declared}}}}}}}
         ],"resolve":{{"nodes":[
             {{"id":"member","dependencies":["sdk"]}},
             {{"id":"sdk","dependencies":["spec"]}},

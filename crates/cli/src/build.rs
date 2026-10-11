@@ -768,10 +768,11 @@ pub fn cargo_metadata_with_artifacts(
 
     serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
 }
-/// The SDK crate whose manifest declares the raw spec wire format a contract
-/// emits. It owns the fragment types, so the format version travels with it
+/// The SDK packages whose manifests declare the raw spec wire format a contract
+/// emits. They own the fragment types, so the format version travels with them
 /// and no version table has to be maintained here.
-const CONTRACT_SPEC_PACKAGE: &str = "groundhog-contract-spec";
+// Released SDKs still use the old identity; both packages declare the same raw format metadata.
+const CONTRACT_SPEC_PACKAGES: &[&str] = &["thruput-contract-spec", "groundhog-contract-spec"];
 
 /// `cargo metadata` output read for the resolved dependency graph.
 ///
@@ -817,7 +818,7 @@ struct DependencySpecMetadata {
 impl DependencyPackage {
     /// The raw spec format this package declares.
     ///
-    /// A `groundhog-contract-spec` predating the manifest key is
+    /// A contract-spec package predating the manifest key is
     /// pre-versioning, which is format 0 — genuinely unsupported, so absence
     /// is not treated as "unknown, allow it".
     fn raw_spec_format(&self) -> u32 {
@@ -965,7 +966,9 @@ fn check_dependency_raw_spec_format(
     }
 
     for package in &metadata.packages {
-        if package.name != CONTRACT_SPEC_PACKAGE || !seen.contains(package.id.as_str()) {
+        if !CONTRACT_SPEC_PACKAGES.contains(&package.name.as_str())
+            || !seen.contains(package.id.as_str())
+        {
             continue;
         }
         groundhog_spec_tool::check_raw_spec_format(package.raw_spec_format())
@@ -982,9 +985,9 @@ fn check_dependency_raw_spec_format(
 /// costs one `cargo metadata` call, so skew is reported in seconds instead of
 /// as a fragment parse failure after a full contract compile.
 ///
-/// A project with no `groundhog-contract-spec` in its graph is not a
-/// Thruput contract and is left alone. An unavailable dependency graph
-/// warns rather than refuses, so an offline or vendored build still
+/// A project with neither `thruput-contract-spec` nor `groundhog-contract-spec`
+/// in its graph is not a Thruput contract and is left alone. An unavailable
+/// dependency graph warns rather than refuses, so an offline or vendored build still
 /// completes: only a format this build genuinely cannot read is a hard error.
 ///
 /// This is the first thing a build does that reads the registry, so it is
@@ -1580,6 +1583,29 @@ mod raw_spec_format_preflight_tests {
     fn check(json: &str) -> Result<(), crate::CliError> {
         let metadata = serde_json::from_str(json).expect("bug: fixture should parse");
         super::check_dependency_raw_spec_format(&metadata, SELECTED)
+    }
+
+    #[test]
+    fn checks_thruput_contract_spec_formats_in_the_selected_subtree() {
+        for (dependency, accepted) in [
+            (SpecDep::Format(RAW_SPEC_FORMAT), true),
+            (SpecDep::Format(RAW_SPEC_FORMAT + 1), false),
+            (SpecDep::Format(RAW_SPEC_FORMAT - 1), false),
+            (SpecDep::PreVersioning, false),
+        ] {
+            let json = workspace_json(dependency, SpecDep::Format(RAW_SPEC_FORMAT))
+                .replace("groundhog-contract-spec", "thruput-contract-spec");
+            assert_eq!(check(&json).is_ok(), accepted, "metadata: {json}");
+        }
+    }
+
+    #[test]
+    fn ignores_unrelated_thruput_contract_spec_formats() {
+        for selected in [SpecDep::Absent, SpecDep::Format(RAW_SPEC_FORMAT)] {
+            let json = workspace_json(selected, SpecDep::Format(RAW_SPEC_FORMAT + 1))
+                .replace("groundhog-contract-spec", "thruput-contract-spec");
+            assert!(check(&json).is_ok(), "metadata: {json}");
+        }
     }
 
     #[test]
