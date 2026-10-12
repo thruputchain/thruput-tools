@@ -29,6 +29,9 @@ use tokio::sync::Notify;
 #[derive(Clone, Debug, clap::Args)]
 #[group(id = "SubscriptionConfig")]
 pub struct Config {
+    /// Maximum requested depth in blocks (42,428 is about 24 hours at measured cadence).
+    #[arg(long, default_value_t = 42_428, value_parser = clap::value_parser!(i64).range(1..))]
+    pub request_window: i64,
     /// WebSocket subscription listener.
     #[arg(long, default_value = "127.0.0.1:9551")]
     pub ws_listen: SocketAddr,
@@ -75,7 +78,8 @@ impl Config {
 
     /// Reject invalid bounds and accidental public exposure before binding.
     pub fn validate(&self, metrics_address: SocketAddr) -> Result<(), crate::Error> {
-        if self.max_subscribers == 0
+        if self.request_window <= 0
+            || self.max_subscribers == 0
             || self.subscription_limit_per_connection() == 0
             || self.subscriber_queue == 0
             || self.subscriber_queue_bytes == 0
@@ -101,7 +105,7 @@ impl Config {
     }
 }
 
-fn record_from_bytes(block: &EventIndexerPulledBlock, bytes: Vec<u8>) -> Record {
+pub(crate) fn record_from_bytes(block: &EventIndexerPulledBlock, bytes: Vec<u8>) -> Record {
     Record {
         height: crate::block_height(block),
         consensus_hash: HexBytes::from(block.block.identity.consensus_hash.as_ref().to_vec()),
@@ -144,6 +148,7 @@ struct Subscriber {
 #[derive(Debug)]
 struct State {
     tip: i64,
+    request_window: Option<i64>,
     next_id: u64,
     subscribers: BTreeMap<u64, Subscriber>,
     totals: Counters,
@@ -186,6 +191,7 @@ impl Hub {
             connections: Arc::new(AtomicUsize::new(0)),
             state: Arc::new(Mutex::new(State {
                 tip,
+                request_window: None,
                 next_id: 1,
                 subscribers: BTreeMap::new(),
                 totals: Counters::default(),
@@ -198,8 +204,7 @@ impl Hub {
     }
 
     /// Publish only after successful durable append. No subscriber I/O occurs here.
-    pub(crate) fn publish(&self, block: &EventIndexerPulledBlock, bytes: Vec<u8>) {
-        let mut record = record_from_bytes(block, bytes);
+    pub(crate) fn publish(&self, mut record: Record) {
         record.ingested_at_unix_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -250,6 +255,13 @@ impl Hub {
             Cursor::Height { height } if (0..i64::MAX).contains(height) => *height,
             Cursor::Height { .. } => return Err(error("invalid height")),
         };
+        // Admission policy only: accepted catch-up streams keep their exact cursor
+        // as the tip advances. Never fast-forward a subscriber to this boundary.
+        if matches!(cursor, Cursor::Height { .. })
+            && next < state.tip.saturating_sub(self.config.request_window).max(0)
+        {
+            return Err(error("below_window"));
+        }
         let id = state.next_id;
         state.next_id = state
             .next_id
@@ -319,11 +331,50 @@ impl Hub {
             "totals": totals, "subscribers": subscribers})
     }
 
+    // Retention removes a prefix of immutable consecutive height files. Locate its
+    // boundary within the admission window in O(log window) metadata probes, without
+    // enumerating the archive. This observation never affects cursors.
+    async fn realised_window(&self, tip: i64) -> std::io::Result<i64> {
+        if tip < 0 {
+            return Ok(0);
+        }
+        let present =
+            |height| tokio::fs::try_exists(crate::store::record_path(&self.directory, height));
+        if !present(tip).await? {
+            return Ok(0);
+        }
+        let mut low = tip.saturating_sub(self.config.request_window).max(0);
+        let mut high = tip;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if present(mid).await? {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        Ok(tip - low)
+    }
+
+    /// Cache realised archive depth using async I/O, independently of metrics scrapes.
+    /// Unknown depth or a failed probe is exposed as NaN until the next refresh.
+    pub async fn refresh_request_window(&self) {
+        let tip = self.lock().tip;
+        let window = self.realised_window(tip).await.ok();
+        self.lock().request_window = window;
+    }
+
     /// Prometheus exposition with active-only subscriber labels and retained totals.
     pub fn render_metrics(&self) -> String {
         use std::fmt::Write;
         let stats = self.stats();
         let mut output = format!("firehose_subscribers {}\n", stats["currentSubscribers"]);
+        let window = self
+            .lock()
+            .request_window
+            .map_or_else(|| "NaN".to_owned(), |span| span.to_string());
+        let _ = writeln!(output, "# TYPE firehose_request_window_blocks gauge");
+        let _ = writeln!(output, "firehose_request_window_blocks {window}");
         let _ = writeln!(output, "# TYPE firehose_connections gauge");
         let _ = writeln!(
             output,

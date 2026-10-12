@@ -4,6 +4,7 @@ pub mod client;
 pub mod metrics;
 pub mod store;
 pub mod subscription;
+pub mod tailer;
 pub mod types;
 mod verify;
 

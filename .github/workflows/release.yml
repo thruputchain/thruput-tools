@@ -38,14 +38,18 @@ jobs:
             release_target: x86_64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-2604
             artifact_name: groundhog-rpc-x86_64-release-artifacts
-            release_apps: hog-gateway thruput rv32-lower hogsim thruput-faucet
+            release_apps: >-
+              hog-gateway thruput rv32-lower hogsim thruput-faucet
+              hog-firehose-store hog-firehose-serve
           - architecture: arm64
             machine: aarch64
             platform: linux
             release_target: aarch64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-arm64
             artifact_name: groundhog-rpc-arm64-release-artifacts
-            release_apps: hog-gateway thruput rv32-lower hogsim thruput-faucet
+            release_apps: >-
+              hog-gateway thruput rv32-lower hogsim thruput-faucet
+              hog-firehose-store hog-firehose-serve
           - architecture: arm64
             machine: arm64
             platform: macos
@@ -119,9 +123,10 @@ jobs:
             -p thruput-rv32-lower \
             -p thruput-sim \
             -p thruput-faucet \
+            -p thruput-firehose \
             --bins
 
-          for app in hog-gateway thruput rv32-lower hogsim thruput-faucet; do
+          for app in ${{ matrix.release_apps }}; do
             app_version="$CRATE_VERSION"
             if [ "$app" = thruput ] || [ "$app" = hog-gateway ]; then
               app_version="$CRATE_VERSION (commit ${source_commit:0:8})"
@@ -151,6 +156,8 @@ jobs:
               rv32-lower) package_args+=(-p thruput-rv32-lower) ;;
               hogsim) package_args+=(-p thruput-sim) ;;
               thruput-faucet) package_args+=(-p thruput-faucet) ;;
+              hog-firehose-store|hog-firehose-serve)
+                package_args+=(-p thruput-firehose) ;;
               *)
                 echo "unsupported release app: $app" >&2
                 exit 1
@@ -276,7 +283,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
-          test "${#archives[@]}" -eq 24
+          test "${#archives[@]}" -eq 32
           for archive in "${archives[@]}"; do
             test -s "$archive"
           done

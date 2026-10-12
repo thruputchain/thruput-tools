@@ -1,6 +1,15 @@
+use std::time::Duration;
+
+use jsonrpsee::{
+    core::client::{Subscription, SubscriptionClientT},
+    rpc_params,
+    ws_client::{WsClient, WsClientBuilder},
+};
+use serde_json::Value;
 use thruput_firehose::{
     client::{Outcome, outcome},
     store::Store,
+    subscription::{Config, Cursor, Hub},
 };
 use thruput_indexer::{EventIndexerPullResult, IndexerProgress};
 
@@ -171,4 +180,84 @@ fn crash_after_publication_never_truncates_the_committed_inode() {
     drop(store);
     assert_eq!(std::fs::read(published).unwrap(), original);
     assert_eq!(Store::open(dir.path()).unwrap().blocks, 2);
+}
+
+fn config() -> Config {
+    Config {
+        request_window: 42_428,
+        ws_listen: "127.0.0.1:0".parse().unwrap(),
+        allow_remote: false,
+        max_subscribers: 64,
+        max_subscriptions_per_connection: None,
+        subscriber_queue: 2,
+        subscriber_queue_bytes: 32 * 1024,
+        max_record_bytes: 16 * 1024 * 1024,
+        live_timeout_ms: 1000,
+        catchup_timeout_ms: 1000,
+        catchup_progress_ms: 30000,
+    }
+}
+
+async fn connect(address: std::net::SocketAddr) -> WsClient {
+    WsClientBuilder::default()
+        .max_response_size(40 * 1024 * 1024)
+        .build(format!("ws://{address}"))
+        .await
+        .unwrap()
+}
+
+async fn subscribe(client: &WsClient, cursor: Cursor) -> Subscription<Value> {
+    client
+        .subscribe(
+            "firehose_subscribe",
+            rpc_params![cursor],
+            "firehose_unsubscribe",
+        )
+        .await
+        .unwrap()
+}
+
+async fn receive(sub: &mut Subscription<Value>) -> Value {
+    tokio::time::timeout(Duration::from_secs(5), sub.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn catchup_refuses_archive_corruption_after_recovery() {
+    for malformed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut original = fixture();
+        let mut store = Store::open(dir.path()).unwrap();
+        store.append(&original).unwrap();
+        drop(store);
+        let store = Store::open(dir.path()).unwrap();
+        let hub = Hub::new(dir.path().to_owned(), store.height(), config());
+        // Keep valid XDR and the expected height, but invalidate its commitment.
+        original.block.payload.consensus_value.prev_hash =
+            original.block.identity.consensus_hash.clone();
+        let bytes = if malformed {
+            vec![0]
+        } else {
+            xdrs::txs::encode(&original).unwrap()
+        };
+        std::fs::write(dir.path().join("00000000000000000001.xdr"), bytes).unwrap();
+        let (address, server) = hub.serve().await.unwrap();
+        let client = connect(address).await;
+        let mut sub = subscribe(&client, Cursor::Height { height: 1 }).await;
+        assert_eq!(
+            receive(&mut sub).await,
+            serde_json::json!({
+                "type": "closed", "reason": "archive_corrupt", "nextHeight": 1
+            })
+        );
+        assert_eq!(hub.stats()["totals"]["blocksSent"], 0);
+        assert_eq!(hub.stats()["totals"]["disconnects"]["archive_corrupt"], 1);
+        server.stop().unwrap();
+        drop(sub);
+        drop(client);
+        server.stopped().await;
+    }
 }

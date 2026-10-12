@@ -3927,6 +3927,7 @@ dependencies = [
  "axum",
  "clap",
  "fs2",
+ "futures-util",
  "hex",
  "jsonrpsee",
  "prometheus",
