@@ -294,6 +294,16 @@ where
     }
 }
 
+/// Runs a retention pass on a blocking worker so directory scans and deletions
+/// do not stall the task that also serves health and metrics.
+async fn prune(mut store: Store, retention: Retention) -> Result<Store, Error> {
+    tokio::task::spawn_blocking(move || {
+        store.prune(retention)?;
+        Ok::<_, Error>(store)
+    })
+    .await?
+}
+
 /// XDR size of one component of a stored block, for the `tail` size breakdown.
 fn encoded_len<T: xdrs::WriteXDR>(value: &T) -> Result<usize, Error> {
     Ok(xdrs::txs::encode(value)
@@ -343,7 +353,7 @@ async fn ingest(
                     return Ok(());
                 }
                 _ = pruning.tick() => {
-                    store.prune(retention)?;
+                    store = prune(store, retention).await?;
                     update_store_metrics(metrics, &store);
                 }
             }
@@ -365,7 +375,7 @@ async fn ingest(
                         return Ok(());
                     }
                     _ = pruning.tick() => {
-                        store.prune(retention)?;
+                        store = prune(store, retention).await?;
                         update_store_metrics(metrics, &store);
                     }
                     _ = ticker.tick(), if parked => { metrics.parked.set(parked_total + start.elapsed().as_secs_f64()); }
