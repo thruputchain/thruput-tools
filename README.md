@@ -164,6 +164,3 @@ behavior. Include tests for changed behavior and describe what you verified.
 - [Bundled documentation maintenance](docs/bundled-documentation.md): updating
   the developer guide shipped with the CLI.
 
-## License
-
-[Apache-2.0](LICENSE)
