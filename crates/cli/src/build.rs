@@ -771,7 +771,8 @@ pub fn cargo_metadata_with_artifacts(
 /// The SDK packages whose manifests declare the raw spec wire format a contract
 /// emits. They own the fragment types, so the format version travels with them
 /// and no version table has to be maintained here.
-// Released SDKs still use the old identity; both packages declare the same raw format metadata.
+///
+/// Released SDKs use the old identity. Both packages declare the same metadata.
 const CONTRACT_SPEC_PACKAGES: &[&str] = &["thruput-contract-spec", "groundhog-contract-spec"];
 
 /// `cargo metadata` output read for the resolved dependency graph.
@@ -819,8 +820,8 @@ impl DependencyPackage {
     /// The raw spec format this package declares.
     ///
     /// A contract-spec package predating the manifest key is
-    /// pre-versioning, which is format 0 — genuinely unsupported, so absence
-    /// is not treated as "unknown, allow it".
+    /// pre-versioning and uses unsupported format 0. Missing metadata is not
+    /// treated as "unknown, allow it".
     fn raw_spec_format(&self) -> u32 {
         self.metadata
             .as_ref()
@@ -987,8 +988,8 @@ fn check_dependency_raw_spec_format(
 ///
 /// A project with neither `thruput-contract-spec` nor `groundhog-contract-spec`
 /// in its graph is not a Thruput contract and is left alone. An unavailable
-/// dependency graph warns rather than refuses, so an offline or vendored build still
-/// completes: only a format this build genuinely cannot read is a hard error.
+/// dependency graph warns rather than refuses, so an offline or vendored
+/// build still completes. Only an unreadable format is a hard error.
 ///
 /// This is the first thing a build does that reads the registry, so it is
 /// also where a registry problem first shows up. Cargo says what it is
