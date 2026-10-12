@@ -3,8 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use groundhog_firehose::store::{Retention, Store};
-use groundhog_indexer::IndexerInitializedProgress;
+use thruput_firehose::store::{Retention, Store};
+use thruput_indexer::IndexerInitializedProgress;
 
 mod common;
 use common::{fixture, next};
@@ -62,7 +62,7 @@ fn recovery_discards_leftovers_in_both_prune_crash_windows() {
         let cursor = store.cursor(false);
         drop(store);
         let bytes = fs::read(dir.path().join("00000000000000000004.xdr")).unwrap();
-        let first: groundhog_indexer::EventIndexerPulledBlock = xdrs::txs::decode(&bytes).unwrap();
+        let first: thruput_indexer::EventIndexerPulledBlock = xdrs::txs::decode(&bytes).unwrap();
         let floor = IndexerInitializedProgress {
             origin: first.origin,
             contiguous_height: 3.into(),
@@ -145,7 +145,7 @@ fn measure_restart_watermark() {
     let hex: String = include_str!("fixtures/hundred-transactions.hex")
         .split_whitespace()
         .collect();
-    let mut block: groundhog_indexer::EventIndexerPulledBlock =
+    let mut block: thruput_indexer::EventIndexerPulledBlock =
         xdrs::txs::decode(&hex::decode(hex).unwrap()).unwrap();
     block.origin.first_height = block
         .block

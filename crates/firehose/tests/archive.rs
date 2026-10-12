@@ -1,17 +1,17 @@
 use std::time::Duration;
 
-use thruput_firehose::{
-    client::{Outcome, outcome},
-    store::Store,
-    subscription::{Config, Cursor, Hub},
-};
-use thruput_indexer::{EventIndexerPullResult, IndexerProgress};
 use jsonrpsee::{
     core::client::{Subscription, SubscriptionClientT},
     rpc_params,
     ws_client::{WsClient, WsClientBuilder},
 };
 use serde_json::Value;
+use thruput_firehose::{
+    client::{Outcome, outcome},
+    store::Store,
+    subscription::{Config, Cursor, Hub},
+};
+use thruput_indexer::{EventIndexerPullResult, IndexerProgress};
 
 mod common;
 use common::{fixture, next, rehash};

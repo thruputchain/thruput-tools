@@ -3,18 +3,18 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use groundhog_firehose::{
-    metrics::Metrics,
-    store::Store,
-    subscription::{Config, Cursor, Hub},
-    tailer::Tailer,
-};
 use jsonrpsee::{
     core::client::{ClientT, SubscriptionClientT},
     rpc_params,
     ws_client::WsClientBuilder,
 };
 use serde_json::Value;
+use thruput_firehose::{
+    metrics::Metrics,
+    store::Store,
+    subscription::{Config, Cursor, Hub},
+    tailer::Tailer,
+};
 
 mod common;
 use common::{fixture, next};
@@ -286,7 +286,7 @@ async fn pruned_archive_restarts_serves_retained_history_and_tails_new_blocks() 
         store.append(block).unwrap();
     }
     store
-        .prune(groundhog_firehose::store::Retention {
+        .prune(thruput_firehose::store::Retention {
             duration: Duration::MAX,
             bytes: 0,
             min_blocks: 2,

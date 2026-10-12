@@ -104,7 +104,7 @@ async fn public_profile_refuses_second_subscription_and_first_keeps_delivering()
         store.height(),
         cli_config(&["--allow-remote"]),
     );
-    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+    let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let mut first = subscribe(&client, Cursor::Tip).await;
@@ -135,7 +135,7 @@ async fn public_profile_concurrent_subscriptions_admit_exactly_one() {
         store.height(),
         cli_config(&["--allow-remote"]),
     );
-    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+    let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let attempt = || {
@@ -175,7 +175,7 @@ async fn loopback_default_and_explicit_remote_override_allow_multiple_cursors() 
         let current = fixture();
         store.append(&current).unwrap();
         let hub = Hub::new(dir.path().to_owned(), store.height(), cli_config(&args));
-        let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+        let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
         let (address, server) = hub.serve().await.unwrap();
         let client = connect(address).await;
         let mut tip = subscribe(&client, Cursor::Tip).await;
@@ -312,7 +312,7 @@ async fn request_window_refuses_retained_history_and_preserves_attached_cursors(
     let mut config = config();
     config.request_window = 2;
     let hub = Hub::new(dir.path().to_owned(), store.height(), config);
-    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+    let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     assert!(dir.path().join("00000000000000000002.xdr").is_file());
@@ -439,7 +439,7 @@ async fn archive_boundary_resume_and_bytes_are_exact() {
         current = next(&current);
     }
     let hub = Hub::new(dir.path().to_owned(), store.height(), config());
-    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+    let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let mut sub = subscribe(&client, Cursor::Height { height: 1 }).await;
@@ -506,7 +506,7 @@ async fn slow_subscriber_demotes_and_disconnects_without_harming_fast_subscriber
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();
     let hub = Hub::new(dir.path().to_owned(), store.height(), config());
-    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+    let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let fast = connect(address).await;
     let slow = connect(address).await;
@@ -981,7 +981,7 @@ async fn bounds_connection_scoped_acks_and_cleanup() {
     config.max_subscribers = 2;
     config.subscriber_queue_bytes = 1;
     let hub = Hub::new(dir.path().to_owned(), store.height(), config);
-    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+    let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let other = connect(address).await;
@@ -1042,7 +1042,7 @@ async fn stalled_live_and_oversize_records_return_resumable_close_reasons() {
             config.max_record_bytes = 100;
         }
         let hub = Hub::new(dir.path().to_owned(), store.height(), config);
-        let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+        let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
         let (address, server) = hub.serve().await.unwrap();
         let client = connect(address).await;
         let mut sub = subscribe(&client, Cursor::Tip).await;
@@ -1094,7 +1094,7 @@ async fn growing_archive_lag_disconnects_even_when_individual_acks_meet_deadline
     let mut config = config();
     config.catchup_progress_ms = 50;
     let hub = Hub::new(dir.path().to_owned(), store.height(), config);
-    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+    let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let mut sub = subscribe(&client, Cursor::Height { height: 1 }).await;
@@ -1124,7 +1124,7 @@ async fn typed_client_future_cursor_and_invalid_cursor() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();
     let hub = Hub::new(dir.path().to_owned(), store.height(), config());
-    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+    let mut tailer = thruput_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     assert!(

@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use axum::{Router, extract::State, http::StatusCode, routing::get};
 use clap::Parser;
-use groundhog_firehose::{
+use thruput_firehose::{
     metrics::Metrics,
     subscription::{self, Hub},
     tailer::Tailer,

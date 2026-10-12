@@ -166,7 +166,7 @@ impl Tailer {
 fn verify_record(
     bytes: &[u8],
     height: i64,
-) -> Result<groundhog_indexer::EventIndexerPulledBlock, Error> {
+) -> Result<thruput_indexer::EventIndexerPulledBlock, Error> {
     let block = crate::decode(bytes)?;
     crate::verify::verify(&block)?;
     if crate::block_height(&block) != height {

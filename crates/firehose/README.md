@@ -190,7 +190,7 @@ This isolates avoided hashing, not cold gp3 I/O; warm recovery still reads every
 record. Reproduce with:
 
 ```sh
-cargo test -p groundhog-firehose --test retention measure_restart_watermark \
+cargo test -p thruput-firehose --test retention measure_restart_watermark \
   -- --ignored --nocapture
 ```
 

@@ -689,7 +689,7 @@ mod tests {
             .proposal_header
             .block_height += 1;
         let bytes = xdrs::txs::encode(&second.block.payload.consensus_value).unwrap();
-        second.block.identity.consensus_hash = groundhog_xdr::types::ConsensusValueHash::new(
+        second.block.identity.consensus_hash = thruput_xdr::types::ConsensusValueHash::new(
             <[u8; 32]>::from(Sha256::digest(bytes)).into(),
         );
         let dir = tempfile::tempdir().unwrap();

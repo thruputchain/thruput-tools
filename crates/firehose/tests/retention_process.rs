@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use groundhog_firehose::store::Store;
+use thruput_firehose::store::Store;
 
 mod common;
 use common::{fixture, next};
