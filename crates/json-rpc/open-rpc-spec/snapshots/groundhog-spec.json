@@ -1177,7 +1177,7 @@
         ]
       },
       "ExecutionConfig": {
-        "description": "Rules fetched during this request, without stale-cache fallback.\nApply to execution following `observedTip`; later inclusion can use newer rules.",
+        "description": "Rules read with the committed tip named in `observedTip`, which may be a\nrecent reading this endpoint already held rather than one taken during this\nrequest. Never a lapsed reading: without one recent enough the request\nreads the backend, and a failure surfaces rather than an old price.\nApply to execution following `observedTip`; later inclusion can use newer rules.",
         "properties": {
           "configHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash",
@@ -2654,7 +2654,7 @@
           "$ref": "#/components/schemas/ChainConfig"
         }
       },
-      "summary": "Stated execution parameters, plus an authoritative `execution` reading when supported. Top-level omissions mean unspecified. `execution` pairs resolved limits and storage prices with the committed tip observed during this request; it is never served from a stale cache. Stated fields come from the same fresh DB reading. Unavailable or unreadable readings fail with `BackendUnavailable`.",
+      "summary": "Stated execution parameters, plus an authoritative `execution` reading when supported. Top-level omissions mean unspecified. `execution` pairs resolved limits and storage prices with the committed tip it names in `observedTip`, which may be a recent reading this endpoint already held rather than one taken during this request; it is never a lapsed reading, and without one recent enough the request reads the backend. Stated fields come from that same reading. Unavailable or unreadable readings fail with `BackendUnavailable`.",
       "tags": [
         {
           "name": "Core API"

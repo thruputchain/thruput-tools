@@ -29,7 +29,10 @@ impl From<NetworkConfigParams> for ChainConfig {
     }
 }
 
-/// Rules fetched during this request, without stale-cache fallback.
+/// Rules read with the committed tip named in `observedTip`, which may be a
+/// recent reading this endpoint already held rather than one taken during this
+/// request. Never a lapsed reading: without one recent enough the request
+/// reads the backend, and a failure surfaces rather than an old price.
 /// Apply to execution following `observedTip`; later inclusion can use newer rules.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

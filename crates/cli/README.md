@@ -524,8 +524,10 @@ These options require an RPC endpoint exposing authoritative `chainConfig.execut
 rules. The estimate reports the observed tip, balance-item deposit, code storage
 collateral, and minimum transfer in raw integer units and HOG (10,000,000 raw units
 per HOG). It assumes a fresh, unfunded contract address. The runtime charges code
-by the deployed artifact's byte length. Prices are fetched during the request;
-they are not a guarantee of the rules at eventual inclusion.
+by the deployed artifact's byte length. Prices come from the committed tip
+reported as the observed height, which the endpoint may have read shortly before
+this request rather than during it; either way they are not a guarantee of the
+rules at eventual inclusion.
 
 `--fund minimum` covers deployment without an initializer and leaves zero free
 balance for future storage growth. Sender replay storage and gas scheduling capacity

@@ -1942,8 +1942,11 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         );
     }
 
+    /// With no execution rules in the reading there is nothing a price read
+    /// can be answered from, so every call reads the tip. This is the shape
+    /// `chainConfig` had before the cache could carry execution.
     #[tokio::test]
-    async fn chain_config_rpc_fetches_on_every_request() {
+    async fn chain_config_rpc_fetches_when_the_backend_supplies_no_execution() {
         let chain = ConfigChain::new(3);
         let server = expiry_check_server(
             chain.clone(),
@@ -1961,7 +1964,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(
             *chain.tip_calls.lock().await,
             3,
-            "configuration must be fetched during each request"
+            "a reading without execution rules cannot answer a price read"
         );
     }
 
@@ -2137,8 +2140,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         }
     }
 
+    /// Two callers arriving together, with nothing cacheable to serve them,
+    /// each read the tip rather than one inheriting the other's probe.
     #[tokio::test]
-    async fn concurrent_chain_config_calls_each_request_a_fresh_reading() {
+    async fn concurrent_chain_config_calls_each_read_the_tip_when_nothing_is_cacheable() {
         let chain = ConfigChain::new(3);
         let server = expiry_check_server(
             YieldingChain(chain.clone()),
@@ -2165,7 +2170,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(
             *chain.tip_calls.lock().await,
             2,
-            "only the backend may coalesce fresh configuration reads"
+            "with nothing cacheable, only the backend may coalesce these reads"
         );
     }
 
