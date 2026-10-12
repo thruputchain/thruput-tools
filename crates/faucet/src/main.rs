@@ -235,7 +235,7 @@ mod tests {
     #[tokio::test]
     async fn pprof_listener_requires_explicit_address() {
         let cli =
-            super::Cli::try_parse_from(["groundhog-faucet", "--config", "unused.toml"]).unwrap();
+            super::Cli::try_parse_from(["thruput-faucet", "--config", "unused.toml"]).unwrap();
         assert!(cli.pprof_listen.is_none());
         assert!(
             super::pprof_listener(cli.pprof_listen.as_deref(), false)
@@ -244,7 +244,7 @@ mod tests {
                 .is_none()
         );
         let cli = super::Cli::try_parse_from([
-            "groundhog-faucet",
+            "thruput-faucet",
             "--config",
             "unused.toml",
             "--pprof-listen",
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn pprof_allow_remote_flag_parses() {
         let cli = super::Cli::try_parse_from([
-            "groundhog-faucet",
+            "thruput-faucet",
             "--config",
             "unused.toml",
             "--pprof-allow-remote",
