@@ -95,9 +95,9 @@ follow the same precision policy, with independently versioned command schemas.
 
 - [Rust client](crates/client/): contract invocation and supplied-spec codecs.
 - [Typed Rust RPC client](crates/json-rpc/json-rpc-client/): the JSON-RPC surface.
-- [TypeScript client](https://github.com/groundhogchain/client-ts):
-  `@groundhogchain/client`, also used by generated contract bindings.
-- [TypeScript protocol bindings](https://github.com/groundhogchain/protocol-ts):
+- [TypeScript client](https://github.com/thruputchain/client-ts):
+  `@thruputchain/client`, also used by generated contract bindings.
+- [TypeScript protocol bindings](https://github.com/thruputchain/protocol-ts):
   XDR and contract-spec primitives.
 
 The gateway and local node share the same public server implementation.
