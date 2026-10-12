@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use groundhog_json_rpc_types::runtime_manifest::{
+use thruput_json_rpc_types::runtime_manifest::{
     BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, RuntimeManifest,
 };
 
@@ -813,7 +813,7 @@ pub fn validate_against_runtime(
     manifest: &SimulationManifest,
     runtime: &RuntimeManifest,
 ) -> Result<(), ValidationError> {
-    if runtime.kind == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
+    if runtime.kind == thruput_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
         && manifest.accounts.is_none()
         && requires_signing_accounts(manifest)
     {
@@ -825,7 +825,7 @@ pub fn validate_against_runtime(
     }
     if let Some(accounts) = &manifest.accounts {
         let local = runtime.kind
-            == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND;
+            == thruput_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND;
         if (local
             && accounts.funding == crate::manifest::NativeAccountFunding::Faucet
             && accounts.funding_amount_raw.is_none())
@@ -852,8 +852,7 @@ pub fn validate_against_runtime(
         .bootstrap_accounts
         .iter()
         .any(|account| account.index == Some(0) && account.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET);
-    if runtime.kind
-        == groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+    if runtime.kind == thruput_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
         && manifest.accounts.is_none()
         && max_users > account_count
         && actor_provisioning_enabled(manifest)
@@ -861,8 +860,7 @@ pub fn validate_against_runtime(
     {
         return Err(ValidationError::ActorProvisioningRequiresSponsor);
     }
-    if runtime.kind
-        == groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+    if runtime.kind == thruput_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
         && manifest.accounts.is_none()
         && max_users > account_count
         && !actor_provisioning_enabled(manifest)
@@ -1154,11 +1152,11 @@ pub enum ValidationError {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::hex::Hex0x;
-    use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
-    use groundhog_signing::derive_dev_account_signer;
-    use groundhog_xdr::types::Ed25519PublicKey;
     use serde_json::json;
+    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::runtime_manifest::RuntimeManifest;
+    use thruput_signing::derive_dev_account_signer;
+    use thruput_xdr::types::Ed25519PublicKey;
 
     use super::*;
     use crate::manifest::{

@@ -1,17 +1,17 @@
-use groundhog_db_gateway::DbGatewayItemResult;
-use groundhog_db_gateway::DbGatewayPayload;
-use groundhog_db_gateway::DbGatewayResult;
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_json_rpc_types::ContractAddress;
-use groundhog_json_rpc_types::address_auth::{AuthPublicKey, AuthSigner};
-use groundhog_json_rpc_types::hex::Hex0x;
-use groundhog_scheduler::RPCError;
-use groundhog_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
-use groundhog_xdr::storage_item::WireStorageItem;
-use groundhog_xdr::types::{Ed25519PublicKey, PublicKey};
+use thruput_db_gateway::DbGatewayItemResult;
+use thruput_db_gateway::DbGatewayPayload;
+use thruput_db_gateway::DbGatewayResult;
+use thruput_json_rpc_server::RpcServerError;
+use thruput_json_rpc_types::ContractAddress;
+use thruput_json_rpc_types::address_auth::{AuthPublicKey, AuthSigner};
+use thruput_json_rpc_types::hex::Hex0x;
+use thruput_scheduler::RPCError;
+use thruput_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
+use thruput_xdr::storage_item::WireStorageItem;
+use thruput_xdr::types::{Ed25519PublicKey, PublicKey};
 use xdr_common::VecM;
 
-use groundhog_hogd_backend::db_gateway::*;
+use thruput_hogd_backend::db_gateway::*;
 
 #[test]
 fn a_missing_key_is_a_read_at_a_known_height_not_a_failure() {
@@ -102,7 +102,7 @@ fn auth_data_with_slots(slots: &[(usize, u8, u32)], required_weight: u32) -> Add
 }
 
 fn address(byte: u8) -> ContractAddress {
-    Hex0x(groundhog_xdr::types::ContractAddress::from([byte; 32]))
+    Hex0x(thruput_xdr::types::ContractAddress::from([byte; 32]))
 }
 
 #[test]

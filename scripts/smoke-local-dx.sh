@@ -400,10 +400,10 @@ for line in manifest.read_text(encoding="utf-8").splitlines():
 if not replaced:
     raise SystemExit("sdk dependency line not found")
 patches = {
-    "groundhog-spec": "groundhog-spec",
-    "groundhog-trace": "groundhog-trace",
-    "groundhog-xdr": "groundhog-xdr",
-    "groundhog-syscall": "groundhog-syscall",
+    "thruput-spec": "thruput-spec",
+    "thruput-trace": "thruput-trace",
+    "thruput-xdr": "thruput-xdr",
+    "thruput-syscall": "thruput-syscall",
     "hogexec-internal": "hogexec-internal",
 }
 lines.extend(["", '[patch."sparse+https://crates.thruput.network/api/v1/crates/"]'])
@@ -599,7 +599,7 @@ HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     log "Building CLI and standalone gateway"
-    cargo build --locked -p thruput-cli -p groundhog-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --locked -p thruput-cli -p thruput-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
 else
     log "Building CLI"
     cargo build --locked -p thruput-cli --manifest-path "$REPO_ROOT/Cargo.toml"
@@ -673,7 +673,7 @@ import sys
 
 with pathlib.Path(".cargo/config.toml").open("a", encoding="utf-8") as config:
     config.write('\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\n')
-    config.write(f'groundhog-json-rpc-client = {{ path = {json.dumps(sys.argv[1])} }}\n')
+    config.write(f'thruput-json-rpc-client = {{ path = {json.dumps(sys.argv[1])} }}\n')
 PYCLIENT
 
 if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then

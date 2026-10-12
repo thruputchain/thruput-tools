@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
-use groundhog_sim::manifest::*;
-use groundhog_sim::target::TargetProviderKind;
+use thruput_sim::manifest::*;
+use thruput_sim::target::TargetProviderKind;
 
 #[test]
 fn parses_manifest_with_baseline_and_closed_workload_enum() {

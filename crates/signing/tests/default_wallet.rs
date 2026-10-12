@@ -1,7 +1,7 @@
-use groundhog_signing::default_wallet::*;
-use groundhog_signing::{PubkeyAccount, SigningError, derive_deploy_address, wallet_contract_hash};
-use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
-use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+use thruput_signing::default_wallet::*;
+use thruput_signing::{PubkeyAccount, SigningError, derive_deploy_address, wallet_contract_hash};
+use thruput_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
+use thruput_xdr::types::{ContractAddress, SHA256Hash};
 use xdr_common::BytesM;
 
 #[test]
@@ -69,7 +69,7 @@ fn deployment_attaches_the_exact_code_it_hashes_and_keeps_salt_stable() {
         build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
             account: &account,
             deployment_nonce: salt,
-            code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract.clone()),
+            code: thruput_signing::default_wallet::DeploymentCode::Attached(contract.clone()),
             amount: 0,
             initializer: None,
             gas_limit: 1000,
@@ -117,7 +117,7 @@ fn funded_deployment_encodes_exact_amount_and_attaches_matching_code() {
         let tx = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
             account: &account,
             deployment_nonce: salt,
-            code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract.clone()),
+            code: thruput_signing::default_wallet::DeploymentCode::Attached(contract.clone()),
             amount,
             initializer: None,
             gas_limit: 1000,
@@ -175,7 +175,7 @@ fn deployment_initializer_uses_fixed_selector_and_optional_cxs_layout() {
     let tx = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
         account: &account,
         deployment_nonce: salt,
-        code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
+        code: thruput_signing::default_wallet::DeploymentCode::Attached(contract),
         amount: 64,
         initializer: Some(WalletInitCall {
             entrypoint: ContractEntrypointID::from(63_u64.to_be_bytes()),

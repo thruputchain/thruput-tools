@@ -1,14 +1,14 @@
-use groundhog_json_rpc_types::hex::prefixed_hex;
 use std::path::{Path, PathBuf};
+use thruput_json_rpc_types::hex::prefixed_hex;
 
-use groundhog_client::codec::method_entrypoint_id;
-use groundhog_client::{CallRequest, PollOptions, SignedCall, UnsignedCall};
-use groundhog_json_rpc_types::receipt::ExecStatus;
-use groundhog_json_rpc_types::receipt::TransactionReceipt;
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_signing::LocalSigner;
-use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
+use thruput_client::codec::method_entrypoint_id;
+use thruput_client::{CallRequest, PollOptions, SignedCall, UnsignedCall};
+use thruput_json_rpc_types::receipt::ExecStatus;
+use thruput_json_rpc_types::receipt::TransactionReceipt;
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_signing::LocalSigner;
+use thruput_xdr::contract::ContractEntrypointID;
 
 use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
 use crate::artifacts::ArtifactOptions;
@@ -458,7 +458,7 @@ fn prepare_call_plan_with_runtime(
     let wallet_entrypoint_id = format_entrypoint_id(wallet_context.entrypoints.do_action);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
-    let tx = groundhog_client::prepare_call(
+    let tx = thruput_client::prepare_call(
         CallRequest {
             wallet: sender.wallet(wallet_context.entrypoints.do_action),
             target_address: contract_address,
@@ -492,7 +492,7 @@ fn check_call_gas_balance(rpc_url: &str, wallet: &str, gas_limit: u64) -> Result
     let address = parse_contract_address(wallet)?;
     let balance = fetch_balance_blocking(
         rpc_url,
-        groundhog_json_rpc_types::ContractAddress::from(address),
+        thruput_json_rpc_types::ContractAddress::from(address),
     )?;
     let available = balance.raw_balance.parse::<u128>().map_err(|error| {
         CliError::Other(format!(
@@ -621,12 +621,11 @@ pub(crate) fn resolve_artifact_call(
     }
     let spec = crate::contract_spec::load_artifact_contract_spec(artifact)?.ok_or_else(||
         CliError::SpecFailed("initializer requires the selected artifact's current .spec.xdr sidecar; rebuild it or supply an explicit entrypoint".into()))?;
-    let metadata =
-        groundhog_client::codec::resolve_spec_method(&spec, method)?.ok_or_else(|| {
-            CliError::SpecFailed(format!(
-                "initializer method `{method}` is absent from the selected artifact's spec"
-            ))
-        })?;
+    let metadata = thruput_client::codec::resolve_spec_method(&spec, method)?.ok_or_else(|| {
+        CliError::SpecFailed(format!(
+            "initializer method `{method}` is absent from the selected artifact's spec"
+        ))
+    })?;
     Ok(ResolvedCall {
         entrypoint: method_entrypoint_id(&metadata.interface_name, &metadata.version, method),
         metadata: Some(CallMetadata::Spec(metadata)),
@@ -646,7 +645,7 @@ fn resolve_spec_method(
         return Ok(None);
     };
 
-    Ok(groundhog_client::codec::resolve_spec_method(&spec, method)?)
+    Ok(thruput_client::codec::resolve_spec_method(&spec, method)?)
 }
 
 fn resolve_local_contract_metadata(
@@ -1072,16 +1071,16 @@ mod tests {
     };
     use crate::contract_spec::{InterfaceSpec, load_built_registered_interfaces};
     use crate::tx_utils::summarize_exec_status;
-    use groundhog_contract_spec::{
+    use serde_json::json;
+    use serial_test::serial;
+    use tempfile::TempDir;
+    use thruput_contract_spec::{
         ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractField, ContractSpec,
         ContractSpecInterface, ContractSpecMethod, ContractSpecString, ContractStructDef,
         ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
         ContractVectorType,
     };
-    use groundhog_json_rpc_types::receipt::ExecStatus;
-    use serde_json::json;
-    use serial_test::serial;
-    use tempfile::TempDir;
+    use thruput_json_rpc_types::receipt::ExecStatus;
 
     #[test]
     fn parses_contract_attr_values() {
@@ -1952,7 +1951,7 @@ mod tests {
             resolved.metadata.as_ref(),
         )
         .expect("bug: the spec should encode address and u128 arguments");
-        let decoded: (groundhog_xdr::types::ContractAddress, u128) =
+        let decoded: (thruput_xdr::types::ContractAddress, u128) =
             xdrs::cxs::decode(&encoded).expect("bug: encoded mint arguments should decode");
         assert_eq!(
             decoded,
@@ -2470,8 +2469,8 @@ mod tests {
 
     /// A fixture id: one crate, one module, so the declared name is what
     /// tells these types apart -- which is all these tests turn on.
-    fn spec_id(declared: &str) -> groundhog_contract_spec::ContractSpecId {
-        groundhog_contract_spec::ContractSpecId {
+    fn spec_id(declared: &str) -> thruput_contract_spec::ContractSpecId {
+        thruput_contract_spec::ContractSpecId {
             crate_name: spec_string_bytes("demo"),
             major: spec_string_bytes("1"),
             module_path: spec_string_bytes("demo"),

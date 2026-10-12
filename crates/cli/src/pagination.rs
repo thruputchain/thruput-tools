@@ -1,4 +1,4 @@
-use groundhog_json_rpc_types::events::PaginationCursor;
+use thruput_json_rpc_types::events::PaginationCursor;
 
 pub(crate) const DEFAULT_PAGE_LIMIT: u32 = 50;
 

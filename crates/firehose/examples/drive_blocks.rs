@@ -1,17 +1,17 @@
 //! Local-only measurement driver: scheduler proposal/commit cycles, mirroring
 //! node-supervisor's manual block driver. Never run against a production node.
-use groundhog_scheduler::{
+use sha2::{Digest, Sha256};
+use std::time::{Duration, Instant};
+use thruput_scheduler::{
     ConsensusValue, ParallelBatch, ProposalTxs, ProposalTxsHash, SchedulerCommitOutcome,
     SchedulerGetTipResult, SchedulerProposalResult,
     sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
-use groundhog_xdr::{
+use thruput_xdr::{
     header::ProposalContext,
     types::{ConsensusValueHash, ExtensionPoint, Protocol, SHA256Hash, TimePoint},
     validator::ValidatorID,
 };
-use sha2::{Digest, Sha256};
-use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     let store = std::path::Path::new(args.get(2).ok_or("missing store")?);
     let count: usize = args.get(3).ok_or("missing count")?.parse()?;
     let interval: u64 = args.get(4).ok_or("missing interval")?.parse()?;
-    let scheduler = groundhog_x23_transport::connect(
+    let scheduler = thruput_x23_transport::connect(
         "local_measurement_driver",
         endpoint,
         1,

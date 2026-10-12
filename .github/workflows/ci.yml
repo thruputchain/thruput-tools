@@ -86,25 +86,25 @@ jobs:
           set -euo pipefail
 
           package_args=(
-            -p groundhog-json-rpc-gateway
+            -p thruput-json-rpc-gateway
             -p thruput-cli
-            -p groundhog-rv32-lower
-            -p groundhog-sim
-            -p groundhog-faucet
+            -p thruput-rv32-lower
+            -p thruput-sim
+            -p thruput-faucet
           )
           targets=(
-            groundhog-json-rpc-gateway:hog-gateway
+            thruput-json-rpc-gateway:hog-gateway
             thruput-cli:thruput
-            groundhog-rv32-lower:rv32-lower
-            groundhog-sim:hogsim
-            groundhog-faucet:groundhog-faucet
+            thruput-rv32-lower:rv32-lower
+            thruput-sim:hogsim
+            thruput-faucet:thruput-faucet
           )
           source_commit=$(git rev-parse HEAD)
           export GROUNDHOG_SOURCE_COMMIT="$source_commit"
 
           cargo test --quiet --locked -p thruput-cli \
             --test cli_integration_test version_flag
-          cargo test --quiet --locked -p groundhog-json-rpc-gateway \
+          cargo test --quiet --locked -p thruput-json-rpc-gateway \
             --test version_identity
 
           env -u GROUNDHOG_DISTRIBUTION_VERSION \
@@ -166,7 +166,7 @@ jobs:
       - name: Use checked-out RPC client before registry publication
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: |
-          printf '\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\ngroundhog-json-rpc-client = { path = "%s" }\n' \
+          printf '\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\nthruput-json-rpc-client = { path = "%s" }\n' \
             "$GITHUB_WORKSPACE/crates/json-rpc/json-rpc-client" \
             >> .cargo/config.toml
 

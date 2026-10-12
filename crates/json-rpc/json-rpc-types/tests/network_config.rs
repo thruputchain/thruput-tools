@@ -1,8 +1,8 @@
-use groundhog_xdr::network_config::{ConfigParam, NetworkConfig, NetworkConfigV0};
 use serde_json::json;
+use thruput_xdr::network_config::{ConfigParam, NetworkConfig, NetworkConfigV0};
 use xdr_common::VecM;
 
-use groundhog_json_rpc_types::network_config::NetworkConfigParams;
+use thruput_json_rpc_types::network_config::NetworkConfigParams;
 
 fn network_config(params: Vec<ConfigParam>) -> NetworkConfig {
     NetworkConfig::_0 {

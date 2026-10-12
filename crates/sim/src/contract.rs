@@ -1,20 +1,20 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use groundhog_json_rpc_client::poll_receipt;
-use groundhog_json_rpc_types::{
+use sha2::{Digest, Sha256};
+use thruput_json_rpc_client::poll_receipt;
+use thruput_json_rpc_types::{
     receipt::{ExecStatus, TransactionReceipt},
     transaction::TxHash,
 };
-use groundhog_signing::{
+use thruput_signing::{
     DEFAULT_TX_GAS_LIMIT, SignTransactionParams, derive_deploy_address,
     sign_and_encode_transaction_hex,
 };
-use groundhog_xdr::{
+use thruput_xdr::{
     contract::{Contract, ContractBlob},
     types::{ContractAddress, SHA256Hash},
 };
-use sha2::{Digest, Sha256};
 use xdr_common::BytesM;
 
 use crate::actor::{ActorError, ActorState};
@@ -30,7 +30,7 @@ use crate::rpc::{
     ReceiptWaitFailure, SimReceiptSource, SimRpcClient, SimRpcError, receipt_poll_config,
 };
 use crate::util::json_string;
-use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
+use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 
@@ -381,15 +381,15 @@ fn prepare_deploy(
         .ok_or_else(|| SimError::Executor("native deploy collateral is missing".into()))?
         .parse::<u128>()
         .map_err(|_| SimError::Executor("invalid native deploy collateral".into()))?;
-    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+    let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
         actor.signer.verifying_key_bytes(),
         0,
     );
-    let tx = groundhog_signing::default_wallet::build_default_wallet_deploy_transaction(
-        groundhog_signing::default_wallet::BuildDefaultWalletDeployTransaction {
+    let tx = thruput_signing::default_wallet::build_default_wallet_deploy_transaction(
+        thruput_signing::default_wallet::BuildDefaultWalletDeployTransaction {
             account: &account,
             deployment_nonce: deploy_address_nonce,
-            code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
+            code: thruput_signing::default_wallet::DeploymentCode::Attached(contract),
             amount,
             initializer: None,
             gas_limit: DEFAULT_TX_GAS_LIMIT,
@@ -399,7 +399,7 @@ fn prepare_deploy(
     )
     .map_err(|error| SimError::Executor(error.to_string()))?;
     let tx_hash = TxHash(
-        groundhog_signing::transaction_hash(&tx)
+        thruput_signing::transaction_hash(&tx)
             .map_err(|error| SimError::Executor(error.to_string()))?
             .into(),
     );
@@ -746,18 +746,18 @@ mod tests {
     use std::future::Future;
     use std::sync::{Arc, Mutex};
 
-    use groundhog_json_rpc_types::{
+    use serde_json::json;
+    use tempfile::NamedTempFile;
+    use thruput_json_rpc_types::{
         BlockHeight,
         block::ChainTip,
         hex::{Hex0x, HexBytes},
         receipt::TransactionReceipt,
         view::{ViewRequest, ViewResponse},
     };
-    use groundhog_signing::derive_dev_account_signer;
-    use groundhog_xdr::contract::ContractEntrypointID;
-    use groundhog_xdr::transaction::SignedTransaction;
-    use serde_json::json;
-    use tempfile::NamedTempFile;
+    use thruput_signing::derive_dev_account_signer;
+    use thruput_xdr::contract::ContractEntrypointID;
+    use thruput_xdr::transaction::SignedTransaction;
 
     use crate::rpc::SimRpcError;
 
@@ -803,7 +803,7 @@ mod tests {
                     xdrs::txs::decode(&hex::decode(tx_hex.trim_start_matches("0x")).unwrap())
                         .unwrap();
                 let tx_hash = TxHash(Hex0x(
-                    groundhog_signing::transaction_hash(&signed.tx).unwrap(),
+                    thruput_signing::transaction_hash(&signed.tx).unwrap(),
                 ));
                 submitted
                     .lock()
@@ -1081,10 +1081,8 @@ mod tests {
         event_path: std::path::PathBuf,
     }
     impl SimRpcClient for NativeDeployClient {
-        async fn chain_tip(
-            &self,
-        ) -> Result<groundhog_json_rpc_types::block::ChainTip, SimRpcError> {
-            Ok(groundhog_json_rpc_types::block::ChainTip {
+        async fn chain_tip(&self) -> Result<thruput_json_rpc_types::block::ChainTip, SimRpcError> {
+            Ok(thruput_json_rpc_types::block::ChainTip {
                 height: 1.into(),
                 block_hash: Hex0x(SHA256Hash::from([0; 32])),
             })
@@ -1098,7 +1096,7 @@ mod tests {
             let signed: SignedTransaction =
                 xdrs::txs::decode(&bytes).map_err(|e| decode_failed(&e))?;
             let hash =
-                groundhog_signing::transaction_hash(&signed.tx).map_err(|e| decode_failed(&e))?;
+                thruput_signing::transaction_hash(&signed.tx).map_err(|e| decode_failed(&e))?;
             self.submitted
                 .lock()
                 .expect("submitted tx lock")
@@ -1189,7 +1187,7 @@ mod tests {
             assert!(record.address.is_none());
             let transactions = submitted.lock().expect("transactions");
             assert_eq!(transactions.len(), 1);
-            let expected = groundhog_signing::transaction_hash(&transactions[0].tx).expect("hash");
+            let expected = thruput_signing::transaction_hash(&transactions[0].tx).expect("hash");
             assert_eq!(
                 record.tx_hash.as_deref(),
                 Some(format!("0x{}", hex::encode(expected.as_ref())).as_str())
@@ -1245,7 +1243,7 @@ mod tests {
             let tx = &transactions[0].tx;
             assert_eq!(
                 tx.invocation.entrypoint,
-                groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT
+                thruput_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT
             );
             assert_eq!(tx.auth_claim, actors[0].auth_claim());
             let (nonce, code_hash, amount, initializer): NativeDeployCalldata =
@@ -1283,7 +1281,7 @@ mod tests {
         let bytes = b"rv32 artifact bytes".to_vec();
         std::fs::write(rv32.path(), &bytes).expect("rv32 fixture should write");
         let actors = actor_states();
-        let deploy_entrypoint = groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT;
+        let deploy_entrypoint = thruput_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT;
 
         let prepared = prepare_deploy(rv32.path(), &actors[0], 42, Some("10000000"))
             .expect("rv32 deploy should prepare");
@@ -1410,13 +1408,13 @@ mod tests {
             SimAccount {
                 index: 0,
                 signer: derive_dev_account_signer("contract-test-seed", 0),
-                wallet_address: groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                wallet_address: thruput_signing::PubkeyAccount::from_public_key_bytes(
                     derive_dev_account_signer("contract-test-seed", 0).verifying_key_bytes(),
                     0,
                 )
                 .address(),
-                network_hash: groundhog_xdr::types::NetworkHash::new(
-                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                network_hash: thruput_xdr::types::NetworkHash::new(
+                    thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
             },
             NonceNamespace::new(1).expect("namespace should fit"),

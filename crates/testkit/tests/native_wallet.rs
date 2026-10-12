@@ -1,30 +1,30 @@
 //! Public testkit API checks against a recording RPC, including ambiguous outcomes.
 use std::sync::{Arc, Mutex};
 
-use groundhog_signing::default_wallet::{
+use jsonrpsee::{
+    RpcModule,
+    server::{ServerBuilder, ServerHandle},
+    types::ErrorObjectOwned,
+};
+use thruput_signing::default_wallet::{
     DEFAULT_WALLET_DEPLOY_ENTRYPOINT, DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
 };
-use groundhog_signing::{
+use thruput_signing::{
     PubkeyAccount, derive_deploy_address, derive_dev_account_signer, transaction_hash,
 };
-use groundhog_testkit::rpc_types::{
+use thruput_testkit::rpc_types::{
     hex::{Hex0x, HexBytes},
     receipt::{ExecStatus, TransactionReceipt},
     transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource, TransactionStatus, TxHash,
     },
 };
-use groundhog_testkit::xdr::{
+use thruput_testkit::xdr::{
     contract::ContractEntrypointID, transaction::SignedTransaction, types::SHA256Hash,
 };
-use groundhog_testkit::{
+use thruput_testkit::{
     Agent, ArtifactKind, Contract, DeployOptions, NetworkConfig, Scenario, TestkitError,
     WalletInitCall,
-};
-use jsonrpsee::{
-    RpcModule,
-    server::{ServerBuilder, ServerHandle},
-    types::ErrorObjectOwned,
 };
 
 #[derive(Clone, Copy)]
@@ -195,7 +195,7 @@ async fn repeated_scenarios_fund_the_same_account_with_distinct_transactions() {
         let scenario = fixture.scenario(false).await;
         scenario
             .run_agents([Agent::new("alice", |ctx| async move {
-                let signer = derive_dev_account_signer("groundhog-testkit:native-test", 0);
+                let signer = derive_dev_account_signer("thruput-testkit:native-test", 0);
                 assert_eq!(
                     ctx.address(),
                     PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
@@ -262,7 +262,7 @@ async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_retur
     assert!(fixture.state.submitted.lock().unwrap().is_empty());
     scenario
         .run_agents([Agent::new("alice", |mut ctx| async move {
-            let signer = derive_dev_account_signer("groundhog-testkit:native-test", 0);
+            let signer = derive_dev_account_signer("thruput-testkit:native-test", 0);
             assert_eq!(
                 ctx.address(),
                 PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()

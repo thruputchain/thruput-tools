@@ -4,14 +4,14 @@ use crate::keys_json::{
 };
 use crate::result::CommandResult;
 use crate::{CliError, Print};
-use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
-use groundhog_signing::strkey;
-use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
+use thruput_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
+use thruput_signing::strkey;
+use thruput_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount};
 use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_KEY_NAME: &str = "default";
@@ -627,6 +627,6 @@ fn parse_stored_hex<const N: usize>(input: &str) -> Result<[u8; N], CliError> {
     decode_fixed_hex(input).map_err(|error| CliError::Other(format!("invalid stored key: {error}")))
 }
 
-fn signing_error(error: &groundhog_signing::SigningError) -> CliError {
+fn signing_error(error: &thruput_signing::SigningError) -> CliError {
     CliError::Other(error.to_string())
 }

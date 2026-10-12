@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde_json::json;
 use tempfile::tempdir;
 
-use groundhog_sim::catalog::*;
+use thruput_sim::catalog::*;
 
 #[test]
 fn parses_and_filters_catalog_entries_by_tag() {

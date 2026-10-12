@@ -1036,7 +1036,7 @@ fn write_local_runtime_manifest(path: &std::path::Path, accounts: &[(u32, &str)]
     let accounts: Vec<_> = accounts
         .iter()
         .map(|(index, role)| {
-            let signer = groundhog_signing::derive_default_dev_account_signer(*index as usize);
+            let signer = thruput_signing::derive_default_dev_account_signer(*index as usize);
             serde_json::json!({
                 "index": index,
                 "role": role,
@@ -1059,7 +1059,7 @@ fn write_local_runtime_manifest(path: &std::path::Path, accounts: &[(u32, &str)]
             "endpoints": { "scheduler": "127.0.0.1:1000" },
             "bootstrapAccountDerivation": {
                 "scheme": "groundhog-bootstrap-account-v1",
-                "seed": groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED
+                "seed": thruput_signing::DEFAULT_DEV_ACCOUNT_SEED
             },
             "bootstrapAccounts": accounts,
             "bootstrap": {

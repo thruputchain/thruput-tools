@@ -1,4 +1,4 @@
-# Groundhog documentation
+# Thruput documentation
 
 Start with the [workspace architecture](architecture.md) for the system's shape
 and a map into the source. The [repository README](../README.md) covers setup

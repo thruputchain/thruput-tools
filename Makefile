@@ -47,8 +47,8 @@ CARGO_PROFILE_FLAG := --profile $(PROFILE)
 TARGET_DIR := $(TARGET_ROOT)/$(PROFILE)
 endif
 
-# Binaries `make install` copies. The workspace builds more (groundhog-bench,
-# rv32-lower, groundhog-open-rpc-spec, groundhog-faucet); add them here when a
+# Binaries `make install` copies. The workspace builds more (thruput-bench,
+# rv32-lower, thruput-open-rpc-spec, thruput-faucet); add them here when a
 # deployment needs them rather than installing the whole target directory.
 BINS ?= thruput hogsim hog-gateway
 

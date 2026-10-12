@@ -115,7 +115,7 @@ try {
   const cargoConfig = join(project, ".cargo/config.toml");
   await writeFile(
     cargoConfig,
-    `${await readFile(cargoConfig, "utf8")}\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\ngroundhog-json-rpc-client = { path = ${JSON.stringify(join(repo, "crates/json-rpc/json-rpc-client"))} }\n`,
+    `${await readFile(cargoConfig, "utf8")}\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\nthruput-json-rpc-client = { path = ${JSON.stringify(join(repo, "crates/json-rpc/json-rpc-client"))} }\n`,
   );
   console.log("Installing generated app dependencies");
   await run("npm", ["install"]);

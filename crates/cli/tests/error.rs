@@ -1,6 +1,6 @@
-use groundhog_json_rpc_types::error::TxInvalidDetail;
-use groundhog_rv32_lower::LowerError;
 use thruput_cli::CliError;
+use thruput_json_rpc_types::error::TxInvalidDetail;
+use thruput_rv32_lower::LowerError;
 
 fn hint(error: &CliError) -> String {
     error.hint().expect("bug: hint expected").into_owned()
@@ -121,7 +121,7 @@ fn generated_command_hints_quote_dynamic_arguments() {
     };
     assert_eq!(
         hint(&error),
-        "pass `--hogd-protocol='hogp/test;echo bad'` to override, or rebuild thruput node against a matching groundhog-xdr"
+        "pass `--hogd-protocol='hogp/test;echo bad'` to override, or rebuild thruput node against a matching thruput-xdr"
     );
 }
 

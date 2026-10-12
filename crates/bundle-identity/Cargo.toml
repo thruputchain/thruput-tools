@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-bundle-identity"
+name = "thruput-bundle-identity"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,10 +10,10 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Runtime Groundhog bundle identity validation"
+description = "Runtime Thruput bundle identity validation"
 
 [dependencies]
-groundhog-build-info = { workspace = true }
+thruput-build-info = { workspace = true }
 hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

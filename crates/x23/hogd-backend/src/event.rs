@@ -6,11 +6,11 @@
 //! `num_topics` (0–3) is the split point; the total payload is at most
 //! 1024 bytes.
 
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     events::EmittedEvent,
     hex::{Hex0x, HexBytes, Topic},
 };
-use groundhog_xdr::event::TxEmittedEvent;
+use thruput_xdr::event::TxEmittedEvent;
 use xdr_common::VecM;
 
 /// Width of one event topic.

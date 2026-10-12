@@ -39,16 +39,16 @@ impl LocalSigner {
 }
 
 impl crate::Signer for LocalSigner {
-    fn public_key(&self) -> groundhog_xdr::types::PublicKey {
-        groundhog_xdr::types::PublicKey::Ed25519 {
-            ed25519: groundhog_xdr::types::Ed25519PublicKey::from(self.verifying_key_bytes()),
+    fn public_key(&self) -> thruput_xdr::types::PublicKey {
+        thruput_xdr::types::PublicKey::Ed25519 {
+            ed25519: thruput_xdr::types::Ed25519PublicKey::from(self.verifying_key_bytes()),
         }
     }
 
-    fn sign(&self, message: &[u8]) -> Result<groundhog_xdr::types::Signature, SigningError> {
+    fn sign(&self, message: &[u8]) -> Result<thruput_xdr::types::Signature, SigningError> {
         let sig_bytes = self.signing_key.sign(message).to_bytes();
-        Ok(groundhog_xdr::types::Signature::Ed25519 {
-            ed25519: groundhog_xdr::types::Ed25519Signature::from(sig_bytes),
+        Ok(thruput_xdr::types::Signature::Ed25519 {
+            ed25519: thruput_xdr::types::Ed25519Signature::from(sig_bytes),
         })
     }
 }

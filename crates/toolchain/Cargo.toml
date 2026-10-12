@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-toolchain"
+name = "thruput-toolchain"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

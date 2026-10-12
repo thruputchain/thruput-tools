@@ -10,27 +10,27 @@ env:
   CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
   CARGO_REGISTRIES_THRUPUT_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
   PUBLISH_PACKAGES: >-
-    groundhog-build-info
-    groundhog-bundle-identity
-    groundhog-json-rpc-types
-    groundhog-open-rpc
-    groundhog-open-rpc-macros
-    groundhog-json-rpc-api
-    groundhog-open-rpc-spec
-    groundhog-x23-transport
-    groundhog-rv32-artifact
-    groundhog-tx-validation
-    groundhog-json-rpc-server
-    groundhog-hogd-backend
-    groundhog-json-rpc-client
-    groundhog-signing
-    groundhog-client
-    groundhog-node-supervisor
-    groundhog-rv32-lower
-    groundhog-toolchain
-    groundhog-cli-macros
+    thruput-build-info
+    thruput-bundle-identity
+    thruput-json-rpc-types
+    thruput-open-rpc
+    thruput-open-rpc-macros
+    thruput-json-rpc-api
+    thruput-open-rpc-spec
+    thruput-x23-transport
+    thruput-rv32-artifact
+    thruput-tx-validation
+    thruput-json-rpc-server
+    thruput-hogd-backend
+    thruput-json-rpc-client
+    thruput-signing
+    thruput-client
+    thruput-node-supervisor
+    thruput-rv32-lower
+    thruput-toolchain
+    thruput-cli-macros
     thruput-cli
-    groundhog-testkit
+    thruput-testkit
 
 permissions:
   contents: read
@@ -81,8 +81,8 @@ jobs:
       - name: Verify managed toolchain catalog and public bundles
         shell: bash
         run: |
-          cargo test --locked -p groundhog-toolchain --test catalog_contract
-          cargo test --locked -p groundhog-toolchain --test install_contract public_catalog_installs_all_targets -- --ignored --exact --color never | tee "$RUNNER_TEMP/public-bundle-tests.log"
+          cargo test --locked -p thruput-toolchain --test catalog_contract
+          cargo test --locked -p thruput-toolchain --test install_contract public_catalog_installs_all_targets -- --ignored --exact --color never | tee "$RUNNER_TEMP/public-bundle-tests.log"
           grep -q '^test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/public-bundle-tests.log"
 
       - name: Verify managed toolchain startup with a fresh cache

@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use groundhog_toolchain::{
-    Catalog, DEFAULT_PUBLIC_ARTIFACT_BASE_URL, HostTarget, HttpSource, Installer,
-};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thruput_toolchain::{
+    Catalog, DEFAULT_PUBLIC_ARTIFACT_BASE_URL, HostTarget, HttpSource, Installer,
+};
 
 use crate::config::{cache_dir, load_toolchain_version, save_toolchain_version};
 use crate::result::CommandResult;

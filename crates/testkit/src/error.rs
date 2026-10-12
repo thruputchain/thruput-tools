@@ -2,10 +2,10 @@
 
 use std::fmt;
 
-use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
-use groundhog_node_supervisor::BlockProductionError;
+use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_node_supervisor::BlockProductionError;
 
-/// Result alias used throughout `groundhog-testkit`.
+/// Result alias used throughout `thruput-testkit`.
 pub type Result<T, E = TestkitError> = std::result::Result<T, E>;
 
 /// One agent error retained after every non-panicking agent has finished.
@@ -87,7 +87,7 @@ pub enum TestkitError {
     )]
     FundingRequestMismatch {
         /// Recipient with retained funding intent.
-        recipient: groundhog_xdr::types::ContractAddress,
+        recipient: thruput_xdr::types::ContractAddress,
     },
     /// A receipt belongs to another transaction.
     #[error("receipt hash does not match {expected:?}")]
@@ -111,7 +111,7 @@ pub enum TestkitError {
         /// Locally computed transaction identity.
         tx_hash: TxHash,
         /// Address predicted from the signed deployment effects.
-        predicted_address: groundhog_xdr::types::ContractAddress,
+        predicted_address: thruput_xdr::types::ContractAddress,
         /// Exact original signed bytes for reconciliation.
         signed_transaction: String,
         /// Failed receipt lookup or verification.

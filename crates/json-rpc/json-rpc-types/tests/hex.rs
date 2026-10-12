@@ -1,4 +1,4 @@
-use groundhog_json_rpc_types::hex::*;
+use thruput_json_rpc_types::hex::*;
 
 #[test]
 fn hex_serialization_matches_reference_across_chunk_boundaries() {
@@ -69,7 +69,7 @@ fn topic_wrong_length_fails() {
 
 #[test]
 fn hex0x_sha256_roundtrip() {
-    use groundhog_xdr::types::SHA256Hash;
+    use thruput_xdr::types::SHA256Hash;
 
     let mut bytes = [0u8; 32];
     bytes[0] = 0xab;
@@ -87,7 +87,7 @@ fn hex0x_sha256_roundtrip() {
 
 #[test]
 fn hex0x_accepts_no_prefix() {
-    use groundhog_xdr::types::SHA256Hash;
+    use thruput_xdr::types::SHA256Hash;
 
     let hex_str = format!(r#""{}""#, "ab".to_owned() + &"00".repeat(30) + "cd");
     let decoded: Hex0x<SHA256Hash> = serde_json::from_str(&hex_str).unwrap();
@@ -97,7 +97,7 @@ fn hex0x_accepts_no_prefix() {
 
 #[test]
 fn hex0x_wrong_length_fails() {
-    use groundhog_xdr::types::SHA256Hash;
+    use thruput_xdr::types::SHA256Hash;
 
     let result: Result<Hex0x<SHA256Hash>, _> = serde_json::from_str(r#""0xcafe""#);
     assert!(result.is_err());

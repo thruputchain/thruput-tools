@@ -1,7 +1,7 @@
-use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use thruput_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 
 use axum::{
     Json,
@@ -9,23 +9,23 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use groundhog_json_rpc_client::{
+use thruput_json_rpc_client::{
     GroundhogApiClient, HttpClientBuilder, poll_transaction_receipt, submit_transaction,
 };
-use groundhog_json_rpc_types::airdrop::{AirdropAttemptResponse, HostedAirdropRequest};
-use groundhog_json_rpc_types::hex::HexBytes;
-use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
-use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
-use groundhog_signing::default_wallet::{
+use thruput_json_rpc_types::airdrop::{AirdropAttemptResponse, HostedAirdropRequest};
+use thruput_json_rpc_types::hex::HexBytes;
+use thruput_json_rpc_types::network_descriptor::NetworkDescriptor;
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_json_rpc_types::{ContractAddress, SHA256Hash};
+use thruput_signing::default_wallet::{
     BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction,
 };
-use groundhog_signing::{
+use thruput_signing::{
     DEFAULT_TX_GAS_LIMIT, LocalSigner, PubkeyAccount, SignTransactionParams,
     sign_and_encode_transaction_hex, transaction_hash,
 };
-use groundhog_xdr::contract::ContractEntrypointID;
+use thruput_xdr::contract::ContractEntrypointID;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
 
@@ -701,7 +701,7 @@ impl AirdropService {
             }
             Err(
                 error @ AirdropSubmitError::Poll(
-                    groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                    thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
                         status:
                             TransactionStatus::Invalid { .. } | TransactionStatus::Dropped { .. },
                         ..
@@ -723,14 +723,14 @@ impl AirdropService {
             }
             Err(
                 error @ AirdropSubmitError::Poll(
-                    groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                    thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
                         status: TransactionStatus::Retry { .. },
                         ..
                     },
                 ),
             ) => self.retry_airdrop_attempt(recipient, attempt, error).await,
             Err(AirdropSubmitError::Poll(
-                groundhog_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout { .. },
+                thruput_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout { .. },
             )) => {
                 attempt.status = AirdropAttemptStatus::Pending;
                 attempt.updated_at = SystemTime::now();
@@ -844,7 +844,7 @@ fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
 pub(crate) fn parse_tx_hash(value: &str) -> Option<TxHash> {
     let bytes = decode_fixed_hex(value).ok()?;
     Some(TxHash(SHA256Hash::from(
-        groundhog_xdr::types::SHA256Hash::from(bytes),
+        thruput_xdr::types::SHA256Hash::from(bytes),
     )))
 }
 
@@ -933,14 +933,14 @@ pub enum AirdropSubmitError {
     Submit(String),
     /// The accepted faucet transaction could not be confirmed.
     #[error("failed to confirm airdrop transaction: {0}")]
-    Poll(#[from] groundhog_json_rpc_client::PollTransactionReceiptError),
+    Poll(#[from] thruput_json_rpc_client::PollTransactionReceiptError),
 }
 
 impl AirdropSubmitError {
     fn into_response(self) -> Response {
         match self {
             Self::Poll(
-                groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
                     status: TransactionStatus::Dropped { error },
                     ..
                 },
@@ -954,7 +954,7 @@ impl AirdropSubmitError {
             ),
             Self::TransactionFailed { .. }
             | Self::Poll(
-                groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
                     status: TransactionStatus::Invalid { .. },
                     ..
                 },
@@ -1031,10 +1031,10 @@ impl AirdropRuntimeConfig {
 pub struct RpcAirdropSubmitter {
     rpc_url: String,
     raw_amount: u128,
-    network_hash: groundhog_xdr::types::NetworkHash,
+    network_hash: thruput_xdr::types::NetworkHash,
     faucet_account: PubkeyAccount,
     faucet_signer: LocalSigner,
-    hog_token_address: groundhog_xdr::types::ContractAddress,
+    hog_token_address: thruput_xdr::types::ContractAddress,
     hog_transfer_entrypoint: ContractEntrypointID,
 }
 
@@ -1043,7 +1043,7 @@ impl RpcAirdropSubmitter {
     pub fn new(
         descriptor: &NetworkDescriptor,
         config: &AirdropRuntimeConfig,
-        network_hash: groundhog_xdr::types::NetworkHash,
+        network_hash: thruput_xdr::types::NetworkHash,
     ) -> Result<Self, AirdropRuntimeConfigError> {
         let faucet_signer = LocalSigner::from_secret_key(*config.faucet_secret_key);
         let faucet_account =
@@ -1165,10 +1165,10 @@ fn entrypoint_bytes(entrypoint: &HexBytes) -> Result<[u8; 8], AirdropRuntimeConf
 }
 
 fn encode_transfer_calldata(
-    recipient: &groundhog_xdr::types::ContractAddress,
+    recipient: &thruput_xdr::types::ContractAddress,
     raw_amount: u128,
 ) -> Result<Vec<u8>, AirdropSubmitError> {
-    groundhog_signing::native_hog_transfer_calldata(recipient, raw_amount)
+    thruput_signing::native_hog_transfer_calldata(recipient, raw_amount)
         .map_err(|error| AirdropSubmitError::EncodeTransferCalldata(error.to_string()))
 }
 
@@ -1179,7 +1179,7 @@ mod tests {
     use serde_json::json;
     use zeroize::Zeroizing;
 
-    use groundhog_json_rpc_types::airdrop::HostedAirdropRequest;
+    use thruput_json_rpc_types::airdrop::HostedAirdropRequest;
 
     use super::{
         AirdropRuntimeConfig, MIN_AIRDROP_TERMINAL_RETENTION_SECS, terminal_attempt_expiry,

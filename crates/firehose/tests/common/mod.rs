@@ -1,6 +1,6 @@
 //! Chain-building helpers shared by the archive and subscription suites.
-use groundhog_indexer::EventIndexerPulledBlock;
 use sha2::{Digest, Sha256};
+use thruput_indexer::EventIndexerPulledBlock;
 
 /// Height 1 of a live node, captured with its origin and both commitments.
 pub fn fixture() -> EventIndexerPulledBlock {
@@ -13,9 +13,8 @@ pub fn fixture() -> EventIndexerPulledBlock {
 /// Restore the identity commitment after editing the consensus value.
 pub fn rehash(block: &mut EventIndexerPulledBlock) {
     let bytes = xdrs::txs::encode(&block.block.payload.consensus_value).unwrap();
-    block.block.identity.consensus_hash = groundhog_xdr::types::ConsensusValueHash::new(
-        <[u8; 32]>::from(Sha256::digest(bytes)).into(),
-    );
+    block.block.identity.consensus_hash =
+        thruput_xdr::types::ConsensusValueHash::new(<[u8; 32]>::from(Sha256::digest(bytes)).into());
 }
 
 /// The next block in the chain: one height on, parented by this one.

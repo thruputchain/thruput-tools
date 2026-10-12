@@ -1,6 +1,6 @@
-use groundhog_sim::manifest::WorkloadKind;
-use groundhog_sim::metrics::{RunMetricsBuilder, SIMULATOR_BACKPRESSURE_ERROR_CLASS};
-use groundhog_sim::result::{
+use thruput_sim::manifest::WorkloadKind;
+use thruput_sim::metrics::{RunMetricsBuilder, SIMULATOR_BACKPRESSURE_ERROR_CLASS};
+use thruput_sim::result::{
     ChainTipObservation, LatencySummary, ReceiptPollSummary, ResourceSamplePoint,
     ResourceSampleScope,
 };

@@ -1,11 +1,11 @@
-use groundhog_json_rpc_types::events::EmittedEvent;
-use groundhog_json_rpc_types::hex::HexBytes;
-use groundhog_json_rpc_types::receipt::ExecStatus;
-use groundhog_json_rpc_types::transaction::TransactionStatus;
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_json_rpc_types::{BlockHeight, ContractAddress, Ed25519PublicKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thruput_json_rpc_types::events::EmittedEvent;
+use thruput_json_rpc_types::hex::HexBytes;
+use thruput_json_rpc_types::receipt::ExecStatus;
+use thruput_json_rpc_types::transaction::TransactionStatus;
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_json_rpc_types::{BlockHeight, ContractAddress, Ed25519PublicKey};
 
 pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 3;
 
@@ -35,8 +35,8 @@ pub struct TransferReportCommon {
 pub struct TransferDryRunReport {
     #[serde(flatten)]
     pub common: TransferReportCommon,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<i64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<i64>")]
     pub expiry_height: i64,
     pub signed_transaction: HexBytes,
 }
@@ -47,13 +47,13 @@ pub struct TransferDryRunReport {
 pub struct TransferCommittedReport {
     #[serde(flatten)]
     pub common: TransferReportCommon,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub height: BlockHeight,
     pub status: ExecStatus,
     pub events: Vec<EmittedEvent>,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     pub gas_used: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_data: Option<HexBytes>,
@@ -86,9 +86,9 @@ pub struct TransferUnconfirmedReport {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
-    use groundhog_json_rpc_types::transaction::TxHash;
-    use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
+    use thruput_json_rpc_types::hex::{Hex0x, HexBytes};
+    use thruput_json_rpc_types::transaction::TxHash;
+    use thruput_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 
     use super::{
         TRANSFER_JSON_SCHEMA_VERSION, TransferCommittedReport, TransferDryRunReport,
@@ -100,15 +100,15 @@ mod tests {
     fn committed_report_serializes_decoded_abort_fields() {
         let report = TransferCommittedReport {
             common: report_common(),
-            height: groundhog_json_rpc_types::BlockHeight::from(43),
-            status: groundhog_json_rpc_types::receipt::ExecStatus::Reverted { message: None },
+            height: thruput_json_rpc_types::BlockHeight::from(43),
+            status: thruput_json_rpc_types::receipt::ExecStatus::Reverted { message: None },
             events: vec![],
             gas_used: 1_500,
             return_data: None,
             abort_data: Some(HexBytes(vec![0x01])),
             abort: AbortReport {
                 abort_exception: Some("ERC20Error".into()),
-                abort_exception_crate: Some("groundhog-erc20-if".into()),
+                abort_exception_crate: Some("thruput-erc20-if".into()),
                 abort_exception_version: Some("0.1".into()),
                 abort_value: Some(serde_json::json!("TooLarge")),
                 abort_decode_error: None,
@@ -118,7 +118,7 @@ mod tests {
         let value = serde_json::to_value(report).expect("bug: report should serialize");
 
         assert_eq!(value["abortException"], "ERC20Error");
-        assert_eq!(value["abortExceptionCrate"], "groundhog-erc20-if");
+        assert_eq!(value["abortExceptionCrate"], "thruput-erc20-if");
         assert_eq!(value["abortExceptionVersion"], "0.1");
         assert_eq!(value["abortValue"], "TooLarge");
         assert!(value.get("abortDecodeError").is_none());
@@ -128,8 +128,8 @@ mod tests {
     fn committed_report_omits_absent_abort_fields() {
         let report = TransferCommittedReport {
             common: report_common(),
-            height: groundhog_json_rpc_types::BlockHeight::from(43),
-            status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
+            height: thruput_json_rpc_types::BlockHeight::from(43),
+            status: thruput_json_rpc_types::receipt::ExecStatus::Ok,
             events: vec![],
             gas_used: 1_500,
             return_data: None,

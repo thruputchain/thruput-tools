@@ -137,9 +137,9 @@ mod wallet_json {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            with = "groundhog_json_rpc_types::decimal::option"
+            with = "thruput_json_rpc_types::decimal::option"
         )]
-        #[schemars(with = "Option<groundhog_json_rpc_types::decimal::Decimal<u64>>")]
+        #[schemars(with = "Option<thruput_json_rpc_types::decimal::Decimal<u64>>")]
         account_nonce: Option<u64>,
     }
 
@@ -377,7 +377,7 @@ pub fn save_profile_wallet_address_with_default(
                 .into(),
         ));
     }
-    if groundhog_signing::strkey::parse_public_key(owner_public_key.trim()).is_err() {
+    if thruput_signing::strkey::parse_public_key(owner_public_key.trim()).is_err() {
         return Err(CliError::Other(
             "wallet owner public key must be a G StrKey or 64 hex characters, optionally prefixed with 0x".into(),
         ));
@@ -452,7 +452,7 @@ pub(crate) fn save_native_wallet(
                 && existing.account_nonce == binding.account_nonce
                 && validated.address == crate::codec::parse_contract_address(&binding.address)?
                 && validated.owner_public_key
-                    == groundhog_signing::strkey::parse_public_key(&binding.owner_public_key)
+                    == thruput_signing::strkey::parse_public_key(&binding.owner_public_key)
                         .map_err(|e| CliError::Other(e.to_string()))?
             {
                 return Ok(());
@@ -472,8 +472,8 @@ pub(crate) fn save_native_wallet(
         let owner_matches: Vec<_> = existing_wallets
             .iter()
             .filter(|(_, wallet)| {
-                groundhog_signing::strkey::parse_public_key(&wallet.owner_public_key).ok()
-                    == groundhog_signing::strkey::parse_public_key(&binding.owner_public_key).ok()
+                thruput_signing::strkey::parse_public_key(&wallet.owner_public_key).ok()
+                    == thruput_signing::strkey::parse_public_key(&binding.owner_public_key).ok()
             })
             .map(|(name, _)| name.as_str())
             .collect();
@@ -926,7 +926,7 @@ pub fn apply_profile_overrides(
 }
 
 fn is_valid_address(addr: &str) -> bool {
-    groundhog_signing::strkey::parse_contract_address(addr).is_ok()
+    thruput_signing::strkey::parse_contract_address(addr).is_ok()
 }
 
 #[cfg(test)]

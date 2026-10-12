@@ -4,10 +4,11 @@ use std::sync::{
     atomic::{AtomicBool, AtomicI64, Ordering},
 };
 
-use groundhog_faucet::airdrop::{
+use jsonrpsee::{RpcModule, server::ServerBuilder, types::ErrorObjectOwned};
+use thruput_faucet::airdrop::{
     AirdropRuntimeConfig, AirdropRuntimeConfigError, AirdropSubmitter, RpcAirdropSubmitter,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     block::ChainTip,
     hex::{Hex0x, HexBytes},
     network_descriptor::{
@@ -15,14 +16,13 @@ use groundhog_json_rpc_types::{
     },
     transaction::TxHash,
 };
-use groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT;
-use groundhog_signing::{LocalSigner, PubkeyAccount, transaction_hash};
-use groundhog_xdr::{
+use thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT;
+use thruput_signing::{LocalSigner, PubkeyAccount, transaction_hash};
+use thruput_xdr::{
     contract::ContractEntrypointID,
     transaction::SignedTransaction,
     types::{ContractAddress, SHA256Hash},
 };
-use jsonrpsee::{RpcModule, server::ServerBuilder, types::ErrorObjectOwned};
 use zeroize::Zeroizing;
 
 fn descriptor(account: &PubkeyAccount, rpc_url: String) -> NetworkDescriptor {

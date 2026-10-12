@@ -1,8 +1,8 @@
-use groundhog_json_rpc_types::error::TxInvalidDetail;
-use groundhog_json_rpc_types::error::codes;
 use jsonrpsee::types::ErrorObjectOwned;
+use thruput_json_rpc_types::error::TxInvalidDetail;
+use thruput_json_rpc_types::error::codes;
 
-use groundhog_json_rpc_server::error::*;
+use thruput_json_rpc_server::error::*;
 
 #[test]
 fn every_variant_maps_to_its_documented_code() {
@@ -80,11 +80,11 @@ fn plain_tx_invalid_carries_no_data() {
 
 #[test]
 fn unresolved_local_funding_carries_evidence_without_asserting_an_outcome() {
-    let evidence = groundhog_json_rpc_types::airdrop::LocalFundingErrorData::new(
-        groundhog_json_rpc_types::transaction::TxHash(
-            groundhog_xdr::types::SHA256Hash::from([0x42; 32]).into(),
+    let evidence = thruput_json_rpc_types::airdrop::LocalFundingErrorData::new(
+        thruput_json_rpc_types::transaction::TxHash(
+            thruput_xdr::types::SHA256Hash::from([0x42; 32]).into(),
         ),
-        groundhog_json_rpc_types::hex::HexBytes(vec![1, 2, 3]),
+        thruput_json_rpc_types::hex::HexBytes(vec![1, 2, 3]),
     );
     let object: ErrorObjectOwned = RpcServerError::LocalFundingUnresolved {
         reason: "receipt unavailable".into(),
@@ -93,7 +93,7 @@ fn unresolved_local_funding_carries_evidence_without_asserting_an_outcome() {
     .into();
     assert_eq!(object.code(), codes::LOCAL_FUNDING_UNRESOLVED);
     assert_eq!(
-        serde_json::from_str::<groundhog_json_rpc_types::airdrop::LocalFundingErrorData>(
+        serde_json::from_str::<thruput_json_rpc_types::airdrop::LocalFundingErrorData>(
             object.data().unwrap().get()
         )
         .unwrap(),
@@ -102,10 +102,8 @@ fn unresolved_local_funding_carries_evidence_without_asserting_an_outcome() {
     let mut extended = serde_json::to_value(&evidence).unwrap();
     extended["futureDiagnostic"] = serde_json::json!("additional output metadata");
     assert_eq!(
-        serde_json::from_value::<groundhog_json_rpc_types::airdrop::LocalFundingErrorData>(
-            extended
-        )
-        .unwrap(),
+        serde_json::from_value::<thruput_json_rpc_types::airdrop::LocalFundingErrorData>(extended)
+            .unwrap(),
         evidence
     );
 }

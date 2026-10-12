@@ -1,8 +1,8 @@
-use groundhog_rv32_artifact::format::{
+use thruput_rv32_artifact::format::{
     FORMAT_VERSION, MAGIC, compute_format_fingerprint_with_domain,
     compute_format_fingerprint_with_format_version, compute_format_fingerprint_with_magic,
 };
-use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, compute_format_fingerprint};
+use thruput_rv32_artifact::{FORMAT_FINGERPRINT, compute_format_fingerprint};
 
 #[test]
 fn fingerprint_is_pinned() {

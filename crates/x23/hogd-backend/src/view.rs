@@ -5,13 +5,13 @@
 //! auth claim is assumed, never signature-verified. Events are still produced,
 //! which lets a wallet preview show what a real submit would emit.
 
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_server::RpcServerError;
+use thruput_json_rpc_types::{
     hex::HexBytes,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_view::ViewGatewayResult;
-use groundhog_xdr::{
+use thruput_view::ViewGatewayResult;
+use thruput_xdr::{
     auth_claim::{AuthClaim, AuthClaim_source_address_claim},
     contract::ContractEntrypointID,
     invoke_flag::InvokeFlag,
@@ -24,17 +24,17 @@ use crate::event::parse_emitted_events;
 
 /// Build a batch with the remaining caller budget, rounded down to milliseconds.
 pub fn view_batch_query(
-    request: groundhog_json_rpc_types::view::ViewBatchRequest,
+    request: thruput_json_rpc_types::view::ViewBatchRequest,
     gas_limit: u64,
     remaining: std::time::Duration,
-    limits: groundhog_json_rpc_server::ViewBatchConfig,
-) -> Result<groundhog_view::ViewGatewayBatchQuery, RpcServerError> {
+    limits: thruput_json_rpc_server::ViewBatchConfig,
+) -> Result<thruput_view::ViewGatewayBatchQuery, RpcServerError> {
     let millis = remaining.as_millis().min(u128::from(u32::MAX));
     let budget_millis = u32::try_from(millis).map_err(|_| RpcServerError::BackendTimeout)?;
     if budget_millis == 0 {
         return Err(RpcServerError::BackendTimeout);
     }
-    Ok(groundhog_view::ViewGatewayBatchQuery {
+    Ok(thruput_view::ViewGatewayBatchQuery {
         calls: VecM(
             request
                 .calls
@@ -54,13 +54,11 @@ pub fn view_batch_query(
 /// Decode one complete batch. Malformed, incomplete, or stale results fail the group.
 pub fn view_batch_response(
     service: &str,
-    query: &groundhog_view::ViewGatewayBatchQuery,
-    result: groundhog_view::ViewGatewayBatchResult,
-) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
-    use groundhog_json_rpc_types::view::{
-        ViewBatchResponse, ViewCallResult, ViewHeightUnavailable,
-    };
-    use groundhog_view::{ViewGatewayBatchOutcome as Outcome, ViewGatewayBatchResult};
+    query: &thruput_view::ViewGatewayBatchQuery,
+    result: thruput_view::ViewGatewayBatchResult,
+) -> Result<thruput_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+    use thruput_json_rpc_types::view::{ViewBatchResponse, ViewCallResult, ViewHeightUnavailable};
+    use thruput_view::{ViewGatewayBatchOutcome as Outcome, ViewGatewayBatchResult};
     match result {
         ViewGatewayBatchResult::ViewGatewayBatchOk { payload } => {
             if payload.results.0.len() != query.calls.0.len()
@@ -253,27 +251,27 @@ pub fn view_outcome(
 #[cfg(test)]
 mod batch_tests {
     use super::*;
-    use groundhog_json_rpc_types::view::ViewBatchRequest;
-    use groundhog_view::{ViewGatewayBatchPayload, ViewGatewayBatchResult};
-    use groundhog_xdr::view::TransactionViewResult;
     use std::time::Duration;
+    use thruput_json_rpc_types::view::ViewBatchRequest;
+    use thruput_view::{ViewGatewayBatchPayload, ViewGatewayBatchResult};
+    use thruput_xdr::view::TransactionViewResult;
 
-    fn query() -> groundhog_view::ViewGatewayBatchQuery {
+    fn query() -> thruput_view::ViewGatewayBatchQuery {
         view_batch_query(
             ViewBatchRequest {
-                calls: vec![groundhog_json_rpc_types::view::ViewCall {
+                calls: vec![thruput_json_rpc_types::view::ViewCall {
                     auth_claim: None,
                     gas_limit: Some(123),
-                    contract: groundhog_xdr::types::ContractAddress::from([7; 32]).into(),
+                    contract: thruput_xdr::types::ContractAddress::from([7; 32]).into(),
                     entrypoint: HexBytes(vec![0; 8]),
                     calldata: HexBytes(vec![1]),
-                    caller: Some(groundhog_xdr::types::ContractAddress::from([8; 32]).into()),
+                    caller: Some(thruput_xdr::types::ContractAddress::from([8; 32]).into()),
                 }],
                 min_height: Some(42.into()),
             },
             10_000_000,
             Duration::from_millis(999),
-            groundhog_json_rpc_server::ViewBatchConfig::default(),
+            thruput_json_rpc_server::ViewBatchConfig::default(),
         )
         .unwrap()
     }
@@ -340,7 +338,7 @@ mod batch_tests {
             calls: vec![],
             min_height: None,
         };
-        let limits = groundhog_json_rpc_server::ViewBatchConfig {
+        let limits = thruput_json_rpc_server::ViewBatchConfig {
             max_response_bytes: 321,
             ..Default::default()
         };
@@ -356,7 +354,7 @@ mod batch_tests {
     #[test]
     fn batch_failure_maps_height_details_and_deadline() {
         let result = ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
-            height_unavailable: groundhog_view::ViewGatewayHeightUnavailable {
+            height_unavailable: thruput_view::ViewGatewayHeightUnavailable {
                 requested: 42.into(),
                 observed: 41.into(),
             },

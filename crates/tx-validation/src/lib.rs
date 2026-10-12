@@ -22,11 +22,11 @@
 //! re-checks everything, and a reading that lags a block is harmless
 //! because these parameters change only through explicit config upgrades.
 
-use groundhog_json_rpc_types::error::TxInvalidDetail;
-use groundhog_rv32_artifact::{
+use thruput_json_rpc_types::error::TxInvalidDetail;
+use thruput_rv32_artifact::{
     DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, DeclaredSizes, declared_sizes,
 };
-use groundhog_xdr::{
+use thruput_xdr::{
     contract::{Contract, kDefaultMaxContractSizeBytes},
     transaction::Transaction,
 };
@@ -43,7 +43,7 @@ const DEFAULT_MAX_RV32_MEMORY_BYTES: u32 = 65_536;
 const _: () = assert!(DEFAULT_MAX_RV32_CODE_BYTES as usize == DEFAULT_MAX_CODE_BYTES);
 const _: () = assert!(DEFAULT_MAX_RV32_MEMORY_BYTES as usize == DEFAULT_MEMORY_BYTES);
 
-pub use groundhog_json_rpc_types::network_config::{NetworkConfigParams, UnsupportedNetworkConfig};
+pub use thruput_json_rpc_types::network_config::{NetworkConfigParams, UnsupportedNetworkConfig};
 
 /// Bytes one attached contract's code blob may hold under `params`.
 ///
@@ -304,7 +304,7 @@ fn contract_code_size(contract: &Contract) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_xdr::{
+    use thruput_xdr::{
         contract::ContractBlob,
         network_config::{ConfigParam, NetworkConfig, NetworkConfigV0},
         precompiles::HogexecPrecompiledNativeContracts,
@@ -451,7 +451,7 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
     /// `memory_bytes` of guest memory, as an attached contract.
     fn artifact(code_bytes: usize, memory_bytes: usize) -> Contract {
         let artifact =
-            groundhog_rv32_artifact::build_artifact(&vec![0u8; code_bytes], &[], 0, memory_bytes)
+            thruput_rv32_artifact::build_artifact(&vec![0u8; code_bytes], &[], 0, memory_bytes)
                 .unwrap();
         Contract::kRv32 {
             rv32_contract: ContractBlob {

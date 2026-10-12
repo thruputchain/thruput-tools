@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
-use groundhog_json_rpc_types::events::{EmittedEvent, IdentifiedEvent, PaginationCursor};
-use groundhog_json_rpc_types::hex::{HexBytes, Topic};
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thruput_json_rpc_types::events::{EmittedEvent, IdentifiedEvent, PaginationCursor};
+use thruput_json_rpc_types::hex::{HexBytes, Topic};
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 
 pub const EVENTS_LIST_JSON_SCHEMA_VERSION: u32 = 2;
 
@@ -58,8 +58,8 @@ pub struct DecodedEventReport {
 #[serde(rename_all = "camelCase")]
 pub struct RawEventReport {
     pub tx_hash: TxHash,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub block_height: BlockHeight,
     pub sequence_number: u32,
     pub contract_address: ContractAddress,
@@ -127,10 +127,10 @@ pub struct EventListReport {
     pub spec: Option<EventSpecReport>,
     pub events: Vec<EventListItemReport>,
     pub cursor: PaginationCursor,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub latest_block: BlockHeight,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub oldest_block: BlockHeight,
 }

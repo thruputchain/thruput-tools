@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use groundhog_json_rpc_types::NetworkHashHex;
 use serde_json::json;
+use thruput_json_rpc_types::NetworkHashHex;
 
-use groundhog_node_supervisor::config::{BlockDriverConfig, BlockDriverMode, HogdDevConfig};
+use thruput_node_supervisor::config::{BlockDriverConfig, BlockDriverMode, HogdDevConfig};
 
 #[test]
 fn data_dir_is_absolute_and_expands_home() {
@@ -55,16 +55,16 @@ fn block_driver_default_keeps_instant_mode_with_500ms_interval() {
 #[test]
 fn rpc_batch_concurrency_defaults_and_builder_are_validated() {
     assert_eq!(
-        groundhog_node_supervisor::config::NodeSupervisorConfig::default()
+        thruput_node_supervisor::config::NodeSupervisorConfig::default()
             .rpc_batch_concurrency
             .get(),
         128
     );
     for value in [0, 1025] {
-        assert!(groundhog_node_supervisor::RpcBatchConcurrency::try_from(value).is_err());
+        assert!(thruput_node_supervisor::RpcBatchConcurrency::try_from(value).is_err());
     }
     for value in [1, 1024] {
-        let config = groundhog_node_supervisor::config::NodeSupervisorConfig::default()
+        let config = thruput_node_supervisor::config::NodeSupervisorConfig::default()
             .with_rpc_batch_concurrency(value.try_into().unwrap());
         assert_eq!(config.rpc_batch_concurrency.get(), value);
     }
@@ -84,8 +84,8 @@ fn manual_block_driver_keeps_default_interval_inert() {
 
 #[test]
 fn hogd_dev_config_lowers_to_public_allocations() {
-    use groundhog_json_rpc_types::{bootstrap_manifest::BootstrapManifestAllocation, hex::Hex0x};
-    let key = Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x42; 32]));
+    use thruput_json_rpc_types::{bootstrap_manifest::BootstrapManifestAllocation, hex::Hex0x};
+    let key = Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x42; 32]));
     let config = HogdDevConfig::default()
         .with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(key, "42")]);
     let value =
@@ -102,7 +102,7 @@ fn hogd_dev_config_lowers_to_public_allocations() {
     );
     assert!(HogdDevConfig::default().bootstrap_accounts.is_empty());
     assert_eq!(
-        groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS,
+        thruput_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS,
         100 * 10_000_000
     );
 }

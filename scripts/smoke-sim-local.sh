@@ -205,17 +205,17 @@ cargo build -p thruput-cli
 log "running local-provider smoke"
 THRUPUT_DEVNODE_BINARY="$DEVNODE_BINARY" \
 THRUPUT_SIM_CLI_BINARY="$THRUPUT_BINARY" \
-    cargo test -p groundhog-sim --test local_target_smoke local_target_chain_tip_smoke -- --ignored --nocapture
+    cargo test -p thruput-sim --test local_target_smoke local_target_chain_tip_smoke -- --ignored --nocapture
 
 log "running local-provider restart smoke"
 THRUPUT_DEVNODE_BINARY="$DEVNODE_BINARY" \
 THRUPUT_SIM_CLI_BINARY="$THRUPUT_BINARY" \
-    cargo test -p groundhog-sim --test local_target_smoke local_restart_target_chain_tip_smoke -- --ignored --nocapture
+    cargo test -p thruput-sim --test local_target_smoke local_restart_target_chain_tip_smoke -- --ignored --nocapture
 
 log "running local-provider sweeper smoke"
 THRUPUT_DEVNODE_BINARY="$DEVNODE_BINARY" \
 THRUPUT_SIM_CLI_BINARY="$THRUPUT_BINARY" \
-    cargo test -p groundhog-sim --test local_target_smoke local_target_sweep_orphan_smoke -- --ignored --nocapture
+    cargo test -p thruput-sim --test local_target_smoke local_target_sweep_orphan_smoke -- --ignored --nocapture
 
 NODE_STDOUT="$WORKDIR/groundhog-node.json"
 NODE_STDERR="$WORKDIR/groundhog-node.stderr"
@@ -240,7 +240,7 @@ log "running existing-provider smoke against $RPC_URL"
 GROUNDHOG_SIM_RPC_URL="$RPC_URL" \
 GROUNDHOG_SIM_RUNTIME_MANIFEST="$RUNTIME_MANIFEST" \
 GROUNDHOG_SIM_EXISTING_ROOT="$WORKDIR/existing-provider" \
-    cargo test -p groundhog-sim --test existing_target_smoke -- --ignored --nocapture
+    cargo test -p thruput-sim --test existing_target_smoke -- --ignored --nocapture
 
 terminate_node "$NODE_PID"
 NODE_PID=""

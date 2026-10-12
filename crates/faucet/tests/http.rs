@@ -1,19 +1,19 @@
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
-use groundhog_json_rpc_types::hex::Hex0x;
-use groundhog_json_rpc_types::network_descriptor::{
-    NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
-};
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
-use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+use thruput_json_rpc_types::hex::Hex0x;
+use thruput_json_rpc_types::network_descriptor::{
+    NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
+};
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 use tower::ServiceExt;
 
-use groundhog_faucet::{DEFAULT_LISTEN_ADDRESS, FaucetConfig, airdrop, app, config, policy};
+use thruput_faucet::{DEFAULT_LISTEN_ADDRESS, FaucetConfig, airdrop, app, config, policy};
 
 #[test]
 fn default_config_uses_local_listen_address() {
@@ -28,7 +28,7 @@ async fn serve_stops_when_shutdown_future_resolves() {
     config.listen_address = "127.0.0.1:0".into();
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
-    let server = tokio::spawn(groundhog_faucet::serve_with_shutdown(config, async move {
+    let server = tokio::spawn(thruput_faucet::serve_with_shutdown(config, async move {
         let _ = shutdown_rx.await;
     }));
 
@@ -293,7 +293,7 @@ fn airdrop_submitter_amount_must_match_network_descriptor() {
 
     assert!(matches!(
         error,
-        groundhog_faucet::config::FaucetConfigError::SubmitterAmountMismatch {
+        thruput_faucet::config::FaucetConfigError::SubmitterAmountMismatch {
             submitter: "airdrop submitter",
             expected: 100_000_000,
             actual: 200_000_000,
@@ -311,7 +311,7 @@ fn faucet_config_requires_airdrop_descriptor() {
 
     assert!(matches!(
         error,
-        groundhog_faucet::config::FaucetConfigError::MissingAirdropDescriptor
+        thruput_faucet::config::FaucetConfigError::MissingAirdropDescriptor
     ));
 }
 
@@ -329,7 +329,7 @@ fn faucet_config_rejects_invalid_airdrop_descriptor_amount() {
 
     assert!(matches!(
         error,
-        groundhog_faucet::config::FaucetConfigError::InvalidDescriptorAmount {
+        thruput_faucet::config::FaucetConfigError::InvalidDescriptorAmount {
             field: "airdrop.rawAmount",
             ref value,
         } if value == "invalid"
@@ -1480,7 +1480,7 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
         }
         if let Some(status) = self.poll_status.lock().unwrap().clone() {
             return Err(airdrop::AirdropSubmitError::Poll(
-                groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
                     tx_hash,
                     status,
                 },
@@ -1488,7 +1488,7 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
         }
         if self.poll_times_out {
             return Err(airdrop::AirdropSubmitError::Poll(
-                groundhog_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout {
+                thruput_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout {
                     tx_hash,
                     attempts: 1,
                     last_status: None,
@@ -1497,7 +1497,7 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
         }
         if self.poll_invalid {
             return Err(airdrop::AirdropSubmitError::Poll(
-                groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
                     tx_hash,
                     status: TransactionStatus::Invalid {
                         reason: "expired".into(),
@@ -1510,7 +1510,7 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
 }
 
 fn test_tx_hash() -> TxHash {
-    TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x22; 32])))
+    TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x22; 32])))
 }
 
 fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
@@ -1534,8 +1534,8 @@ fn prepared_airdrop(raw_amount: &str) -> airdrop::PreparedAirdrop {
     }
 }
 
-fn scheduler_error() -> groundhog_json_rpc_types::transaction::SchedulerTransactionError {
-    use groundhog_json_rpc_types::transaction::{
+fn scheduler_error() -> thruput_json_rpc_types::transaction::SchedulerTransactionError {
+    use thruput_json_rpc_types::transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource,
     };
     SchedulerTransactionError::new(SchedulerTransactionErrorSource::Executor, 7)

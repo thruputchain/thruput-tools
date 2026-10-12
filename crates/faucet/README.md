@@ -1,6 +1,6 @@
 # Groundhog Faucet
 
-`groundhog-faucet` serves the hosted Devnet network descriptor and airdrops.
+`thruput-faucet` serves the hosted Devnet network descriptor and airdrops.
 The signing key is loaded once at startup and never belongs in TOML config, process arguments, or logs.
 
 ## Run Locally
@@ -10,19 +10,19 @@ source values with values from your local or hosted Devnet setup:
 
 ```sh
 cp crates/faucet/faucet.example.toml crates/faucet/faucet.toml
-cargo run -p groundhog-faucet -- --config crates/faucet/faucet.toml
+cargo run -p thruput-faucet -- --config crates/faucet/faucet.toml
 ```
 
 Override the listen address when needed:
 
 ```sh
-cargo run -p groundhog-faucet -- --config crates/faucet/faucet.toml --listen 127.0.0.1:8081
+cargo run -p thruput-faucet -- --config crates/faucet/faucet.toml --listen 127.0.0.1:8081
 ```
 
 Logs use `RUST_LOG` and default to `info`:
 
 ```sh
-RUST_LOG=debug cargo run -p groundhog-faucet -- --config crates/faucet/faucet.toml
+RUST_LOG=debug cargo run -p thruput-faucet -- --config crates/faucet/faucet.toml
 ```
 
 ## Config

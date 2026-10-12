@@ -5,28 +5,28 @@
 //! as in client-ts/examples/fixtures/counter.rv32a and its generated binding.
 //! Never point this test at a persistent or public network.
 
-use groundhog_json_rpc_client::{
+use std::time::Duration;
+use thruput_json_rpc_client::{
     AirdropApiClient, GroundhogApiClient, HttpClient, HttpClientBuilder,
     poll_transaction_receipt_with_client_config,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
     hex::Hex0x,
     receipt::{ExecStatus, TransactionReceipt},
     transaction::{ConflictCode, TransactionStatus, TxHash},
 };
-use groundhog_signing::default_wallet::*;
-use groundhog_signing::{
+use thruput_signing::default_wallet::*;
+use thruput_signing::{
     LocalSigner, NATIVE_HOG_ADDRESS, NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount,
     SignTransactionParams, derive_deploy_address, native_hog_transfer_calldata,
     sign_and_encode_transaction_hex, transaction_hash, wallet_contract_hash,
 };
-use groundhog_xdr::{
+use thruput_xdr::{
     contract::{Contract, ContractBlob, ContractEntrypointID},
     transaction::Transaction,
     types::{ContractAddress, NetworkHash, SHA256Hash},
 };
-use std::time::Duration;
 use xdr_common::BytesM;
 
 async fn submit(
@@ -81,7 +81,7 @@ async fn qualify_native_deployment(atomic: bool) {
         std::env::var("NATIVE_WALLET_COUNTER_RV32A").expect("Counter 0.1.0 artifact path required");
     let client = HttpClientBuilder::default().build(url).unwrap();
     let network = NetworkHash::new(client.network_info().await.unwrap().network_hash.0);
-    let manifest: groundhog_json_rpc_types::runtime_manifest::RuntimeManifest =
+    let manifest: thruput_json_rpc_types::runtime_manifest::RuntimeManifest =
         serde_json::from_slice(
             &std::fs::read(
                 std::env::var("NATIVE_WALLET_RUNTIME_MANIFEST")
@@ -130,7 +130,7 @@ async fn qualify_native_deployment(atomic: bool) {
     let negative = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
         account: &account,
         deployment_nonce: unfunded_salt,
-        code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract.clone()),
+        code: thruput_signing::default_wallet::DeploymentCode::Attached(contract.clone()),
         amount: 0,
         initializer: None,
         gas_limit: 1_000_000,
@@ -144,7 +144,7 @@ async fn qualify_native_deployment(atomic: bool) {
         match client.get_transaction_status(negative_hash).await.unwrap() {
             TransactionStatus::RecentFailure {
                 cause:
-                    groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                    thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
                         conflict,
                     },
                 ..
@@ -207,7 +207,7 @@ async fn qualify_native_deployment(atomic: bool) {
     let deployment = BuildDefaultWalletDeployTransaction {
         account: &account,
         deployment_nonce: salt,
-        code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
+        code: thruput_signing::default_wallet::DeploymentCode::Attached(contract),
         amount: if atomic { amount } else { 0 },
         initializer: None,
         gas_limit: 1_000_000,

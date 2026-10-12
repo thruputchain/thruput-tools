@@ -3,8 +3,8 @@
 
 use std::time::{Duration, Instant};
 
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
+use thruput_json_rpc_server::RpcServerError;
+use thruput_scheduler::parallel::ParallelSignedTransactionBatch;
 use xdr_common::VecM;
 use xdrs::{ChunkedBytes, EncodesAs, WriteXDR};
 

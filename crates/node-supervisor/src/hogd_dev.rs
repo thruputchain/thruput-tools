@@ -1,6 +1,5 @@
 //! hog-devnode process adapter.
 
-use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::{
     collections::BTreeMap,
     env,
@@ -12,8 +11,11 @@ use std::{
     process::ExitStatus,
     time::Duration,
 };
+use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
-use groundhog_json_rpc_types::{
+use serde::{Deserialize, de::DeserializeOwned};
+use tempfile::TempDir;
+use thruput_json_rpc_types::{
     ContractAddress, NetworkHashHex,
     hex::HexBytes,
     runtime_manifest::{
@@ -22,10 +24,8 @@ use groundhog_json_rpc_types::{
         parse_runtime_manifest,
     },
 };
-use groundhog_signing::LocalSigner;
-use groundhog_tx_validation::ConfigParamName;
-use serde::{Deserialize, de::DeserializeOwned};
-use tempfile::TempDir;
+use thruput_signing::LocalSigner;
+use thruput_tx_validation::ConfigParamName;
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, BufReader},
     process::{ChildStderr, ChildStdout},
@@ -175,7 +175,7 @@ pub(crate) fn validate_bootstrap_accounts(
     readiness: &HogdDevReadiness,
     config: &HogdDevConfig,
     network_hash: &NetworkHashHex,
-    faucet_public_key: groundhog_json_rpc_types::Ed25519PublicKey,
+    faucet_public_key: thruput_json_rpc_types::Ed25519PublicKey,
 ) -> Result<(), NodeSupervisorError> {
     let fail = |reason: String| NodeSupervisorError::InvalidRuntimeManifest {
         program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
@@ -215,7 +215,7 @@ pub(crate) fn validate_bootstrap_accounts(
         if account.role != role
             || account.initial_storage_tokens != allocation.initial_storage_tokens
             || account.wallet_address.0
-                != groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address()
+                != thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address()
         {
             return Err(fail("runtime bootstrap account does not match its public allocation and native identity".into()));
         }
@@ -714,7 +714,7 @@ impl BootstrapManifestFile {
 fn write_bootstrap_manifest(
     config: &HogdDevConfig,
     network_hash: &NetworkHashHex,
-    faucet_public_key: groundhog_json_rpc_types::Ed25519PublicKey,
+    faucet_public_key: thruput_json_rpc_types::Ed25519PublicKey,
 ) -> Result<BootstrapManifestFile, NodeSupervisorError> {
     let manifest = config.to_bootstrap_manifest(network_hash.clone(), faucet_public_key);
     let bytes = serde_json::to_vec_pretty(&manifest)

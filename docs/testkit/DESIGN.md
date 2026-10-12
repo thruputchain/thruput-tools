@@ -1,6 +1,6 @@
 # Testkit design
 
-`groundhog-testkit` runs concurrent application actors as ordinary Rust tests.
+`thruput-testkit` runs concurrent application actors as ordinary Rust tests.
 Each actor can make calls, wait for results, coordinate with other actors, and
 assert on what it observes. This is useful when correctness depends on several
 users interacting, rather than on one contract call in isolation.

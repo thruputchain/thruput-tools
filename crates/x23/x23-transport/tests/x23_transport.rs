@@ -12,7 +12,7 @@ use rpc_driver::{ProgVers, RpcServer, handler::RpcHandler};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
-use groundhog_x23_transport::*;
+use thruput_x23_transport::*;
 
 #[derive(Debug)]
 struct DummyClient;

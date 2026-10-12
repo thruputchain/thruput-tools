@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use groundhog_xdr::{header::ProposalHeader, types::ExtensionPoint};
+use thruput_xdr::{header::ProposalHeader, types::ExtensionPoint};
 
 use crate::hex::{Hex0x, HexBytes};
 use crate::{
@@ -140,7 +140,7 @@ fn ensure_base_extension(
 /// Return the canonical hash of an XDR-encoded consensus value.
 pub fn consensus_value_hash(value: &ConsensusValue) -> Result<BlockHash, xdrs::WriteError> {
     xdrs::txs::encode(value).map(|encoded| {
-        Hex0x(groundhog_xdr::types::SHA256Hash::from(<[u8; 32]>::from(
+        Hex0x(thruput_xdr::types::SHA256Hash::from(<[u8; 32]>::from(
             Sha256::digest(encoded),
         )))
     })

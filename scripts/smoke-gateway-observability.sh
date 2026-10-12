@@ -13,7 +13,7 @@
 #   NODE_STARTUP_TIMEOUT_SECS=60
 #   NODE_BLOCK_INTERVAL_MS=500
 #   NODE_VERBOSE=1
-#   GATEWAY_RUST_LOG=info,hog_gateway=debug,groundhog_json_rpc_gateway=debug
+#   GATEWAY_RUST_LOG=info,hog_gateway=debug,thruput_json_rpc_gateway=debug
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
@@ -23,7 +23,7 @@ GATEWAY="$REPO_ROOT/target/debug/hog-gateway"
 
 NODE_STARTUP_TIMEOUT_SECS="${NODE_STARTUP_TIMEOUT_SECS:-60}"
 NODE_BLOCK_INTERVAL_MS="${NODE_BLOCK_INTERVAL_MS:-500}"
-GATEWAY_RUST_LOG="${GATEWAY_RUST_LOG:-info,hog_gateway=debug,groundhog_json_rpc_gateway=debug}"
+GATEWAY_RUST_LOG="${GATEWAY_RUST_LOG:-info,hog_gateway=debug,thruput_json_rpc_gateway=debug}"
 
 log() {
     printf '==> %s\n' "$*" >&2
@@ -268,7 +268,7 @@ DEVNODE_BINARY="$(find_hogd_dev_binary)"
 HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
 log "Building CLI and gateway"
-cargo build -p thruput-cli -p groundhog-json-rpc-gateway \
+cargo build -p thruput-cli -p thruput-json-rpc-gateway \
     --manifest-path "$REPO_ROOT/Cargo.toml"
 
 WORK="$(mktemp -d)"

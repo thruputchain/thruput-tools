@@ -1,4 +1,4 @@
-use groundhog_build_info::BuildVersion;
+use thruput_build_info::BuildVersion;
 
 #[test]
 fn display_keeps_crate_and_legacy_platform_versions_distinct() {

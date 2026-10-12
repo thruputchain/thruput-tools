@@ -49,7 +49,7 @@ struct Ctx {
     cmd_name: &'static str,
     /// `--offline` or `THRUPUT_OFFLINE=1`.
     offline: bool,
-    bundle_identity: groundhog_bundle_identity::BundleIdentity,
+    bundle_identity: thruput_bundle_identity::BundleIdentity,
 }
 
 /// Invocation directory the project-relative commands resolve against.
@@ -182,7 +182,7 @@ enum Command {
                         are written to stderr;\n  add --verbose/-v to also forward \
                         hog-devnode info logs. RUST_LOG overrides\n  the default filter, \
                         for example \
-                        RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug."
+                        RUST_LOG=thruput_node_supervisor=debug,hogd_dev=debug."
     )]
     Test(TestArgs),
     /// Deploy a contract
@@ -671,7 +671,7 @@ struct TestArgs {
     /// decimal, hex, or K/M/G values). Mirrors `thruput node --network-config`.
     #[arg(long = "network-config", value_name = "NAME=VALUE", requires = "integration",
           value_parser = thruput_cli::node::parse_network_config_override)]
-    network_config: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
+    network_config: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
     /// Config profile to use
     #[arg(long = "profile")]
     profile: Option<String>,
@@ -1068,7 +1068,7 @@ struct NodeArgs {
     /// Initialize a new chain: 64 lowercase hex digits, optionally 0x-prefixed
     /// (default: all zeros for new chains). Omit on restart; initialized directories reject it.
     #[arg(long, value_name = "HEX64", value_parser = thruput_cli::config::parse_network_hash)]
-    init_network_hash: Option<groundhog_json_rpc_types::NetworkHashHex>,
+    init_network_hash: Option<thruput_json_rpc_types::NetworkHashHex>,
     /// Override hog-devnode readiness timeout for smoke tests
     #[arg(long, hide = true)]
     startup_timeout_secs: Option<u64>,
@@ -1084,7 +1084,7 @@ struct NodeArgs {
 
     /// Concurrent entries per JSON-RPC array (1..=1024, default 128)
     #[arg(long)]
-    rpc_batch_concurrency: Option<groundhog_node_supervisor::RpcBatchConcurrency>,
+    rpc_batch_concurrency: Option<thruput_node_supervisor::RpcBatchConcurrency>,
     /// RAM database capacity for hog-devnode (decimal, 0x hex, or a K/M/G
     /// suffix such as 2G); omit for the devnode default
     #[arg(long, value_name = "SIZE", value_parser = thruput_cli::byte_size::parse_byte_size)]
@@ -1093,7 +1093,7 @@ struct NodeArgs {
     /// Existing data directories must use the same overrides they were created with.
     #[arg(long = "network-config", value_name = "NAME=VALUE",
           value_parser = thruput_cli::node::parse_network_config_override)]
-    network_config: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
+    network_config: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
 }
 
 impl NodeArgs {
@@ -1120,7 +1120,7 @@ impl NodeArgs {
                 thruput_cli::node::stored_key_allocation(
                     self.key.as_deref(),
                     self.initial_account_hog
-                        .unwrap_or(groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS),
+                        .unwrap_or(thruput_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS),
                 )?;
         }
         options.block_driver = self.block_driver.map(Into::into);
@@ -1930,13 +1930,13 @@ impl TokenCommand {
     }
 }
 
-fn cli_command(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> clap::Command {
+fn cli_command(bundle_identity: &thruput_bundle_identity::BundleIdentity) -> clap::Command {
     Cli::command()
         .styles(Print::command_styles())
         .version(bundle_identity.to_string())
 }
 
-fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Cli {
+fn parse_cli(bundle_identity: &thruput_bundle_identity::BundleIdentity) -> Cli {
     // Clap can print help/errors before Print exists. Honor the global plain-output
     // switch here too, but do not inspect arguments forwarded after `--`.
     let no_ui = std::env::args_os()
@@ -1995,7 +1995,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use groundhog_node_supervisor::ConfigParamName;
+    use thruput_node_supervisor::ConfigParamName;
 
     #[test]
     fn config_get_flags_and_command_name_parse() {

@@ -1,21 +1,21 @@
 use schemars::schema_for;
 
-use groundhog_json_rpc_types::block::{BlockInfo, ChainTip};
-use groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifest;
-use groundhog_json_rpc_types::dev::{
+use thruput_json_rpc_types::block::{BlockInfo, ChainTip};
+use thruput_json_rpc_types::bootstrap_manifest::BootstrapManifest;
+use thruput_json_rpc_types::dev::{
     FrameOutputInfo, InvocationInfo, StorageDeltaInfo, SyscallInfo, SyscallStatusInfo, TraceInfo,
     TransactionDetail,
 };
-use groundhog_json_rpc_types::events::{
+use thruput_json_rpc_types::events::{
     EmittedEvent, EventFilter, EventPage, EventQuery, EventTopicFilter, IdentifiedEvent,
 };
-use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::state::{StorageItemInfo, StorageItemRead};
-use groundhog_json_rpc_types::transaction::{
+use thruput_json_rpc_types::network_descriptor::NetworkDescriptor;
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::state::{StorageItemInfo, StorageItemRead};
+use thruput_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
 };
-use groundhog_json_rpc_types::view::{RootInvocationOutput, ViewRequest, ViewResponse};
+use thruput_json_rpc_types::view::{RootInvocationOutput, ViewRequest, ViewResponse};
 
 #[test]
 fn schema_generation_succeeds() {

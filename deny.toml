@@ -22,8 +22,8 @@ unmaintained = "all"
 maximum-db-staleness = "P7D"
 
 [licenses]
-# Internal crates (publish = false) carry no license field: groundhog-bench,
-# groundhog-e2e-tests, groundhog-sim. They ship to nobody.
+# Internal crates (publish = false) carry no license field: thruput-bench,
+# thruput-e2e-tests, thruput-sim. They ship to nobody.
 private = { ignore = true }
 allow = [
     "Apache-2.0",

@@ -1,8 +1,8 @@
 //! Public API types for committed-snapshot storage state reads.
 
-use groundhog_xdr::storage_item::WireStorageItem;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thruput_xdr::storage_item::WireStorageItem;
 
 use crate::hex::{Hex0x, HexBytes};
 use crate::{BlockHeight, SHA256Hash};

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use groundhog_testkit::{
+use thruput_testkit::{
     Agent, ArtifactKind, LocalNetworkConfig, NetworkConfig, Scenario, TestkitError,
 };
 
@@ -82,7 +82,7 @@ async fn offline_chain_verbs_report_offline() {
                 .deploy(
                     b"not-a-real-artifact",
                     ArtifactKind::Rv32,
-                    groundhog_testkit::DeployOptions::funded(0),
+                    thruput_testkit::DeployOptions::funded(0),
                 )
                 .await
                 .expect_err("deploy against an offline target must fail");
@@ -264,7 +264,7 @@ async fn registry_exposes_hash_and_registration_state() {
             ));
             // Deploying needs a live target.
             assert!(matches!(
-                ctx.deploy_artifact("counter", groundhog_testkit::DeployOptions::funded(0))
+                ctx.deploy_artifact("counter", thruput_testkit::DeployOptions::funded(0))
                     .await,
                 Err(TestkitError::Offline { .. })
             ));

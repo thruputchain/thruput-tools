@@ -1,14 +1,14 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use groundhog_json_rpc_client::{AirdropApiClient, LocalFundingApiClient};
-use groundhog_json_rpc_types::{
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use thruput_json_rpc_client::{AirdropApiClient, LocalFundingApiClient};
+use thruput_json_rpc_types::{
     airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, LocalFundingErrorData},
     receipt::ExecStatus,
 };
-use groundhog_xdr::types::NetworkHash;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use thruput_xdr::types::NetworkHash;
 
 use crate::account_resolution::{
     LocalBootstrapRole, resolve_address_target, resolve_address_target_or_default_wallet,
@@ -50,7 +50,7 @@ pub(crate) struct PreparedLocalAirdrop {
     pub(crate) raw_amount: u128,
     pub(crate) faucet_role: String,
     pub(crate) faucet_wallet: String,
-    pub(crate) faucet_balance_height: groundhog_json_rpc_types::BlockHeight,
+    pub(crate) faucet_balance_height: thruput_json_rpc_types::BlockHeight,
     pub(crate) funding_projection: LocalFundingProjection,
     pub(crate) network_hash: NetworkHash,
 }
@@ -62,7 +62,7 @@ pub(crate) struct PreparedRemoteAirdrop {
     pub(crate) recipient_input: String,
     pub(crate) recipient_wallet: String,
     client_nonce: String,
-    airdrop_policy: groundhog_json_rpc_types::network_descriptor::AirdropDescriptor,
+    airdrop_policy: thruput_json_rpc_types::network_descriptor::AirdropDescriptor,
     amount_hog: String,
     attempt_path: PathBuf,
     _attempt_locks: Vec<File>,
@@ -92,7 +92,7 @@ struct LocalAirdropPlan {
     raw_amount: u128,
     faucet_role: String,
     faucet_wallet: String,
-    faucet_balance_height: groundhog_json_rpc_types::BlockHeight,
+    faucet_balance_height: thruput_json_rpc_types::BlockHeight,
     funding_projection: LocalFundingProjection,
     network_hash: NetworkHash,
 }
@@ -288,7 +288,7 @@ fn retain_local_funding_request(
         recipient,
         faucet,
         raw_amount: prepared.raw_amount.to_string(),
-        client_nonce: groundhog_json_rpc_types::airdrop::ClientNonce::new(nonce.to_vec())
+        client_nonce: thruput_json_rpc_types::airdrop::ClientNonce::new(nonce.to_vec())
             .map_err(|error| CliError::LocalFundingAttempt(error.to_string()))?,
     };
     write_attempt(
@@ -322,8 +322,7 @@ fn run_local_airdrop(
             Ok(response) => response,
             Err(error) => {
                 if let jsonrpsee::core::client::Error::Call(call) = &error
-                    && call.code()
-                        == groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
+                    && call.code() == thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
                     && let Some(data) = call.data()
                 {
                     let evidence: LocalFundingErrorData = serde_json::from_str(data.get())
@@ -349,11 +348,11 @@ fn run_local_airdrop(
             &path,
             &LocalFundingErrorData::new(response.tx_hash, response.signed_transaction.clone()),
         )?;
-        let receipt = groundhog_json_rpc_client::poll_transaction_receipt_with_client_config(
+        let receipt = thruput_json_rpc_client::poll_transaction_receipt_with_client_config(
             &client,
             response.tx_hash,
-            groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
-            groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
+            thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
+            thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
         )
         .await
         .map_err(|error| CliError::LocalFundingUnresolved {
@@ -411,12 +410,12 @@ fn retain_local_funding_evidence(
     path: &Path,
     evidence: &LocalFundingErrorData,
 ) -> Result<(), CliError> {
-    let signed: groundhog_xdr::transaction::SignedTransaction =
+    let signed: thruput_xdr::transaction::SignedTransaction =
         xdrs::txs::decode(&evidence.signed_transaction.0)
             .map_err(|e| CliError::LocalFundingAttempt(e.to_string()))?;
-    let hash = groundhog_signing::transaction_hash(&signed.tx)
+    let hash = thruput_signing::transaction_hash(&signed.tx)
         .map_err(|e| CliError::LocalFundingAttempt(e.to_string()))?;
-    if evidence.tx_hash != groundhog_json_rpc_types::transaction::TxHash(hash.into()) {
+    if evidence.tx_hash != thruput_json_rpc_types::transaction::TxHash(hash.into()) {
         return Err(CliError::LocalFundingAttempt(
             "retained funding hash does not match signed bytes".into(),
         ));
@@ -461,7 +460,7 @@ fn local_funding_recovery_error(path: &Path, error: CliError) -> Result<CliError
 
 fn ensure_local_airdrop_success(
     prepared: &PreparedLocalAirdrop,
-    receipt: &groundhog_json_rpc_types::receipt::TransactionReceipt,
+    receipt: &thruput_json_rpc_types::receipt::TransactionReceipt,
     tx_hash: &str,
 ) -> Result<(), CliError> {
     let decoded_abort = crate::tx_utils::decode_receipt_abort(receipt, None);
@@ -544,7 +543,7 @@ fn prepare_local_airdrop_plan(
     let faucet_wallet = format_contract_address(&faucet.wallet_address);
     let faucet_balance = fetch_balance_blocking(
         rpc_url,
-        groundhog_json_rpc_types::ContractAddress::from(faucet.wallet_address),
+        thruput_json_rpc_types::ContractAddress::from(faucet.wallet_address),
     )?;
     let funding_projection = local_funding_projection(
         &faucet_balance.raw_balance,
@@ -600,7 +599,7 @@ fn post_airdrop_observations(prepared: &PreparedLocalAirdrop, print: &Print) -> 
 
 fn observe_post_airdrop_balance(label: &str, rpc_url: &str, address: &str, print: &Print) -> Value {
     let observation = parse_contract_address(address)
-        .map(groundhog_json_rpc_types::ContractAddress::from)
+        .map(thruput_json_rpc_types::ContractAddress::from)
         .and_then(|address| fetch_balance_blocking(rpc_url, address))
         .and_then(|balance| {
             let raw = balance.raw_balance.parse::<u128>().map_err(|error| {
@@ -749,7 +748,7 @@ fn validate_remote_airdrop_amount(expected: &str, actual: &str) -> Result<(), Cl
 }
 
 fn print_remote_airdrop_policy(
-    policy: &groundhog_json_rpc_types::network_descriptor::AirdropDescriptor,
+    policy: &thruput_json_rpc_types::network_descriptor::AirdropDescriptor,
     amount_hog: &str,
     print: &Print,
 ) {
@@ -1128,8 +1127,8 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
-    use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
     use serial_test::serial;
+    use thruput_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
     use super::{
         PreparedAirdrop, PreparedLocalAirdrop, RemoteAirdropAttempt, ensure_local_airdrop_success,
@@ -1599,7 +1598,7 @@ mod tests {
     fn non_reverted_too_large_airdrop_preserves_transaction_status() {
         let prepared = prepared_local_airdrop();
         let mut receipt = reverted_too_large_receipt();
-        receipt.status = groundhog_json_rpc_types::receipt::ExecStatus::DeterministicError {
+        receipt.status = thruput_json_rpc_types::receipt::ExecStatus::DeterministicError {
             kind: "outOfGas".into(),
         };
 
@@ -1646,30 +1645,30 @@ mod tests {
             raw_amount: 100_000_000,
             faucet_role: "faucet".into(),
             faucet_wallet: format!("0x{}", "cd".repeat(32)),
-            faucet_balance_height: groundhog_json_rpc_types::BlockHeight::from(42),
+            faucet_balance_height: thruput_json_rpc_types::BlockHeight::from(42),
             funding_projection: crate::balance::LocalFundingProjection {
                 committed_balance: 200_000_000,
                 transaction_storage_cost: 12_007,
                 estimated_max: 199_987_993,
                 projected_balance: Some(99_987_993),
             },
-            network_hash: groundhog_xdr::types::NetworkHash::new(
-                groundhog_xdr::types::SHA256Hash::from([0; 32]),
+            network_hash: thruput_xdr::types::NetworkHash::new(
+                thruput_xdr::types::SHA256Hash::from([0; 32]),
             ),
         }
     }
 
-    fn reverted_too_large_receipt() -> groundhog_json_rpc_types::receipt::TransactionReceipt {
-        groundhog_json_rpc_types::receipt::TransactionReceipt {
-            tx_hash: groundhog_json_rpc_types::transaction::TxHash(
-                groundhog_json_rpc_types::hex::Hex0x(groundhog_xdr::types::SHA256Hash::from(
+    fn reverted_too_large_receipt() -> thruput_json_rpc_types::receipt::TransactionReceipt {
+        thruput_json_rpc_types::receipt::TransactionReceipt {
+            tx_hash: thruput_json_rpc_types::transaction::TxHash(
+                thruput_json_rpc_types::hex::Hex0x(thruput_xdr::types::SHA256Hash::from(
                     [0x44; 32],
                 )),
             ),
-            height: groundhog_json_rpc_types::BlockHeight::from(43),
-            status: groundhog_json_rpc_types::receipt::ExecStatus::Reverted { message: None },
+            height: thruput_json_rpc_types::BlockHeight::from(43),
+            status: thruput_json_rpc_types::receipt::ExecStatus::Reverted { message: None },
             return_data: None,
-            abort_data: Some(groundhog_json_rpc_types::hex::HexBytes(
+            abort_data: Some(thruput_json_rpc_types::hex::HexBytes(
                 erc20_too_large_abort(),
             )),
             events: Vec::new(),
@@ -1678,14 +1677,10 @@ mod tests {
     }
 
     fn erc20_too_large_abort() -> Vec<u8> {
-        let selector = groundhog_contract_util::exception_selector(
-            "0.1.9",
-            "groundhog-erc20-if",
-            "ERC20Error",
-        );
+        let selector = <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR;
         let mut bytes = xdrs::cxs::encode(&selector).expect("bug: selector should encode");
         bytes.extend_from_slice(
-            &xdrs::cxs::encode(&groundhog_erc20_if::ERC20Error::TooLarge)
+            &xdrs::cxs::encode(&thruput_erc20_if::ERC20Error::TooLarge)
                 .expect("bug: ERC20 error should encode"),
         );
         bytes
@@ -1720,7 +1715,7 @@ mod tests {
 
     fn test_network_descriptor_value() -> serde_json::Value {
         serde_json::json!({
-            "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
+            "schemaVersion": thruput_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet-preview",
             "networkHash": format!("0x{}", "42".repeat(32)),

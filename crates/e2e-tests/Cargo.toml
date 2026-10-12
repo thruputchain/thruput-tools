@@ -1,10 +1,10 @@
 [package]
-name = "groundhog-e2e-tests"
+name = "thruput-e2e-tests"
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
-description = "Process-level JSON-RPC smoke tests for Groundhog"
+description = "Process-level JSON-RPC smoke tests for Thruput"
 
 # This crate exists only for integration tests.
 # It does not produce a library.
@@ -12,10 +12,10 @@ description = "Process-level JSON-RPC smoke tests for Groundhog"
 path = "src/lib.rs"
 
 [dependencies]
-groundhog-json-rpc-client = { workspace = true }
-groundhog-json-rpc-types = { workspace = true }
-groundhog-signing = { workspace = true }
-groundhog-xdr = { workspace = true }
+thruput-json-rpc-client = { workspace = true }
+thruput-json-rpc-types = { workspace = true }
+thruput-signing = { workspace = true }
+thruput-xdr = { workspace = true }
 xdr-common = { workspace = true }
 xdrs = { workspace = true }
 serde_json = { workspace = true }

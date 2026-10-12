@@ -1,4 +1,4 @@
-//! `groundhog-rv32-lower` — turn a freestanding `riscv32im-unknown-none-elf`
+//! `thruput-rv32-lower` — turn a freestanding `riscv32im-unknown-none-elf`
 //! contract binary into a Groundhog **v5 RV32 artifact** (`.rv32a`).
 //!
 //! This focused lowerer validates the contract ELF and emits the canonical RV32
@@ -12,7 +12,7 @@
 //!      the minimal nonzero initial-memory span and its load base. Dispatch
 //!      lives in the guest (since v4), so no symbol scanning is needed and
 //!      stripped builds are valid.
-//!   3. `groundhog-rv32-artifact` — pack the v5 header + sections, then
+//!   3. `thruput-rv32-artifact` — pack the v5 header + sections, then
 //!      self-verify.
 //!
 //! See `docs/rv32/design.md` for the surrounding design.
@@ -23,9 +23,9 @@ pub mod lower;
 pub mod metadata;
 
 pub use error::{LowerError, Result};
-pub use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, compute_format_fingerprint};
 pub use lower::{
     ALLOC_ALLOWLIST, INTERFACE_ID_BYTES, INTERFACE_TABLE_ANCHOR_SECTION, INTERFACE_TABLE_SECTION,
     LowerOptions, Lowered, lower, lower_with,
 };
 pub use metadata::{MetadataInput, render_metadata, summary_json};
+pub use thruput_rv32_artifact::{FORMAT_FINGERPRINT, compute_format_fingerprint};

@@ -1,13 +1,13 @@
-use groundhog_json_rpc_types::BlockHeight;
-use groundhog_json_rpc_types::transaction::{ConflictCode, TransactionStatus};
-use groundhog_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
-use groundhog_xdr::types::{AddressAndKey, ContractAddress, StorageKey};
 use serde_json::json;
+use thruput_json_rpc_types::BlockHeight;
+use thruput_json_rpc_types::transaction::{ConflictCode, TransactionStatus};
+use thruput_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
+use thruput_xdr::types::{AddressAndKey, ContractAddress, StorageKey};
 
 fn diagnostic(code: DbConflictCode) -> TxFailureDiagnostic {
     TxFailureDiagnostic {
         attempt_height: BlockHeight::from(1234),
-        cause: groundhog_trace::TxFailureCause::TxFailureDbConflict {
+        cause: thruput_trace::TxFailureCause::TxFailureDbConflict {
             conflict: DbConflictDiagnostic {
                 addrkey: AddressAndKey {
                     address: ContractAddress::from([0x11; 32]),
@@ -88,9 +88,7 @@ fn transaction_status_deserializes_unknown_tag_as_other() {
 
 #[test]
 fn contract_rejection_preserves_attachment_index_and_all_codes() {
-    use groundhog_trace::{
-        ContractRejectCode as XdrCode, ContractRejectDiagnostic, TxFailureCause,
-    };
+    use thruput_trace::{ContractRejectCode as XdrCode, ContractRejectDiagnostic, TxFailureCause};
     let codes = [
         (XdrCode::ContractRejectTooMany, "tooMany"),
         (XdrCode::ContractRejectBlobTooLarge, "blobTooLarge"),
@@ -143,7 +141,7 @@ fn contract_rejection_preserves_attachment_index_and_all_codes() {
 
 #[test]
 fn unknown_failure_cause_and_contract_code_decode_as_other() {
-    use groundhog_json_rpc_types::transaction::{ContractRejectCode, TransactionFailureCause};
+    use thruput_json_rpc_types::transaction::{ContractRejectCode, TransactionFailureCause};
     assert!(matches!(
         serde_json::from_value::<TransactionFailureCause>(json!({"kind":"futureCause"})).unwrap(),
         TransactionFailureCause::Other
@@ -156,7 +154,7 @@ fn unknown_failure_cause_and_contract_code_decode_as_other() {
 
 #[test]
 fn scheduler_failure_statuses_preserve_source_and_code() {
-    use groundhog_json_rpc_types::transaction::{
+    use thruput_json_rpc_types::transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource,
     };
     for (status, tag) in [

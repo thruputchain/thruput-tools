@@ -10,11 +10,11 @@ use encode::encode_signed_transaction_xdr;
 use hash::transaction_hash;
 use local::LocalSigner;
 
-use groundhog_signing::*;
-use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::transaction::SignedTransaction;
-use groundhog_xdr::types::{ContractAddress, NetworkHash, SHA256Hash};
 use sha2::{Digest, Sha256};
+use thruput_signing::*;
+use thruput_xdr::contract::ContractEntrypointID;
+use thruput_xdr::transaction::SignedTransaction;
+use thruput_xdr::types::{ContractAddress, NetworkHash, SHA256Hash};
 
 // These pinned vectors currently come from the pre-refactor tx-building
 // output path. They are canonical XDR/hash vectors only; the signed

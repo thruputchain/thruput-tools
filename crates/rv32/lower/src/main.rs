@@ -12,12 +12,12 @@ use std::process::ExitCode;
 use clap::Parser;
 use same_file::Handle;
 
-use groundhog_rv32_lower::{
+use thruput_rv32_lower::{
     FORMAT_FINGERPRINT, LowerError, LowerOptions, MetadataInput, lower_with, render_metadata,
     summary_json,
 };
 
-const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
+const BUILD_VERSION: thruput_build_info::BuildVersion = thruput_build_info::build_version!();
 
 /// Lower a RISC-V rv32im contract ELF to a Groundhog v5 RV32 artifact.
 #[derive(Parser)]

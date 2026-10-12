@@ -1,15 +1,15 @@
 //! Durable, chain-bound evidence retained before local funding broadcasts.
 
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_json_rpc_types::{
-    ContractAddress, NetworkHashHex, airdrop::FundAccountRequest, hex::HexBytes,
-    transaction::TxHash,
-};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
+};
+use thruput_json_rpc_server::RpcServerError;
+use thruput_json_rpc_types::{
+    ContractAddress, NetworkHashHex, airdrop::FundAccountRequest, hex::HexBytes,
+    transaction::TxHash,
 };
 
 use crate::{
@@ -70,7 +70,7 @@ impl FundingJournal {
         init_network_hash: Option<NetworkHashHex>,
         faucet: ContractAddress,
         fresh: bool,
-        signer: &std::sync::Arc<groundhog_signing::LocalSigner>,
+        signer: &std::sync::Arc<thruput_signing::LocalSigner>,
     ) -> Result<Self, NodeSupervisorError> {
         let path = dir.join(LOCAL_FUNDING_ATTEMPTS_FILE);
         match fs::symlink_metadata(&path) {
@@ -267,7 +267,7 @@ impl FundingJournal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use groundhog_json_rpc_types::{airdrop::ClientNonce, hex::Hex0x};
+    use thruput_json_rpc_types::{airdrop::ClientNonce, hex::Hex0x};
 
     #[test]
     fn size_rejection_preserves_prior_records_and_dirty_state() {

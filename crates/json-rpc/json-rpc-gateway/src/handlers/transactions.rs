@@ -1,13 +1,13 @@
 //! `groundhog_getTransactionsByAddress` handler.
 
-use groundhog_hogd_backend::indexer as shared_indexer;
-use groundhog_indexer::TransactionRefPageResult;
-use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::transaction::{AddressTransactionQuery, TransactionRefPage};
+use thruput_hogd_backend::indexer as shared_indexer;
+use thruput_indexer::TransactionRefPageResult;
+use thruput_json_rpc_server::RpcRequestContext;
+use thruput_json_rpc_types::transaction::{AddressTransactionQuery, TransactionRefPage};
 
 use crate::config::HealthBackend;
 use crate::context::GatewayContext;
-use groundhog_json_rpc_server::RpcServerError;
+use thruput_json_rpc_server::RpcServerError;
 
 use super::{INDEXER, backend_deadline, timed_backend_call};
 
@@ -27,7 +27,7 @@ pub async fn get_transactions_by_address(
         .clone()
         .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
 
-    let wire_query: groundhog_indexer::indexer::AddressTransactionQuery = query.into();
+    let wire_query: thruput_indexer::indexer::AddressTransactionQuery = query.into();
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
     let result = timed_backend_call(
         &ctx.metrics,

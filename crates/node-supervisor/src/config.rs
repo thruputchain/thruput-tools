@@ -6,12 +6,12 @@ use std::{
     time::Duration,
 };
 
-use groundhog_bundle_identity::BundleIdentity;
-use groundhog_json_rpc_types::bootstrap_manifest::{
+use thruput_bundle_identity::BundleIdentity;
+use thruput_json_rpc_types::bootstrap_manifest::{
     BootstrapManifest, BootstrapManifestAllocation, BootstrapManifestStorageCostModel,
 };
-use groundhog_json_rpc_types::{Ed25519PublicKey, NetworkHashHex};
-use groundhog_tx_validation::ConfigParamName;
+use thruput_json_rpc_types::{Ed25519PublicKey, NetworkHashHex};
+use thruput_tx_validation::ConfigParamName;
 
 /// Default JSON-RPC listen address for `thruput node`.
 pub const DEFAULT_RPC_LISTEN_ADDRESS: &str = "127.0.0.1:9545";
@@ -56,7 +56,7 @@ pub const DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE: &str = "local-dev";
 pub const DEFAULT_HOGD_DEV_STORAGE_COST_MODEL_PROFILE: &str = "hogd-default";
 
 /// Default local airdrop amount: 10 HOG in indivisible units.
-pub const DEFAULT_LOCAL_AIRDROP_RAW_AMOUNT: u128 = 10 * groundhog_signing::NATIVE_HOG_SCALE;
+pub const DEFAULT_LOCAL_AIRDROP_RAW_AMOUNT: u128 = 10 * thruput_signing::NATIVE_HOG_SCALE;
 
 /// Resource bounds and transfer amount for the optional local airdrop RPC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,12 +110,12 @@ pub struct NodeSupervisorConfig {
     /// Maximum simultaneous public JSON-RPC connections.
     pub rpc_max_connections: u32,
     /// Active plus buffered entries per JSON-RPC array (1..=1024, default 128).
-    pub rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency,
+    pub rpc_batch_concurrency: thruput_json_rpc_server::batch::RpcBatchConcurrency,
     /// Configuration for the supervised hogd-dev child process.
     pub hogd_dev: HogdDevConfig,
     /// Optional protocol string used for hogd-dev intro handshakes.
     ///
-    /// Defaults to the protocol embedded in the linked `groundhog-xdr` crate.
+    /// Defaults to the protocol embedded in the linked `thruput-xdr` crate.
     /// This override is intended for local cross-repo smoke tests before a
     /// matching Rust protocol crate has been published.
     pub hogd_protocol_override: Option<String>,
@@ -124,7 +124,7 @@ pub struct NodeSupervisorConfig {
     /// Maximum time to wait for one hogd-dev `ViewGateway` execution RPC.
     pub view_timeout: Duration,
     /// Aggregate limits for shared-snapshot reads.
-    pub view_batch: groundhog_json_rpc_server::ViewBatchConfig,
+    pub view_batch: thruput_json_rpc_server::ViewBatchConfig,
     /// Local block production policy for hogd-dev scheduler coordination.
     pub block_driver: BlockDriverConfig,
     /// Optional local airdrop behavior and resource bounds.
@@ -138,12 +138,12 @@ impl Default for NodeSupervisorConfig {
         Self {
             rpc_listen_address: DEFAULT_RPC_LISTEN_ADDRESS.to_string(),
             rpc_max_connections: DEFAULT_RPC_MAX_CONNECTIONS,
-            rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
+            rpc_batch_concurrency: thruput_json_rpc_server::batch::RpcBatchConcurrency::default(),
             hogd_dev: HogdDevConfig::default(),
             hogd_protocol_override: None,
-            view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
+            view_gas_limit: thruput_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             view_timeout: DEFAULT_HOGD_DEV_VIEW_TIMEOUT,
-            view_batch: groundhog_json_rpc_server::ViewBatchConfig::default(),
+            view_batch: thruput_json_rpc_server::ViewBatchConfig::default(),
             block_driver: BlockDriverConfig::default(),
             local_airdrop: LocalAirdropConfig::default(),
             bundle_identity: None,
@@ -156,7 +156,7 @@ impl NodeSupervisorConfig {
     #[must_use]
     pub const fn with_view_batch(
         mut self,
-        limits: groundhog_json_rpc_server::ViewBatchConfig,
+        limits: thruput_json_rpc_server::ViewBatchConfig,
     ) -> Self {
         self.view_batch = limits;
         self
@@ -165,7 +165,7 @@ impl NodeSupervisorConfig {
     #[must_use]
     pub const fn with_rpc_batch_concurrency(
         mut self,
-        concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency,
+        concurrency: thruput_json_rpc_server::batch::RpcBatchConcurrency,
     ) -> Self {
         self.rpc_batch_concurrency = concurrency;
         self

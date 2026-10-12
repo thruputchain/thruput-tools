@@ -205,11 +205,11 @@ mod tests {
             network_hash: crate::NetworkHashHex::from([0x51; 32]),
             profile: "local-dev".into(),
             bootstrap_faucet: BootstrapManifestAllocation::new(
-                crate::hex::Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x11; 32])),
+                crate::hex::Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x11; 32])),
                 "10000000000000",
             ),
             bootstrap_accounts: vec![BootstrapManifestAllocation::new(
-                crate::hex::Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x22; 32])),
+                crate::hex::Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x22; 32])),
                 "1000000000",
             )],
             storage_cost_model: BootstrapManifestStorageCostModel {

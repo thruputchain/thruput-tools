@@ -1,8 +1,8 @@
-use groundhog_json_rpc_types::view::{
+use serde_json::json;
+use thruput_json_rpc_types::view::{
     RootInvocationOutput, ViewBatchRequest, ViewBatchResponse, ViewCallResult,
     ViewHeightUnavailable,
 };
-use serde_json::json;
 
 #[test]
 fn batch_wide_integers_use_lossless_decimal_strings() {

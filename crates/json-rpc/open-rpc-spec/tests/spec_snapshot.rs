@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use groundhog_json_rpc_api::{
+use pretty_assertions::assert_eq;
+use thruput_json_rpc_api::{
     WIRE_FORMAT_VERSION,
     types::{
         airdrop::MAX_CLIENT_NONCE_BYTES,
@@ -9,10 +10,9 @@ use groundhog_json_rpc_api::{
         events::MAX_TOPIC_VALUES_PER_POSITION,
     },
 };
-use groundhog_open_rpc_spec::build_spec;
-use pretty_assertions::assert_eq;
+use thruput_open_rpc_spec::build_spec;
 
-const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
+const SNAPSHOT_PATH: &str = "snapshots/thruput-spec.json";
 
 // Methods that are infallible by design and intentionally carry an empty
 // `errors: []` array. Add a method here only when it has no backend

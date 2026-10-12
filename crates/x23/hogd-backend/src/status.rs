@@ -7,8 +7,8 @@
 
 use std::future::Future;
 
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_json_rpc_server::RpcServerError;
+use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
 
 /// The two backend reads [`transaction_status`] composes.
 ///

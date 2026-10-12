@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use groundhog_json_rpc_types::{error::outcome_for_code, transaction::TransactionStatus};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use thruput_json_rpc_types::{error::outcome_for_code, transaction::TransactionStatus};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "kind", content = "code", rename_all = "snake_case")]
@@ -22,7 +22,7 @@ pub(super) fn corpus(seed: &str, count: u32) -> Vec<String> {
     (0..count)
         .map(|index| {
             let mut hash = Sha256::new();
-            hash.update(b"groundhog-lookup-bench-v1\0");
+            hash.update(b"thruput-lookup-bench-v1\0");
             hash.update(seed.as_bytes());
             hash.update(index.to_be_bytes());
             format!("0x{}", hex::encode(hash.finalize()))

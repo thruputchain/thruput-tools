@@ -5,15 +5,15 @@
 //! `call`/`view`, encoding arguments and decoding returns with `xdrs` so tests
 //! name methods and pass Rust values instead of hand-building calldata.
 
-pub use groundhog_xdr::contract::ContractEntrypointID;
+pub use thruput_xdr::contract::ContractEntrypointID;
 
-use groundhog_contract_util::{
+use thruput_contract_util::{
     EntrypointSignature, NormalizedMethodSignature, semver::try_major_version_from_string,
 };
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_json_rpc_types::view::RootInvocationOutput;
-use groundhog_xdr::types::ContractAddress;
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_json_rpc_types::view::RootInvocationOutput;
+use thruput_xdr::types::ContractAddress;
 use xdrs::{ReadXDR, WriteXDR};
 
 use crate::agent::AgentContext;
@@ -60,7 +60,7 @@ impl SubmittedContractCall {
 /// rebuilt).
 ///
 /// ```
-/// let bump = groundhog_testkit::entrypoint_id("CallerCounter", "0.1.0", "bump");
+/// let bump = thruput_testkit::entrypoint_id("CallerCounter", "0.1.0", "bump");
 /// ```
 #[must_use]
 pub fn entrypoint_id(interface: &str, version: &str, method: &str) -> ContractEntrypointID {
@@ -190,7 +190,7 @@ impl Contract {
             .return_data
             .as_ref()
             .map_or(&[][..], |data| data.as_ref());
-        let returned = groundhog_signing::default_wallet::decode_default_wallet_call_return(bytes)
+        let returned = thruput_signing::default_wallet::decode_default_wallet_call_return(bytes)
             .map_err(TestkitError::decode)?;
         decode_return(&returned)
     }

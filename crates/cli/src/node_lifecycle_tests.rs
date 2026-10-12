@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use groundhog_toolchain::{Catalog, HostTarget, InstallError, Installer};
+use thruput_toolchain::{Catalog, HostTarget, InstallError, Installer};
 
 use super::{LocalNodeOptions, LocalNodePidFile, start_resolved_local_node};
 

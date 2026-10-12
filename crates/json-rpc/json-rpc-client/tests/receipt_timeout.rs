@@ -1,20 +1,18 @@
-use groundhog_json_rpc_client::{
-    PollTransactionReceiptError, poll_transaction_receipt_with_config,
-};
-use groundhog_json_rpc_types::{
+use jsonrpsee::{RpcModule, server::Server, types::ErrorObjectOwned};
+use std::{collections::VecDeque, sync::Mutex, time::Duration};
+use thruput_json_rpc_client::{PollTransactionReceiptError, poll_transaction_receipt_with_config};
+use thruput_json_rpc_types::{
     BlockHeight,
     hex::Hex0x,
     receipt::{ExecStatus, TransactionReceipt},
     transaction::{TransactionStatus, TxHash},
 };
-use jsonrpsee::{RpcModule, server::Server, types::ErrorObjectOwned};
-use std::{collections::VecDeque, sync::Mutex, time::Duration};
 
 async fn poll(
     statuses: Vec<Option<TransactionStatus>>,
     receipt_after: Option<usize>,
 ) -> Result<TransactionReceipt, PollTransactionReceiptError> {
-    let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x33; 32])));
+    let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x33; 32])));
     let attempts = statuses.len();
     let mut module = RpcModule::new(Mutex::new((VecDeque::from(statuses), 0usize)));
     module
@@ -141,7 +139,7 @@ async fn invalid_still_stops_polling() {
 
 #[tokio::test]
 async fn scheduler_processing_failures_stop_polling_before_a_later_receipt() {
-    use groundhog_json_rpc_types::transaction::{
+    use thruput_json_rpc_types::transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource,
     };
     for status in [

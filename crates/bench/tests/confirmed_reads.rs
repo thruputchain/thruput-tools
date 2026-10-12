@@ -129,7 +129,7 @@ async fn benchmark_with_receipt_lag(
             .unwrap(),
     )
     .unwrap();
-    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog-bench"));
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_thruput-bench"));
     command
         .args([
             "--url",

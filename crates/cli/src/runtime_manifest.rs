@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use groundhog_json_rpc_types::runtime_manifest::{RuntimeManifest, parse_runtime_manifest};
+use thruput_json_rpc_types::runtime_manifest::{RuntimeManifest, parse_runtime_manifest};
 
 use crate::{CliError, config::ResolvedProfile};
 

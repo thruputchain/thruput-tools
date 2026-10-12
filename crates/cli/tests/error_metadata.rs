@@ -12,10 +12,10 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
-use groundhog_json_rpc_types::error::TxInvalidDetail;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 use thruput_cli::error::CliError;
+use thruput_json_rpc_types::error::TxInvalidDetail;
 
 const SNAPSHOT_PATH: &str = "tests/snapshots/error-metadata.txt";
 
@@ -34,7 +34,7 @@ fn unavailable_scaffold_client_has_a_version_specific_hint() {
     let error = CliError::CargoFailedWithOutput {
         code: 101,
         stdout: String::new(),
-        stderr: "error: failed to select a version for the requirement `groundhog-json-rpc-client = \"^0.24.0\"`".into(),
+        stderr: "error: failed to select a version for the requirement `thruput-json-rpc-client = \"^0.24.0\"`".into(),
     };
     let hint = error.hint().unwrap();
     assert!(hint.contains("unavailable in the configured registry"));
@@ -120,7 +120,7 @@ fn details_keys_follow_the_camel_case_wire_convention() {
 fn computed_details_payloads_carry_their_keys() {
     assert_eq!(
         details_of(&CliError::Rv32LowerFailed(
-            groundhog_rv32_lower::LowerError::Invalid("bad .text".to_owned())
+            thruput_rv32_lower::LowerError::Invalid("bad .text".to_owned())
         )),
         json!({ "message": "bad .text" }),
     );
@@ -150,11 +150,10 @@ fn computed_details_payloads_carry_their_keys() {
         details_of(&CliError::TransactionRecentFailure {
             tx_hash: "0xab".to_owned(),
             attempt_height: 17,
-            cause:
-                groundhog_json_rpc_types::transaction::TransactionFailureCause::ContractRejected {
-                    contract_index: 2,
-                    code: groundhog_json_rpc_types::transaction::ContractRejectCode::InvalidProgram,
-                },
+            cause: thruput_json_rpc_types::transaction::TransactionFailureCause::ContractRejected {
+                contract_index: 2,
+                code: thruput_json_rpc_types::transaction::ContractRejectCode::InvalidProgram,
+            },
         }),
         json!({
             "txHash": "0xab",

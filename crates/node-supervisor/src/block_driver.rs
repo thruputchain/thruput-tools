@@ -11,17 +11,17 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use groundhog_scheduler::{
+use sha2::{Digest, Sha256};
+use thruput_scheduler::{
     BlockID, ConsensusValue, ProposalTxsHash, SchedulerCommitOutcome, SchedulerGetTipResult,
     SchedulerProposalResult, SchedulerProposedBlock,
     sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
-use groundhog_xdr::{
+use thruput_xdr::{
     header::{ProposalContext, ProposalHeader},
     types::{ConsensusValueHash, ExtensionPoint, Protocol, SHA256Hash, TimePoint},
     validator::ValidatorID,
 };
-use sha2::{Digest, Sha256};
 use tokio::{
     sync::{Notify, mpsc, oneshot},
     task::JoinHandle,
@@ -562,7 +562,7 @@ async fn commit_proposed_block(
 fn consensus_value(
     parent: &ConsensusValue,
     proposal_header: ProposalHeader,
-    proposal_txs: &groundhog_scheduler::ProposalTxs,
+    proposal_txs: &thruput_scheduler::ProposalTxs,
 ) -> Result<ConsensusValue, BlockProductionError> {
     Ok(ConsensusValue {
         protocol: Protocol::new(0),
@@ -577,7 +577,7 @@ fn consensus_value(
 // Matches hogd's temporary compatibility hash until the protocol moves to
 // canonical XDR hashing for ProposalTxs.
 fn proposal_txs_compatibility_hash(
-    proposal_txs: &groundhog_scheduler::ProposalTxs,
+    proposal_txs: &thruput_scheduler::ProposalTxs,
 ) -> Result<ProposalTxsHash, BlockProductionError> {
     let mut base = proposal_txs.clone();
     base.hash.segment_tokens.0.clear();
@@ -609,7 +609,7 @@ fn proposal_txs_compatibility_hash(
 
 fn hash_parallel_batch_compatibility(
     batch_name: &'static str,
-    batch: &groundhog_scheduler::ParallelBatch,
+    batch: &thruput_scheduler::ParallelBatch,
 ) -> Result<[u8; 32], BlockProductionError> {
     batch
         .validate()
@@ -721,7 +721,7 @@ async fn reconcile_commit(
 mod timepoint_tests {
     use std::time::{Duration, UNIX_EPOCH};
 
-    use groundhog_xdr::types::TimePoint;
+    use thruput_xdr::types::TimePoint;
 
     use super::next_block_timepoint;
 
@@ -751,11 +751,11 @@ mod timepoint_tests {
 
 #[cfg(test)]
 mod hash_tests {
-    use groundhog_scheduler::{
+    use thruput_scheduler::{
         ParallelBatch, ParallelNondeterministicProposalDataBatch, ParallelTransactionHashBatch,
         ProposalTxs,
     };
-    use groundhog_xdr::types::{ExtensionPoint, SHA256Hash};
+    use thruput_xdr::types::{ExtensionPoint, SHA256Hash};
     use xdrs::{BytesM, VecM};
 
     use super::{BlockProductionError, hash_xdr, proposal_txs_compatibility_hash};

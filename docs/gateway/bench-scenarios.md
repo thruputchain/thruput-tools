@@ -41,13 +41,13 @@ Start the [node and gateway](runtime-manifest.md#manual-local-loop) with interva
 block production. Seed and validate a corpus outside the timed window:
 
 ```sh
-groundhog-bench --url http://127.0.0.1:9546 \
+thruput-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" --account-seed benchmark-fixtures-v1 \
   --method getTransactionReceipt --seed-count 12000 \
   --seed-output ./confirmed-hashes.json --accounts 10 --force \
   --outstanding 128 --workers 2 --warmup 3 --duration 20 --json > receipts.json
 
-groundhog-bench --url http://127.0.0.1:9546 \
+thruput-bench --url http://127.0.0.1:9546 \
   --method getTransactionStatus --hashes-file ./confirmed-hashes.json \
   --outstanding 128 --workers 2 --warmup 3 --duration 20 --json > status.json
 ```
@@ -89,7 +89,7 @@ Missing metadata is unknown, not verified equality. A caller can supply
 See the [benchmark source](../../crates/bench/src/) for artifact types.
 
 ```sh
-groundhog-bench compare \
+thruput-bench compare \
   --baseline baseline-r0.json --baseline baseline-r1.json \
   --candidate candidate-r0.json --candidate candidate-r1.json \
   --vary gateway-revision
@@ -99,7 +99,7 @@ Use separate comparisons for each method and outstanding count. The comparator
 reports repeat spread and retains failed outcomes. Declare the dimension being
 varied; do not hide unrelated differences. `--equivalent-corpus` allows matching
 count and receipt shape instead of identical hashes, but cannot establish equal
-cache warmth or backend data locality. See `groundhog-bench compare --help` for
+cache warmth or backend data locality. See `thruput-bench compare --help` for
 the supported experiment dimensions.
 
 For transport experiments, restart the gateway with the selected

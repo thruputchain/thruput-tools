@@ -8,20 +8,20 @@
 //! x23 surface.
 
 use async_trait::async_trait;
-use groundhog_db_gateway::DbGateway_DbGateway1_Client;
-use groundhog_hogd_backend::{db_gateway as shared_db_gateway, intro};
-use groundhog_json_rpc_server::{
+use std::{fmt, net::SocketAddr};
+use thruput_db_gateway::DbGateway_DbGateway1_Client;
+use thruput_hogd_backend::{db_gateway as shared_db_gateway, intro};
+use thruput_json_rpc_server::{
     ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading, ValidatedTransaction,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     BlockHeight, NetworkHashHex, block::BlockInfo, protocol_token::protocol_from_text,
 };
-use groundhog_scheduler::{
+use thruput_scheduler::{
     DbTip, ExpectedDBTip, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
     sched_gateway::SchedGateway_SchedGateway1_Client,
 };
-use groundhog_x23_transport::{connect_with_config, hogd_large_message_config};
-use std::{fmt, net::SocketAddr};
+use thruput_x23_transport::{connect_with_config, hogd_large_message_config};
 
 use crate::{
     NodeSupervisorError,

@@ -18,9 +18,9 @@ env:
   CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
   CARGO_REGISTRIES_THRUPUT_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
   RELEASE_CRATES: >-
-    groundhog-bundle-identity
+    thruput-bundle-identity
     thruput-cli
-    groundhog-rv32-lower
+    thruput-rv32-lower
 
 permissions:
   # The publish job raises this to "write"
@@ -38,14 +38,14 @@ jobs:
             release_target: x86_64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-2604
             artifact_name: groundhog-rpc-x86_64-release-artifacts
-            release_apps: hog-gateway thruput rv32-lower hogsim groundhog-faucet
+            release_apps: hog-gateway thruput rv32-lower hogsim thruput-faucet
           - architecture: arm64
             machine: aarch64
             platform: linux
             release_target: aarch64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-arm64
             artifact_name: groundhog-rpc-arm64-release-artifacts
-            release_apps: hog-gateway thruput rv32-lower hogsim groundhog-faucet
+            release_apps: hog-gateway thruput rv32-lower hogsim thruput-faucet
           - architecture: arm64
             machine: arm64
             platform: macos
@@ -114,14 +114,14 @@ jobs:
           source_commit=$(git rev-parse HEAD)
           export GROUNDHOG_SOURCE_COMMIT="$source_commit"
           cargo build --locked --release \
-            -p groundhog-json-rpc-gateway \
+            -p thruput-json-rpc-gateway \
             -p thruput-cli \
-            -p groundhog-rv32-lower \
-            -p groundhog-sim \
-            -p groundhog-faucet \
+            -p thruput-rv32-lower \
+            -p thruput-sim \
+            -p thruput-faucet \
             --bins
 
-          for app in hog-gateway thruput rv32-lower hogsim groundhog-faucet; do
+          for app in hog-gateway thruput rv32-lower hogsim thruput-faucet; do
             app_version="$CRATE_VERSION"
             if [ "$app" = thruput ] || [ "$app" = hog-gateway ]; then
               app_version="$CRATE_VERSION (commit ${source_commit:0:8})"
@@ -146,11 +146,11 @@ jobs:
           package_args=()
           for app in $RELEASE_APPS; do
             case "$app" in
-              hog-gateway) package_args+=(-p groundhog-json-rpc-gateway) ;;
+              hog-gateway) package_args+=(-p thruput-json-rpc-gateway) ;;
               thruput) package_args+=(-p thruput-cli) ;;
-              rv32-lower) package_args+=(-p groundhog-rv32-lower) ;;
-              hogsim) package_args+=(-p groundhog-sim) ;;
-              groundhog-faucet) package_args+=(-p groundhog-faucet) ;;
+              rv32-lower) package_args+=(-p thruput-rv32-lower) ;;
+              hogsim) package_args+=(-p thruput-sim) ;;
+              thruput-faucet) package_args+=(-p thruput-faucet) ;;
               *)
                 echo "unsupported release app: $app" >&2
                 exit 1
@@ -230,7 +230,7 @@ jobs:
           unset GROUNDHOG_DISTRIBUTION_VERSION
           export GROUNDHOG_SOURCE_COMMIT="$EXPECTED_SOURCE_COMMIT"
           cargo build --locked --release --target x86_64-unknown-linux-gnu \
-            -p groundhog-json-rpc-gateway --bin hog-gateway
+            -p thruput-json-rpc-gateway --bin hog-gateway
           release_ref=${GITHUB_REF_NAME//\//-}
           archive_base="hog-gateway-${release_ref}-x86_64-unknown-linux-gnu-znver5"
           mkdir -p "package/$archive_base"

@@ -309,7 +309,7 @@ fn test_json_lists_a_build_warning() {
     fs::write(
         &elf_fixture,
         support::minimal_rv32_elf_with_section(
-            groundhog_spec_tool::RAW_SECTION_NAME,
+            thruput_spec_tool::RAW_SECTION_NAME,
             &support::contract_spec_raw_for_interface("__gh_Counter"),
         ),
     )

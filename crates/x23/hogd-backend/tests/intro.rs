@@ -1,9 +1,9 @@
-use groundhog_db_gateway::DbGatewayIntroOutcome;
-use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
-use groundhog_scheduler::SchedGatewayIntroOutcome;
-use groundhog_view::ViewGatewayIntroOutcome;
+use thruput_db_gateway::DbGatewayIntroOutcome;
+use thruput_indexer::IndexerBlockExplorerIntroOutcome;
+use thruput_scheduler::SchedGatewayIntroOutcome;
+use thruput_view::ViewGatewayIntroOutcome;
 
-use groundhog_hogd_backend::intro::*;
+use thruput_hogd_backend::intro::*;
 
 #[test]
 fn every_service_reports_success_for_its_own_success_discriminant() {

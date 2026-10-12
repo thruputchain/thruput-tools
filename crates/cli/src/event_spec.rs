@@ -3,12 +3,12 @@ use std::fs::File;
 use std::io::{Read as _, Take};
 use std::path::Path;
 
-use groundhog_contract_spec::{
+use thruput_contract_spec::{
     ContractEventDef, ContractField, ContractSpec, ContractSpecId, ContractSpecString,
     ContractType, ContractTypeDef, ContractUnionCaseType,
 };
-use groundhog_json_rpc_types::events::IdentifiedEvent;
-use groundhog_json_rpc_types::hex::Topic;
+use thruput_json_rpc_types::events::IdentifiedEvent;
+use thruput_json_rpc_types::hex::Topic;
 
 use crate::CliError;
 use crate::codec::{
@@ -872,13 +872,13 @@ fn invalid_spec(path: &str, message: &str) -> CliError {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_contract_spec::{
+    use thruput_contract_spec::{
         ContractEnumDef, ContractEnumVariant, ContractEventDef, ContractField, ContractSpec,
         ContractSpecId, ContractSpecString, ContractStructDef, ContractType, ContractTypeDef,
     };
-    use groundhog_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
-    use groundhog_json_rpc_types::hex::{HexBytes, Topic};
-    use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
+    use thruput_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
+    use thruput_json_rpc_types::hex::{HexBytes, Topic};
+    use thruput_json_rpc_types::{BlockHeight, ContractAddress};
     use xdr_common::VecM;
 
     use super::{
@@ -952,7 +952,7 @@ mod tests {
         let mut ty = ContractType::U64;
         for _ in 1..depth {
             ty = ContractType::Vector {
-                vector: groundhog_contract_spec::ContractVectorType {
+                vector: thruput_contract_spec::ContractVectorType {
                     element: Box::new(ty),
                     max_len: 1,
                 },
@@ -984,9 +984,9 @@ mod tests {
             block_height: BlockHeight::from(42),
             sequence_number: 3,
             event: EmittedEvent {
-                contract_address: ContractAddress::from(
-                    groundhog_xdr::types::ContractAddress::from([0x33; 32]),
-                ),
+                contract_address: ContractAddress::from(thruput_xdr::types::ContractAddress::from(
+                    [0x33; 32],
+                )),
                 topics: (0..topics)
                     .map(|index| Topic([if index == 0 { signature } else { 0x44 }; 32]))
                     .collect(),
@@ -1102,7 +1102,7 @@ mod tests {
         ));
 
         let array = ContractType::Array {
-            array: groundhog_contract_spec::ContractArrayType {
+            array: thruput_contract_spec::ContractArrayType {
                 element: Box::new(ContractType::U64),
                 len: u32::try_from(MAX_EVENT_VALUES).unwrap(),
             },
@@ -1116,7 +1116,7 @@ mod tests {
     #[test]
     fn indexed_topics_ignore_payload_materialization_limit() {
         let large_array = || ContractType::Array {
-            array: groundhog_contract_spec::ContractArrayType {
+            array: thruput_contract_spec::ContractArrayType {
                 element: Box::new(ContractType::U64),
                 len: u32::try_from(MAX_EVENT_VALUES).unwrap(),
             },
@@ -1208,7 +1208,7 @@ mod tests {
         ));
 
         let array = |len| ContractType::Array {
-            array: groundhog_contract_spec::ContractArrayType {
+            array: thruput_contract_spec::ContractArrayType {
                 element: Box::new(ContractType::Void),
                 len: u32::try_from(len).unwrap(),
             },
@@ -1239,7 +1239,7 @@ mod tests {
     #[test]
     fn dynamic_vector_exhaustion_is_an_item_level_decode_failure() {
         let vector = ContractType::Vector {
-            vector: groundhog_contract_spec::ContractVectorType {
+            vector: thruput_contract_spec::ContractVectorType {
                 element: Box::new(ContractType::Void),
                 max_len: u32::try_from(MAX_EVENT_VALUES + 1).unwrap(),
             },
@@ -1264,7 +1264,7 @@ mod tests {
     fn present_option_uses_only_its_materialized_inner_value_budget() {
         let field_type = ContractType::Option {
             option_inner: Box::new(ContractType::Array {
-                array: groundhog_contract_spec::ContractArrayType {
+                array: thruput_contract_spec::ContractArrayType {
                     element: Box::new(ContractType::Void),
                     len: u32::try_from(MAX_EVENT_VALUES - 2).unwrap(),
                 },

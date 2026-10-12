@@ -2,20 +2,20 @@
 
 use std::sync::Arc;
 
-use groundhog_json_rpc_types::hex::Hex0x;
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_signing::default_wallet::{
+use sha2::{Digest, Sha256};
+use thruput_json_rpc_types::hex::Hex0x;
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_signing::default_wallet::{
     BuildDefaultWalletCallTransaction, BuildDefaultWalletDeployTransaction, DeploymentCode,
     build_default_wallet_call_transaction, build_default_wallet_deploy_transaction,
 };
-use groundhog_signing::{
+use thruput_signing::{
     DEFAULT_TX_GAS_LIMIT, SignTransactionParams, derive_deploy_address,
     sign_and_encode_transaction_hex, transaction_hash,
 };
-use groundhog_xdr::contract::{Contract, ContractEntrypointID};
-use groundhog_xdr::types::{ContractAddress, SHA256Hash};
-use sha2::{Digest, Sha256};
+use thruput_xdr::contract::{Contract, ContractEntrypointID};
+use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
 use crate::artifact::{
     ArtifactEntry, PendingRegistration as ArtifactPendingRegistration, RegistrationOwner,
@@ -36,7 +36,7 @@ pub struct DeployOptions<'a> {
     /// Exact raw HOG amount transferred to the new contract. Zero skips funding.
     pub amount: u128,
     /// Optional invocation on the new contract, called by its deploying wallet.
-    pub initializer: Option<groundhog_signing::default_wallet::WalletInitCall<'a>>,
+    pub initializer: Option<thruput_signing::default_wallet::WalletInitCall<'a>>,
 }
 
 impl DeployOptions<'_> {
@@ -162,7 +162,7 @@ impl SubmittedDeploy {
         if let Some(receipt) = &self.cached_receipt {
             return Err(TestkitError::TransactionNotPending {
                 tx_hash: format!("{:?}", self.tx_hash),
-                status: groundhog_json_rpc_types::transaction::TransactionStatus::Committed {
+                status: thruput_json_rpc_types::transaction::TransactionStatus::Committed {
                     height: receipt.height.clone(),
                 },
             });
@@ -337,7 +337,7 @@ impl Account {
             .map_err(TestkitError::signing)?;
 
         let registered = contract.is_some();
-        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+        let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
             self.dev.signer.verifying_key_bytes(),
             0,
         );
@@ -402,7 +402,7 @@ pub(crate) fn prepare_call(
     nonce: u64,
 ) -> Result<(TxHash, String)> {
     let tx = {
-        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+        let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
             dev.signer.verifying_key_bytes(),
             0,
         );
@@ -475,11 +475,11 @@ pub(crate) fn verify_deployment_receipt(
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::BlockHeight;
-    use groundhog_json_rpc_types::hex::Hex0x;
-    use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-    use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
-    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+    use thruput_json_rpc_types::BlockHeight;
+    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+    use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+    use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
     use crate::artifact::{PendingRegistration, RegistrationOwner};
     use crate::error::TestkitError;

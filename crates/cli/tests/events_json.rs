@@ -1,7 +1,7 @@
-use groundhog_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
-use groundhog_json_rpc_types::hex::{HexBytes, Topic};
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
+use thruput_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
+use thruput_json_rpc_types::hex::{HexBytes, Topic};
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 
 use thruput_cli::events_json::{EventDecodeStatus, EventListItemReport};
 
@@ -14,7 +14,7 @@ fn tx_hash(byte: u8) -> TxHash {
 }
 
 fn contract_address(byte: u8) -> ContractAddress {
-    ContractAddress::from(groundhog_xdr::types::ContractAddress::from([byte; 32]))
+    ContractAddress::from(thruput_xdr::types::ContractAddress::from([byte; 32]))
 }
 
 #[test]

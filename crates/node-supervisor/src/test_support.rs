@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 pub(crate) const FAKE_HOGD_DEV_MODE_ENV: &str = "THRUPUT_FAKE_HOGD_DEV_MODE";
 
 /// Builds and returns the `fake_hogd_dev` example binary; `cargo test` builds it
-/// only as a test harness, so a copy on disk may predate a `groundhog-xdr` bump.
+/// only as a test harness, so a copy on disk may predate a `thruput-xdr` bump.
 pub(crate) fn fake_hogd_dev_binary() -> PathBuf {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
     BINARY.get_or_init(build_fake_hogd_dev_binary).clone()
@@ -21,7 +21,7 @@ fn build_fake_hogd_dev_binary() -> PathBuf {
             "--locked",
             "--message-format=json",
             "-p",
-            "groundhog-node-supervisor",
+            "thruput-node-supervisor",
             "--example",
             "fake_hogd_dev",
         ])

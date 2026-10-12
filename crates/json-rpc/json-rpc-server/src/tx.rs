@@ -1,12 +1,12 @@
-use groundhog_json_rpc_types::{hex::Hex0x, transaction::TxHash};
 use sha2::Digest;
+use thruput_json_rpc_types::{hex::Hex0x, transaction::TxHash};
 
-use groundhog_tx_validation::{NetworkConfigParams, check_transaction};
+use thruput_tx_validation::{NetworkConfigParams, check_transaction};
 
 use crate::{ValidatedTransaction, error::RpcServerError};
 
 /// The `signatures` field of `SignedTransaction`, decoded for validation only.
-type SignaturesField = xdrs::VecM<groundhog_xdr::transaction::DecoratedSignature>;
+type SignaturesField = xdrs::VecM<thruput_xdr::transaction::DecoratedSignature>;
 
 /// Compile-time guard tying [`SignaturesField`] to the field it stands in for.
 ///
@@ -15,7 +15,7 @@ type SignaturesField = xdrs::VecM<groundhog_xdr::transaction::DecoratedSignature
 /// signatures type — including a tighter `VecM` bound — must fail the build
 /// instead of silently letting the gateway accept what a whole-struct decode
 /// would reject.
-const _: fn(groundhog_xdr::transaction::SignedTransaction) = |signed| {
+const _: fn(thruput_xdr::transaction::SignedTransaction) = |signed| {
     let _: SignaturesField = signed.signatures;
 };
 
@@ -29,7 +29,7 @@ pub fn validate_raw_transaction(
     tx_hex: &str,
     params: &NetworkConfigParams,
 ) -> Result<ValidatedTransaction, RpcServerError> {
-    let tx_bytes = groundhog_json_rpc_types::hex::decode_prefixed_hex(tx_hex)
+    let tx_bytes = thruput_json_rpc_types::hex::decode_prefixed_hex(tx_hex)
         .map_err(|e| RpcServerError::TxInvalid(format!("invalid hex: {e}")))?;
 
     validate_raw_transaction_bytes(tx_bytes, params)
@@ -71,7 +71,7 @@ pub fn validate_raw_transaction_bytes(
     // is what catches it.
     let mut reader = xdrs::txs::buf_reader::BufReader::new(&tx_bytes);
 
-    let tx: groundhog_xdr::transaction::Transaction = xdrs::read_xdr(&mut reader)
+    let tx: thruput_xdr::transaction::Transaction = xdrs::read_xdr(&mut reader)
         .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
     let tx_end = reader.position();
 
@@ -90,7 +90,7 @@ pub fn validate_raw_transaction_bytes(
     check_transaction(&tx, params).map_err(RpcServerError::TxInvalidDetailed)?;
 
     let hash_bytes: [u8; 32] = sha2::Sha256::digest(&tx_bytes[..tx_end]).into();
-    let hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from(hash_bytes)));
+    let hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from(hash_bytes)));
 
     Ok(ValidatedTransaction {
         bytes: tx_bytes,
@@ -102,7 +102,7 @@ pub fn validate_raw_transaction_bytes(
 /// Signed-transaction fixtures shared by this crate's unit tests.
 #[cfg(test)]
 pub(crate) mod test_fixtures {
-    use groundhog_xdr::{contract::Contract, transaction::SignedTransaction};
+    use thruput_xdr::{contract::Contract, transaction::SignedTransaction};
 
     /// Canonical XDR/hash vector. Structurally valid with a stable hash, but
     /// not auth-valid against empty hogd-dev genesis.
@@ -143,8 +143,8 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::error::TxInvalidDetail;
-    use groundhog_xdr::contract::{Contract, ContractBlob};
+    use thruput_json_rpc_types::error::TxInvalidDetail;
+    use thruput_xdr::contract::{Contract, ContractBlob};
     use xdr_common::BytesM;
 
     use super::test_fixtures::{
@@ -152,7 +152,7 @@ mod tests {
         signed_tx_bytes_with_contracts,
     };
     use super::*;
-    use groundhog_xdr::contract::kDefaultMaxContractSizeBytes;
+    use thruput_xdr::contract::kDefaultMaxContractSizeBytes;
 
     fn rv32(size: usize, fill: u8) -> Contract {
         Contract::kRv32 {
@@ -183,7 +183,7 @@ mod tests {
         // fails with a diagnosis instead of an unexplained hash diff.
         for count in [0usize, 1, 2, 5] {
             let bytes = signed_tx_with_signature_count(count);
-            let signed: groundhog_xdr::transaction::SignedTransaction =
+            let signed: thruput_xdr::transaction::SignedTransaction =
                 xdrs::txs::decode(&bytes).expect("bug: re-encoded signed tx should decode");
             let reencoded = xdrs::txs::encode(&signed.tx).expect("bug: inner tx should encode");
             let expected: [u8; 32] = sha2::Sha256::digest(&reencoded).into();

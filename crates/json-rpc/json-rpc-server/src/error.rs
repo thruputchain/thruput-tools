@@ -1,6 +1,6 @@
-use groundhog_json_rpc_types::airdrop::LocalFundingErrorData;
-use groundhog_json_rpc_types::error::{TxInvalidDetail, codes};
 use jsonrpsee::types::ErrorObjectOwned;
+use thruput_json_rpc_types::airdrop::LocalFundingErrorData;
+use thruput_json_rpc_types::error::{TxInvalidDetail, codes};
 
 /// Errors returned by the shared JSON-RPC server layer.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -16,7 +16,7 @@ pub enum RpcServerError {
     },
     /// The selected committed snapshot did not meet the freshness floor.
     #[error("view height unavailable: requested {}, observed {}", *.0.requested, *.0.observed)]
-    ViewHeightUnavailable(groundhog_json_rpc_types::view::ViewHeightUnavailable),
+    ViewHeightUnavailable(thruput_json_rpc_types::view::ViewHeightUnavailable),
     /// Transaction was malformed.
     #[error("invalid transaction: {0}")]
     TxInvalid(String),

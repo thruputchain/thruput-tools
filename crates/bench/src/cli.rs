@@ -17,9 +17,9 @@ pub(super) enum Command {
     Compare(crate::compare::CompareArgs),
 }
 
-/// Groundhog JSON-RPC benchmark harness.
+/// Thruput JSON-RPC benchmark harness.
 #[derive(Parser)]
-#[command(name = "groundhog-bench", version)]
+#[command(name = "thruput-bench", version)]
 pub(super) struct Cli {
     #[command(subcommand)]
     pub(super) command: Option<Command>,
@@ -245,8 +245,8 @@ mod tests {
 
     #[test]
     fn force_is_a_benchmark_command_option() {
-        let cli = Cli::try_parse_from(["groundhog-bench", "--force"])
-            .expect("bug: groundhog-bench should accept --force");
+        let cli = Cli::try_parse_from(["thruput-bench", "--force"])
+            .expect("bug: thruput-bench should accept --force");
 
         assert!(cli.force);
     }
@@ -345,20 +345,20 @@ mod tests {
     }
 
     fn confirmation_cli(method: &str) -> Cli {
-        let mut cli = Cli::parse_from(["groundhog-bench"]);
+        let mut cli = Cli::parse_from(["thruput-bench"]);
         cli.method = method.to_string();
         cli
     }
     #[test]
     fn scheduling_modes_are_mutually_exclusive() {
         for args in [
-            vec!["groundhog-bench", "--outstanding", "3", "--rate", "100"],
-            vec!["groundhog-bench", "--outstanding", "3", "--unthrottled"],
-            vec!["groundhog-bench", "--rate", "100", "--unthrottled"],
+            vec!["thruput-bench", "--outstanding", "3", "--rate", "100"],
+            vec!["thruput-bench", "--outstanding", "3", "--unthrottled"],
+            vec!["thruput-bench", "--rate", "100", "--unthrottled"],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
         }
-        assert!(Cli::try_parse_from(["groundhog-bench", "--outstanding", "3"]).is_ok());
+        assert!(Cli::try_parse_from(["thruput-bench", "--outstanding", "3"]).is_ok());
     }
 
     #[test]

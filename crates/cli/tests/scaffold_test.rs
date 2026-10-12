@@ -148,7 +148,7 @@ fn assert_counter_manifest(cargo: &str) {
     assert!(cargo.contains(r#"[target.'cfg(target_arch = "riscv32")'.dependencies]"#));
     assert!(cargo.contains("thruput-integration-test = ["));
     assert!(cargo.contains(
-        r#"[target.'cfg(not(target_arch = "riscv32"))'.dependencies.groundhog-json-rpc-client]"#
+        r#"[target.'cfg(not(target_arch = "riscv32"))'.dependencies.thruput-json-rpc-client]"#
     ));
     assert!(cargo.contains(&format!(
         "version = \"{}\"",
@@ -425,7 +425,7 @@ const RESERVED_NAME_CASES: &[(&str, &str)] = &[
     // The scaffold's own dependencies: a duplicate extern name.
     ("sdk", "dependency"),
     ("tokio", "dependency"),
-    ("groundhog-json-rpc-client", "dependency"),
+    ("thruput-json-rpc-client", "dependency"),
     // Cargo build directories: the RV32 bin target name would collide with a
     // directory under `target/<triple>/release`, which is where `thruput
     // build` looks for the ELF.
@@ -490,7 +490,7 @@ fn every_scaffold_dependency_name_is_reserved() {
     for line in manifest.lines() {
         let line = line.trim();
         if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            // `[target.'cfg(..)'.dependencies.groundhog-json-rpc-client]` names
+            // `[target.'cfg(..)'.dependencies.thruput-json-rpc-client]` names
             // the dependency in the header itself.
             in_dependencies = false;
             if let Some((prefix, name)) = header.rsplit_once(".dependencies.") {

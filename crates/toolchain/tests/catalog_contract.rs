@@ -1,4 +1,4 @@
-use groundhog_toolchain::{Catalog, CatalogError, HostTarget};
+use thruput_toolchain::{Catalog, CatalogError, HostTarget};
 
 const PUBLIC_BASE_URL: &str =
     "https://groundhog-public-release-artifacts-017820684264.s3.us-west-2.amazonaws.com";
@@ -7,33 +7,33 @@ const PUBLIC_BASE_URL: &str =
 fn embedded_catalog_pins_the_published_default_matrix() {
     let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
 
-    assert_eq!(catalog.default_version(), "0.1.31-rc.2");
+    assert_eq!(catalog.default_version(), "0.1.31-rc.3");
     assert_eq!(
         catalog.resolve_version(None).expect("bug: default exists"),
-        "0.1.31-rc.2"
+        "0.1.31-rc.3"
     );
 
     let expected = [
         (
             HostTarget::LinuxX86_64,
-            "582850fcbf4d1f98b8872e41b966d281f2c2e43405f65869fb11b26f26a892b7",
-            9_418_248,
+            "4078043a258112ba8fdf573ae7e9c8bb44d1b866b924120db3f5dc88bc887b13",
+            9_431_472,
         ),
         (
             HostTarget::LinuxAarch64,
-            "cc6e2286f3f1dfc34bddcd8ee9879e488ed5b7aa411ae358a1378e22882fc12f",
-            8_660_840,
+            "4e6adc4241e8c29951876a6a273099b9ca72c8b0f369b7a5b14651dc1dd480ab",
+            8_669_836,
         ),
         (
             HostTarget::MacosAarch64,
-            "4d525f8c77fcbe56452b57606065db7ed038354e946f0764d3bcd5a8c786e9b1",
-            10_680_600,
+            "f461d602aef33be20a0fadbf9df0aca2215697ee1abbfb9175a1172a8eb627a4",
+            10_683_770,
         ),
     ];
 
     for (target, sha256, size) in expected {
         let artifact = catalog
-            .artifact("0.1.31-rc.2", target)
+            .artifact("0.1.31-rc.3", target)
             .expect("bug: default target should exist");
         assert_eq!(artifact.sha256(), sha256);
         assert_eq!(artifact.size(), size);
@@ -60,6 +60,7 @@ fn embedded_catalog_keeps_earlier_releases_selectable() {
         "0.1.30-rc.5",
         "0.1.30-rc.6",
         "0.1.31-rc.1",
+        "0.1.31-rc.2",
     ] {
         assert_eq!(
             catalog

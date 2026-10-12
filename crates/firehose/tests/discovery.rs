@@ -1,6 +1,6 @@
-use groundhog_indexer::{EventIndexerPullRequest, EventIndexerPullResult};
 use rpc_driver::{ProgVers, RpcError, RpcServer, ServiceMap, handler::RpcHandler};
 use serde_json::Value;
+use thruput_indexer::{EventIndexerPullRequest, EventIndexerPullResult};
 use tokio::{io::AsyncWriteExt, net::TcpListener, process::Command};
 
 struct Reply(i32);

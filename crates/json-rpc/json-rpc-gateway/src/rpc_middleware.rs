@@ -1,11 +1,11 @@
 use std::time::Instant;
 
-use groundhog_json_rpc_types::error::outcome_for_code;
 use jsonrpsee::{
     core::middleware::{Batch, BatchEntry, Notification, RpcServiceT},
     core::server::MethodResponse,
     types::Request,
 };
+use thruput_json_rpc_types::error::outcome_for_code;
 
 use crate::metrics::GatewayMetrics;
 
@@ -243,7 +243,7 @@ mod tests {
         let err = MethodResponse::error(
             Id::Number(2),
             ErrorObject::owned(
-                groundhog_json_rpc_types::error::codes::BACKEND_TIMEOUT,
+                thruput_json_rpc_types::error::codes::BACKEND_TIMEOUT,
                 "backend timeout",
                 None::<()>,
             ),
@@ -306,10 +306,10 @@ mod tests {
         let service = jsonrpsee::core::middleware::RpcServiceBuilder::new()
             .layer_fn(|inner| RpcMetricsService::new(inner, metrics.clone()))
             .layer_fn(|inner| {
-                groundhog_json_rpc_server::batch::ConcurrentBatchService::new(
+                thruput_json_rpc_server::batch::ConcurrentBatchService::new(
                     inner,
                     4096,
-                    groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
+                    thruput_json_rpc_server::batch::RpcBatchConcurrency::default(),
                 )
             })
             .service(inner.clone());
@@ -385,10 +385,10 @@ mod tests {
         let service = jsonrpsee::core::middleware::RpcServiceBuilder::new()
             .layer_fn(|inner| RpcMetricsService::new(inner, metrics.clone()))
             .layer_fn(|inner| {
-                groundhog_json_rpc_server::batch::ConcurrentBatchService::new(
+                thruput_json_rpc_server::batch::ConcurrentBatchService::new(
                     inner,
                     4096,
-                    groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
+                    thruput_json_rpc_server::batch::RpcBatchConcurrency::default(),
                 )
             })
             .service(MockRpcService::default());

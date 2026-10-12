@@ -1,4 +1,4 @@
-use groundhog_json_rpc_types::events::*;
+use thruput_json_rpc_types::events::*;
 
 fn address_json() -> serde_json::Value {
     serde_json::Value::String(format!("0x{}", "11".repeat(32)))

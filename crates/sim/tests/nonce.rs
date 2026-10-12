@@ -1,4 +1,4 @@
-use groundhog_sim::nonce::*;
+use thruput_sim::nonce::*;
 
 #[test]
 fn namespace_uses_high_32_bits() {

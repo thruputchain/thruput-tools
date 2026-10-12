@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-json-rpc-gateway"
+name = "thruput-json-rpc-gateway"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "JSON-RPC gateway server for Groundhog"
+description = "JSON-RPC gateway server for Thruput"
 
 exclude = [
     "tests/",
@@ -24,19 +24,19 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-groundhog-build-info = { workspace = true }
-groundhog-bundle-identity = { workspace = true }
-groundhog-hogd-backend = { workspace = true }
-groundhog-json-rpc-api = { workspace = true }
-groundhog-json-rpc-types = { workspace = true }
-groundhog-json-rpc-server = { workspace = true }
-groundhog-x23-transport = { workspace = true }
-groundhog-xdr = { workspace = true }
-groundhog_indexer = { workspace = true }
-groundhog_scheduler = { workspace = true }
-groundhog_db_gateway = { workspace = true }
-groundhog_view = { workspace = true }
-groundhog_scp = { workspace = true }
+thruput-build-info = { workspace = true }
+thruput-bundle-identity = { workspace = true }
+thruput-hogd-backend = { workspace = true }
+thruput-json-rpc-api = { workspace = true }
+thruput-json-rpc-types = { workspace = true }
+thruput-json-rpc-server = { workspace = true }
+thruput-x23-transport = { workspace = true }
+thruput-xdr = { workspace = true }
+thruput-indexer = { workspace = true }
+thruput-scheduler = { workspace = true }
+thruput-db-gateway = { workspace = true }
+thruput-view = { workspace = true }
+thruput-scp = { workspace = true }
 rpc_driver = { workspace = true }
 xdr-common = { workspace = true }
 async-trait = { workspace = true }
@@ -61,8 +61,8 @@ reqwest = { workspace = true, features = ["json"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-groundhog-trace = { workspace = true }
-groundhog_coordinator = { workspace = true }
+thruput-trace = { workspace = true }
+thruput-coordinator = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }

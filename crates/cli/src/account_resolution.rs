@@ -1,6 +1,6 @@
-use groundhog_json_rpc_types::hex::prefixed_hex;
-use groundhog_json_rpc_types::{NetworkHashHex, runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET};
-use groundhog_signing::LocalSigner;
+use thruput_json_rpc_types::hex::prefixed_hex;
+use thruput_json_rpc_types::{NetworkHashHex, runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET};
+use thruput_signing::LocalSigner;
 
 use crate::{
     CliError, codec,
@@ -29,31 +29,31 @@ impl LocalBootstrapRole {
 #[derive(Debug)]
 pub(crate) struct ResolvedLocalBootstrapAccount {
     pub(crate) role: String,
-    pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
+    pub(crate) wallet_address: thruput_xdr::types::ContractAddress,
     /// Network this account signs for. Part of every signature preimage.
-    pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
+    pub(crate) network_hash: thruput_xdr::types::NetworkHash,
 }
 
 #[derive(Debug)]
 pub(crate) struct ResolvedTransactionSender {
-    pub(crate) native_account: Option<groundhog_signing::PubkeyAccount>,
+    pub(crate) native_account: Option<thruput_signing::PubkeyAccount>,
     pub(crate) key_name: String,
     pub(crate) wallet_name: Option<String>,
     pub(crate) signer: LocalSigner,
-    pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
+    pub(crate) wallet_address: thruput_xdr::types::ContractAddress,
     /// Optional network pin, validated against hosted RPC before signing.
     /// Hosted profiles may discover the identity from matching descriptor and RPC data.
-    pub(crate) network_hash: Option<groundhog_xdr::types::NetworkHash>,
+    pub(crate) network_hash: Option<thruput_xdr::types::NetworkHash>,
 }
 
 impl ResolvedTransactionSender {
     pub(crate) fn wallet(
         &self,
-        entrypoint: groundhog_xdr::contract::ContractEntrypointID,
-    ) -> groundhog_client::Wallet<'_> {
+        entrypoint: thruput_xdr::contract::ContractEntrypointID,
+    ) -> thruput_client::Wallet<'_> {
         match &self.native_account {
-            Some(account) => groundhog_client::Wallet::Native(account),
-            None => groundhog_client::Wallet::Legacy {
+            Some(account) => thruput_client::Wallet::Native(account),
+            None => thruput_client::Wallet::Legacy {
                 address: self.wallet_address,
                 entrypoint,
             },
@@ -83,7 +83,7 @@ impl ResolvedTransactionSender {
 
 pub(crate) struct ValidatedSavedWalletBinding {
     pub(crate) owner_public_key: Vec<u8>,
-    pub(crate) address: groundhog_xdr::types::ContractAddress,
+    pub(crate) address: thruput_xdr::types::ContractAddress,
 }
 
 pub(crate) fn resolve_transaction_sender(
@@ -116,11 +116,11 @@ pub(crate) fn bind_sender_to_network(
 /// The key and wallet a profile would send from, without the network binding.
 #[derive(Debug)]
 pub(crate) struct ResolvedSenderAccount {
-    pub(crate) native_account: Option<groundhog_signing::PubkeyAccount>,
+    pub(crate) native_account: Option<thruput_signing::PubkeyAccount>,
     pub(crate) key_name: String,
     pub(crate) wallet_name: Option<String>,
     pub(crate) signer: LocalSigner,
-    pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
+    pub(crate) wallet_address: thruput_xdr::types::ContractAddress,
 }
 
 /// Load the effective signer and validate its wallet.
@@ -164,7 +164,7 @@ pub(crate) fn resolve_sender_account(
 pub(crate) fn resolve_network_hash(
     profile: &ResolvedProfile,
     key_name: &str,
-) -> Result<Option<groundhog_xdr::types::NetworkHash>, CliError> {
+) -> Result<Option<thruput_xdr::types::NetworkHash>, CliError> {
     if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
         return Ok(Some(manifest.network_hash.to_network_hash()));
     }
@@ -187,7 +187,7 @@ fn resolve_wallet_selection(
     key_name: &str,
     signer: &LocalSigner,
     selected_wallet: Option<&str>,
-) -> Result<(Option<String>, groundhog_xdr::types::ContractAddress), CliError> {
+) -> Result<(Option<String>, thruput_xdr::types::ContractAddress), CliError> {
     if let Some(wallet_name) = selected_wallet {
         return resolve_selected_wallet(
             profile,
@@ -206,7 +206,7 @@ pub(crate) fn resolve_selected_wallet(
     key_name: &str,
     public_key: [u8; 32],
     wallet_name: &str,
-) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+) -> Result<thruput_xdr::types::ContractAddress, CliError> {
     let wallet = profile
         .wallets
         .get(wallet_name)
@@ -240,7 +240,7 @@ pub(crate) fn validate_saved_wallet_binding(
 fn native_account_for_binding(
     name: &str,
     wallet: &SavedWalletBinding,
-) -> Result<Option<groundhog_signing::PubkeyAccount>, CliError> {
+) -> Result<Option<thruput_signing::PubkeyAccount>, CliError> {
     let invalid = |message: &str| CliError::InvalidWalletBinding {
         wallet_name: name.into(),
         message: message.into(),
@@ -256,9 +256,9 @@ fn native_account_for_binding(
             let nonce = wallet
                 .account_nonce
                 .ok_or_else(|| invalid("native accounts require account_nonce"))?;
-            let owner = groundhog_signing::strkey::parse_public_key(&wallet.owner_public_key)
+            let owner = thruput_signing::strkey::parse_public_key(&wallet.owner_public_key)
                 .map_err(|_| invalid("native accounts require a valid owner_public_key"))?;
-            let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(owner, nonce);
+            let account = thruput_signing::PubkeyAccount::from_public_key_bytes(owner, nonce);
             if account.address() != codec::parse_contract_address(&wallet.address)? {
                 return Err(invalid(
                     "address does not match the owner and account_nonce",
@@ -269,15 +269,15 @@ fn native_account_for_binding(
     }
 }
 
-fn default_native_account(signer: &LocalSigner) -> groundhog_signing::PubkeyAccount {
-    groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+fn default_native_account(signer: &LocalSigner) -> thruput_signing::PubkeyAccount {
+    thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
 }
 
 fn resolve_saved_wallet_for_public_key(
     profile: &ResolvedProfile,
     key_name: &str,
     expected_public_key: [u8; 32],
-) -> Result<(Option<String>, groundhog_xdr::types::ContractAddress), CliError> {
+) -> Result<(Option<String>, thruput_xdr::types::ContractAddress), CliError> {
     let mut matches = Vec::new();
     for (wallet_name, wallet) in &profile.wallets {
         match parse_owner_public_key(wallet_name, &wallet.owner_public_key) {
@@ -294,7 +294,7 @@ fn resolve_saved_wallet_for_public_key(
         if matches.is_empty() {
             return Ok((
                 None,
-                groundhog_signing::PubkeyAccount::from_public_key_bytes(expected_public_key, 0)
+                thruput_signing::PubkeyAccount::from_public_key_bytes(expected_public_key, 0)
                     .address(),
             ));
         }
@@ -312,7 +312,7 @@ fn resolve_saved_wallet_for_public_key(
 }
 
 fn parse_owner_public_key(key_name: &str, value: &str) -> Result<Vec<u8>, CliError> {
-    groundhog_signing::strkey::parse_public_key(value)
+    thruput_signing::strkey::parse_public_key(value)
         .map(|bytes| bytes.to_vec())
         .map_err(|error| saved_wallet_owner_public_key_invalid(key_name, error.to_string()))
 }
@@ -333,7 +333,7 @@ pub(crate) fn looks_like_address_literal(value: &str) -> bool {
 pub(crate) fn resolve_address_target(
     profile: &ResolvedProfile,
     target: &str,
-) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+) -> Result<thruput_xdr::types::ContractAddress, CliError> {
     resolve_address_target_with_keys(profile, target, true)
 }
 
@@ -341,7 +341,7 @@ fn resolve_address_target_with_keys(
     profile: &ResolvedProfile,
     target: &str,
     allow_key_names: bool,
-) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+) -> Result<thruput_xdr::types::ContractAddress, CliError> {
     if let Some(wallet) = profile.wallets.get(target) {
         native_account_for_binding(target, wallet)?;
         return parse_target_address(target, &wallet.address);
@@ -375,7 +375,7 @@ fn resolve_address_target_with_keys(
 pub(crate) fn resolve_address_target_or_default_wallet(
     profile: &ResolvedProfile,
     target: Option<&str>,
-) -> Result<(String, groundhog_xdr::types::ContractAddress), CliError> {
+) -> Result<(String, thruput_xdr::types::ContractAddress), CliError> {
     if let Some(target) = target {
         return resolve_address_target(profile, target).map(|address| (target.to_owned(), address));
     }
@@ -398,7 +398,7 @@ pub(crate) fn resolve_address_target_or_default_wallet(
 pub(crate) fn resolve_contract_target(
     profile: &ResolvedProfile,
     target: &str,
-) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+) -> Result<thruput_xdr::types::ContractAddress, CliError> {
     if let Some(address) = profile.contracts.get(target) {
         return parse_target_address(target, address);
     }
@@ -416,7 +416,7 @@ pub(crate) fn resolve_contract_target(
 fn parse_target_address(
     target: &str,
     address: &str,
-) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+) -> Result<thruput_xdr::types::ContractAddress, CliError> {
     let normalized = address.strip_prefix("0X").map(|value| format!("0x{value}"));
     codec::parse_contract_address(normalized.as_deref().unwrap_or(address)).map_err(|error| {
         CliError::InvalidAddressTarget {
@@ -467,7 +467,7 @@ pub(crate) fn resolve_local_bootstrap_account(
         .as_ref()
         .try_into()
         .map_err(|_| local_runtime_error(key_name, "invalid faucet public key"))?;
-    if groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address()
+    if thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address()
         != selected.wallet_address.0
     {
         return Err(local_runtime_error(
@@ -499,14 +499,14 @@ mod tests {
 
     #[test]
     fn saved_strkey_wallet_selects_the_matching_signer_and_rejects_another() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let other = groundhog_signing::derive_default_dev_account_signer(1);
-        let address = groundhog_xdr::types::ContractAddress::from([42; 32]);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let other = thruput_signing::derive_default_dev_account_signer(1);
+        let address = thruput_xdr::types::ContractAddress::from([42; 32]);
         let binding = SavedWalletBinding {
             kind: crate::config::WalletKind::DevWallet,
             account_nonce: None,
-            address: groundhog_signing::strkey::format_contract_address(&address),
-            owner_public_key: groundhog_signing::strkey::format_public_key(
+            address: thruput_signing::strkey::format_contract_address(&address),
+            owner_public_key: thruput_signing::strkey::format_public_key(
                 &signer.verifying_key_bytes(),
             ),
         };
@@ -529,8 +529,8 @@ mod tests {
     #[test]
     fn strkey_targets_and_saved_wallet_owner_are_distinct() {
         let profile = test_profile("alice", None, BTreeMap::new());
-        let address = groundhog_signing::strkey::format_contract_address(&[42; 32].into());
-        let public = groundhog_signing::strkey::format_public_key(&[42; 32]);
+        let address = thruput_signing::strkey::format_contract_address(&[42; 32].into());
+        let public = thruput_signing::strkey::format_public_key(&[42; 32]);
         assert_eq!(
             resolve_address_target(&profile, &address).unwrap(),
             [42; 32].into()
@@ -549,8 +549,8 @@ mod tests {
 
     #[test]
     fn address_target_prefers_saved_wallet_over_contract_alias() {
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x11; 32]);
-        let contract_address = groundhog_xdr::types::ContractAddress::from([0x22; 32]);
+        let wallet_address = thruput_xdr::types::ContractAddress::from([0x11; 32]);
+        let contract_address = thruput_xdr::types::ContractAddress::from([0x22; 32]);
         let mut wallets = BTreeMap::new();
         wallets.insert(
             "alice".into(),
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn address_target_resolves_contract_alias() {
-        let expected = groundhog_xdr::types::ContractAddress::from([0x44; 32]);
+        let expected = thruput_xdr::types::ContractAddress::from([0x44; 32]);
         let mut profile = test_profile("alice", None, BTreeMap::new());
         profile
             .contracts
@@ -688,8 +688,8 @@ mod tests {
 
     #[test]
     fn non_dev_key_uses_saved_wallet_address() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x80; 32]);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let wallet_address = thruput_xdr::types::ContractAddress::from([0x80; 32]);
         let mut wallets = BTreeMap::new();
         wallets.insert(
             "alice".into(),
@@ -711,8 +711,8 @@ mod tests {
 
     #[test]
     fn non_dev_key_uses_unique_owner_matched_wallet_with_different_name() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x81; 32]);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let wallet_address = thruput_xdr::types::ContractAddress::from([0x81; 32]);
         let mut wallets = BTreeMap::new();
         wallets.insert(
             "dev-default".into(),
@@ -734,8 +734,8 @@ mod tests {
 
     #[test]
     fn non_dev_key_uses_owner_match_despite_unrelated_malformed_wallet() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x84; 32]);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let wallet_address = thruput_xdr::types::ContractAddress::from([0x84; 32]);
         let mut wallets = BTreeMap::new();
         wallets.insert(
             "broken".into(),
@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn non_dev_key_rejects_multiple_owner_matched_wallets() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
         let owner_public_key = prefixed_hex(signer.verifying_key_bytes());
         let mut wallets = BTreeMap::new();
         for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn selected_wallet_disambiguates_owner_matched_wallets() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
         let owner_public_key = prefixed_hex(signer.verifying_key_bytes());
         let mut wallets = BTreeMap::new();
         for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
@@ -820,7 +820,7 @@ mod tests {
 
     #[test]
     fn profile_default_wallet_disambiguates_owner_matched_wallets() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
         let owner_public_key = prefixed_hex(signer.verifying_key_bytes());
         let mut wallets = BTreeMap::new();
         for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
@@ -851,8 +851,8 @@ mod tests {
 
     #[test]
     fn selected_wallet_must_belong_to_effective_key() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let other = groundhog_signing::derive_default_dev_account_signer(1);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let other = thruput_signing::derive_default_dev_account_signer(1);
         let mut wallets = BTreeMap::new();
         wallets.insert(
             "trading".into(),
@@ -877,7 +877,7 @@ mod tests {
 
     #[test]
     fn selected_wallet_must_exist() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
         let profile = test_profile("default", None, BTreeMap::new());
 
         let error = resolve_wallet_selection(&profile, "default", &signer, Some("missing"))
@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn ordinary_key_without_saved_wallet_uses_native_nonce_zero() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
         let profile = test_profile("alice", None, BTreeMap::default());
         let (name, address) = resolve_wallet_selection(&profile, "alice", &signer, None).unwrap();
         assert!(name.is_none());
@@ -931,10 +931,8 @@ mod tests {
     #[test]
     fn native_bindings_require_a_matching_nonce_owner_and_address() {
         let signer = LocalSigner::from_secret_key([42; 32]);
-        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
-            signer.verifying_key_bytes(),
-            17,
-        );
+        let account =
+            thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 17);
         let binding = SavedWalletBinding {
             address: crate::codec::format_contract_address(&account.address()),
             owner_public_key: format!("0x{}", hex::encode(signer.verifying_key_bytes())),
@@ -1005,9 +1003,9 @@ mod tests {
 
     #[test]
     fn non_dev_key_ignores_wallet_owned_by_another_key() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let other = groundhog_signing::derive_default_dev_account_signer(1);
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let other = thruput_signing::derive_default_dev_account_signer(1);
+        let wallet_address = thruput_xdr::types::ContractAddress::from([0x41; 32]);
         let mut profile = test_profile("alice", None, BTreeMap::new());
         profile.wallets.insert(
             "alice".into(),
@@ -1027,8 +1025,8 @@ mod tests {
 
     #[test]
     fn selected_wallet_rejects_invalid_owner_public_key() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let wallet_address = thruput_xdr::types::ContractAddress::from([0x41; 32]);
         let mut profile = test_profile("alice", None, BTreeMap::new());
         profile.wallets.insert(
             "alice".into(),
@@ -1055,8 +1053,8 @@ mod tests {
 
     #[test]
     fn automatic_selection_ignores_malformed_owner_public_key() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let wallet_address = thruput_xdr::types::ContractAddress::from([0x41; 32]);
         let mut profile = test_profile("alice", None, BTreeMap::new());
         profile.wallets.insert(
             "alice".into(),
@@ -1078,7 +1076,7 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let manifest_path = temp.path().join("runtime-manifest.json");
         let faucet_wallet =
-            default_native_account(&groundhog_signing::derive_default_dev_account_signer(0))
+            default_native_account(&thruput_signing::derive_default_dev_account_signer(0))
                 .address();
         write_test_runtime_manifest_with_accounts(&manifest_path, &[(0, "faucet", faucet_wallet)]);
         let profile = profile_with_manifest(Some(manifest_path));
@@ -1094,7 +1092,7 @@ mod tests {
     fn local_bootstrap_account_rejects_dev_zero_without_faucet_role() {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let manifest_path = temp.path().join("runtime-manifest.json");
-        let dev0_wallet = groundhog_xdr::types::ContractAddress::from([0x70; 32]);
+        let dev0_wallet = thruput_xdr::types::ContractAddress::from([0x70; 32]);
         write_test_runtime_manifest_with_accounts(
             &manifest_path,
             &[(0, "local_user", dev0_wallet)],
@@ -1138,12 +1136,12 @@ mod tests {
 
     fn write_test_runtime_manifest_with_accounts(
         manifest_path: &std::path::Path,
-        accounts: &[(usize, &str, groundhog_xdr::types::ContractAddress)],
+        accounts: &[(usize, &str, thruput_xdr::types::ContractAddress)],
     ) {
         let accounts: Vec<serde_json::Value> = accounts
             .iter()
             .map(|(index, role, wallet_address)| {
-                let signer = groundhog_signing::derive_default_dev_account_signer(*index);
+                let signer = thruput_signing::derive_default_dev_account_signer(*index);
                 serde_json::json!({
                     "role": role,
                     "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),

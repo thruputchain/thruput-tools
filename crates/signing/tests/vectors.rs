@@ -8,13 +8,13 @@
 //! a consensus-affecting bug, not a test update.
 
 use ed25519_dalek::{Verifier, VerifyingKey};
-use groundhog_signing::{
+use thruput_signing::{
     BuildCallTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount,
     SignTransactionParams, Signer, build_call_transaction, encode_signed_transaction_xdr,
     sign_transaction, transaction_hash,
 };
-use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::{NetworkHash, SHA256Hash, Signature};
+use thruput_xdr::contract::ContractEntrypointID;
+use thruput_xdr::types::{NetworkHash, SHA256Hash, Signature};
 
 /// Fixed secret so the derived addresses below are stable.
 const TEST_SECRET: [u8; 32] = [0x42; 32];
@@ -118,9 +118,9 @@ fn transaction_hash_vector_matches_the_server_side_hash() {
     .expect("bug: transaction should sign");
     let signed_xdr =
         encode_signed_transaction_xdr(&signed_tx).expect("bug: signed tx should encode");
-    let validated = groundhog_json_rpc_server::tx::validate_raw_transaction_bytes(
+    let validated = thruput_json_rpc_server::tx::validate_raw_transaction_bytes(
         signed_xdr,
-        &groundhog_tx_validation::NetworkConfigParams::default(),
+        &thruput_tx_validation::NetworkConfigParams::default(),
     )
     .expect("bug: signed tx should validate server-side");
 

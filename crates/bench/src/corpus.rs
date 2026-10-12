@@ -1,18 +1,18 @@
 //! Seed/import confirmed records outside the measurement window.
 
-use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
-use groundhog_json_rpc_types::{
+use serde::{Deserialize, Serialize};
+use thruput_json_rpc_types::{
     NetworkHash,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     runtime_manifest::RuntimeManifest,
     transaction::{TransactionStatus, TxHash},
 };
-use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
 use crate::{

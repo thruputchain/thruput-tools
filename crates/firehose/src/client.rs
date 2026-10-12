@@ -1,11 +1,11 @@
 //! This boundary exposes only the non-destructive committed-block procedure.
 use crate::Error;
-use groundhog_indexer::{
+use std::{future::Future, net::SocketAddr, time::Duration};
+use thruput_indexer::{
     EventIndexer_EventIndexer1_Client, EventIndexerPullOutcome, EventIndexerPullRequest,
     EventIndexerPullResult, IndexerProgress,
 };
-use groundhog_xdr::network::ProtocolCommit;
-use std::{future::Future, net::SocketAddr, time::Duration};
+use thruput_xdr::network::ProtocolCommit;
 use tokio::time::Instant;
 
 /// Resolve an endpoint and share the remaining deadline across connection attempts.
@@ -16,7 +16,7 @@ pub async fn connect_endpoint<C, F, Fut>(
 ) -> Result<C, Error>
 where
     F: FnMut(SocketAddr) -> Fut,
-    Fut: Future<Output = Result<C, groundhog_x23_transport::ConnectError>>,
+    Fut: Future<Output = Result<C, thruput_x23_transport::ConnectError>>,
 {
     connect_addresses(
         endpoint,
@@ -36,7 +36,7 @@ pub async fn connect_addresses<C, F, Fut>(
 ) -> Result<C, Error>
 where
     F: FnMut(SocketAddr) -> Fut,
-    Fut: Future<Output = Result<C, groundhog_x23_transport::ConnectError>>,
+    Fut: Future<Output = Result<C, thruput_x23_transport::ConnectError>>,
 {
     let mut attempts = Vec::new();
     let addresses: Vec<_> = addresses.into_iter().collect();
@@ -46,7 +46,7 @@ where
         match tokio::time::timeout(budget, connect(address)).await {
             Ok(Ok(client)) => return Ok(client),
             Ok(Err(error)) => attempts.push(error),
-            Err(_) => attempts.push(groundhog_x23_transport::ConnectError::ConnectFailed {
+            Err(_) => attempts.push(thruput_x23_transport::ConnectError::ConnectFailed {
                 service: "endpoint",
                 addr: address.to_string(),
                 source: rpc_driver::RpcError::ConnectFailed,
@@ -64,8 +64,8 @@ where
 
 async fn connect_event_indexer(
     address: SocketAddr,
-) -> Result<Client, groundhog_x23_transport::ConnectError> {
-    groundhog_x23_transport::connect_with_config(
+) -> Result<Client, thruput_x23_transport::ConnectError> {
+    thruput_x23_transport::connect_with_config(
         "event_indexer",
         &address.to_string(),
         1,
@@ -245,7 +245,7 @@ mod tests {
         .unwrap();
         let result = client
             .pull(
-                groundhog_xdr::PROTOCOL_VERSION,
+                thruput_xdr::PROTOCOL_VERSION,
                 IndexerProgress::Default { state: 0 },
             )
             .await
@@ -362,16 +362,16 @@ mod tests {
             procedures: Mutex::new(Vec::new()),
         });
         let client = Client(EventIndexer_EventIndexer1_Client::new(sender.clone()));
-        let origin = groundhog_indexer::IndexerOutboxOrigin {
-            protocol: groundhog_xdr::PROTOCOL_VERSION,
+        let origin = thruput_indexer::IndexerOutboxOrigin {
+            protocol: thruput_xdr::PROTOCOL_VERSION,
             epoch_sequence: 1,
             first_height: 1.into(),
-            first_prev_hash: groundhog_xdr::types::ConsensusValueHash::new([0; 32].into()),
+            first_prev_hash: thruput_xdr::types::ConsensusValueHash::new([0; 32].into()),
         };
-        let initialized = groundhog_indexer::IndexerInitializedProgress {
+        let initialized = thruput_indexer::IndexerInitializedProgress {
             origin,
             contiguous_height: 0.into(),
-            last_consensus_hash: groundhog_xdr::types::ConsensusValueHash::new([0; 32].into()),
+            last_consensus_hash: thruput_xdr::types::ConsensusValueHash::new([0; 32].into()),
         };
         for progress in [
             IndexerProgress::Default { state: 0 },
@@ -383,7 +383,7 @@ mod tests {
             assert_eq!(
                 outcome(
                     &client
-                        .pull(groundhog_xdr::PROTOCOL_VERSION, progress)
+                        .pull(thruput_xdr::PROTOCOL_VERSION, progress)
                         .await
                         .unwrap()
                 ),

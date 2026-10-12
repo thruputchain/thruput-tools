@@ -3,11 +3,11 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use groundhog_json_rpc_types::{
+use serde::Deserialize;
+use thruput_json_rpc_types::{
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
-use serde::Deserialize;
 
 use crate::BenchError;
 use crate::workload::make_request;

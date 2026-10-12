@@ -34,13 +34,11 @@ pub enum LowerError {
     Io(#[from] std::io::Error),
 }
 
-impl From<groundhog_rv32_artifact::ArtifactError> for LowerError {
-    fn from(error: groundhog_rv32_artifact::ArtifactError) -> Self {
+impl From<thruput_rv32_artifact::ArtifactError> for LowerError {
+    fn from(error: thruput_rv32_artifact::ArtifactError) -> Self {
         match error {
-            groundhog_rv32_artifact::ArtifactError::Invalid(message) => {
-                LowerError::Invalid(message)
-            }
-            groundhog_rv32_artifact::ArtifactError::Verify(message) => LowerError::Verify(message),
+            thruput_rv32_artifact::ArtifactError::Invalid(message) => LowerError::Invalid(message),
+            thruput_rv32_artifact::ArtifactError::Verify(message) => LowerError::Verify(message),
         }
     }
 }

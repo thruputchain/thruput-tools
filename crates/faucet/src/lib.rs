@@ -13,11 +13,11 @@ use axum::{
     http::{HeaderValue, Method, header},
     routing::{get, post},
 };
-use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use serde::Serialize;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
+use thruput_json_rpc_types::network_descriptor::NetworkDescriptor;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 
