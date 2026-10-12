@@ -111,7 +111,10 @@ impl fmt::Debug for Agent {
 /// Chain operations take `&self`: they go through the agent's [`Caller`],
 /// which can also be cloned out to hold independently of the context. Only
 /// receiving messages and drawing randomness take `&mut self`, since those
-/// consume per-agent streams in order.
+/// consume per-agent streams in order, along with artifact deployment and
+/// registration. Those treat an in-flight registration from the same agent as
+/// a retry of the same request, so overlapping requests from one agent must
+/// not be possible.
 #[derive(Debug)]
 pub struct AgentContext {
     id: AgentId,
@@ -156,8 +159,20 @@ impl AgentContext {
     /// (on the first deploy of that artifact, in the same transaction) and
     /// deploying by hash thereafter. Awaits the receipt; fails if execution is
     /// not successful.
+    ///
+    /// Requests from one agent cannot overlap, since a second request would
+    /// be taken as a retry of the first:
+    ///
+    /// ```compile_fail,E0499
+    /// # async fn overlap(ctx: &mut thruput_testkit::AgentContext) {
+    /// let options = thruput_testkit::DeployOptions::funded(0);
+    /// let first = ctx.deploy_artifact("counter", options);
+    /// let second = ctx.deploy_artifact("counter", options);
+    /// let _ = (first.await, second.await);
+    /// # }
+    /// ```
     pub async fn deploy_artifact(
-        &self,
+        &mut self,
         name: &str,
         options: DeployOptions<'_>,
     ) -> Result<Deployed> {
@@ -190,7 +205,7 @@ impl AgentContext {
     /// A scheduler `Retry` replays the retained registration's signed bytes;
     /// a `Dropped` outcome clears that attempt and returns its failure.
     pub async fn submit_deploy_artifact(
-        &self,
+        &mut self,
         name: &str,
         options: DeployOptions<'_>,
     ) -> Result<SubmittedDeploy> {
@@ -233,7 +248,7 @@ impl AgentContext {
     /// the same transaction. Prefer [`AgentContext::deploy_artifact`] unless a
     /// test needs to control when registration happens.
     pub async fn register_artifact(
-        &self,
+        &mut self,
         name: &str,
         options: DeployOptions<'_>,
     ) -> Result<Deployed> {
@@ -262,7 +277,7 @@ impl AgentContext {
     /// Returns [`TestkitError::ArtifactRegistrationPending`] when a registration
     /// transaction is already in flight.
     pub async fn submit_register_artifact(
-        &self,
+        &mut self,
         name: &str,
         options: DeployOptions<'_>,
     ) -> Result<SubmittedDeploy> {

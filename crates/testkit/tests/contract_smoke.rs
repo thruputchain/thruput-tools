@@ -177,7 +177,7 @@ async fn caller_counter_deploy_call_read() {
 
     fund_native_accounts(&scenario, false).await;
     scenario
-        .run_agents([Agent::new("alice", |ctx| async move {
+        .run_agents([Agent::new("alice", |mut ctx| async move {
             // The first deploy carries the binary (registers it) and creates an
             // instance; the harness reports it registered.
             let instance1 = ctx
@@ -265,7 +265,7 @@ async fn multiple_runs_are_possible() {
 
     fund_native_accounts(&scenario, false).await;
     let make_agents = || {
-        [Agent::new("alice", |ctx| async move {
+        [Agent::new("alice", |mut ctx| async move {
             // The first deploy carries the binary (registers it) and creates an
             // instance; the harness reports it registered.
             let caller_counter = ctx
@@ -325,7 +325,7 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
     let first_address = Arc::new(Mutex::new(None));
     let stored_address = Arc::clone(&first_address);
     scenario
-        .run_agents([Agent::new("alice", move |ctx| async move {
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
             let registration = ctx
                 .submit_deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
                 .await?;
@@ -343,7 +343,7 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
         .expect("address mutex is not poisoned")
         .expect("first run records its deployment address");
     scenario
-        .run_agents([Agent::new("alice", move |ctx| async move {
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
             let registration_hash = match ctx
                 .submit_deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
                 .await
@@ -411,7 +411,7 @@ async fn manual_block_production_stages_deploys_and_calls() {
     let addresses = Arc::new(Mutex::new(Vec::new()));
     let deployment_addresses = Arc::clone(&addresses);
     scenario
-        .run_agents([Agent::new("alice", move |ctx| async move {
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
             let genesis = ctx.network().chain_tip().await?;
             let registration = ctx
                 .submit_deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))

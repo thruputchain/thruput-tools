@@ -300,7 +300,7 @@ async fn deployment_has_exact_effects_and_registers_once() {
     let fixture = Fixture::new(Outcome::Success).await;
     let scenario = fixture.scenario(false).await;
     scenario
-        .run_agents([Agent::new("alice", |ctx| async move {
+        .run_agents([Agent::new("alice", |mut ctx| async move {
             let options = DeployOptions {
                 amount: 123,
                 initializer: Some(WalletInitCall {
@@ -335,7 +335,7 @@ async fn funded_bootstrap_accounts_deploy_through_native_wallet() {
     let fixture = Fixture::new(Outcome::Success).await;
     let scenario = fixture.scenario(true).await;
     scenario
-        .run_agents([Agent::new("alice", |ctx| async move {
+        .run_agents([Agent::new("alice", |mut ctx| async move {
             let signer = derive_dev_account_signer("groundhog-dev-accounts", 1);
             assert_eq!(
                 ctx.address(),
@@ -405,7 +405,7 @@ async fn registry_never_accepts_unverified_receipts_or_resubmits_pending_attempt
         let fixture = Fixture::new(outcome).await;
         let scenario = fixture.scenario(false).await;
         scenario
-            .run_agents([Agent::new("alice", move |ctx| async move {
+            .run_agents([Agent::new("alice", move |mut ctx| async move {
                 let submitted = ctx
                     .submit_deploy_artifact("counter", DeployOptions::funded(123))
                     .await?;
@@ -485,7 +485,7 @@ async fn registration_retries_reuse_signed_bytes_and_receipts_finish_recovery() 
     fixture
         .scenario(false)
         .await
-        .run_agents([Agent::new("alice", move |ctx| async move {
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
             let first = ctx
                 .submit_deploy_artifact("counter", DeployOptions::funded(123))
                 .await?;
@@ -521,7 +521,7 @@ async fn registration_retries_reuse_signed_bytes_and_receipts_finish_recovery() 
 #[tokio::test]
 async fn dropped_registration_releases_the_attempt_without_replaying_it() {
     let fixture = Fixture::new(Outcome::Dropped).await;
-    fixture.scenario(false).await.run_agents([Agent::new("alice", |ctx| async move {
+    fixture.scenario(false).await.run_agents([Agent::new("alice", |mut ctx| async move {
         let first = ctx.submit_register_artifact("counter", DeployOptions::funded(123)).await?;
         let error = ctx.submit_register_artifact("counter", DeployOptions::funded(123)).await.unwrap_err();
         assert!(matches!(error, TestkitError::Deploy { ref detail } if detail.contains("dropped: Executor code 7")));
@@ -538,7 +538,7 @@ async fn a_later_run_retries_registration_without_taking_the_original_deployment
     let fixture = Fixture::new(Outcome::Retry).await;
     let scenario = fixture.scenario(false).await;
     scenario
-        .run_agents([Agent::new("alice", |ctx| async move {
+        .run_agents([Agent::new("alice", |mut ctx| async move {
             let _submitted = ctx
                 .submit_deploy_artifact("counter", DeployOptions::funded(123))
                 .await?;
@@ -548,7 +548,7 @@ async fn a_later_run_retries_registration_without_taking_the_original_deployment
         .unwrap();
     let state = fixture.state.clone();
     scenario
-        .run_agents([Agent::new("alice", move |ctx| async move {
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
             let error = ctx
                 .submit_deploy_artifact("counter", DeployOptions::funded(124))
                 .await

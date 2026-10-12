@@ -253,7 +253,7 @@ async fn registry_exposes_hash_and_registration_state() {
         .expect("offline scenario builds with a registered artifact");
 
     scenario
-        .run_agents([Agent::new("solo", |ctx| async move {
+        .run_agents([Agent::new("solo", |mut ctx| async move {
             // The contract hash is available before any deploy; nothing is
             // registered on-network yet.
             ctx.contract_hash("counter")?;
