@@ -8,12 +8,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use groundhog_json_rpc_types::{
+use serde::Deserialize;
+use thruput_json_rpc_types::{
     NetworkHashHex, bootstrap_manifest::BootstrapManifestAllocation, hex::Hex0x,
 };
-use groundhog_signing::LocalSigner;
-use groundhog_tx_validation::ConfigParamName;
-use serde::Deserialize;
+use thruput_signing::LocalSigner;
+use thruput_tx_validation::ConfigParamName;
 use zeroize::Zeroizing;
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// Private faucet credential included in a local-chain backup.
-pub const LOCAL_FAUCET_KEY_FILE: &str = "groundhog-faucet.key";
+pub const LOCAL_FAUCET_KEY_FILE: &str = "thruput-faucet.key";
 /// Retained signed funding requests included in a local-chain backup.
 pub const LOCAL_FUNDING_ATTEMPTS_FILE: &str = "groundhog-funding.json";
 const STATE_METADATA_FILE: &str = "hog-devnode-data.json";
@@ -89,7 +89,7 @@ impl LocalChainState {
                 .unwrap_or_else(|| [0; 32].into());
             let signer = Arc::new(random_signer(Path::new("ephemeral faucet"))?);
             let faucet = Hex0x(
-                groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                thruput_signing::PubkeyAccount::from_public_key_bytes(
                     signer.verifying_key_bytes(),
                     0,
                 )
@@ -112,11 +112,8 @@ impl LocalChainState {
         let key_path = dir.join(LOCAL_FAUCET_KEY_FILE);
         let signer = load_or_create_faucet(&key_path, metadata.is_none())?;
         let faucet = Hex0x(
-            groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                signer.verifying_key_bytes(),
-                0,
-            )
-            .address(),
+            thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+                .address(),
         );
         let signer = Arc::new(signer);
         let journal = FundingJournal::open(
@@ -163,8 +160,8 @@ impl LocalChainState {
         })
     }
 
-    pub(crate) fn public_key(&self) -> groundhog_json_rpc_types::Ed25519PublicKey {
-        Hex0x(groundhog_xdr::types::Ed25519PublicKey::from(
+    pub(crate) fn public_key(&self) -> thruput_json_rpc_types::Ed25519PublicKey {
+        Hex0x(thruput_xdr::types::Ed25519PublicKey::from(
             self.signer.verifying_key_bytes(),
         ))
     }
@@ -626,7 +623,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let original =
             config(dir.path()).with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(
-                Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x11; 32])),
+                Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x11; 32])),
                 "1234",
             )]);
         let state = LocalChainState::prepare(&original).unwrap();

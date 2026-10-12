@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-build-info"
+name = "thruput-build-info"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Build and platform version metadata for Groundhog binaries"
+description = "Build and platform version metadata for Thruput binaries"
 
 [lints]
 workspace = true

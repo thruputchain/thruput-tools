@@ -1,9 +1,9 @@
-use groundhog_xdr::event::TxEmittedEvent;
+use thruput_xdr::event::TxEmittedEvent;
 use xdr_common::VecM;
 
 use xdr_common::BytesM;
 
-use groundhog_hogd_backend::event::*;
+use thruput_hogd_backend::event::*;
 
 #[test]
 fn event_payload_reuses_the_wire_buffer_for_every_topic_count() {

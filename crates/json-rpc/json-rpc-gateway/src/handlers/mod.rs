@@ -6,7 +6,7 @@ pub mod view;
 
 use std::time::{Duration, Instant};
 
-use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
+use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
 
 use crate::config::HealthBackend;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
@@ -66,7 +66,7 @@ pub(crate) async fn timed_backend_call<T, E: std::fmt::Display>(
 mod tests {
     use std::time::Duration;
 
-    use groundhog_json_rpc_server::RpcRequestContext;
+    use thruput_json_rpc_server::RpcRequestContext;
 
     use super::backend_deadline;
 

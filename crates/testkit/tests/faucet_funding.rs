@@ -2,10 +2,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use groundhog_json_rpc_client::GroundhogApiClient;
-use groundhog_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
-use groundhog_testkit::rpc_types::hex::Hex0x;
-use groundhog_testkit::{Agent, NetworkConfig, Scenario};
+use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
+use thruput_testkit::rpc_types::hex::Hex0x;
+use thruput_testkit::{Agent, NetworkConfig, Scenario};
 
 #[tokio::test]
 #[ignore = "requires THRUPUT_DEVNODE_BINARY"]

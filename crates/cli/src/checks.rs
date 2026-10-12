@@ -121,7 +121,7 @@ pub struct ProjectContext {
     pub default_wallet_kind: Option<crate::config::WalletKind>,
     /// Derivation nonce when the selected wallet is native.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(with = "groundhog_json_rpc_types::decimal::option")]
+    #[serde(with = "thruput_json_rpc_types::decimal::option")]
     pub default_wallet_account_nonce: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_wallet_source: Option<&'static str>,
@@ -130,10 +130,10 @@ pub struct ProjectContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpc_url: Option<String>,
     #[serde(skip_serializing_if = "is_zero")]
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
     pub contract_count: usize,
     #[serde(skip_serializing_if = "is_zero")]
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
     pub wallet_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<Finding>,
@@ -1039,8 +1039,8 @@ fn check_genesis_root_artifact(devnode: &DevnodeStatus) -> GenesisRootArtifactSt
             };
         }
     };
-    let sha256 = groundhog_rv32_artifact::sha256_hex(&bytes);
-    match groundhog_rv32_artifact::verify_artifact(&bytes) {
+    let sha256 = thruput_rv32_artifact::sha256_hex(&bytes);
+    match thruput_rv32_artifact::verify_artifact(&bytes) {
         Ok(()) => GenesisRootArtifactStatus {
             available: true,
             valid: true,

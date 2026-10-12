@@ -1,19 +1,19 @@
 //! Local public funding retains request identity and returns before block production.
-use groundhog_json_rpc_types::{
-    airdrop::{FundAccountRequest, FundAccountResponse},
-    hex::{Hex0x, HexBytes},
-    transaction::TxHash,
-};
-use groundhog_signing::{
-    LocalSigner, PubkeyAccount, SignTransactionParams, Signer, sign_and_encode_transaction_hex,
-    transaction_hash,
-};
-use groundhog_testkit::{Agent, NetworkConfig, Scenario, TestkitError};
 use jsonrpsee::{RpcModule, server::ServerBuilder, types::ErrorObjectOwned};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
+use thruput_json_rpc_types::{
+    airdrop::{FundAccountRequest, FundAccountResponse},
+    hex::{Hex0x, HexBytes},
+    transaction::TxHash,
+};
+use thruput_signing::{
+    LocalSigner, PubkeyAccount, SignTransactionParams, Signer, sign_and_encode_transaction_hex,
+    transaction_hash,
+};
+use thruput_testkit::{Agent, NetworkConfig, Scenario, TestkitError};
 
 #[tokio::test]
 async fn lost_response_reuses_request_and_returns_admitted_bytes_without_receipt_wait() {
@@ -32,14 +32,12 @@ async fn lost_response_reuses_request_and_returns_admitted_bytes_without_receipt
             if seen.len() == 1 {
                 let response = funding_response(request, &faucet);
                 return Err(ErrorObjectOwned::owned(
-                    groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED,
+                    thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED,
                     "receipt unavailable after durable signing",
-                    Some(
-                        groundhog_json_rpc_types::airdrop::LocalFundingErrorData::new(
-                            response.tx_hash,
-                            response.signed_transaction,
-                        ),
-                    ),
+                    Some(thruput_json_rpc_types::airdrop::LocalFundingErrorData::new(
+                        response.tx_hash,
+                        response.signed_transaction,
+                    )),
                 ));
             }
             if seen.len() == 2 {
@@ -136,14 +134,12 @@ async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
             seen.push(request);
             if seen.len() == 1 {
                 return Err(ErrorObjectOwned::owned(
-                    groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED,
+                    thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED,
                     "admission unverified",
-                    Some(
-                        groundhog_json_rpc_types::airdrop::LocalFundingErrorData::new(
-                            response.tx_hash,
-                            response.signed_transaction,
-                        ),
-                    ),
+                    Some(thruput_json_rpc_types::airdrop::LocalFundingErrorData::new(
+                        response.tx_hash,
+                        response.signed_transaction,
+                    )),
                 ));
             }
             Ok(response)
@@ -154,7 +150,7 @@ async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
     module
         .register_method("groundhog_sendRawTransaction", move |params, _, _| {
             let bytes: String = params.one()?;
-            let signed: groundhog_xdr::transaction::SignedTransaction =
+            let signed: thruput_xdr::transaction::SignedTransaction =
                 xdrs::txs::decode(&hex::decode(bytes.strip_prefix("0x").unwrap()).unwrap())
                     .unwrap();
             let hash = TxHash(Hex0x(transaction_hash(&signed.tx).unwrap()));
@@ -208,11 +204,11 @@ async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
     handle.stop().unwrap();
 }
 
-fn successful_receipt(tx_hash: TxHash) -> groundhog_json_rpc_types::receipt::TransactionReceipt {
-    groundhog_json_rpc_types::receipt::TransactionReceipt {
+fn successful_receipt(tx_hash: TxHash) -> thruput_json_rpc_types::receipt::TransactionReceipt {
+    thruput_json_rpc_types::receipt::TransactionReceipt {
         tx_hash,
         height: 3.into(),
-        status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
+        status: thruput_json_rpc_types::receipt::ExecStatus::Ok,
         events: vec![],
         return_data: None,
         abort_data: None,
@@ -221,16 +217,16 @@ fn successful_receipt(tx_hash: TxHash) -> groundhog_json_rpc_types::receipt::Tra
 }
 
 fn funding_response(request: FundAccountRequest, faucet: &LocalSigner) -> FundAccountResponse {
-    let calldata = groundhog_signing::native_hog_transfer_calldata(
+    let calldata = thruput_signing::native_hog_transfer_calldata(
         &request.recipient.0,
         request.amount().unwrap(),
     )
     .unwrap();
-    let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
-        groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+    let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
+        thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
             account: &PubkeyAccount::new(faucet.public_key(), 0),
-            target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
-            target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            target_address: thruput_signing::NATIVE_HOG_ADDRESS,
+            target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
             target_calldata: &calldata,
             gas_limit: 20_000_000,
             target_gas_limit: 10_000_000,
@@ -244,7 +240,7 @@ fn funding_response(request: FundAccountRequest, faucet: &LocalSigner) -> FundAc
         tx,
         faucet,
         SignTransactionParams::default(),
-        &groundhog_xdr::types::NetworkHash::new([0; 32].into()),
+        &thruput_xdr::types::NetworkHash::new([0; 32].into()),
     )
     .unwrap();
     FundAccountResponse::new(
@@ -257,7 +253,7 @@ fn funding_response(request: FundAccountRequest, faucet: &LocalSigner) -> FundAc
 
 fn local_manifest(
     faucet_public_key: [u8; 32],
-    faucet_address: groundhog_xdr::types::ContractAddress,
+    faucet_address: thruput_xdr::types::ContractAddress,
 ) -> tempfile::NamedTempFile {
     let manifest = tempfile::NamedTempFile::new().unwrap();
     let mut document: serde_json::Value =

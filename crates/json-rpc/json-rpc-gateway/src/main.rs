@@ -22,13 +22,13 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use crate::backend::GatewayBackend;
 use crate::config::{GatewayConfig, HealthBackend};
 use crate::context::GatewayContext;
-use groundhog_bundle_identity::{BundleIdentity, BundleSubject};
-use groundhog_json_rpc_api::GroundhogApiServer;
-use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-use groundhog_json_rpc_types::{NetworkHashHex, SHA256Hash};
+use thruput_bundle_identity::{BundleIdentity, BundleSubject};
+use thruput_json_rpc_api::GroundhogApiServer;
+use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use thruput_json_rpc_types::{NetworkHashHex, SHA256Hash};
 
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
-const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
+const BUILD_VERSION: thruput_build_info::BuildVersion = thruput_build_info::build_version!();
 
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
@@ -72,7 +72,7 @@ struct Cli {
 
     /// Concurrent entries per JSON-RPC array (1..=1024, default 128; overrides config)
     #[arg(long)]
-    rpc_batch_concurrency: Option<groundhog_json_rpc_server::batch::RpcBatchConcurrency>,
+    rpc_batch_concurrency: Option<thruput_json_rpc_server::batch::RpcBatchConcurrency>,
 
     /// Private health/metrics listen address (overrides config file)
     #[arg(long)]
@@ -177,8 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(path) = &cli.runtime_manifest {
         let contents = read_runtime_manifest(path).await?;
-        let manifest =
-            groundhog_json_rpc_types::runtime_manifest::parse_runtime_manifest(&contents)?;
+        let manifest = thruput_json_rpc_types::runtime_manifest::parse_runtime_manifest(&contents)?;
         config.apply_runtime_manifest(&manifest)?;
     }
 
@@ -251,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_connections(ctx.config.max_connections)
         .max_response_body_size(max_response_body_size)
         .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(
-            groundhog_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS,
+            thruput_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS,
         ))
         .build();
     let http_mw = middleware::http_middleware(&ctx.config, metrics.clone());
@@ -347,8 +346,8 @@ fn parse_network_hash(value: &str) -> Result<NetworkHashHex, String> {
 }
 
 fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, String> {
-    groundhog_json_rpc_types::hex::decode_fixed_hex(value)
-        .map(|bytes| SHA256Hash::from(groundhog_xdr::types::SHA256Hash::from(bytes)))
+    thruput_json_rpc_types::hex::decode_fixed_hex(value)
+        .map(|bytes| SHA256Hash::from(thruput_xdr::types::SHA256Hash::from(bytes)))
         .map_err(|error| error.to_string())
 }
 

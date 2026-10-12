@@ -8,8 +8,8 @@ use crate::SigningError;
 /// keep this trait focused on the synchronous local path.
 pub trait Signer {
     /// Returns the signer's public key in Groundhog XDR form.
-    fn public_key(&self) -> groundhog_xdr::types::PublicKey;
+    fn public_key(&self) -> thruput_xdr::types::PublicKey;
 
     /// Signs the provided message bytes.
-    fn sign(&self, message: &[u8]) -> Result<groundhog_xdr::types::Signature, SigningError>;
+    fn sign(&self, message: &[u8]) -> Result<thruput_xdr::types::Signature, SigningError>;
 }

@@ -2,11 +2,11 @@
 
 use std::time::{Duration, Instant};
 
-use groundhog_hogd_backend::view as shared_view;
-use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
-use groundhog_json_rpc_types::view::{ViewRequest, ViewResponse};
-use groundhog_view::{ViewGatewayBatchOutcome, ViewGatewayBatchResult, ViewGatewayResult};
-use groundhog_xdr::view::TransactionViewQuery;
+use thruput_hogd_backend::view as shared_view;
+use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
+use thruput_json_rpc_types::view::{ViewRequest, ViewResponse};
+use thruput_view::{ViewGatewayBatchOutcome, ViewGatewayBatchResult, ViewGatewayResult};
+use thruput_xdr::view::TransactionViewQuery;
 
 use crate::{
     config::HealthBackend,
@@ -21,10 +21,10 @@ use super::{VIEW_GATEWAY, backend_deadline, timed_backend_call};
 pub async fn view_batch(
     ctx: &GatewayContext,
     context: RpcRequestContext,
-    request: groundhog_json_rpc_types::view::ViewBatchRequest,
+    request: thruput_json_rpc_types::view::ViewBatchRequest,
     gas_limit: u64,
-    limits: groundhog_json_rpc_server::ViewBatchConfig,
-) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+    limits: thruput_json_rpc_server::ViewBatchConfig,
+) -> Result<thruput_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
     let timeout =
         Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
     let deadline = backend_deadline(context, timeout)?;
@@ -102,7 +102,7 @@ pub async fn view(
 }
 
 async fn view_response_from_client(
-    client: &groundhog_view::ViewGateway_ViewGateway1_Client,
+    client: &thruput_view::ViewGateway_ViewGateway1_Client,
     metrics: &GatewayMetrics,
     query: &TransactionViewQuery,
     deadline: Instant,
@@ -146,18 +146,18 @@ mod tests {
     use std::net::SocketAddr;
 
     use async_trait::async_trait;
-    use groundhog_json_rpc_types::ContractAddress;
-    use groundhog_json_rpc_types::hex::HexBytes;
-    use groundhog_json_rpc_types::view::RootInvocationOutput;
-    use groundhog_scp::network::ProtocolCommit as Protocol;
-    use groundhog_view::{
+    use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
+    use thruput_json_rpc_types::ContractAddress;
+    use thruput_json_rpc_types::hex::HexBytes;
+    use thruput_json_rpc_types::view::RootInvocationOutput;
+    use thruput_scp::network::ProtocolCommit as Protocol;
+    use thruput_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Client,
         ViewGateway_ViewGateway1_Dispatcher, ViewGatewayIntroOutcome, ViewGatewayPayload,
     };
-    use groundhog_xdr::event::TxEmittedEvent;
-    use groundhog_xdr::transaction::InvocationFrameOutput;
-    use groundhog_xdr::types::ContractAddress as XdrContractAddress;
-    use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
+    use thruput_xdr::event::TxEmittedEvent;
+    use thruput_xdr::transaction::InvocationFrameOutput;
+    use thruput_xdr::types::ContractAddress as XdrContractAddress;
     use tokio::net::TcpListener;
     use xdr_common::{BytesM, VecM};
 
@@ -178,9 +178,9 @@ mod tests {
     impl ViewGateway_ViewGateway1 for FakeViewGateway {
         async fn viewgateway_view_batch(
             &self,
-            query: groundhog_view::ViewGatewayBatchQuery,
-        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
-            use groundhog_view::{
+            query: thruput_view::ViewGatewayBatchQuery,
+        ) -> Result<thruput_view::ViewGatewayBatchResult, ProgramError> {
+            use thruput_view::{
                 ViewGatewayBatchPayload, ViewGatewayBatchResult, ViewGatewayHeightUnavailable,
             };
             if let FakeViewGatewayMode::BatchOutcome(outcome) = self.mode {
@@ -213,7 +213,7 @@ mod tests {
                             .calls
                             .0
                             .into_iter()
-                            .map(|call| groundhog_xdr::view::TransactionViewResult {
+                            .map(|call| thruput_xdr::view::TransactionViewResult {
                                 output: InvocationFrameOutput::Return {
                                     return_buffer: BytesM(call.invocation.calldata.0),
                                 },
@@ -330,11 +330,11 @@ mod tests {
     #[tokio::test]
     async fn public_views_preserve_order_gas_height_and_freshness_errors() {
         use crate::{backend::GatewayBackend, config::GatewayConfig, context::BackendClient};
-        use groundhog_json_rpc_api::GroundhogApiServer;
-        use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-        use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
-        use groundhog_xdr::{PROTOCOL_VERSION, types::SHA256Hash};
         use std::sync::Arc;
+        use thruput_json_rpc_api::GroundhogApiServer;
+        use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+        use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
+        use thruput_xdr::{PROTOCOL_VERSION, types::SHA256Hash};
         use tokio::sync::RwLock;
 
         let (addr, fake) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
@@ -361,7 +361,7 @@ mod tests {
             NetworkInfo::new(NetworkHash::from(SHA256Hash::from([0; 32]))),
             RpcServerConfig::default()
                 .with_view_timeout_ms(60_000)
-                .with_view_batch(groundhog_json_rpc_server::ViewBatchConfig {
+                .with_view_batch(thruput_json_rpc_server::ViewBatchConfig {
                     max_gas: 1_000,
                     max_response_bytes: 256,
                     ..Default::default()
@@ -425,13 +425,13 @@ mod tests {
     #[tokio::test]
     async fn batch_metrics_separate_expected_refusals_from_backend_failures() {
         use crate::{config::GatewayConfig, context::BackendClient};
-        use groundhog_json_rpc_server::ViewBatchConfig;
-        use groundhog_json_rpc_types::{
+        use std::sync::Arc;
+        use thruput_json_rpc_server::ViewBatchConfig;
+        use thruput_json_rpc_types::{
             error::codes,
             view::{ViewBatchRequest, ViewCall},
         };
-        use groundhog_view::ViewGatewayBatchOutcome as Outcome;
-        use std::sync::Arc;
+        use thruput_view::ViewGatewayBatchOutcome as Outcome;
         use tokio::sync::RwLock;
 
         let cases = [
@@ -476,7 +476,7 @@ mod tests {
             let socket = FixedSerialPool::connect(&addr, 1).await.unwrap();
             let client = ViewGateway_ViewGateway1_Client::new(Arc::new(socket));
             let context = GatewayContext::assemble(
-                groundhog_xdr::PROTOCOL_VERSION,
+                thruput_xdr::PROTOCOL_VERSION,
                 Arc::new(RwLock::new(None)),
                 Arc::new(RwLock::new(None)),
                 Arc::new(RwLock::new(Some(BackendClient::new(

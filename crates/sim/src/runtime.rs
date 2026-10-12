@@ -1,7 +1,8 @@
 use std::{future::Future, path::Path, time::Duration};
 
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-use groundhog_json_rpc_types::{
+use sha2::{Digest, Sha256};
+use thruput_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use thruput_json_rpc_types::{
     NetworkHashHex,
     protocol_token::protocol_text,
     runtime_manifest::{
@@ -9,8 +10,7 @@ use groundhog_json_rpc_types::{
         RuntimeManifest, RuntimeManifestParseError, parse_runtime_manifest,
     },
 };
-use groundhog_signing::{LocalSigner, derive_dev_account_signer};
-use sha2::{Digest, Sha256};
+use thruput_signing::{LocalSigner, derive_dev_account_signer};
 use tokio::io::AsyncReadExt;
 
 pub const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
@@ -20,9 +20,9 @@ const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub struct SimAccount {
     pub index: u32,
     pub signer: LocalSigner,
-    pub wallet_address: groundhog_xdr::types::ContractAddress,
+    pub wallet_address: thruput_xdr::types::ContractAddress,
     /// Network this account signs for. Part of every signature preimage.
-    pub network_hash: groundhog_xdr::types::NetworkHash,
+    pub network_hash: thruput_xdr::types::NetworkHash,
 }
 
 #[derive(Debug, Clone)]
@@ -90,7 +90,7 @@ pub(crate) async fn preflight_chain_identity(
     // This checks this client's wire compatibility, not remotely observed server
     // protocol: RC2 networkInfo exposes only networkHash, and chainTip only
     // height/blockHash. Keep the distinction explicit until that API changes.
-    let compiled_protocol = protocol_text(&groundhog_xdr::PROTOCOL_VERSION);
+    let compiled_protocol = protocol_text(&thruput_xdr::PROTOCOL_VERSION);
     if manifest.protocol != compiled_protocol {
         return Err(RuntimeManifestError::ClientProtocolMismatch {
             expected: manifest.protocol.clone(),
@@ -228,7 +228,7 @@ fn derive_account(
         });
     }
 
-    if groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+    if thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
         .address()
         != account.wallet_address.0
     {
@@ -247,11 +247,11 @@ fn derive_account(
 fn hosted_derivation(
     manifest: &RuntimeManifest,
 ) -> Result<
-    &groundhog_json_rpc_types::runtime_manifest::BootstrapAccountDerivation,
+    &thruput_json_rpc_types::runtime_manifest::BootstrapAccountDerivation,
     RuntimeManifestError,
 > {
     if manifest.kind
-        != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+        != thruput_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
     {
         return Err(RuntimeManifestError::ExplicitAccountsRequired);
     }
@@ -326,11 +326,11 @@ pub enum RuntimeManifestError {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::hex::Hex0x;
-    use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
-    use groundhog_signing::derive_dev_account_signer;
-    use groundhog_xdr::types::Ed25519PublicKey;
     use serde_json::json;
+    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::runtime_manifest::RuntimeManifest;
+    use thruput_signing::derive_dev_account_signer;
+    use thruput_xdr::types::Ed25519PublicKey;
 
     use super::*;
 
@@ -366,11 +366,8 @@ mod tests {
         local_user.role = BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER.into();
         local_user.public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
         local_user.wallet_address = Hex0x(
-            groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                signer.verifying_key_bytes(),
-                0,
-            )
-            .address(),
+            thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+                .address(),
         );
         manifest.bootstrap_accounts.push(local_user);
 
@@ -569,7 +566,7 @@ mod tests {
             "kind": "hosted-devnet-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
-            "protocol": protocol_text(&groundhog_xdr::PROTOCOL_VERSION),
+            "protocol": protocol_text(&thruput_xdr::PROTOCOL_VERSION),
             "producer": {
                 "binary": "hog-devnode",
                 "version": "0.1.0"
@@ -586,7 +583,7 @@ mod tests {
                 "index": 0,
                 "role": "local_user",
                 "publicKey": public_key,
-                "walletAddress": format!("0x{}", hex::encode(groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address().as_ref())),
+                "walletAddress": format!("0x{}", hex::encode(thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address().as_ref())),
                 "initialStorageTokens": "1000000000"
             }],
             "bootstrap": {

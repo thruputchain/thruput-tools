@@ -1,8 +1,8 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use groundhog_hogd_backend::submit::*;
-use groundhog_scheduler::{ParallelBatch, parallel::ParallelSignedTransactionBatch};
+use thruput_hogd_backend::submit::*;
+use thruput_scheduler::{ParallelBatch, parallel::ParallelSignedTransactionBatch};
 use xdr_common::{BytesM, VecM};
 use xdrs::{EncodesAs, cxs, txs};
 

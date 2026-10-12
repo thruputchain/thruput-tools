@@ -1,16 +1,16 @@
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_scheduler::ExpectedDBTip;
-use groundhog_scheduler::RPCError;
-use groundhog_scheduler::SchedGatewaySubmitOutcome;
+use thruput_json_rpc_server::RpcServerError;
+use thruput_scheduler::ExpectedDBTip;
+use thruput_scheduler::RPCError;
+use thruput_scheduler::SchedGatewaySubmitOutcome;
 
-use groundhog_json_rpc_types::transaction::{SchedulerTransactionErrorSource, TransactionStatus};
-use groundhog_scheduler::{
+use thruput_json_rpc_types::transaction::{SchedulerTransactionErrorSource, TransactionStatus};
+use thruput_scheduler::{
     SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
     SchedulerTransactionStatus as Status,
 };
 use xdr_common::VecM;
 
-use groundhog_hogd_backend::scheduler::*;
+use thruput_hogd_backend::scheduler::*;
 
 #[test]
 fn admission_outcomes_separate_client_faults_from_backend_faults() {

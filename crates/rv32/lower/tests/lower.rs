@@ -9,8 +9,8 @@
 // The synthetic-ELF builder favors owned specs that tests clone-and-mutate.
 #![allow(clippy::needless_pass_by_value)]
 
-use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, verify_artifact};
-use groundhog_rv32_lower::{
+use thruput_rv32_artifact::{FORMAT_FINGERPRINT, verify_artifact};
+use thruput_rv32_lower::{
     ALLOC_ALLOWLIST, INTERFACE_ID_BYTES, INTERFACE_TABLE_ANCHOR_SECTION, INTERFACE_TABLE_SECTION,
     MetadataInput, lower, render_metadata,
 };
@@ -651,7 +651,7 @@ fn ignores_alloc_contract_spec_metadata_sections() {
     // failing the lowering with "unexpected alloc section".
     for name in [
         "groundhogspecrawv0",
-        groundhog_spec_tool::RAW_SECTION_NAME,
+        thruput_spec_tool::RAW_SECTION_NAME,
         "groundhogspecrawv99",
         "groundhogspecv0",
     ] {
@@ -676,18 +676,18 @@ fn spec_metadata_section_names_match_spec_tool() {
     // no spec-tool dependency; pin them here (dev-dependency only) so a
     // rename in the SDK cannot silently leave spec bytes in a lowered image.
     assert_eq!(
-        groundhog_rv32_lower::lower::RAW_SPEC_SECTION_PREFIX,
-        groundhog_spec_tool::RAW_SECTION_PREFIX,
+        thruput_rv32_lower::lower::RAW_SPEC_SECTION_PREFIX,
+        thruput_spec_tool::RAW_SECTION_PREFIX,
     );
     assert_eq!(
-        groundhog_rv32_lower::lower::FINAL_SPEC_SECTION,
-        groundhog_spec_tool::FINAL_SECTION_NAME,
+        thruput_rv32_lower::lower::FINAL_SPEC_SECTION,
+        thruput_spec_tool::FINAL_SECTION_NAME,
     );
     // The prefix has to actually cover the current name, or a bump would
     // silently stop stripping the section it is meant to catch.
     assert!(
-        groundhog_spec_tool::FINAL_SECTION_NAME
-            .starts_with(groundhog_rv32_lower::lower::FINAL_SPEC_SECTION_PREFIX),
+        thruput_spec_tool::FINAL_SECTION_NAME
+            .starts_with(thruput_rv32_lower::lower::FINAL_SPEC_SECTION_PREFIX),
     );
 }
 
@@ -887,7 +887,7 @@ fn rejects_section_exceeding_memory_limit() {
     let err = lower(&elf).expect_err("expected lowering to fail");
     assert!(matches!(
         &err,
-        groundhog_rv32_lower::LowerError::DataTooLarge {
+        thruput_rv32_lower::LowerError::DataTooLarge {
             section,
             end: 65792,
             max: 65536,
@@ -1002,7 +1002,7 @@ fn verify_artifact_rejects_nonzero_flags() {
 
 #[test]
 fn build_artifact_rejects_empty_code_only() {
-    use groundhog_rv32_artifact::{DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, build_artifact};
+    use thruput_rv32_artifact::{DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, build_artifact};
     let memory: Vec<u8> = Vec::new();
     assert!(build_artifact(&[], &memory, 0, DEFAULT_MEMORY_BYTES).is_err()); // empty code
     // The code limit is the lowering's, not the format's: the writer emits
@@ -1013,7 +1013,7 @@ fn build_artifact_rejects_empty_code_only() {
 
 #[test]
 fn build_artifact_accepts_span_up_to_memory_bytes() {
-    use groundhog_rv32_artifact::{DEFAULT_MEMORY_BYTES, build_artifact};
+    use thruput_rv32_artifact::{DEFAULT_MEMORY_BYTES, build_artifact};
     let code = vec![0u8; 4];
     let m = DEFAULT_MEMORY_BYTES;
     // A short span and a full-size span are both valid; only past-the-end is not.
@@ -1038,8 +1038,8 @@ fn verify_artifact_rejects_code_size_disagreeing_with_the_body() {
 
 #[test]
 fn lower_with_stamps_the_requested_memory() {
-    use groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES;
-    use groundhog_rv32_lower::{LowerOptions, lower_with};
+    use thruput_rv32_artifact::DEFAULT_MEMORY_BYTES;
+    use thruput_rv32_lower::{LowerOptions, lower_with};
     let elf = assemble(happy_spec());
     let default = lower(&elf).expect("lowers");
 
@@ -1092,7 +1092,7 @@ fn metadata_renders_null_build_info() {
 #[test]
 fn summary_json_has_the_expected_shape() {
     let lowered = lower(&assemble(happy_spec())).expect("lowers");
-    let rendered = groundhog_rv32_lower::summary_json("/tmp/x.rv32a", &lowered);
+    let rendered = thruput_rv32_lower::summary_json("/tmp/x.rv32a", &lowered);
     let doc: serde_json::Value = serde_json::from_str(&rendered).expect("valid json");
     assert_eq!(doc["status"], "ok");
     assert_eq!(doc["out"], "/tmp/x.rv32a");
@@ -1193,7 +1193,7 @@ fn matches_golden_when_provided() {
 
 #[test]
 fn a_large_memory_size_stages_only_the_placed_data() {
-    use groundhog_rv32_lower::{LowerOptions, lower_with};
+    use thruput_rv32_lower::{LowerOptions, lower_with};
     let elf = assemble(happy_spec());
     let default = lower(&elf).expect("lowers");
 
@@ -1210,7 +1210,7 @@ fn a_large_memory_size_stages_only_the_placed_data() {
 
 #[test]
 fn a_high_data_section_stages_only_its_own_span() {
-    use groundhog_rv32_lower::{LowerOptions, lower_with};
+    use thruput_rv32_lower::{LowerOptions, lower_with};
     // A few bytes placed near the top of a 3 GiB address space must stage
     // neither the gigabytes below them nor the space above; the image is the
     // nonzero span at its own address.
@@ -1238,7 +1238,7 @@ fn a_high_data_section_stages_only_its_own_span() {
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn rejects_a_memory_size_past_the_header_field() {
-    use groundhog_rv32_lower::{LowerError, LowerOptions, lower_with};
+    use thruput_rv32_lower::{LowerError, LowerOptions, lower_with};
     let elf = assemble(happy_spec());
     let past = LowerOptions {
         memory_bytes: u32::MAX as usize + 1,
@@ -1470,12 +1470,12 @@ fn cli_emits_matching_artifact_metadata_and_summary() {
         let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         let document: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
-        let hash = groundhog_rv32_artifact::sha256_hex(&artifact);
+        let hash = thruput_rv32_artifact::sha256_hex(&artifact);
         assert_eq!(summary["artifact_sha256"], hash);
         assert_eq!(document["artifact_sha256"], hash);
         assert_eq!(
             document["elf_sha256"],
-            groundhog_rv32_artifact::sha256_hex(&bytes)
+            thruput_rv32_artifact::sha256_hex(&bytes)
         );
         assert_eq!(summary["artifact_bytes"], artifact.len());
         assert_eq!(document["artifact_bytes"], artifact.len());

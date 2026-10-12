@@ -16,10 +16,10 @@ use std::{
     time::Duration,
 };
 
-use groundhog_testkit::rpc_types::receipt::ExecStatus;
-use groundhog_testkit::rpc_types::view::RootInvocationOutput;
-use groundhog_testkit::xdr::types::ContractAddress;
-use groundhog_testkit::{
+use thruput_testkit::rpc_types::receipt::ExecStatus;
+use thruput_testkit::rpc_types::view::RootInvocationOutput;
+use thruput_testkit::xdr::types::ContractAddress;
+use thruput_testkit::{
     Agent, AgentContext, BlockDriverConfig, DeployOptions, LocalNetworkConfig, NetworkConfig,
     Result, Scenario, TestkitError, WalletInitCall, entrypoint_id,
 };
@@ -50,7 +50,7 @@ async fn read_counter(
         .await?;
     match response.output {
         RootInvocationOutput::Return { return_data } => {
-            Ok(groundhog_testkit::xdrs::cxs::decode::<u64>(&return_data.0)
+            Ok(thruput_testkit::xdrs::cxs::decode::<u64>(&return_data.0)
                 .expect("get() return decodes as a u64"))
         }
         other => panic!("get() did not return a value: {other:?}"),
@@ -157,7 +157,7 @@ async fn caller_counter_deploy_call_read() {
     };
 
     let mut config = LocalNetworkConfig::default();
-    // config.log_level = Some(groundhog_testkit::LogLevel::Trace);
+    // config.log_level = Some(thruput_testkit::LogLevel::Trace);
     if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
@@ -245,7 +245,7 @@ async fn multiple_runs_are_possible() {
     };
 
     let mut config = LocalNetworkConfig::default();
-    // config.log_level = Some(groundhog_testkit::LogLevel::Trace);
+    // config.log_level = Some(thruput_testkit::LogLevel::Trace);
     if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }

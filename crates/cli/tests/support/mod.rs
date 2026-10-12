@@ -8,11 +8,11 @@ pub fn write_versioned_devnode(dir: &std::path::Path) -> std::path::PathBuf {
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
     let contracts = dir.join("contracts");
     std::fs::create_dir(&contracts).unwrap();
-    let artifact = groundhog_rv32_artifact::build_artifact(
+    let artifact = thruput_rv32_artifact::build_artifact(
         &[0; 4],
         &[],
         0,
-        groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES,
+        thruput_rv32_artifact::DEFAULT_MEMORY_BYTES,
     )
     .unwrap();
     std::fs::write(contracts.join("genesis_root.rv32a"), artifact).unwrap();
@@ -49,7 +49,7 @@ fn push_shdr(
     }
 }
 
-/// Minimal valid ELF32-LE RISC-V executable accepted by `groundhog-rv32-lower`.
+/// Minimal valid ELF32-LE RISC-V executable accepted by `thruput-rv32-lower`.
 #[must_use]
 #[allow(dead_code)]
 pub fn minimal_rv32_elf() -> Vec<u8> {
@@ -73,15 +73,15 @@ pub fn minimal_contract_spec_raw() -> Vec<u8> {
 #[must_use]
 #[allow(dead_code)]
 pub fn contract_spec_raw_for_interface(interface_name: &str) -> Vec<u8> {
-    fn spec_string(value: &str) -> groundhog_spec_tool::ContractSpecString {
+    fn spec_string(value: &str) -> thruput_spec_tool::ContractSpecString {
         value.try_into().expect("bug: test spec string should fit")
     }
 
     /// The crate that declares this interface. A bare `#[contract]` block
     /// records its crate rather than a trait, so the module path and the
     /// declared name are both empty -- see `crate_id_tokens` in the SDK.
-    fn declarer() -> groundhog_contract_spec::ContractSpecId {
-        groundhog_contract_spec::ContractSpecId {
+    fn declarer() -> thruput_contract_spec::ContractSpecId {
+        thruput_contract_spec::ContractSpecId {
             crate_name: spec_string("counter"),
             major: spec_string("0.1"),
             module_path: spec_string(""),
@@ -90,8 +90,8 @@ pub fn contract_spec_raw_for_interface(interface_name: &str) -> Vec<u8> {
     }
 
     let fragments = [
-        groundhog_spec_tool::SpecFragment::SpecInterface {
-            interface_fragment: groundhog_spec_tool::SpecInterfaceFragment {
+        thruput_spec_tool::SpecFragment::SpecInterface {
+            interface_fragment: thruput_spec_tool::SpecInterfaceFragment {
                 interface_name: spec_string(interface_name),
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
@@ -99,22 +99,22 @@ pub fn contract_spec_raw_for_interface(interface_name: &str) -> Vec<u8> {
                 emits: vec![].try_into().unwrap(),
             },
         },
-        groundhog_spec_tool::SpecFragment::InterfaceAnchor {
-            interface_anchor: groundhog_contract_spec::SpecInterfaceAnchor {
+        thruput_spec_tool::SpecFragment::InterfaceAnchor {
+            interface_anchor: thruput_contract_spec::SpecInterfaceAnchor {
                 interface_name: spec_string(interface_name),
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
             },
         },
-        groundhog_spec_tool::SpecFragment::SpecMethod {
-            method_fragment: groundhog_spec_tool::SpecMethodFragment {
+        thruput_spec_tool::SpecFragment::SpecMethod {
+            method_fragment: thruput_spec_tool::SpecMethodFragment {
                 interface_name: spec_string(interface_name),
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
-                method: groundhog_spec_tool::ContractSpecMethod {
+                method: thruput_spec_tool::ContractSpecMethod {
                     name: spec_string("get"),
                     args: vec![].try_into().unwrap(),
-                    return_type: groundhog_spec_tool::ContractType::U64,
+                    return_type: thruput_spec_tool::ContractType::U64,
                     effect: None,
                 },
             },

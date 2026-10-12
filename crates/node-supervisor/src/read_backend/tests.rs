@@ -5,27 +5,28 @@ use std::sync::{
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
-use groundhog_db_gateway::AddressAndKeyBatch;
-use groundhog_db_gateway::{
+use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
+use thruput_db_gateway::AddressAndKeyBatch;
+use thruput_db_gateway::{
     DbGateway_DbGateway1, DbGateway_DbGateway1_Client, DbGateway_DbGateway1_Dispatcher,
     DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
 };
-use groundhog_indexer::{
+use thruput_indexer::{
     AddressTransactionQuery, EventPage as IdxEventPage, EventPageResult,
     IndexerBlockExplorer_IndexerBlockExplorer1, IndexerBlockExplorer_IndexerBlockExplorer1_Client,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
     TransactionPage as IdxTransactionPage, TransactionPageResult, TransactionQuery,
     TransactionRefPage, TransactionRefPageResult, TxInfo, TxInfoResult,
 };
-use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
-use groundhog_json_rpc_types::protocol_token::protocol_text;
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
+use thruput_json_rpc_types::protocol_token::protocol_text;
+use thruput_json_rpc_types::{
     address_auth::{AuthPublicKey, AuthSigner},
     events::{EventFilterList, EventQuery},
     hex::Hex0x,
     transaction::{TransactionStatus, TxHash},
 };
-use groundhog_scheduler::{
+use thruput_scheduler::{
     ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount, RPCError,
     SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
     SchedulerTransactionOutcomeBatch,
@@ -34,16 +35,16 @@ use groundhog_scheduler::{
         SchedGateway_SchedGateway1_Dispatcher,
     },
 };
-use groundhog_scp::network::ProtocolCommit as Protocol;
-use groundhog_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
-use groundhog_xdr::event::IdentifiedEvent as IdxIdentifiedEvent;
-use groundhog_xdr::transaction::{
+use thruput_scp::network::ProtocolCommit as Protocol;
+use thruput_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
+use thruput_xdr::event::IdentifiedEvent as IdxIdentifiedEvent;
+use thruput_xdr::transaction::{
     Invocation, OptSignedTransactionBatch, SignedTransaction, Transaction, TransactionHashBatch,
     Uniquifier,
 };
-use groundhog_xdr::types::BlockHeight as IdxBlockHeight;
-use groundhog_xdr::types::{Ed25519PublicKey, PublicKey, StorageKey};
-use groundhog_xdr::{
+use thruput_xdr::types::BlockHeight as IdxBlockHeight;
+use thruput_xdr::types::{Ed25519PublicKey, PublicKey, StorageKey};
+use thruput_xdr::{
     PROTOCOL_VERSION,
     event::TxEmittedEvent,
     exec_result::ExecResult,
@@ -51,7 +52,6 @@ use groundhog_xdr::{
     transaction::TransactionHash,
     types::{AddressAndKey, ContractAddress, SHA256Hash},
 };
-use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
 use tokio::net::TcpListener;
 use xdr_common::{BytesM, VecM};
 
@@ -83,7 +83,7 @@ const CANNED_STORAGE_HEIGHT: i64 = 12;
 enum FakeSchedulerMode {
     /// Returns one `None` per queried hash — nothing pending.
     NoPending,
-    Outcome(groundhog_scheduler::SchedulerTransactionOutcome),
+    Outcome(thruput_scheduler::SchedulerTransactionOutcome),
     /// Returns one `Some(dummy_tx)` per queried hash — all pending.
     AllPending,
     /// Returns an empty batch — no per-hash answer at all.
@@ -104,9 +104,9 @@ struct FakeScheduler {
 /// pending-detection path. The transaction is not valid on-chain; it only
 /// needs to be `Some(...)` so `Option::is_some()` returns true.
 fn dummy_signed_transaction() -> SignedTransaction {
-    use groundhog_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
-    use groundhog_xdr::contract::ContractEntrypointID;
-    use groundhog_xdr::types::GasAmount;
+    use thruput_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
+    use thruput_xdr::contract::ContractEntrypointID;
+    use thruput_xdr::types::GasAmount;
     SignedTransaction {
         tx: Transaction {
             invocation: Invocation {
@@ -133,8 +133,8 @@ fn dummy_signed_transaction() -> SignedTransaction {
 
 /// Wrap [`dummy_signed_transaction`] with empty nondeterministic
 /// proposal data so it can stand in for a `TxInfo.tx` body in tests.
-fn dummy_proposed_transaction() -> groundhog_xdr::transaction::ProposedTransaction {
-    use groundhog_xdr::transaction::{NondeterministicProposalData, ProposedTransaction};
+fn dummy_proposed_transaction() -> thruput_xdr::transaction::ProposedTransaction {
+    use thruput_xdr::transaction::{NondeterministicProposalData, ProposedTransaction};
     ProposedTransaction {
         signed_tx: dummy_signed_transaction(),
         nondeterministic_proposal_data: NondeterministicProposalData {
@@ -199,7 +199,7 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
         &self,
         hashes: TransactionHashBatch,
     ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-        use groundhog_scheduler::{
+        use thruput_scheduler::{
             SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
             SchedulerTransactionStatus,
         };
@@ -298,7 +298,7 @@ impl FakeIndexer {
     }
 
     fn build_committed_set() -> CommittedSet {
-        use groundhog_xdr::{event::TxEventLog, transaction::InvocationFrameOutput};
+        use thruput_xdr::{event::TxEventLog, transaction::InvocationFrameOutput};
         use xdr_common::BytesM;
 
         let mut map = HashMap::new();
@@ -337,7 +337,7 @@ impl FakeIndexer {
     }
 
     fn build_event_pages() -> EventPages {
-        use groundhog_xdr::types::ContractAddress;
+        use thruput_xdr::types::ContractAddress;
 
         let event1 = IdxIdentifiedEvent {
             tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
@@ -428,21 +428,21 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         match self.committed.get(&key) {
             Some(info) => Ok(TxInfoResult::TxInfoFound { info: info.clone() }),
             None => Ok(TxInfoResult::Default {
-                outcome: groundhog_indexer::TxInfoOutcome::TxInfoNotFound.0,
+                outcome: thruput_indexer::TxInfoOutcome::TxInfoNotFound.0,
             }),
         }
     }
 
     async fn get_block_by_height(
         &self,
-        _height: groundhog_xdr::types::BlockHeight,
-    ) -> Result<groundhog_indexer::BlockLookupResult, ProgramError> {
+        _height: thruput_xdr::types::BlockHeight,
+    ) -> Result<thruput_indexer::BlockLookupResult, ProgramError> {
         Err(ProgramError::msg("not implemented in fake indexer"))
     }
 
     async fn get_events(
         &self,
-        arg0: groundhog_indexer::EventQuery,
+        arg0: thruput_indexer::EventQuery,
     ) -> Result<EventPageResult, ProgramError> {
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail"));
@@ -496,7 +496,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
 
     async fn get_transactions_by_block(
         &self,
-        _query: groundhog_indexer::BlockTransactionQuery,
+        _query: thruput_indexer::BlockTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
         Err(ProgramError::msg("not implemented in fake indexer"))
     }
@@ -551,9 +551,9 @@ struct FakeDbGateway {
 impl DbGateway_DbGateway1 for FakeDbGateway {
     async fn dbgateway_get_config(
         &self,
-    ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
-        Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
-            error: groundhog_scheduler::RPCError::kRPCUnimplemented.0,
+    ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+        Ok(thruput_db_gateway::DbGatewayConfigResult::Default {
+            error: thruput_scheduler::RPCError::kRPCUnimplemented.0,
         })
     }
     async fn dbgateway_intro(
@@ -734,25 +734,23 @@ async fn make_read_backend_with_gateway(
 }
 
 fn canned_tx_hash(bytes: [u8; 32]) -> TxHash {
-    TxHash(groundhog_json_rpc_types::hex::Hex0x(SHA256Hash::from(
-        bytes,
-    )))
+    TxHash(thruput_json_rpc_types::hex::Hex0x(SHA256Hash::from(bytes)))
 }
 
-fn canned_storage_address() -> groundhog_json_rpc_types::ContractAddress {
+fn canned_storage_address() -> thruput_json_rpc_types::ContractAddress {
     Hex0x(ContractAddress::from([0u8; 32]))
 }
 
-fn canned_failure_diagnostic() -> groundhog_trace::TxFailureDiagnostic {
-    groundhog_trace::TxFailureDiagnostic {
+fn canned_failure_diagnostic() -> thruput_trace::TxFailureDiagnostic {
+    thruput_trace::TxFailureDiagnostic {
         attempt_height: IdxBlockHeight::from(CANNED_FAILURE_HEIGHT),
-        cause: groundhog_trace::TxFailureCause::TxFailureDbConflict {
-            conflict: groundhog_trace::DbConflictDiagnostic {
-                addrkey: groundhog_xdr::types::AddressAndKey {
+        cause: thruput_trace::TxFailureCause::TxFailureDbConflict {
+            conflict: thruput_trace::DbConflictDiagnostic {
+                addrkey: thruput_xdr::types::AddressAndKey {
                     address: ContractAddress::from(CANNED_FAILURE_ADDRESS),
-                    key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
+                    key: thruput_xdr::types::StorageKey::FreeNativeTokenBalance,
                 },
-                code: groundhog_trace::DbConflictCode::ExclusiveLockDenied,
+                code: thruput_trace::DbConflictCode::ExclusiveLockDenied,
             },
         },
     }
@@ -761,9 +759,9 @@ fn canned_failure_diagnostic() -> groundhog_trace::TxFailureDiagnostic {
 fn empty_event_query() -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![])),
-        order: groundhog_json_rpc_types::events::IterationOrder::Ascending,
-        anchor: groundhog_json_rpc_types::events::BlockAnchor::AtBeginning,
-        cursor: groundhog_json_rpc_types::events::PaginationCursor(vec![]),
+        order: thruput_json_rpc_types::events::IterationOrder::Ascending,
+        anchor: thruput_json_rpc_types::events::BlockAnchor::AtBeginning,
+        cursor: thruput_json_rpc_types::events::PaginationCursor(vec![]),
         limit: 10,
     }
 }
@@ -771,9 +769,9 @@ fn empty_event_query() -> EventQuery {
 fn event_query_with_cursor(cursor: &[u8]) -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![])),
-        order: groundhog_json_rpc_types::events::IterationOrder::Ascending,
-        anchor: groundhog_json_rpc_types::events::BlockAnchor::AtBeginning,
-        cursor: groundhog_json_rpc_types::events::PaginationCursor(cursor.to_vec()),
+        order: thruput_json_rpc_types::events::IterationOrder::Ascending,
+        anchor: thruput_json_rpc_types::events::BlockAnchor::AtBeginning,
+        cursor: thruput_json_rpc_types::events::PaginationCursor(cursor.to_vec()),
         limit: 10,
     }
 }
@@ -846,7 +844,9 @@ async fn transaction_receipt_indexer_rpc_fail_surfaces_backend_unavailable() {
     assert!(
         matches!(
             result,
-            Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
+            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
+                _
+            ))
         ),
         "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
     );
@@ -1193,7 +1193,7 @@ async fn transaction_status_committed_not_pending_returns_committed() {
 
 #[tokio::test]
 async fn transaction_status_scheduler_retained_outcomes() {
-    use groundhog_scheduler::{
+    use thruput_scheduler::{
         SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
         SchedulerTransactionStatus as Status,
     };
@@ -1275,7 +1275,7 @@ async fn transaction_status_recent_failure_returns_diagnostic() {
         TransactionStatus::RecentFailure {
             attempt_height,
             cause:
-                groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict { conflict },
+                thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict { conflict },
         } => {
             assert_eq!(*attempt_height, CANNED_FAILURE_HEIGHT);
             assert_eq!(
@@ -1284,7 +1284,7 @@ async fn transaction_status_recent_failure_returns_diagnostic() {
             );
             assert_eq!(
                 conflict.code,
-                groundhog_json_rpc_types::transaction::ConflictCode::ExclusiveLock
+                thruput_json_rpc_types::transaction::ConflictCode::ExclusiveLock
             );
         }
         other => panic!("expected RecentFailure, got {other:?}"),
@@ -1350,7 +1350,9 @@ async fn transaction_status_scheduler_rpc_fail_and_indexer_miss_surfaces_backend
     assert!(
         matches!(
             result,
-            Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
+            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
+                _
+            ))
         ),
         "unconsulted mempool with indexer miss should surface BackendUnavailable, got {result:?}"
     );
@@ -1374,7 +1376,9 @@ async fn transaction_status_empty_lookup_batch_and_indexer_miss_surfaces_backend
     assert!(
         matches!(
             result,
-            Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
+            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
+                _
+            ))
         ),
         "lookup with no per-tx answer should surface BackendUnavailable, got {result:?}"
     );
@@ -1441,7 +1445,9 @@ async fn transaction_status_indexer_rpc_fail_surfaces_backend_unavailable() {
     assert!(
         matches!(
             result,
-            Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
+            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
+                _
+            ))
         ),
         "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
     );
@@ -1547,7 +1553,9 @@ async fn contract_events_unknown_cursor_surfaces_backend_unavailable() {
     assert!(
         matches!(
             result,
-            Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
+            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
+                _
+            ))
         ),
         "unknown cursor should surface BackendUnavailable, got {result:?}"
     );
@@ -1569,7 +1577,9 @@ async fn contract_events_indexer_rpc_fail_surfaces_backend_unavailable() {
     assert!(
         matches!(
             result,
-            Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
+            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
+                _
+            ))
         ),
         "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
     );

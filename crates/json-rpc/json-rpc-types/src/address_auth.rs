@@ -1,9 +1,9 @@
 //! Public API types for reading an address's authorization configuration.
 
-use groundhog_xdr::address_auth::AddressAuthData;
-use groundhog_xdr::types::PublicKey;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thruput_xdr::address_auth::AddressAuthData;
+use thruput_xdr::types::PublicKey;
 
 use crate::hex::Hex0x;
 use crate::{BlockHeight, ContractAddress, Ed25519PublicKey};

@@ -1,6 +1,6 @@
-# Groundhog Developer Tools
+# Thruput Developer Tools
 
-This repository contains Groundhog's off-chain tools: the `thruput` CLI,
+This repository contains Thruput's off-chain tools: the `thruput` CLI,
 JSON-RPC gateway and clients, signing and RV32 build libraries, hosted faucet,
 and local development, simulation, and benchmark harnesses. The node runtime
 (`hog-devnode`) lives in the separate `hogd` repository.
@@ -12,10 +12,10 @@ and local development, simulation, and benchmark harnesses. The node runtime
 ## Install
 
 Building from source requires Rust 1.96 or newer. This workspace and generated
-contract projects currently depend on packages in the private Groundhog Cargo
+contract projects currently depend on packages in the private Thruput Cargo
 registry. Repository access alone is not enough to build them; the commands
 below require registry credentials and authentication instructions from the
-Groundhog team.
+Thruput team.
 
 Generated contracts pin their own nightly toolchain, which rustup installs on
 first use.
@@ -83,7 +83,7 @@ Use `thruput <command> --help` for the installed version's options.
 ## Clients and API
 
 The public API uses JSON-RPC methods named `groundhog_*`. Start with the
-[generated OpenRPC specification](crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json)
+[generated OpenRPC specification](crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json)
 for methods, types, and errors. Its wire-format version is independent of the
 Rust workspace version and is reported by `groundhog_version` as `wireFormat`.
 

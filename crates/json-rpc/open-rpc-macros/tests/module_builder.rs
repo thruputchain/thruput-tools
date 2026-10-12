@@ -1,7 +1,7 @@
 use gh_open_rpc::{Project, ProjectInfo};
-use groundhog_open_rpc_macros::open_rpc;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
+use thruput_open_rpc_macros::open_rpc;
 
 mod docs_alias {
     pub use gh_open_rpc::{Project, ProjectInfo};

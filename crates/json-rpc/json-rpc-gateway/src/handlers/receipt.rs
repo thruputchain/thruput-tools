@@ -3,26 +3,26 @@
 
 use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
-use groundhog_hogd_backend::{
+use std::time::Instant;
+use thruput_hogd_backend::{
     indexer as shared_indexer, receipt as shared_receipt, scheduler as shared_scheduler,
     status as shared_status,
 };
-use groundhog_indexer::{
+use thruput_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client,
     indexer::{TxInfo, TxInfoResult},
 };
-use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_server::RpcRequestContext;
+use thruput_json_rpc_types::{
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
-use std::time::Instant;
 use tokio::task::JoinHandle;
 
 use crate::config::HealthBackend;
 use crate::context::{GatewayContext, clear_scheduler_if_current};
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
-use groundhog_json_rpc_server::RpcServerError;
+use thruput_json_rpc_server::RpcServerError;
 
 use super::{INDEXER, SCHEDULER, backend_deadline, timed_backend_call};
 
@@ -309,7 +309,7 @@ impl shared_status::StatusProbe for GatewayStatusProbe<'_> {
 }
 
 /// Status by the probe order shared with the node supervisor
-/// (`groundhog_hogd_backend::status`). All stages share one deadline, so a
+/// (`thruput_hogd_backend::status`). All stages share one deadline, so a
 /// slow indexer can consume the budget before the scheduler lookup is
 /// dispatched. Scheduler outcomes remain available if the indexer is
 /// disconnected.
@@ -325,22 +325,23 @@ pub async fn get_transaction_status(
 
 #[cfg(test)]
 mod tests {
-    use groundhog_xdr::PROTOCOL_VERSION;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    use thruput_xdr::PROTOCOL_VERSION;
 
     use async_trait::async_trait;
-    use groundhog_indexer::indexer::TxInfoResult;
-    use groundhog_indexer::{
+    use rpc_driver::{ProgramError, RpcServer, ServiceMap};
+    use thruput_indexer::indexer::TxInfoResult;
+    use thruput_indexer::{
         AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPageResult,
         EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
         TransactionPageResult, TransactionQuery, TransactionRefPageResult, TxInfoOutcome,
     };
-    use groundhog_scheduler::{
+    use thruput_scheduler::{
         ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount, SchedGatewayIntroOutcome,
         SchedGatewaySubmitOutcomeBatch, SchedulerTransactionOutcomeBatch,
         sched_gateway::{
@@ -348,14 +349,13 @@ mod tests {
             SchedGateway_SchedGateway1_Dispatcher,
         },
     };
-    use groundhog_scp::network::ProtocolCommit as Protocol;
-    use groundhog_x23_transport::try_connect;
-    use groundhog_xdr::exec_result::ExecResult;
-    use groundhog_xdr::{
+    use thruput_scp::network::ProtocolCommit as Protocol;
+    use thruput_x23_transport::try_connect;
+    use thruput_xdr::exec_result::ExecResult;
+    use thruput_xdr::{
         transaction::{OptSignedTransactionBatch, TransactionHash, TransactionHashBatch},
         types::SHA256Hash,
     };
-    use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
     use tokio::sync::{Notify, RwLock};
     use xdr_common::VecM;
@@ -399,7 +399,7 @@ mod tests {
 
         async fn get_block_by_height(
             &self,
-            _arg0: groundhog_xdr::types::BlockHeight,
+            _arg0: thruput_xdr::types::BlockHeight,
         ) -> Result<BlockLookupResult, ProgramError> {
             panic!("bug: status tests should not query blocks")
         }
@@ -434,7 +434,7 @@ mod tests {
     enum FakeSchedulerMode {
         GatedMiss(Arc<LookupGate>),
         Pending,
-        Outcome(groundhog_scheduler::SchedulerTransactionOutcome),
+        Outcome(thruput_scheduler::SchedulerTransactionOutcome),
         /// Mempool lookup succeeds and reports the transaction absent.
         MempoolMiss,
         /// Mempool lookup succeeds but returns no slot for the queried hash.
@@ -524,7 +524,7 @@ mod tests {
 
         async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
             Ok(ExpectedDBTip::Default {
-                error: groundhog_scheduler::RPCError::kRPCNotFound.0,
+                error: thruput_scheduler::RPCError::kRPCNotFound.0,
             })
         }
 
@@ -582,7 +582,7 @@ mod tests {
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-            use groundhog_scheduler::{
+            use thruput_scheduler::{
                 SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
                 SchedulerTransactionStatus,
             };
@@ -727,7 +727,7 @@ mod tests {
     async fn gathered_metrics(ctx: &GatewayContext) -> String {
         let health = crate::health::GatewayHealth::new(
             &GatewayConfig::default(),
-            groundhog_build_info::BuildVersion::new("test", None),
+            thruput_build_info::BuildVersion::new("test", None),
             None,
         );
         ctx.metrics.gather(&health.snapshot().await).unwrap()
@@ -751,7 +751,7 @@ mod tests {
     }
 
     fn test_hash() -> TxHash {
-        TxHash(groundhog_json_rpc_types::hex::Hex0x(SHA256Hash::from(
+        TxHash(thruput_json_rpc_types::hex::Hex0x(SHA256Hash::from(
             [7u8; 32],
         )))
     }
@@ -759,9 +759,9 @@ mod tests {
     async fn start_status_http_server(
         ctx: Arc<GatewayContext>,
     ) -> (std::net::SocketAddr, jsonrpsee::server::ServerHandle) {
-        use groundhog_json_rpc_api::GroundhogApiServer;
-        use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-        use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
+        use thruput_json_rpc_api::GroundhogApiServer;
+        use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+        use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
 
         let config = ctx.config.clone();
         let rpc_metrics = ctx.metrics.clone();
@@ -773,7 +773,7 @@ mod tests {
                     .max_connections(config.max_connections)
                     .max_response_body_size(max_response_body_size)
                     .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(
-                        groundhog_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS,
+                        thruput_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS,
                     ))
                     .build(),
             )
@@ -814,7 +814,7 @@ mod tests {
 
     #[tokio::test]
     async fn rpc_array_limit_rejects_oversized_receipt_reads_before_dispatch() {
-        use groundhog_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS;
+        use thruput_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS;
 
         let calls = Arc::new(AtomicUsize::new(0));
         let (indexer_addr, indexer) = start_fake_indexer(
@@ -1137,7 +1137,7 @@ mod tests {
         assert!(matches!(
             watchdog(scheduler.schedgateway_get_tip()).await.unwrap(),
             ExpectedDBTip::Default { error }
-                if error == groundhog_scheduler::RPCError::kRPCNotFound.0
+                if error == thruput_scheduler::RPCError::kRPCNotFound.0
         ));
 
         // The backend may finish the canceled call later; the replacement lane remains usable.
@@ -1200,7 +1200,7 @@ mod tests {
     const COMMITTED_GAS_CONSUMED: u64 = 4_242;
 
     fn committed_result() -> TxInfoResult {
-        use groundhog_xdr::{
+        use thruput_xdr::{
             auth_claim::{AuthClaim, AuthClaim_source_address_claim},
             event::TxEventLog,
             transaction::*,
@@ -1208,7 +1208,7 @@ mod tests {
         use xdr_common::BytesM;
 
         TxInfoResult::TxInfoFound {
-            info: groundhog_indexer::TxInfo {
+            info: thruput_indexer::TxInfo {
                 height: 42.into(),
                 tx: ProposedTransaction {
                     signed_tx: SignedTransaction {
@@ -1252,15 +1252,15 @@ mod tests {
         }
     }
 
-    fn recent_diagnostic() -> groundhog_trace::TxFailureDiagnostic {
-        use groundhog_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
+    fn recent_diagnostic() -> thruput_trace::TxFailureDiagnostic {
+        use thruput_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
         TxFailureDiagnostic {
             attempt_height: 43.into(),
-            cause: groundhog_trace::TxFailureCause::TxFailureDbConflict {
+            cause: thruput_trace::TxFailureCause::TxFailureDbConflict {
                 conflict: DbConflictDiagnostic {
-                    addrkey: groundhog_xdr::types::AddressAndKey {
+                    addrkey: thruput_xdr::types::AddressAndKey {
                         address: [0; 32].into(),
-                        key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
+                        key: thruput_xdr::types::StorageKey::FreeNativeTokenBalance,
                     },
                     code: DbConflictCode::ExclusiveLockDenied,
                 },
@@ -1314,7 +1314,7 @@ mod tests {
 
     #[tokio::test]
     async fn scheduler_retained_outcomes_are_exposed_when_indexer_misses() {
-        use groundhog_scheduler::{
+        use thruput_scheduler::{
             SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
             SchedulerTransactionStatus as Status,
         };
@@ -1358,7 +1358,7 @@ mod tests {
 
     #[tokio::test]
     async fn scheduler_commitment_height_survives_indexer_unavailability() {
-        use groundhog_scheduler::{
+        use thruput_scheduler::{
             SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
             SchedulerTransactionStatus as Status,
         };

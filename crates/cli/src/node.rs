@@ -3,13 +3,13 @@
 use crate::{CliError, Print};
 
 use crate::result::CommandResult;
-use groundhog_node_supervisor::ConfigParamName;
 use serde_json::json;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::Duration;
+use thruput_node_supervisor::ConfigParamName;
 
 const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
@@ -66,7 +66,7 @@ pub fn stored_key_allocation(
 ) -> Result<
     (
         Option<String>,
-        Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>,
+        Vec<thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>,
     ),
     CliError,
 > {
@@ -86,8 +86,8 @@ pub fn stored_key_allocation(
     Ok((
         Some(key),
         vec![
-            groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-                groundhog_json_rpc_types::hex::Hex0x(public_key.into()),
+            thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+                thruput_json_rpc_types::hex::Hex0x(public_key.into()),
                 raw_amount.to_string(),
             ),
         ],
@@ -98,7 +98,7 @@ pub fn stored_key_allocation(
 /// Each entry contains only `publicKey` and positive decimal `initialStorageTokens`.
 pub fn load_bootstrap_allocations(
     path: &Path,
-) -> Result<Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>, CliError>
+) -> Result<Vec<thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>, CliError>
 {
     use std::io::Read as _;
     let invalid = |message: String| CliError::ConfigValueInvalid {
@@ -121,9 +121,8 @@ pub fn load_bootstrap_allocations(
     if bytes.len() > 256 * 1024 {
         return Err(invalid("allocation file exceeds 256 KiB".into()));
     }
-    let allocations: Vec<
-        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation,
-    > = serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
+    let allocations: Vec<thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation> =
+        serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
     if allocations.len() > 1000 {
         return Err(invalid(
             "at most 1000 user allocations are supported".into(),
@@ -164,7 +163,7 @@ pub enum NetworkConfigOverrideError {
     NotAnAssignment,
     /// The name is not one this build knows.
     #[error(transparent)]
-    Name(#[from] groundhog_node_supervisor::UnknownConfigParamName),
+    Name(#[from] thruput_node_supervisor::UnknownConfigParamName),
     /// The value is not a byte count.
     #[error(transparent)]
     Amount(#[from] crate::byte_size::ByteSizeError),
@@ -200,7 +199,7 @@ pub struct LocalNodeOptions {
     pub hogd_protocol: Option<String>,
     /// Signing domain for a new chain. Omission initializes zero for fresh starts.
     /// Initialized directories reject this option and load their persisted identity instead.
-    pub init_network_hash: Option<groundhog_json_rpc_types::NetworkHashHex>,
+    pub init_network_hash: Option<thruput_json_rpc_types::NetworkHashHex>,
     /// Override readiness timeout while waiting for hogd-dev.
     pub startup_timeout: Option<Duration>,
     /// PID-file behavior for orphan detection.
@@ -209,7 +208,7 @@ pub struct LocalNodeOptions {
     pub selected_key: Option<String>,
     /// Public allocations for caller-owned nonce-zero native accounts.
     pub bootstrap_accounts:
-        Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>,
+        Vec<thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>,
     /// Override the local block production mode.
     pub block_driver: Option<LocalNodeBlockDriverMode>,
     /// Override the interval used by timer-driven block production.
@@ -217,7 +216,7 @@ pub struct LocalNodeOptions {
     /// Override the public JSON-RPC simultaneous connection cap.
     pub rpc_max_connections: Option<u32>,
     /// Override active plus buffered entries per JSON-RPC array (1..=1024).
-    pub rpc_batch_concurrency: Option<groundhog_node_supervisor::RpcBatchConcurrency>,
+    pub rpc_batch_concurrency: Option<thruput_node_supervisor::RpcBatchConcurrency>,
     /// Override the RAM database capacity in bytes hog-devnode reserves at startup.
     pub ramdb_bytes: Option<u64>,
     /// Genesis parameter values to use in place of the ones stock genesis
@@ -225,7 +224,7 @@ pub struct LocalNodeOptions {
     pub network_config_overrides: Vec<(ConfigParamName, u32)>,
     /// Validated release identity supplied by an embedding client process.
     /// When absent, the `thruput` client identity is discovered while building the config.
-    pub bundle_identity: Option<groundhog_bundle_identity::BundleIdentity>,
+    pub bundle_identity: Option<thruput_bundle_identity::BundleIdentity>,
 }
 
 /// PID-file behavior for local hogd-dev startup.
@@ -245,10 +244,10 @@ pub enum LocalNodePidFile {
 #[derive(Debug)]
 #[must_use = "local nodes keep hogd-dev running until stop, stopped, or run_until consumes them"]
 pub struct StartedLocalNode {
-    handle: groundhog_node_supervisor::NodeSupervisorHandle,
+    handle: thruput_node_supervisor::NodeSupervisorHandle,
     rpc_addr: SocketAddr,
-    readiness: groundhog_node_supervisor::HogdDevReadiness,
-    backend_planes: groundhog_node_supervisor::BackendPlanes,
+    readiness: thruput_node_supervisor::HogdDevReadiness,
+    backend_planes: thruput_node_supervisor::BackendPlanes,
     data_dir: Option<PathBuf>,
     selected_key: Option<String>,
 }
@@ -269,12 +268,12 @@ impl StartedLocalNode {
     }
 
     /// Parsed hog-devnode readiness payload.
-    pub fn readiness(&self) -> &groundhog_node_supervisor::HogdDevReadiness {
+    pub fn readiness(&self) -> &thruput_node_supervisor::HogdDevReadiness {
         &self.readiness
     }
 
     /// Backend plane status for startup reporting and feature gating.
-    pub fn backend_planes(&self) -> groundhog_node_supervisor::BackendPlanes {
+    pub fn backend_planes(&self) -> thruput_node_supervisor::BackendPlanes {
         self.backend_planes
     }
 
@@ -285,7 +284,7 @@ impl StartedLocalNode {
 
     /// Wait until hogd-dev or the JSON-RPC server stops, then tear down the
     /// remaining side.
-    pub async fn stopped(self) -> Result<groundhog_node_supervisor::SupervisorStop, CliError> {
+    pub async fn stopped(self) -> Result<thruput_node_supervisor::SupervisorStop, CliError> {
         self.handle
             .stopped()
             .await
@@ -297,9 +296,9 @@ impl StartedLocalNode {
     pub async fn run_until<F>(
         self,
         stop_signal: F,
-    ) -> Result<groundhog_node_supervisor::SupervisorStop, CliError>
+    ) -> Result<thruput_node_supervisor::SupervisorStop, CliError>
     where
-        F: std::future::Future<Output = Result<(), groundhog_node_supervisor::NodeSupervisorError>>,
+        F: std::future::Future<Output = Result<(), thruput_node_supervisor::NodeSupervisorError>>,
     {
         self.handle
             .run_until(stop_signal)
@@ -332,16 +331,16 @@ pub(crate) async fn start_local_node_with_print(
 
 async fn start_resolved_local_node(
     options: LocalNodeOptions,
-    lease: Option<groundhog_toolchain::InstallationLease>,
+    lease: Option<thruput_toolchain::InstallationLease>,
 ) -> Result<StartedLocalNode, CliError> {
-    use groundhog_node_supervisor::NodeSupervisorHandle;
+    use thruput_node_supervisor::NodeSupervisorHandle;
 
     let selected_key = options.selected_key.clone();
     let config = local_node_config(options)?;
     let data_dir = config.hogd_dev.data_dir.clone();
     let handle = NodeSupervisorHandle::start_with_inherited_file(
         config,
-        lease.map(groundhog_toolchain::InstallationLease::into_lock_file),
+        lease.map(thruput_toolchain::InstallationLease::into_lock_file),
     )
     .await
     .map_err(|e| map_node_supervisor_error(&e))?;
@@ -385,7 +384,7 @@ async fn run_hogd_dev(
     print: &Print,
     logs: Option<&crate::print::service::ServiceLogs>,
 ) -> Result<(), CliError> {
-    use groundhog_node_supervisor::NodeSupervisorError;
+    use thruput_node_supervisor::NodeSupervisorError;
 
     let shutdown_signal = prepare_stop_signal()
         .map_err(|source| map_node_supervisor_error(&NodeSupervisorError::StopSignal { source }))?;
@@ -487,8 +486,8 @@ async fn run_hogd_dev(
     Ok(())
 }
 
-fn stopped_message(outcome: groundhog_node_supervisor::SupervisorStop) -> Result<String, CliError> {
-    use groundhog_node_supervisor::SupervisorStop;
+fn stopped_message(outcome: thruput_node_supervisor::SupervisorStop) -> Result<String, CliError> {
+    use thruput_node_supervisor::SupervisorStop;
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if status.success() {
@@ -601,7 +600,7 @@ fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, C
                 .ok_or_else(|| CliError::KeyNotFound(key.to_owned()))?;
             (
                 key.to_owned(),
-                groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address(),
+                thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address(),
             )
         }
         Err(error) => return Err(error),
@@ -638,7 +637,7 @@ fn startup_setup_hint(started: &StartedLocalNode) -> Option<String> {
     (started.selected_key.is_none()
         && started.readiness().runtime_manifest.as_ref().is_some_and(|m| {
             !m.bootstrap_accounts.iter().any(|a| a.role ==
-                groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
+                thruput_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
         }))
     .then(|| format!("No key selected. Run `thruput init` or `thruput keys generate NAME` and `thruput keys use NAME`. {}",
         local_funding_hint("NAME", &started.rpc_url(), started.readiness().manifest_path.as_deref())))
@@ -668,7 +667,7 @@ fn print_started_local_node(
         if let Some(manifest) = &started.readiness().runtime_manifest {
             for account in &manifest.bootstrap_accounts {
                 if account.role
-                    == groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER
+                    == thruput_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER
                 {
                     print.detail(
                         "initial allocation",
@@ -773,7 +772,7 @@ pub(crate) enum LocalNodeDiscovery {
 enum DevnodeSelection {
     Local(PathBuf),
     Managed {
-        catalog: groundhog_toolchain::Catalog,
+        catalog: thruput_toolchain::Catalog,
         version: String,
         explicit: bool,
     },
@@ -781,7 +780,7 @@ enum DevnodeSelection {
 
 /// Plan selection without acquiring, locking, or downloading an installation.
 fn resolve_devnode_selection(options: &LocalNodeOptions) -> Result<DevnodeSelection, CliError> {
-    use groundhog_node_supervisor::{HogdDevConfig, resolve_hogd_dev_binary_before_path};
+    use thruput_node_supervisor::{HogdDevConfig, resolve_hogd_dev_binary_before_path};
     let hogd = options
         .hogd_dev_binary
         .clone()
@@ -794,7 +793,7 @@ fn resolve_devnode_selection(options: &LocalNodeOptions) -> Result<DevnodeSelect
     {
         return Ok(DevnodeSelection::Local(binary));
     }
-    let catalog = groundhog_toolchain::Catalog::embedded()?;
+    let catalog = thruput_toolchain::Catalog::embedded()?;
     let configured = crate::config::load_toolchain_version()?;
     let requested = options
         .hogd_dev_version
@@ -813,11 +812,11 @@ fn resolve_devnode_selection(options: &LocalNodeOptions) -> Result<DevnodeSelect
 }
 
 fn managed_target(
-    catalog: &groundhog_toolchain::Catalog,
+    catalog: &thruput_toolchain::Catalog,
     version: &str,
-) -> Result<groundhog_toolchain::HostTarget, CliError> {
+) -> Result<thruput_toolchain::HostTarget, CliError> {
     catalog.resolve_version(Some(version))?;
-    let target = groundhog_toolchain::HostTarget::current()?;
+    let target = thruput_toolchain::HostTarget::current()?;
     catalog
         .artifact(version, target)?
         .validate_current_host(target)?;
@@ -826,7 +825,7 @@ fn managed_target(
 
 /// Inspect default selection without creating cache directories or downloading artifacts.
 pub(crate) fn find_local_node_binary() -> Result<LocalNodeDiscovery, CliError> {
-    use groundhog_node_supervisor::resolve_hogd_dev_binary_on_path;
+    use thruput_node_supervisor::resolve_hogd_dev_binary_on_path;
     let selection = resolve_devnode_selection(&LocalNodeOptions::default())?;
     let (catalog, version, explicit) = match selection {
         DevnodeSelection::Local(path) => return Ok(LocalNodeDiscovery::Local(path)),
@@ -837,7 +836,7 @@ pub(crate) fn find_local_node_binary() -> Result<LocalNodeDiscovery, CliError> {
         } => (catalog, version, explicit),
     };
     let installed = managed_target(&catalog, &version).and_then(|target| {
-        groundhog_toolchain::Installer::new(crate::config::cache_dir()?)
+        thruput_toolchain::Installer::new(crate::config::cache_dir()?)
             .find(&catalog, &version, target)
             .map_err(CliError::from)
     });
@@ -863,11 +862,11 @@ async fn resolve_local_node_options(
 ) -> Result<
     (
         LocalNodeOptions,
-        Option<groundhog_toolchain::InstallationLease>,
+        Option<thruput_toolchain::InstallationLease>,
     ),
     CliError,
 > {
-    use groundhog_node_supervisor::resolve_hogd_dev_binary_on_path;
+    use thruput_node_supervisor::resolve_hogd_dev_binary_on_path;
     // Host probes and read-only filesystem discovery must not block signal handling.
     let planning_options = options.clone();
     let (selection, target) = tokio::task::spawn_blocking(move || {
@@ -909,20 +908,20 @@ async fn resolve_local_node_options(
 
 async fn acquire_managed_node_options(
     mut options: LocalNodeOptions,
-    catalog: groundhog_toolchain::Catalog,
+    catalog: thruput_toolchain::Catalog,
     version: String,
-    target: groundhog_toolchain::HostTarget,
+    target: thruput_toolchain::HostTarget,
     explicitly_requested: bool,
     print: Option<&Print>,
 ) -> Result<
     (
         LocalNodeOptions,
-        Option<groundhog_toolchain::InstallationLease>,
+        Option<thruput_toolchain::InstallationLease>,
     ),
     CliError,
 > {
-    use groundhog_node_supervisor::resolve_hogd_dev_binary_on_path;
-    use groundhog_toolchain::Installer;
+    use thruput_node_supervisor::resolve_hogd_dev_binary_on_path;
+    use thruput_toolchain::Installer;
 
     let cache_root = crate::config::cache_dir()?;
     let cache_installer = Installer::new(&cache_root);
@@ -932,7 +931,7 @@ async fn acquire_managed_node_options(
                 options.hogd_dev_binary = Some(lease.binary_path());
                 return Ok((options, Some(lease)));
             }
-            Err(error @ groundhog_toolchain::InstallError::Io { .. }) if !explicitly_requested => {
+            Err(error @ thruput_toolchain::InstallError::Io { .. }) if !explicitly_requested => {
                 if let Some(binary) = resolve_hogd_dev_binary_on_path() {
                     options.hogd_dev_binary = Some(binary);
                     return Ok((options, None));
@@ -989,13 +988,13 @@ async fn acquire_managed_node_options(
             return Err(error);
         }
         return Err(map_node_supervisor_error(
-            &groundhog_node_supervisor::NodeSupervisorError::HogdDevNotFound,
+            &thruput_node_supervisor::NodeSupervisorError::HogdDevNotFound,
         ));
     }
 }
 
 fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBuf> {
-    use groundhog_node_supervisor::{HogdDevConfig, resolve_hogd_dev_binary};
+    use thruput_node_supervisor::{HogdDevConfig, resolve_hogd_dev_binary};
 
     let artifact_config = HogdDevConfig::default()
         .with_contract_artifact_directories(&options.contract_artifact_directories);
@@ -1067,9 +1066,9 @@ pub(crate) fn genesis_root_artifact_for_binary(binary: &Path) -> Option<PathBuf>
 }
 
 fn with_discovered_contract_artifacts(
-    mut hogd: groundhog_node_supervisor::HogdDevConfig,
-) -> groundhog_node_supervisor::HogdDevConfig {
-    use groundhog_node_supervisor::resolve_hogd_dev_binary;
+    mut hogd: thruput_node_supervisor::HogdDevConfig,
+) -> thruput_node_supervisor::HogdDevConfig {
+    use thruput_node_supervisor::resolve_hogd_dev_binary;
 
     let Some(discovered) = resolve_hogd_dev_binary(&hogd)
         .ok()
@@ -1095,8 +1094,8 @@ fn with_discovered_contract_artifacts(
 )]
 fn local_node_config(
     options: LocalNodeOptions,
-) -> Result<groundhog_node_supervisor::NodeSupervisorConfig, CliError> {
-    use groundhog_node_supervisor::{HogdDevConfig, NodeSupervisorConfig};
+) -> Result<thruput_node_supervisor::NodeSupervisorConfig, CliError> {
+    use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig};
 
     if options
         .block_interval
@@ -1138,7 +1137,7 @@ fn local_node_config(
     let hogd = with_discovered_contract_artifacts(hogd);
     let hogd = match options.data_dir {
         Some(data_dir) => hogd.with_data_dir(data_dir).with_shutdown_grace(
-            groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE,
+            thruput_node_supervisor::config::DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE,
         ),
         None => hogd,
     };
@@ -1200,10 +1199,10 @@ fn local_node_config(
             if let Some(mode) = mode {
                 block_driver = block_driver.with_mode(match mode {
                     LocalNodeBlockDriverMode::Instant => {
-                        groundhog_node_supervisor::BlockDriverMode::Instant
+                        thruput_node_supervisor::BlockDriverMode::Instant
                     }
                     LocalNodeBlockDriverMode::Interval => {
-                        groundhog_node_supervisor::BlockDriverMode::Interval
+                        thruput_node_supervisor::BlockDriverMode::Interval
                     }
                 });
             }
@@ -1260,13 +1259,13 @@ fn local_node_pid_file(scope: &std::path::Path) -> PathBuf {
     scope.join(HOG_DEVNODE_PID_FILE)
 }
 
-fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorError) -> CliError {
+fn map_node_supervisor_error(err: &thruput_node_supervisor::NodeSupervisorError) -> CliError {
     let message = err.to_string();
     match err {
-        groundhog_node_supervisor::NodeSupervisorError::LocalNodeAlreadyRunning { .. } => {
+        thruput_node_supervisor::NodeSupervisorError::LocalNodeAlreadyRunning { .. } => {
             CliError::LocalNodeAlreadyRunning(message)
         }
-        groundhog_node_supervisor::NodeSupervisorError::ProtocolIntroRejected {
+        thruput_node_supervisor::NodeSupervisorError::ProtocolIntroRejected {
             expected_protocol,
             ..
         } => CliError::NodeSupervisorProtocolIntroRejected {
@@ -1283,9 +1282,9 @@ pub(crate) fn init_node_tracing(verbose: bool, print: &Print) {
 
 fn default_tracing_filter(verbose: bool) -> &'static str {
     if verbose {
-        "groundhog_node_supervisor=info,hogd_dev=info"
+        "thruput_node_supervisor=info,hogd_dev=info"
     } else {
-        "groundhog_node_supervisor=warn,hogd_dev=warn"
+        "thruput_node_supervisor=warn,hogd_dev=warn"
     }
 }
 
@@ -1307,8 +1306,8 @@ fn init_tracing(default_filter: &str, print: &Print) {
 
 fn hogd_dev_startup_payload(
     addr: std::net::SocketAddr,
-    readiness: &groundhog_node_supervisor::HogdDevReadiness,
-    backend_planes: groundhog_node_supervisor::BackendPlanes,
+    readiness: &thruput_node_supervisor::HogdDevReadiness,
+    backend_planes: thruput_node_supervisor::BackendPlanes,
     local_runtime_state_result: &Result<PathBuf, CliError>,
     data_dir: Option<&std::path::Path>,
 ) -> serde_json::Value {
@@ -1349,11 +1348,11 @@ fn local_runtime_state_payload(
 }
 
 fn runtime_manifest_payload(
-    readiness: &groundhog_node_supervisor::HogdDevReadiness,
+    readiness: &thruput_node_supervisor::HogdDevReadiness,
 ) -> serde_json::Value {
     match (&readiness.manifest_path, &readiness.manifest_hash) {
         (Some(path), Some(hash)) => json!({
-            "schemaVersion": groundhog_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION,
+            "schemaVersion": thruput_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION,
             "path": path,
             "hash": hash,
         }),
@@ -1362,7 +1361,7 @@ fn runtime_manifest_payload(
 }
 
 fn hogd_dev_endpoints_payload(
-    readiness: &groundhog_node_supervisor::HogdDevReadiness,
+    readiness: &thruput_node_supervisor::HogdDevReadiness,
 ) -> serde_json::Value {
     let mut endpoints = serde_json::Map::new();
     endpoints.insert(
@@ -1406,9 +1405,6 @@ mod tests {
         runtime_artifacts_dir_for_binary, test_local_runtime_state_result,
     };
     use crate::CliError;
-    use groundhog_node_supervisor::{
-        BackendPlanes, ConfigParamName, NodeSupervisorError, PlaneStatus, parse_readiness_line,
-    };
     use sha2::{Digest, Sha256};
     use std::{
         fs,
@@ -1417,6 +1413,9 @@ mod tests {
         time::Duration,
     };
     use tempfile::TempDir;
+    use thruput_node_supervisor::{
+        BackendPlanes, ConfigParamName, NodeSupervisorError, PlaneStatus, parse_readiness_line,
+    };
 
     #[test]
     fn funding_hint_identifies_local_profile_and_exact_node() {
@@ -1502,8 +1501,8 @@ mod tests {
     #[test]
     fn local_node_config_sets_supervisor_startup_options() {
         let binary = PathBuf::from("/tmp/hog-devnode-test");
-        let supplied_identity = groundhog_bundle_identity::BundleIdentity::unbundled(
-            groundhog_build_info::BuildVersion::new("9.8.7-test", None)
+        let supplied_identity = thruput_bundle_identity::BundleIdentity::unbundled(
+            thruput_build_info::BuildVersion::new("9.8.7-test", None)
                 .with_source_commit(Some("373bec4b9dd9b99abae4f23b82f4e35df61273d1")),
         );
         let config = local_node_config(LocalNodeOptions {
@@ -1520,8 +1519,8 @@ mod tests {
             startup_timeout: Some(Duration::from_secs(30)),
             pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hog-devnode-test.pid")),
             bootstrap_accounts: vec![
-                groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-                    groundhog_json_rpc_types::hex::Hex0x([7; 32].into()),
+                thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+                    thruput_json_rpc_types::hex::Hex0x([7; 32].into()),
                     "12345678",
                 ),
             ],
@@ -1569,11 +1568,11 @@ mod tests {
         assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
         assert_eq!(
             config.hogd_dev.shutdown_grace,
-            groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE
+            thruput_node_supervisor::config::DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE
         );
         assert_eq!(
             config.block_driver.mode,
-            groundhog_node_supervisor::BlockDriverMode::Interval
+            thruput_node_supervisor::BlockDriverMode::Interval
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
         assert_eq!(config.rpc_max_connections, 512);
@@ -1593,7 +1592,7 @@ mod tests {
         assert_eq!(config.rpc_listen_address, "0.0.0.0:9545");
         assert_eq!(
             config.hogd_dev.listen_host,
-            groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_LISTEN_HOST
+            thruput_node_supervisor::config::DEFAULT_HOGD_DEV_LISTEN_HOST
         );
     }
 
@@ -1918,7 +1917,7 @@ mod tests {
                 .hint()
                 .expect("intro rejection should have a specific hint"),
             "pass `--hogd-protocol=hogp/expected0000000` to override, or rebuild thruput node \
-             against a matching groundhog-xdr"
+             against a matching thruput-xdr"
         );
     }
 
@@ -1926,11 +1925,11 @@ mod tests {
     fn verbose_tracing_expands_default_service_logs() {
         assert_eq!(
             default_tracing_filter(true),
-            "groundhog_node_supervisor=info,hogd_dev=info"
+            "thruput_node_supervisor=info,hogd_dev=info"
         );
         assert_eq!(
             default_tracing_filter(false),
-            "groundhog_node_supervisor=warn,hogd_dev=warn"
+            "thruput_node_supervisor=warn,hogd_dev=warn"
         );
     }
 

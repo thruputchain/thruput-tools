@@ -2,10 +2,10 @@
 //!
 //! The supervisor forwards `hog-devnode`'s logs through the `tracing` framework
 //! (under the `hogd_dev` target, with its own diagnostics under
-//! `groundhog_node_supervisor`). These helpers install a stderr subscriber so
+//! `thruput_node_supervisor`). These helpers install a stderr subscriber so
 //! those events actually print, mirroring what `thruput node` does.
 
-use groundhog_node_supervisor::LogLevel;
+use thruput_node_supervisor::LogLevel;
 
 /// Install a stderr `tracing` subscriber that prints forwarded `hog-devnode`
 /// logs and supervisor diagnostics.
@@ -15,7 +15,7 @@ use groundhog_node_supervisor::LogLevel;
 /// `local` target with a configured `log_level` installs this automatically;
 /// call it directly to print logs without setting a specific devnode level.
 pub fn init_tracing() {
-    install("hogd_dev=info,groundhog_node_supervisor=info");
+    install("hogd_dev=info,thruput_node_supervisor=info");
 }
 
 /// Install a subscriber whose default filter matches the requested devnode
@@ -28,7 +28,7 @@ pub(crate) fn install_for_level(level: LogLevel) {
         LogLevel::Warn => "warn",
         LogLevel::Error | LogLevel::Critical => "error",
     };
-    install(&format!("hogd_dev={level},groundhog_node_supervisor=info"));
+    install(&format!("hogd_dev={level},thruput_node_supervisor=info"));
 }
 
 fn install(default_filter: &str) {

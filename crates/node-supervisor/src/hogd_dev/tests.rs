@@ -159,11 +159,11 @@ fn contract_artifact_directories_are_forwarded_in_order() {
 #[test]
 fn bootstrap_manifest_file_serializes_config() {
     let config = HogdDevConfig::default().with_bootstrap_accounts(vec![
-        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+        thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
             fixture_public_key(1),
             "1234",
         ),
-        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+        thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
             fixture_public_key(2),
             "1234",
         ),
@@ -206,22 +206,22 @@ fn runtime_identity_rejects_non_bootstrap_network() {
     let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
     let mut readiness =
         parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
-    readiness.network_hash = groundhog_json_rpc_types::NetworkHashHex::from([0xff; 32]);
+    readiness.network_hash = thruput_json_rpc_types::NetworkHashHex::from([0xff; 32]);
 
     let err = validate_runtime_identity(&readiness, "hogp/test00000000000", &[0; 32].into())
         .expect_err("bug: a non-bootstrap network should fail closed");
     assert!(matches!(
         err,
         NodeSupervisorError::RuntimeNetworkHashMismatch { expected, observed }
-            if expected == groundhog_json_rpc_types::NetworkHashHex::from([0; 32])
-                && observed == groundhog_json_rpc_types::NetworkHashHex::from([0xff; 32])
+            if expected == thruput_json_rpc_types::NetworkHashHex::from([0; 32])
+                && observed == thruput_json_rpc_types::NetworkHashHex::from([0xff; 32])
     ));
 }
 
 #[test]
 fn configured_network_hash_reaches_bootstrap_and_readiness_validation() {
     for hash in [[0; 32], [0xab; 32]] {
-        let network_hash = groundhog_json_rpc_types::NetworkHashHex::from(hash);
+        let network_hash = thruput_json_rpc_types::NetworkHashHex::from(hash);
         let config = HogdDevConfig::default().with_init_network_hash(network_hash.clone());
         let file = write_bootstrap_manifest(&config, &network_hash, fixture_public_key(0)).unwrap();
         let value: serde_json::Value =
@@ -786,16 +786,16 @@ fn full_runtime_manifest_uses_canonical_endpoint_names() {
     );
 }
 
-fn fixture_public_key(index: u8) -> groundhog_json_rpc_types::Ed25519PublicKey {
-    groundhog_json_rpc_types::hex::Hex0x(groundhog_xdr::types::Ed25519PublicKey::from(
-        groundhog_signing::LocalSigner::from_secret_key([index; 32]).verifying_key_bytes(),
+fn fixture_public_key(index: u8) -> thruput_json_rpc_types::Ed25519PublicKey {
+    thruput_json_rpc_types::hex::Hex0x(thruput_xdr::types::Ed25519PublicKey::from(
+        thruput_signing::LocalSigner::from_secret_key([index; 32]).verifying_key_bytes(),
     ))
 }
 
 #[test]
 fn explicit_allocations_validate_native_identity_roles_and_amounts() {
     let config = HogdDevConfig::default().with_bootstrap_accounts(vec![
-        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+        thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
             fixture_public_key(1),
             "42",
         ),
@@ -807,7 +807,7 @@ fn explicit_allocations_validate_native_identity_roles_and_amounts() {
                 serde_json::json!({
                     "role": if position == 0 { "faucet" } else { "local_user" },
                     "publicKey": allocation.public_key,
-                    "walletAddress": groundhog_json_rpc_types::hex::Hex0x(groundhog_signing::PubkeyAccount::from_public_key_bytes(key, 0).address()),
+                    "walletAddress": thruput_json_rpc_types::hex::Hex0x(thruput_signing::PubkeyAccount::from_public_key_bytes(key, 0).address()),
                     "initialStorageTokens": allocation.initial_storage_tokens,
                 })
             }).collect();
@@ -838,7 +838,7 @@ fn explicit_allocations_validate_native_identity_roles_and_amounts() {
                 }
                 "walletAddress" => {
                     manifest.bootstrap_accounts[0].wallet_address =
-                        groundhog_xdr::types::ContractAddress::from([0; 32]).into();
+                        thruput_xdr::types::ContractAddress::from([0; 32]).into();
                 }
                 "initialStorageTokens" => {
                     manifest.bootstrap_accounts[0].initial_storage_tokens = "999".into();

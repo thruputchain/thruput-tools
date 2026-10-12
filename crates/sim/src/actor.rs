@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use groundhog_json_rpc_types::{receipt::TransactionReceipt, transaction::TxHash};
-use groundhog_signing::{LocalSigner, PubkeyAccount};
-use groundhog_xdr::types::{ContractAddress, NetworkHash};
+use thruput_json_rpc_types::{receipt::TransactionReceipt, transaction::TxHash};
+use thruput_signing::{LocalSigner, PubkeyAccount};
+use thruput_xdr::types::{ContractAddress, NetworkHash};
 
 use crate::manifest::SimulationManifest;
 use crate::nonce::NonceNamespace;
@@ -126,7 +126,7 @@ impl ActorState {
     }
 
     /// Build the nonce-zero native pubkey authentication claim.
-    pub fn auth_claim(&self) -> groundhog_xdr::auth_claim::AuthClaim {
+    pub fn auth_claim(&self) -> thruput_xdr::auth_claim::AuthClaim {
         PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0).auth_claim()
     }
 
@@ -407,10 +407,10 @@ pub enum ActorError {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::hex::Hex0x;
-    use groundhog_signing::derive_dev_account_signer;
-    use groundhog_xdr::types::ContractAddress;
     use serde_json::json;
+    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_signing::derive_dev_account_signer;
+    use thruput_xdr::types::ContractAddress;
 
     use super::*;
 
@@ -506,8 +506,8 @@ mod tests {
         assert_eq!(actor.receipt_poll_target().unwrap().tx_hash, tx_hash(1));
         actor.record_receipt(TransactionReceipt {
             tx_hash: tx_hash(1),
-            height: groundhog_json_rpc_types::BlockHeight::from(1),
-            status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
+            height: thruput_json_rpc_types::BlockHeight::from(1),
+            status: thruput_json_rpc_types::receipt::ExecStatus::Ok,
             events: Vec::new(),
             return_data: None,
             abort_data: None,
@@ -685,13 +685,13 @@ mod tests {
             index,
             signer: derive_dev_account_signer("actor-test-seed", index as usize),
             wallet_address: Hex0x(ContractAddress::from([address_byte; 32])).0,
-            network_hash: groundhog_xdr::types::NetworkHash::new(
-                groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+            network_hash: thruput_xdr::types::NetworkHash::new(
+                thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
             ),
         }
     }
 
     fn tx_hash(byte: u8) -> TxHash {
-        TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([byte; 32])))
+        TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([byte; 32])))
     }
 }

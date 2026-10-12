@@ -5,15 +5,15 @@ use std::{
 
 use axum::{Router, extract::State, http::StatusCode, routing::get};
 use clap::{Parser, Subcommand};
-use groundhog_firehose::{
+use thruput_firehose::{
     Error,
     client::{self, Client, Outcome},
     metrics::Metrics,
     store::Store,
     subscription::{self, Hub},
 };
-use groundhog_indexer::EventIndexerPullResult;
-use groundhog_xdr::{PROTOCOL_VERSION, network::ProtocolCommit};
+use thruput_indexer::EventIndexerPullResult;
+use thruput_xdr::{PROTOCOL_VERSION, network::ProtocolCommit};
 use tokio::sync::watch;
 
 mod discovery;
@@ -92,7 +92,7 @@ async fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         // including diagnostics from the transport's independently spawned tasks.
         filter = filter
             .add_directive("rpc_driver=off".parse()?)
-            .add_directive("groundhog_x23_transport=off".parse()?);
+            .add_directive("thruput_x23_transport=off".parse()?);
     }
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -240,11 +240,11 @@ fn update_store_metrics(metrics: &Metrics, store: &Store) {
 async fn sample_tip(endpoint: String, protocol: ProtocolCommit, metrics: Metrics) {
     sample_tip_with(protocol, metrics, |deadline| {
         client::connect_endpoint(&endpoint, deadline, |addr| async move {
-            groundhog_x23_transport::connect(
+            thruput_x23_transport::connect(
                 "scheduler_tip",
                 &addr.to_string(),
                 1,
-                groundhog_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client::new,
+                thruput_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client::new,
             )
             .await
         })
@@ -257,12 +257,12 @@ where
     F: FnMut(tokio::time::Instant) -> Fut,
     Fut: std::future::Future<
             Output = Result<
-                groundhog_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client,
+                thruput_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client,
                 Error,
             >,
         >,
 {
-    use groundhog_scheduler::{rpc_types::ExpectedDBTip, sched_gateway::SchedGatewayIntroOutcome};
+    use thruput_scheduler::{rpc_types::ExpectedDBTip, sched_gateway::SchedGatewayIntroOutcome};
     loop {
         let result: Result<(), Error> = async {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
@@ -471,13 +471,13 @@ async fn ingest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use groundhog_indexer::{EventIndexerPullRequest, EventIndexerPulledBlock};
     use rpc_driver::{ProgVers, RpcError, RpcServer, ServiceMap, handler::RpcHandler};
     use std::{
         collections::VecDeque,
         path::Path,
         sync::{Arc, Mutex},
     };
+    use thruput_indexer::{EventIndexerPullRequest, EventIndexerPulledBlock};
 
     struct TipServer {
         sampled: Arc<tokio::sync::Notify>,
@@ -495,17 +495,15 @@ mod tests {
                     let protocol: ProtocolCommit = xdrs::txs::decode(data).unwrap();
                     assert_eq!(protocol, PROTOCOL_VERSION);
                     Ok(xdrs::txs::encode(
-                        &groundhog_scheduler::SchedGatewayIntroOutcome::SchedGatewayIntroSuccess,
+                        &thruput_scheduler::SchedGatewayIntroOutcome::SchedGatewayIntroSuccess,
                     )
                     .unwrap())
                 }
                 2 => {
                     self.sampled.notify_one();
                     Ok(
-                        xdrs::txs::encode(&groundhog_scheduler::ExpectedDBTip::Default {
-                            error: 1,
-                        })
-                        .unwrap(),
+                        xdrs::txs::encode(&thruput_scheduler::ExpectedDBTip::Default { error: 1 })
+                            .unwrap(),
                     )
                 }
                 _ => panic!("unexpected scheduler procedure {procedure}"),
@@ -535,11 +533,11 @@ mod tests {
                         // Deterministically model a SYN that never connects or refuses.
                         std::future::pending().await
                     } else {
-                        groundhog_x23_transport::connect(
+                        thruput_x23_transport::connect(
                             "scheduler_tip",
                             &addr.to_string(),
                             1,
-                            groundhog_scheduler::SchedGateway_SchedGateway1_Client::new,
+                            thruput_scheduler::SchedGateway_SchedGateway1_Client::new,
                         )
                         .await
                     }

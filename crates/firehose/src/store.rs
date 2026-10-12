@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use groundhog_indexer::{
+use thruput_indexer::{
     EventIndexerPulledBlock, IndexerInitializedProgress, IndexerOutboxOrigin, IndexerProgress,
 };
 

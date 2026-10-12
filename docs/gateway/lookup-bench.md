@@ -1,6 +1,6 @@
 # Scheduler lookup miss benchmark
 
-`groundhog-lookup-bench` isolates transaction-status lookup admission. It sends
+`thruput-lookup-bench` isolates transaction-status lookup admission. It sends
 `groundhog_getTransactionStatus` for a deterministic corpus of hashes that it
 never submits. It creates no wallets and sends no transactions.
 
@@ -19,14 +19,14 @@ committed response is a semantic mismatch, not successful miss traffic.
 Build the dedicated binary from the existing benchmark package:
 
 ```sh
-cargo build --release -p groundhog-bench --bin groundhog-lookup-bench
+cargo build --release -p thruput-bench --bin thruput-lookup-bench
 ```
 
 Use an already running local gateway backed by a real devnode. No transaction
 seeding is needed. Supply its public RPC and native metrics endpoints:
 
 ```sh
-./target/release/groundhog-lookup-bench \
+./target/release/thruput-lookup-bench \
   --url http://127.0.0.1:8545 \
   --metrics-url http://127.0.0.1:9646/metrics \
   --mode closed-loop --concurrency 4 --duration-secs 10 \
@@ -41,7 +41,7 @@ modeling an independent arrival rate.
 Paced traffic offers requests at a fixed rate, subject to the concurrency cap:
 
 ```sh
-./target/release/groundhog-lookup-bench \
+./target/release/thruput-lookup-bench \
   --url http://127.0.0.1:8545 \
   --metrics-url http://127.0.0.1:9646/metrics \
   --mode paced --rate 500 --concurrency 64 --duration-secs 10 \
@@ -54,7 +54,7 @@ a run that cannot deliver its offered rate as proof of server capacity.
 Periodic bursts concentrate arrivals while leaving a gap between bursts:
 
 ```sh
-./target/release/groundhog-lookup-bench \
+./target/release/thruput-lookup-bench \
   --url http://127.0.0.1:8545 \
   --metrics-url http://127.0.0.1:9646/metrics \
   --mode burst --burst-size 128 --burst-interval-ms 1000 \

@@ -1,4 +1,4 @@
-use groundhog_json_rpc_types::network_descriptor::{
+use thruput_json_rpc_types::network_descriptor::{
     NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
 };
 

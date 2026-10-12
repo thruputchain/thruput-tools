@@ -8,18 +8,18 @@
 //!
 //! Usage:
 //!   # Against a local JSON-RPC endpoint (smoke):
-//!   groundhog-bench --url http://127.0.0.1:9545 --method chainTip --rate 1000 --duration 5
+//!   thruput-bench --url http://127.0.0.1:9545 --method chainTip --rate 1000 --duration 5
 //!
 //!   # Against real gateway (load):
-//!   groundhog-bench --url http://127.0.0.1:8545 --runtime-manifest /path/to/runtime-manifest.json --rate 100000 --duration 60 --workers 16
+//!   thruput-bench --url http://127.0.0.1:8545 --runtime-manifest /path/to/runtime-manifest.json --rate 100000 --duration 60 --workers 16
 
 use std::io::{self, IsTerminal};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{process, sync::Arc};
 
 use clap::Parser;
-use groundhog_signing::SigningError;
 use hdrhistogram::Histogram;
+use thruput_signing::SigningError;
 
 mod cli;
 mod compare;
@@ -472,7 +472,7 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             .unwrap_or_default()
             .as_millis(),
         producer: ProducerMetadata {
-            name: "groundhog-bench",
+            name: "thruput-bench",
             version: env!("CARGO_PKG_VERSION"),
             build_profile: if cfg!(debug_assertions) {
                 "debug"
@@ -542,7 +542,7 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             account_fixture_sha256: cli
                 .account_seed
                 .as_ref()
-                .map(|seed| groundhog_json_rpc_types::hex::sha256_prefixed_hex(seed.as_bytes())),
+                .map(|seed| thruput_json_rpc_types::hex::sha256_prefixed_hex(seed.as_bytes())),
             transaction_batch_size,
             max_skew_seconds: cli.max_skew,
             request_timeout_ms: cli.request_timeout_ms,

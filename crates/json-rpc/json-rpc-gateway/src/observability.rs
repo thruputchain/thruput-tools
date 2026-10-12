@@ -165,8 +165,8 @@ mod tests {
         health::{GatewayHealth, GatewayHealthSnapshot},
         metrics::GatewayMetrics,
     };
-    use groundhog_build_info::BuildVersion;
     use std::time::Duration;
+    use thruput_build_info::BuildVersion;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]

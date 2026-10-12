@@ -13,12 +13,12 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
-use groundhog_db_gateway::DbGatewayConfigResult;
-use groundhog_hogd_backend::db_gateway as shared_db_gateway;
-use groundhog_json_rpc_server::{RpcRequestContext, TipReading};
-use groundhog_json_rpc_types::NetworkHashHex;
+use thruput_db_gateway::DbGatewayConfigResult;
+use thruput_hogd_backend::db_gateway as shared_db_gateway;
+use thruput_json_rpc_server::{RpcRequestContext, TipReading};
+use thruput_json_rpc_types::NetworkHashHex;
 #[cfg(test)]
-use groundhog_json_rpc_types::block::ChainTip;
+use thruput_json_rpc_types::block::ChainTip;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
 
@@ -27,7 +27,7 @@ use crate::config::{HealthBackend, TipConfig};
 use crate::context::{AbortTaskOnDrop, DbGatewayClient, clear_db_gateway_if_current};
 use crate::handlers::DB_GATEWAY;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics, REASON_CLOSED, REASON_INGRESS_FULL};
-use groundhog_json_rpc_server::RpcServerError;
+use thruput_json_rpc_server::RpcServerError;
 
 const TIP_COALESCER_COMPONENT: &str = "tip_coalescer";
 
@@ -338,14 +338,14 @@ impl TipCoalescer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use groundhog_json_rpc_types::BlockHeight;
-    use groundhog_json_rpc_types::hex::Hex0x;
     use std::collections::VecDeque;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::time::Duration;
+    use thruput_json_rpc_types::BlockHeight;
+    use thruput_json_rpc_types::hex::Hex0x;
     use tokio::sync::Notify;
 
     /// Scripted mock sink.  Each `get_tip()` call pops the next gated
@@ -402,18 +402,18 @@ mod tests {
         TipReading::new(
             ChainTip {
                 height: BlockHeight::new(height),
-                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
+                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from(bytes)),
             },
-            groundhog_xdr::network_config::NetworkConfig::_0 {
-                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+            thruput_xdr::network_config::NetworkConfig::_0 {
+                v0: thruput_xdr::network_config::NetworkConfigV0 {
                     params: xdr_common::VecM(vec![
-                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxSHA256Buffers {
+                        thruput_xdr::network_config::ConfigParam::kConfigParamMaxSHA256Buffers {
                             max_sha256_buffers: 8,
                         },
-                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxCrossInvokeDepth {
+                        thruput_xdr::network_config::ConfigParam::kConfigParamMaxCrossInvokeDepth {
                             max_cross_invoke_depth: 256,
                         },
-                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxNewContractsPerTx {
+                        thruput_xdr::network_config::ConfigParam::kConfigParamMaxNewContractsPerTx {
                             max_new_contracts_per_tx: 6,
                         },
                     ]),

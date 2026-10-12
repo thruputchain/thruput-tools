@@ -2,14 +2,14 @@
 
 use std::path::Path;
 
-use groundhog_json_rpc_types::runtime_manifest::{
+use thruput_json_rpc_types::runtime_manifest::{
     BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, RuntimeManifest, RuntimeManifestParseError,
     parse_runtime_manifest,
 };
-use groundhog_signing::{
+use thruput_signing::{
     DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer, derive_dev_account_signer,
 };
-use groundhog_xdr::types::{ContractAddress, NetworkHash};
+use thruput_xdr::types::{ContractAddress, NetworkHash};
 
 use crate::error::{Result, TestkitError};
 
@@ -130,7 +130,7 @@ pub(crate) fn derive_native_accounts(
 ) -> Vec<TestAccount> {
     (0..count)
         .map(|index| {
-            let signer = derive_dev_account_signer(&format!("groundhog-testkit:{seed}"), index);
+            let signer = derive_dev_account_signer(&format!("thruput-testkit:{seed}"), index);
             let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
             TestAccount {
                 index: u32::try_from(index).unwrap_or(u32::MAX),
@@ -144,12 +144,12 @@ pub(crate) fn derive_native_accounts(
 
 pub(crate) fn derive_faucet(manifest: &RuntimeManifest) -> Result<Option<TestAccount>> {
     if manifest.kind
-        != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+        != thruput_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
     {
         return Ok(None);
     }
     let Some(account) = manifest.bootstrap_accounts.iter().find(|account| {
-        account.role == groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET
+        account.role == thruput_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET
     }) else {
         return Ok(None);
     };
@@ -179,9 +179,9 @@ pub(crate) fn derive_faucet(manifest: &RuntimeManifest) -> Result<Option<TestAcc
 
 fn hosted_derivation(
     manifest: &RuntimeManifest,
-) -> Result<&groundhog_json_rpc_types::runtime_manifest::BootstrapAccountDerivation, TestkitError> {
+) -> Result<&thruput_json_rpc_types::runtime_manifest::BootstrapAccountDerivation, TestkitError> {
     if manifest.kind
-        != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+        != thruput_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
     {
         return Err(TestkitError::Manifest { field: "bootstrapAccounts", detail: "Local manifests contain public allocations only. Use scenario-owned accounts instead of bootstrap_accounts().".into() });
     }
@@ -200,7 +200,7 @@ fn hosted_derivation(
     Ok(derivation)
 }
 fn hosted_index(
-    account: &groundhog_json_rpc_types::runtime_manifest::BootstrapAccount,
+    account: &thruput_json_rpc_types::runtime_manifest::BootstrapAccount,
 ) -> Result<u32> {
     account.index.ok_or_else(|| TestkitError::Manifest {
         field: "bootstrapAccounts.index",

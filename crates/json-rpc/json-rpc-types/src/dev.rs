@@ -1,12 +1,10 @@
-use groundhog_trace::{
-    HostFunctionStatusXdr, InvocationFrameTrace, SyscallTrace, SyscallTraceBody,
-};
-use groundhog_xdr::storage_item::{
-    FlaggedStorageDelta, StorageDelta, StorageDeltaFlagSet, StorageDeltaFlags,
-};
-use groundhog_xdr::transaction::{Invocation, InvocationFrameOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thruput_trace::{HostFunctionStatusXdr, InvocationFrameTrace, SyscallTrace, SyscallTraceBody};
+use thruput_xdr::storage_item::{
+    FlaggedStorageDelta, StorageDelta, StorageDeltaFlagSet, StorageDeltaFlags,
+};
+use thruput_xdr::transaction::{Invocation, InvocationFrameOutput};
 
 use crate::ContractAddress;
 use crate::hex::{Hex0x, HexBytes};
@@ -368,15 +366,15 @@ fn format_number(value: u64) -> String {
     formatted
 }
 
-pub fn format_i128_xdr(value: &groundhog_xdr::types::int128_xdr) -> String {
+pub fn format_i128_xdr(value: &thruput_xdr::types::int128_xdr) -> String {
     int128_to_i128(value).to_string()
 }
 
-pub fn int128_to_i128(value: &groundhog_xdr::types::int128_xdr) -> i128 {
+pub fn int128_to_i128(value: &thruput_xdr::types::int128_xdr) -> i128 {
     (i128::from(value.highbits) << 64) | i128::from(value.lowbits)
 }
 
-fn syscall_error_label(code: groundhog_xdr::syscall_error::SyscallErrorCode) -> String {
+fn syscall_error_label(code: thruput_xdr::syscall_error::SyscallErrorCode) -> String {
     match code.0 {
         0 => "SyscallErrorCode::kSyscallErrorCodeNone".into(),
         1 => "SyscallErrorCode::kSyscallErrorCodeFault".into(),

@@ -1,4 +1,4 @@
-use groundhog_signing::dev_account::*;
+use thruput_signing::dev_account::*;
 
 #[test]
 fn default_dev_account_derivation_is_stable() {

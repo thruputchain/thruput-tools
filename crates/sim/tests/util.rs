@@ -1,13 +1,13 @@
-use groundhog_sim::error::SimError;
-use groundhog_sim::manifest::SimulationManifest;
+use thruput_sim::error::SimError;
+use thruput_sim::manifest::SimulationManifest;
 
 use serde_json::json;
 use tempfile::tempdir;
 
-use groundhog_sim::validation::{ValidationError, validate_manifest};
+use thruput_sim::validation::{ValidationError, validate_manifest};
 
-use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
-use groundhog_sim::util::*;
+use thruput_json_rpc_types::hex::sha256_prefixed_hex;
+use thruput_sim::util::*;
 
 #[test]
 fn simulation_config_hash_excludes_run_identity_but_preserves_effective_config() {

@@ -25,11 +25,11 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 
-pub(crate) use groundhog_hogd_backend::submit::deadline_cohorts;
+pub(crate) use thruput_hogd_backend::submit::deadline_cohorts;
 
 use crate::config::AdaptiveBatchConfig;
 use crate::metrics::{GatewayMetrics, REASON_CLOSED, REASON_INGRESS_FULL};
-use groundhog_json_rpc_server::RpcServerError;
+use thruput_json_rpc_server::RpcServerError;
 
 /// Per-batch processing policy supplied by each batcher callsite.
 ///

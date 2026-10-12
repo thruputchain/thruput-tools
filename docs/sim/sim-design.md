@@ -18,7 +18,7 @@ recorded separately from chain identity because knowing where a service runs
 does not grant permission to kill it. Orphan sweeping verifies recorded ownership
 against the live process before signalling it.
 
-`groundhog-bench` measures controlled method-specific load. Testkit runs arbitrary
+`thruput-bench` measures controlled method-specific load. Testkit runs arbitrary
 application actor logic with concrete assertions. Hogsim occupies the space
 between them: reusable stateful workloads expressed as scenario data, with
 long-run diagnostics and scheduled faults. Cloud deployment remains outside its

@@ -4,24 +4,24 @@
 //! then prepare, inspect, sign, submit, and wait as separate operations.
 
 pub mod codec;
-pub use groundhog_contract_spec as spec;
-pub use groundhog_json_rpc_client as rpc;
-pub use groundhog_json_rpc_types as types;
-pub use groundhog_signing as signing;
-/// Shared C/G/S text encodings; independent of either CLI.
-pub use groundhog_signing::strkey;
-pub use groundhog_xdr as xdr;
 pub use jsonrpsee;
+pub use thruput_contract_spec as spec;
+pub use thruput_json_rpc_client as rpc;
+pub use thruput_json_rpc_types as types;
+pub use thruput_signing as signing;
+/// Shared C/G/S text encodings; independent of either CLI.
+pub use thruput_signing::strkey;
+pub use thruput_xdr as xdr;
 
 use std::time::Duration;
 
-use groundhog_json_rpc_client::{GroundhogApiClient, PollTransactionReceiptError};
-use groundhog_json_rpc_types::{
+use jsonrpsee::core::client::{ClientT, Error as RpcError};
+use thruput_json_rpc_client::{GroundhogApiClient, PollTransactionReceiptError};
+use thruput_json_rpc_types::{
     network_info::NetworkInfo, receipt::TransactionReceipt, transaction::TxHash,
 };
-use groundhog_signing::{SignTransactionParams, Signer, SigningError};
-use groundhog_xdr::{transaction::Transaction, types::NetworkHash};
-use jsonrpsee::core::client::{ClientT, Error as RpcError};
+use thruput_signing::{SignTransactionParams, Signer, SigningError};
+use thruput_xdr::{transaction::Transaction, types::NetworkHash};
 
 /// An inspectable unsigned wallet invocation, bound to the intended network.
 #[derive(Debug, Clone)]
@@ -124,8 +124,8 @@ impl UnsignedCall {
         {
             return Err(SigningError::SignerMismatch);
         }
-        let tx_hash = TxHash(groundhog_signing::transaction_hash(&self.transaction)?.into());
-        let tx_hex = groundhog_signing::sign_and_encode_transaction_hex(
+        let tx_hash = TxHash(thruput_signing::transaction_hash(&self.transaction)?.into());
+        let tx_hex = thruput_signing::sign_and_encode_transaction_hex(
             self.transaction,
             signer,
             SignTransactionParams::default(),
@@ -177,7 +177,7 @@ impl SignedCall {
         client: &C,
     ) -> Result<SubmittedCall, SubmitCallError> {
         let returned =
-            groundhog_json_rpc_client::submit_transaction_with_client(client, &self.tx_hex)
+            thruput_json_rpc_client::submit_transaction_with_client(client, &self.tx_hex)
                 .await
                 .map_err(|source| SubmitCallError::Rpc {
                     tx_hash: self.tx_hash,
@@ -226,8 +226,8 @@ pub struct PollOptions {
 impl Default for PollOptions {
     fn default() -> Self {
         Self {
-            max_attempts: groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
-            interval: groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
+            max_attempts: thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
+            interval: thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
         }
     }
 }
@@ -240,7 +240,7 @@ impl SubmittedCall {
         client: &C,
         options: PollOptions,
     ) -> Result<TransactionReceipt, PollTransactionReceiptError> {
-        groundhog_json_rpc_client::poll_transaction_receipt_with_client_config(
+        thruput_json_rpc_client::poll_transaction_receipt_with_client_config(
             client,
             self.tx_hash,
             options.max_attempts,
@@ -289,12 +289,12 @@ pub async fn resolve_block_expiry_height<C: ClientT + Sync>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use groundhog_signing::LocalSigner;
-    use groundhog_xdr::{
+    use jsonrpsee::{RpcModule, server::ServerBuilder};
+    use thruput_signing::LocalSigner;
+    use thruput_xdr::{
         contract::ContractEntrypointID,
         types::{ContractAddress, SHA256Hash},
     };
-    use jsonrpsee::{RpcModule, server::ServerBuilder};
 
     fn prepared() -> UnsignedCall {
         prepared_with_wallet(Wallet::Legacy {
@@ -363,7 +363,7 @@ mod tests {
     fn signed_bytes_match_canonical_signing_and_remain_network_bound() {
         let key = LocalSigner::from_secret_key([9; 32]);
         let plan = prepared();
-        let expected = groundhog_signing::sign_and_encode_transaction_hex(
+        let expected = thruput_signing::sign_and_encode_transaction_hex(
             plan.transaction().clone(),
             &key,
             SignTransactionParams::default(),
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(
             signed.tx_hash(),
             TxHash(
-                groundhog_signing::transaction_hash(plan.transaction())
+                thruput_signing::transaction_hash(plan.transaction())
                     .unwrap()
                     .into()
             )

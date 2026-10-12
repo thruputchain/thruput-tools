@@ -1,11 +1,11 @@
 //! Native HOG-balance traffic, submitted directly to `SchedGateway`.
-use groundhog_scheduler::{
+use thruput_scheduler::{
     ParallelBatch, ParallelSignedTransactionBatch, sched_gateway::SchedGateway_SchedGateway1_Client,
 };
-use groundhog_signing::{
+use thruput_signing::{
     PubkeyAccount, SignTransactionParams, derive_dev_account_signer, sign_transaction,
 };
-use groundhog_xdr::{PROTOCOL_VERSION, contract::ContractEntrypointID};
+use thruput_xdr::{PROTOCOL_VERSION, contract::ContractEntrypointID};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let count: u32 = args.get(2).ok_or("missing count")?.parse()?;
     let nonce: u64 = args.get(3).ok_or("missing nonce")?.parse()?;
     let document = std::fs::read(path)?;
-    let parsed = groundhog_json_rpc_types::runtime_manifest::parse_runtime_manifest(&document)?;
+    let parsed = thruput_json_rpc_types::runtime_manifest::parse_runtime_manifest(&document)?;
     let endpoint = parsed
         .endpoints
         .scheduler_gateway
@@ -25,10 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if seed.is_empty() {
             return Err("fixture seed must be nonempty".into());
         }
-        derive_dev_account_signer(&format!("groundhog-firehose:{seed}"), 0)
+        derive_dev_account_signer(&format!("thruput-firehose:{seed}"), 0)
     } else {
         if parsed.kind
-            != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+            != thruput_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
         {
             return Err("local manifests contain public allocations only; supply a fixture seed and matching public initial allocation".into());
         }
@@ -62,10 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let calldata = xdrs::cxs::encode(&(wallet,))?;
     let mut bytes = Vec::new();
     for i in 0..count {
-        let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
-            groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+        let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
+            thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
                 account: &native,
-                target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
+                target_address: thruput_signing::NATIVE_HOG_ADDRESS,
                 target_entrypoint: ContractEntrypointID::new(
                     0x41ac_95d6_e06e_2620_u64.to_be_bytes(),
                 ),
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         segment_bytes: xdrs::VecM(vec![u32::try_from(bytes.len())?]),
         xdr: xdrs::BytesM(bytes),
     });
-    let client = groundhog_x23_transport::connect(
+    let client = thruput_x23_transport::connect(
         "local_test_traffic",
         &endpoint.to_string(),
         1,
@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     let intro = client.schedgateway_intro(&PROTOCOL_VERSION).await?;
-    if intro != groundhog_scheduler::SchedGatewayIntroOutcome::SchedGatewayIntroSuccess {
+    if intro != thruput_scheduler::SchedGatewayIntroOutcome::SchedGatewayIntroSuccess {
         return Err("intro rejected".into());
     }
     println!("{:?}", client.schedgateway_submit_tx_batch(&batch).await?);

@@ -1,7 +1,7 @@
-use groundhog_json_rpc_types::events::PaginationCursor;
-use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thruput_json_rpc_types::events::PaginationCursor;
+use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 
 use crate::events_json::RawEventReport;
 
@@ -84,10 +84,10 @@ pub struct TokenTransfersReport {
     pub participant_filter: Option<TokenParticipantFilter>,
     pub records: Vec<TokenTransferRecordReport>,
     pub cursor: PaginationCursor,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub latest_block: BlockHeight,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub oldest_block: BlockHeight,
 }

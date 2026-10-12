@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-json-rpc-server"
+name = "thruput-json-rpc-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,18 +10,18 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Reusable JSON-RPC server layer for Groundhog"
+description = "Reusable JSON-RPC server layer for Thruput"
 
 [lints]
 workspace = true
 
 [dependencies]
-groundhog-build-info = { workspace = true }
-groundhog-bundle-identity = { workspace = true }
-groundhog-json-rpc-api = { workspace = true }
-groundhog-json-rpc-types = { workspace = true }
-groundhog-tx-validation = { workspace = true }
-groundhog-xdr = { workspace = true }
+thruput-build-info = { workspace = true }
+thruput-bundle-identity = { workspace = true }
+thruput-json-rpc-api = { workspace = true }
+thruput-json-rpc-types = { workspace = true }
+thruput-tx-validation = { workspace = true }
+thruput-xdr = { workspace = true }
 xdr-common = { workspace = true }
 xdrs = { workspace = true }
 async-trait = { workspace = true }

@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use groundhog_scheduler::SchedGatewaySubmitOutcome;
+use thruput_scheduler::SchedGatewaySubmitOutcome;
 use tokio::sync::{Notify, Semaphore};
 use xdr_common::VecM;
 

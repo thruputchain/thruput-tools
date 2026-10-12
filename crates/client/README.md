@@ -1,4 +1,4 @@
-# groundhog-client
+# thruput-client
 
 Reusable contract invocation and spec codec for native Groundhog clients.
 Groundhog CLI and the experimental Stellar adapter supply their own configuration,
@@ -42,13 +42,13 @@ Groundhog CLI, node supervisor, compiler/lowerer, toolchain manager, JSON-RPC
 server crate and contract SDK. Existing RPC, signing, XDR and spec types are
 re-exported so adapters can use matching versions.
 
-Node management remains a separate capability based on `groundhog-node-supervisor`.
+Node management remains a separate capability based on `thruput-node-supervisor`.
 Adding a node adapter to another CLI should not expand this crate's dependencies.
 
 ## Text encodings for host applications
 
-`groundhog_client::strkey` re-exports the encoding helpers from
-`groundhog-signing`. Use `parse_contract_address` / `format_contract_address`
+`thruput_client::strkey` re-exports the encoding helpers from
+`thruput-signing`. Use `parse_contract_address` / `format_contract_address`
 for C StrKeys, `parse_public_key` / `format_public_key` for G public keys, and
 `parse_secret_seed` / `format_secret_seed` for explicit S seed import/export.
 Parsing also accepts legacy 32-byte hex. Invalid checksum, length or type is

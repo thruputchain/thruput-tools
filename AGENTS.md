@@ -47,7 +47,7 @@ re-derive protocol primitives in the CLI.
 
 ## RPC contracts
 
-- Reuse `groundhog-xdr` types and shared `json-rpc-types` projections. Keep
+- Reuse `thruput-xdr` types and shared `json-rpc-types` projections. Keep
   public method implementations in `json-rpc-server`; binaries supply backend
   adapters. Add hogd result decoding and composite status ordering to
   `hogd-backend`, not separate gateway/supervisor implementations.
@@ -77,7 +77,7 @@ re-derive protocol primitives in the CLI.
 - `thruput build` is offline and must not enforce a target chain's limits.
   Keep chain admission checks at submission.
 - Generate OpenRPC/JSON Schema from Rust traits and types. Never hand-edit
-  `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json` or maintain
+  `crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json` or maintain
   parallel RPC schemas. The error catalog is `json-rpc-types/src/error.rs`;
   update the per-method error mapping in `open-rpc-spec/src/lib.rs` when adding
   methods/errors. Model structured error data as serde types and project it

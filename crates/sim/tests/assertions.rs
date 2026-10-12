@@ -1,16 +1,16 @@
 use serde_json::json;
 
-use groundhog_sim::assertions::{AssertionEvaluation, determine_outcome, evaluate_assertions};
-use groundhog_sim::manifest::{SimulationManifest, WorkloadKind};
-use groundhog_sim::metrics::RunMetricsBuilder;
-use groundhog_sim::result::{
+use std::collections::BTreeMap;
+use thruput_sim::assertions::{AssertionEvaluation, determine_outcome, evaluate_assertions};
+use thruput_sim::manifest::{SimulationManifest, WorkloadKind};
+use thruput_sim::metrics::RunMetricsBuilder;
+use thruput_sim::result::{
     AssertionResult, AssertionStatus, ChainProgressSummary, ResourceTimeline, SimRunOutcome,
     WorkloadMetrics,
 };
-use groundhog_sim::result::{
+use thruput_sim::result::{
     ChainTipObservation, ResourceSamplePoint, ResourceSampleScope, ResourceSegment,
 };
-use std::collections::BTreeMap;
 
 #[test]
 fn evaluates_max_error_rate_assertion() {

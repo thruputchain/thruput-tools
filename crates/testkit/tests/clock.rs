@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use groundhog_testkit::clock::Clock;
+use thruput_testkit::clock::Clock;
 
 #[tokio::test]
 async fn sleep_waits_until_the_clock_advances() {

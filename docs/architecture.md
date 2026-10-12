@@ -45,9 +45,9 @@ and [RV32 design](rv32/design.md).
 | --- | --- |
 | `thruput test` | Does this project's contract pass executor-backed tests? |
 | `thruput test --integration` | Does the project work through a real local node? |
-| `groundhog-testkit` | Do several application actors interact correctly? |
+| `thruput-testkit` | Do several application actors interact correctly? |
 | `hogsim` | How does a stateful traffic mix behave over time and during faults? |
-| `groundhog-bench` | How does a specific RPC workload perform under controlled load? |
+| `thruput-bench` | How does a specific RPC workload perform under controlled load? |
 
 The [testkit design](testkit/DESIGN.md) and [simulator design](sim/sim-design.md)
 explain their different ownership and timing models. Benchmark and simulation
@@ -69,6 +69,6 @@ capacity.
 | Signing and wallet transactions | [signing](../crates/signing/src/lib.rs) |
 
 [Cargo.toml](../Cargo.toml) lists the complete workspace. The
-[OpenRPC artifact](../crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json)
+[OpenRPC artifact](../crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json)
 is generated from the Rust API and payload types; it is the reference for
 consumers integrating against the wire interface.

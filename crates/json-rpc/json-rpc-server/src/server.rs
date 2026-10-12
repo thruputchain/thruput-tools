@@ -4,9 +4,9 @@ use std::{future::Future, sync::Arc};
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 
-use groundhog_bundle_identity::BundleIdentity;
-use groundhog_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
-use groundhog_json_rpc_types::{
+use thruput_bundle_identity::BundleIdentity;
+use thruput_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress,
     address_auth::AddressAuthDataResponse,
     balance::BalanceResponse,
@@ -23,7 +23,7 @@ use groundhog_json_rpc_types::{
     view::{ViewRequest, ViewResponse},
 };
 
-use groundhog_tx_validation::NetworkConfigParams;
+use thruput_tx_validation::NetworkConfigParams;
 
 use crate::{
     BuildVersion, ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError,
@@ -579,9 +579,7 @@ where
     }
 
     #[tracing::instrument(skip_all)]
-    async fn chain_config(
-        &self,
-    ) -> RpcResult<groundhog_json_rpc_types::network_config::ChainConfig> {
+    async fn chain_config(&self) -> RpcResult<thruput_json_rpc_types::network_config::ChainConfig> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
             // Price reads must report a failed fetch, even when advisory submit
@@ -590,7 +588,7 @@ where
             let stated = NetworkConfigParams::from_network_config(&reading.network_config)
                 .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
             self.tip_cache.store(TipState::from_reading(&reading)).await;
-            let mut config = groundhog_json_rpc_types::network_config::ChainConfig::from(stated);
+            let mut config = thruput_json_rpc_types::network_config::ChainConfig::from(stated);
             config.execution = reading.execution;
             Ok(config)
         })
@@ -600,7 +598,7 @@ where
     #[tracing::instrument(skip_all, fields(?height))]
     async fn get_block_by_number(
         &self,
-        height: groundhog_json_rpc_types::decimal::Decimal<BlockHeight>,
+        height: thruput_json_rpc_types::decimal::Decimal<BlockHeight>,
     ) -> RpcResult<Option<BlockInfo>> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
@@ -612,7 +610,7 @@ where
     #[tracing::instrument(skip_all)]
     async fn pending_transaction_count(
         &self,
-    ) -> RpcResult<groundhog_json_rpc_types::decimal::Decimal<u64>> {
+    ) -> RpcResult<thruput_json_rpc_types::decimal::Decimal<u64>> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
             Ok(self.chain.pending_transaction_count(context).await?.into())
@@ -739,7 +737,7 @@ where
             let response = self.view.view(context, request, gas_limit).await?;
             if let Some(requested) = min_height.filter(|height| *response.height < *height) {
                 return Err(RpcServerError::ViewHeightUnavailable(
-                    groundhog_json_rpc_types::view::ViewHeightUnavailable {
+                    thruput_json_rpc_types::view::ViewHeightUnavailable {
                         requested: requested.into(),
                         observed: response.height,
                     },
@@ -754,8 +752,8 @@ where
     #[tracing::instrument(skip_all, fields(calls = request.calls.len()))]
     async fn view_batch(
         &self,
-        request: groundhog_json_rpc_types::view::ViewBatchRequest,
-    ) -> RpcResult<groundhog_json_rpc_types::view::ViewBatchResponse> {
+        request: thruput_json_rpc_types::view::ViewBatchRequest,
+    ) -> RpcResult<thruput_json_rpc_types::view::ViewBatchResponse> {
         let context = self
             .request_context()
             .capped_from_start(Duration::from_millis(self.config.view_timeout_ms));
@@ -810,7 +808,7 @@ fn view_gas_limit(requested: Option<u64>, ceiling: u64) -> Result<u64, RpcServer
 }
 
 fn validate_view_batch(
-    request: &groundhog_json_rpc_types::view::ViewBatchRequest,
+    request: &thruput_json_rpc_types::view::ViewBatchRequest,
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
     let invalid = |message: &str| RpcServerError::InvalidParam(message.into());
@@ -849,7 +847,7 @@ fn validate_view_batch(
 #[cfg(test)]
 mod view_batch_validation_tests {
     use super::*;
-    use groundhog_json_rpc_types::{
+    use thruput_json_rpc_types::{
         hex::HexBytes,
         view::{ViewBatchRequest, ViewCall},
     };
@@ -858,7 +856,7 @@ mod view_batch_validation_tests {
     fn aggregate_cap_counts_declared_and_default_limits_without_overflow() {
         let call = ViewCall {
             auth_claim: None,
-            contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
+            contract: thruput_xdr::types::ContractAddress::from([0; 32]).into(),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
@@ -894,7 +892,7 @@ mod view_batch_validation_tests {
     fn operator_limits_can_exceed_defaults_and_still_bound_aggregate_work() {
         let call = ViewCall {
             auth_claim: None,
-            contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
+            contract: thruput_xdr::types::ContractAddress::from([0; 32]).into(),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![0; 4096]),
             caller: None,
@@ -925,7 +923,7 @@ mod view_batch_validation_tests {
     fn validates_call_count_calldata_gas_and_height_bounds() {
         let call = ViewCall {
             auth_claim: None,
-            contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
+            contract: thruput_xdr::types::ContractAddress::from([0; 32]).into(),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![0; 4096]),
             caller: None,
@@ -1032,12 +1030,12 @@ mod tests {
 
     use super::*;
     use crate::{ValidatedTransaction, ViewPlane};
-    use groundhog_json_rpc_types::NetworkHash;
-    use groundhog_json_rpc_types::events::{
+    use thruput_json_rpc_types::NetworkHash;
+    use thruput_json_rpc_types::events::{
         BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventTopicFilter,
         IterationOrder, PaginationCursor, TopicList,
     };
-    use groundhog_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::hex::Hex0x;
     use xdr_common::VecM;
 
     // Canonical XDR/hash vector only. This transaction is structurally valid
@@ -1098,15 +1096,15 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     fn tip_reading_with_params(
         height: i64,
-        params: Vec<groundhog_xdr::network_config::ConfigParam>,
+        params: Vec<thruput_xdr::network_config::ConfigParam>,
     ) -> TipReading {
         TipReading::new(
             ChainTip {
                 height: BlockHeight::from(height),
-                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
+                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0u8; 32])),
             },
-            groundhog_xdr::network_config::NetworkConfig::_0 {
-                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+            thruput_xdr::network_config::NetworkConfig::_0 {
+                v0: thruput_xdr::network_config::NetworkConfigV0 {
                     params: VecM(params),
                 },
             },
@@ -1114,7 +1112,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     fn test_network_info() -> NetworkInfo {
-        NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
+        NetworkInfo::new(NetworkHash::from(thruput_xdr::types::SHA256Hash::from(
             [0x07; 32],
         )))
     }
@@ -1430,7 +1428,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         ) -> Result<ViewResponse, RpcServerError> {
             self.view_gas_limits.lock().await.push(gas_limit);
             Ok(ViewResponse {
-                output: groundhog_json_rpc_types::view::RootInvocationOutput::Return {
+                output: thruput_json_rpc_types::view::RootInvocationOutput::Return {
                     return_data: HexBytes(vec![]),
                 },
                 events: vec![],
@@ -1752,18 +1750,18 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     /// that counts how often it is asked, with a pre-expiry tip.
     #[derive(Clone)]
     struct ConfigChain {
-        params: Arc<Mutex<Vec<groundhog_xdr::network_config::ConfigParam>>>,
+        params: Arc<Mutex<Vec<thruput_xdr::network_config::ConfigParam>>>,
         tip_calls: Arc<Mutex<u32>>,
         tip_error: Arc<Mutex<Option<String>>>,
-        execution: Arc<Mutex<Option<groundhog_json_rpc_types::network_config::ExecutionConfig>>>,
+        execution: Arc<Mutex<Option<thruput_json_rpc_types::network_config::ExecutionConfig>>>,
     }
 
     /// A config stating only `maxNewContractsPerTx`.
     fn max_contracts_params(
         max_new_contracts_per_tx: u32,
-    ) -> Vec<groundhog_xdr::network_config::ConfigParam> {
+    ) -> Vec<thruput_xdr::network_config::ConfigParam> {
         vec![
-            groundhog_xdr::network_config::ConfigParam::kConfigParamMaxNewContractsPerTx {
+            thruput_xdr::network_config::ConfigParam::kConfigParamMaxNewContractsPerTx {
                 max_new_contracts_per_tx,
             },
         ]
@@ -1775,7 +1773,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Self::with_params(max_contracts_params(max_new_contracts_per_tx))
         }
 
-        fn with_params(params: Vec<groundhog_xdr::network_config::ConfigParam>) -> Self {
+        fn with_params(params: Vec<thruput_xdr::network_config::ConfigParam>) -> Self {
             Self {
                 params: Arc::new(Mutex::new(params)),
                 tip_calls: Arc::new(Mutex::new(0)),
@@ -1785,7 +1783,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         }
 
         /// Replace the config the next tip reports, as an upgrade block does.
-        async fn set_params(&self, params: Vec<groundhog_xdr::network_config::ConfigParam>) {
+        async fn set_params(&self, params: Vec<thruput_xdr::network_config::ConfigParam>) {
             *self.params.lock().await = params;
         }
     }
@@ -1853,15 +1851,15 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         }
     }
 
-    fn rv32_contract(size: usize, fill: u8) -> groundhog_xdr::contract::Contract {
-        groundhog_xdr::contract::Contract::kRv32 {
-            rv32_contract: groundhog_xdr::contract::ContractBlob {
+    fn rv32_contract(size: usize, fill: u8) -> thruput_xdr::contract::Contract {
+        thruput_xdr::contract::Contract::kRv32 {
+            rv32_contract: thruput_xdr::contract::ContractBlob {
                 data: xdr_common::BytesM(vec![fill; size]),
             },
         }
     }
 
-    fn signed_tx_hex_with_contracts(contracts: Vec<groundhog_xdr::contract::Contract>) -> String {
+    fn signed_tx_hex_with_contracts(contracts: Vec<thruput_xdr::contract::Contract>) -> String {
         format!(
             "0x{}",
             hex::encode(crate::tx::test_fixtures::signed_tx_bytes_with_contracts(
@@ -1932,7 +1930,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             RpcServerConfig::default(),
             submitted.clone(),
         );
-        let oversized = groundhog_xdr::contract::kDefaultMaxContractSizeBytes as usize + 1;
+        let oversized = thruput_xdr::contract::kDefaultMaxContractSizeBytes as usize + 1;
 
         let error = server
             .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(
@@ -1961,7 +1959,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         // The tip's config states a cap far below the protocol default; the
         // submit path must apply the stated value, not the constant.
         let chain = ConfigChain::with_params(vec![
-            groundhog_xdr::network_config::ConfigParam::kConfigParamMaxContractSizeBytes {
+            thruput_xdr::network_config::ConfigParam::kConfigParamMaxContractSizeBytes {
                 max_contract_size_bytes: 64,
             },
         ]);
@@ -2403,7 +2401,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(
             err.code(),
-            groundhog_json_rpc_types::error::codes::TX_REJECTED
+            thruput_json_rpc_types::error::codes::TX_REJECTED
         );
         assert!(
             err.message().contains("expir"),
@@ -2504,7 +2502,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let request = ViewRequest {
             auth_claim: None,
             min_height: None,
-            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            contract: Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
@@ -2545,7 +2543,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 Ok(ViewResponse {
                     height: self.height.load(Ordering::SeqCst).into(),
                     gas_used: gas_limit,
-                    output: groundhog_json_rpc_types::view::RootInvocationOutput::Fault,
+                    output: thruput_json_rpc_types::view::RootInvocationOutput::Fault,
                     events: vec![],
                 })
             }
@@ -2570,7 +2568,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         );
         let request = |min_height: Option<i64>| ViewRequest {
             auth_claim: None,
-            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0; 32])),
+            contract: Hex0x(thruput_xdr::types::ContractAddress::from([0; 32])),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
@@ -2588,7 +2586,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             assert_eq!(response.gas_used, 123);
             assert!(matches!(
                 response.output,
-                groundhog_json_rpc_types::view::RootInvocationOutput::Fault
+                thruput_json_rpc_types::view::RootInvocationOutput::Fault
             ));
         }
         let error = server
@@ -2697,7 +2695,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(
             err.code(),
-            groundhog_json_rpc_types::error::codes::INVALID_PARAMS
+            thruput_json_rpc_types::error::codes::INVALID_PARAMS
         );
         assert_eq!(*mock.event_calls.lock().await, 0);
     }
@@ -2723,7 +2721,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(
             err.code(),
-            groundhog_json_rpc_types::error::codes::INVALID_PARAMS
+            thruput_json_rpc_types::error::codes::INVALID_PARAMS
         );
         assert_eq!(*mock.event_calls.lock().await, 0);
     }
@@ -2764,7 +2762,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(
             err.code(),
-            groundhog_json_rpc_types::error::codes::INVALID_PARAMS
+            thruput_json_rpc_types::error::codes::INVALID_PARAMS
         );
         assert_eq!(*mock.tx_by_address_calls.lock().await, 0);
     }
@@ -2790,7 +2788,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(
             err.code(),
-            groundhog_json_rpc_types::error::codes::INVALID_PARAMS
+            thruput_json_rpc_types::error::codes::INVALID_PARAMS
         );
         assert_eq!(*mock.tx_by_address_calls.lock().await, 0);
     }
@@ -2820,7 +2818,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(
             err.code(),
-            groundhog_json_rpc_types::error::codes::NOT_IMPLEMENTED
+            thruput_json_rpc_types::error::codes::NOT_IMPLEMENTED
         );
     }
 
@@ -2857,7 +2855,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         EventQuery {
             filters: EventFilterList(VecM(vec![EventFilter {
                 contract_addresses: ContractAddressList(VecM(vec![Hex0x(
-                    groundhog_xdr::types::ContractAddress::from([0u8; 32]),
+                    thruput_xdr::types::ContractAddress::from([0u8; 32]),
                 )])),
                 topics: EventTopicFilter {
                     topic0: TopicList(VecM(vec![])),
@@ -2883,7 +2881,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     fn simple_address_query() -> AddressTransactionQuery {
         AddressTransactionQuery {
-            address: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            address: Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32])),
             order: IterationOrder::Ascending,
             anchor: BlockAnchor::AtBeginning,
             cursor: PaginationCursor(vec![]),

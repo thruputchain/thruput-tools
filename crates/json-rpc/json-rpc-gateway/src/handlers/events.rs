@@ -1,14 +1,14 @@
 //! `groundhog_getEvents` handler.
 
-use groundhog_hogd_backend::indexer as shared_indexer;
-use groundhog_indexer::EventPageResult;
-use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::events::{EventPage, EventQuery};
+use thruput_hogd_backend::indexer as shared_indexer;
+use thruput_indexer::EventPageResult;
+use thruput_json_rpc_server::RpcRequestContext;
+use thruput_json_rpc_types::events::{EventPage, EventQuery};
 
 use crate::config::HealthBackend;
 use crate::context::GatewayContext;
 use crate::metrics::REASON_PARSE_FAILED;
-use groundhog_json_rpc_server::RpcServerError;
+use thruput_json_rpc_server::RpcServerError;
 
 use super::{INDEXER, backend_deadline, timed_backend_call};
 
@@ -32,7 +32,7 @@ pub async fn get_events(
         .clone()
         .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
 
-    let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
+    let wire_query: thruput_indexer::indexer::EventQuery = query.into();
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
     let result = timed_backend_call(
         &ctx.metrics,

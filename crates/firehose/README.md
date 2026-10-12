@@ -6,7 +6,7 @@ The gateway remains a separate process with its existing surface. Experimental w
 types and generated jsonrpsee client/server traits live in this unpublished crate.
 
 ```sh
-cargo build -p groundhog-firehose
+cargo build -p thruput-firehose
 hog-firehose discover localhost:9001 localhost:9002 localhost:9003
 hog-firehose tail --event-endpoint localhost:9002 --store ./archive \
   --tip-endpoint localhost:9004 --listen 127.0.0.1:9550 --ws-listen 127.0.0.1:9551
@@ -181,7 +181,7 @@ latencies, growth estimates, restart evidence, and design differences.
 The examples are **local-node test drivers**, not production coordinators:
 
 ```sh
-cargo build -p groundhog-firehose --examples
+cargo build -p thruput-firehose --examples
 # Mirrors node-supervisor's proposal/commit and compatibility hash sequence:
 target/debug/examples/drive_blocks <scheduler-coord> <archive> 30 250
 # Same native wallet self-call shape as the workspace benchmark; unique nonce start:
@@ -190,7 +190,7 @@ target/debug/examples/drive_blocks <scheduler-coord> <archive> 5 250
 ```
 
 For local schema-4 nodes, the example owns account zero derived from
-`groundhog-firehose:traffic-fixture-v1`. Supply that fixture's public allocation
+`thruput-firehose:traffic-fixture-v1`. Supply that fixture's public allocation
 before starting the node; the manifest cannot supply a signer. Hosted schema-3
 manifests retain the separate bootstrap adapter when the seed argument is omitted.
 

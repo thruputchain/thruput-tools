@@ -81,7 +81,7 @@ fn saved_selection_does_not_fall_back_to_path_when_cache_is_unusable() {
     let bin = root.path().join("bin");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
-    let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+    let catalog = thruput_toolchain::Catalog::embedded().unwrap();
     std::fs::write(
         config.join("config.toml"),
         format!(
@@ -116,7 +116,7 @@ fn saved_selection_does_not_fall_back_to_path_when_cache_is_unusable() {
 
 #[test]
 fn status_retains_uninstalled_and_stale_managed_selections() {
-    let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+    let catalog = thruput_toolchain::Catalog::embedded().unwrap();
     for selected in [None, Some(catalog.default_version()), Some("0.0.0-retired")] {
         let version = selected.unwrap_or(catalog.default_version());
         let root = tempfile::tempdir().unwrap();

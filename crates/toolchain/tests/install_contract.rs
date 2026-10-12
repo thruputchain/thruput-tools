@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use groundhog_toolchain::{
+use sha2::{Digest, Sha256};
+use tar::{Builder, EntryType, Header};
+use thruput_toolchain::{
     Artifact, BundleSource, Catalog, DEFAULT_PUBLIC_ARTIFACT_BASE_URL, HostTarget, HttpSource,
     InstallError, Installer, SourceError,
 };
-use sha2::{Digest, Sha256};
-use tar::{Builder, EntryType, Header};
 
 struct MemorySource {
     bytes: Vec<u8>,
@@ -159,7 +159,7 @@ fn clean_removes_a_version_no_longer_in_the_catalog() {
         assert!(matches!(
             installer.clean(version, HostTarget::LinuxX86_64),
             Err(InstallError::Catalog(
-                groundhog_toolchain::CatalogError::InvalidVersion { .. }
+                thruput_toolchain::CatalogError::InvalidVersion { .. }
             ))
         ));
     }

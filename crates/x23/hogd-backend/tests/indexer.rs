@@ -1,14 +1,14 @@
-use groundhog_indexer::EventPage;
-use groundhog_indexer::EventPageResult;
-use groundhog_indexer::IndexerQueryOutcome;
-use groundhog_indexer::TransactionRefPageResult;
-use groundhog_indexer::indexer::TxInfoOutcome;
-use groundhog_indexer::indexer::TxInfoResult;
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_xdr::event::{IdentifiedEvent, TxEmittedEvent};
+use thruput_indexer::EventPage;
+use thruput_indexer::EventPageResult;
+use thruput_indexer::IndexerQueryOutcome;
+use thruput_indexer::TransactionRefPageResult;
+use thruput_indexer::indexer::TxInfoOutcome;
+use thruput_indexer::indexer::TxInfoResult;
+use thruput_json_rpc_server::RpcServerError;
+use thruput_xdr::event::{IdentifiedEvent, TxEmittedEvent};
 use xdr_common::{BytesM, VecM};
 
-use groundhog_hogd_backend::indexer::*;
+use thruput_hogd_backend::indexer::*;
 
 #[test]
 fn query_failures_are_named_and_never_read_as_an_empty_page() {

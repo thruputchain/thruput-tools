@@ -1,7 +1,7 @@
 //! Pubkey-account helpers.
 
-use groundhog_xdr::auth_claim::{AuthClaim, PubkeyAccountPreimage};
-use groundhog_xdr::types::{ContractAddress, PublicKey};
+use thruput_xdr::auth_claim::{AuthClaim, PubkeyAccountPreimage};
+use thruput_xdr::types::{ContractAddress, PublicKey};
 
 /// Default nonce used for the first pubkey-account derived from a key.
 pub const DEFAULT_PUBKEY_ACCOUNT_NONCE: u64 = 0;
@@ -25,7 +25,7 @@ impl PubkeyAccount {
     pub fn from_public_key_bytes(public_key: [u8; 32], nonce: u64) -> Self {
         Self::new(
             PublicKey::Ed25519 {
-                ed25519: groundhog_xdr::types::Ed25519PublicKey::from(public_key),
+                ed25519: thruput_xdr::types::Ed25519PublicKey::from(public_key),
             },
             nonce,
         )
@@ -52,6 +52,6 @@ impl PubkeyAccount {
     /// CXS encodings of both, matching what hogd's auth verifier derives. Every
     /// `PublicKey` variant encodes, so derivation cannot fail.
     pub fn address(&self) -> ContractAddress {
-        groundhog_domain_separator::sha2::pubkey_account_address(&self.preimage())
+        thruput_domain_separator::sha2::pubkey_account_address(&self.preimage())
     }
 }

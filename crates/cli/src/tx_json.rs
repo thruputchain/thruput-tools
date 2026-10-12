@@ -1,8 +1,8 @@
-use groundhog_json_rpc_types::receipt::TransactionReceipt;
-use groundhog_json_rpc_types::transaction::{TransactionRef, TransactionStatus, TxHash};
-use groundhog_json_rpc_types::{BlockHeight, ContractAddress, events::PaginationCursor};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thruput_json_rpc_types::receipt::TransactionReceipt;
+use thruput_json_rpc_types::transaction::{TransactionRef, TransactionStatus, TxHash};
+use thruput_json_rpc_types::{BlockHeight, ContractAddress, events::PaginationCursor};
 
 pub const TX_SHOW_JSON_SCHEMA_VERSION: u32 = 4;
 pub const TX_LIST_JSON_SCHEMA_VERSION: u32 = 2;
@@ -32,10 +32,10 @@ pub struct TxListReport {
     pub address: ContractAddress,
     pub refs: Vec<TransactionRef>,
     pub cursor: PaginationCursor,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub latest_block: BlockHeight,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub oldest_block: BlockHeight,
 }

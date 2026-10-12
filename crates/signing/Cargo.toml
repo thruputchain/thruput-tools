@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-signing"
+name = "thruput-signing"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Off-chain transaction signing and construction for Groundhog"
+description = "Off-chain transaction signing and construction for Thruput"
 
 exclude = [
     "tests/",
@@ -21,8 +21,8 @@ exclude = [
 workspace = true
 
 [dependencies]
-groundhog-xdr = { workspace = true }
-groundhog-domain-separator = { workspace = true }
+thruput-xdr = { workspace = true }
+thruput-domain-separator = { workspace = true }
 xdrs = { workspace = true }
 xdr-common = { workspace = true }
 sha2 = { workspace = true }
@@ -33,5 +33,5 @@ zeroize = { workspace = true }
 stellar-strkey = { workspace = true }
 
 [dev-dependencies]
-groundhog-json-rpc-server = { workspace = true }
-groundhog-tx-validation = { workspace = true }
+thruput-json-rpc-server = { workspace = true }
+thruput-tx-validation = { workspace = true }

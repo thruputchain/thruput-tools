@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# groundhog-testkit live-contract smoke-test
+# thruput-testkit live-contract smoke-test
 #
 # Builds the caller-counter fixture from groundhog-examples and runs the
 # (usually ignored) testkit contract smoke-test against a real hog-devnode.
@@ -113,18 +113,18 @@ fi
 
 log "running native testkit smoke with explicit account funding and atomic initialization"
 env "${ENV_ARGS[@]}" \
-    cargo test -p groundhog-testkit --test contract_smoke caller_counter_deploy_call_read -- --ignored --nocapture
+    cargo test -p thruput-testkit --test contract_smoke caller_counter_deploy_call_read -- --ignored --nocapture
 
 log "running testkit manual block-production smoke"
 env "${ENV_ARGS[@]}" \
-    cargo test -p groundhog-testkit --test contract_smoke manual_block_production_stages_deploys_and_calls -- --ignored --nocapture
+    cargo test -p thruput-testkit --test contract_smoke manual_block_production_stages_deploys_and_calls -- --ignored --nocapture
 
 log "running testkit cross-run registration smoke"
 env "${ENV_ARGS[@]}" \
-    cargo test -p groundhog-testkit --test contract_smoke later_run_does_not_recover_an_earlier_runs_pending_registration -- --ignored --nocapture
+    cargo test -p thruput-testkit --test contract_smoke later_run_does_not_recover_an_earlier_runs_pending_registration -- --ignored --nocapture
 
 log "running testkit repeated scenario smoke"
 env "${ENV_ARGS[@]}" \
-    cargo test -p groundhog-testkit --test contract_smoke multiple_runs_are_possible -- --ignored --nocapture
+    cargo test -p thruput-testkit --test contract_smoke multiple_runs_are_possible -- --ignored --nocapture
 
 log "testkit live contract smoke passed"

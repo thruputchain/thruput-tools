@@ -27,7 +27,7 @@ See [benchmark scenarios](bench-scenarios.md) for heavier runs and saved results
 Use an installed CLI or build the binaries from this checkout. A write benchmark
 must own fixture keys and supply their public initial allocations. Prepare
 `bench-accounts.json` with keys derived from the benchmark namespace
-`groundhog-bench:benchmark-fixtures-v1`; each account seed is SHA-256 of that
+`thruput-bench:benchmark-fixtures-v1`; each account seed is SHA-256 of that
 namespace followed by `:account-N`. The smoke script shows the executable setup.
 These deterministic keys are disposable fixtures. In one terminal:
 
@@ -49,7 +49,7 @@ Leave the gateway running too. In a third terminal:
 
 ```sh
 RUNTIME_MANIFEST=$(jq -er '.data.runtime_manifest.path' /tmp/groundhog-node.json)
-groundhog-bench --url http://127.0.0.1:9546 \
+thruput-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" --account-seed benchmark-fixtures-v1 \
   --method sendRawTransaction --accounts 3 --rate 3 --duration 2 --force
 ```

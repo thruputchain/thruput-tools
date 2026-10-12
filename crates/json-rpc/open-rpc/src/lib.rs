@@ -1,6 +1,6 @@
 //! `OpenRPC` document generation for the Groundhog JSON-RPC API.
 //!
-//! Provides types and helpers that the `groundhog-open-rpc-macros` proc
+//! Provides types and helpers that the `thruput-open-rpc-macros` proc
 //! macro expands into. Application code aggregates methods from
 //! annotated jsonrpsee traits into a [`Project`], then serializes to
 //! the `OpenRPC` 1.2.6 JSON format.

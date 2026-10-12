@@ -1,8 +1,8 @@
-use groundhog_json_rpc_types::error::{TxInvalidDetail, codes};
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use jsonrpsee::core::ClientError;
 use jsonrpsee::types::error::METHOD_NOT_FOUND_CODE;
+use thruput_json_rpc_types::error::{TxInvalidDetail, codes};
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
 
 use crate::codec::{AbortDecodeError, CallMetadata, DecodedAbort, decode_abort};
 use crate::result::CommandError;
@@ -32,7 +32,7 @@ pub fn summarize_exec_status(status: &ExecStatus) -> String {
         } => format!("reverted: {message}"),
         ExecStatus::Reverted { message: None } => "reverted".into(),
         ExecStatus::DeterministicError { kind }
-            if kind == groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT =>
+            if kind == thruput_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT =>
         {
             "failed with a deterministic execution fault (e.g. out-of-bounds access or \
              out of gas; the node does not report the specific cause)"
@@ -99,7 +99,7 @@ pub(crate) fn print_failed_receipt_data(
 /// succeeded, otherwise the raw buffer plus the decode failure when one
 /// was attempted.
 fn print_abort_context(
-    abort_data: Option<&groundhog_json_rpc_types::hex::HexBytes>,
+    abort_data: Option<&thruput_json_rpc_types::hex::HexBytes>,
     decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
     print: &Print,
 ) {
@@ -168,9 +168,8 @@ pub(crate) fn print_prepared_transaction(tx_hex: &str, print: &Print) {
         return;
     }
     if let Ok(bytes) = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex))
-        && let Ok(signed) =
-            xdrs::txs::decode::<groundhog_xdr::transaction::SignedTransaction>(&bytes)
-        && let Ok(hash) = groundhog_signing::transaction_hash(&signed.tx)
+        && let Ok(signed) = xdrs::txs::decode::<thruput_xdr::transaction::SignedTransaction>(&bytes)
+        && let Ok(hash) = thruput_signing::transaction_hash(&signed.tx)
     {
         print.detail("prepared transaction", format_tx_hash(&TxHash(hash.into())));
     }
@@ -216,7 +215,7 @@ pub(crate) fn print_receipt_data(
 
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {
     let client = crate::http_client::rpc_client(rpc_url)?;
-    groundhog_client::resolve_block_expiry_height(&client, DEFAULT_BLOCK_EXPIRY_OFFSET)
+    thruput_client::resolve_block_expiry_height(&client, DEFAULT_BLOCK_EXPIRY_OFFSET)
         .await
         .map_err(|e| CliError::RpcMethodFailed {
             method: "chainTip",
@@ -229,11 +228,11 @@ pub async fn submit_and_poll(
     tx_hex: &str,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
     let client = crate::http_client::rpc_client(rpc_url)?;
-    groundhog_json_rpc_client::submit_and_poll_with_client_config(
+    thruput_json_rpc_client::submit_and_poll_with_client_config(
         &client,
         tx_hex,
-        groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
-        groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
+        thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
+        thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
     )
     .await
     .map_err(map_submit_and_poll_error)
@@ -262,21 +261,21 @@ pub fn ensure_tx_success(
     )))
 }
 
-pub(crate) fn map_submit_call_error(error: groundhog_client::SubmitCallError) -> CliError {
+pub(crate) fn map_submit_call_error(error: thruput_client::SubmitCallError) -> CliError {
     match error {
-        groundhog_client::SubmitCallError::Rpc { source, .. } => map_submit_and_poll_error(
-            groundhog_json_rpc_client::SubmitAndPollError::SendRawTransaction(source),
+        thruput_client::SubmitCallError::Rpc { source, .. } => map_submit_and_poll_error(
+            thruput_json_rpc_client::SubmitAndPollError::SendRawTransaction(source),
         ),
-        mismatch @ groundhog_client::SubmitCallError::HashMismatch { .. } => {
+        mismatch @ thruput_client::SubmitCallError::HashMismatch { .. } => {
             CliError::Other(mismatch.to_string())
         }
     }
 }
 
 pub(crate) fn map_poll_receipt_error(
-    error: groundhog_json_rpc_client::PollTransactionReceiptError,
+    error: thruput_json_rpc_client::PollTransactionReceiptError,
 ) -> CliError {
-    use groundhog_json_rpc_client::{
+    use thruput_json_rpc_client::{
         PollTransactionReceiptError as Poll, SubmitAndPollError as Combined,
     };
     map_submit_and_poll_error(match error {
@@ -298,12 +297,12 @@ pub(crate) fn map_poll_receipt_error(
     })
 }
 
-fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollError) -> CliError {
+fn map_submit_and_poll_error(error: thruput_json_rpc_client::SubmitAndPollError) -> CliError {
     match error {
-        groundhog_json_rpc_client::SubmitAndPollError::Connect { rpc_url, source } => {
+        thruput_json_rpc_client::SubmitAndPollError::Connect { rpc_url, source } => {
             CliError::RpcConnect(format!("{rpc_url}: {source}"))
         }
-        groundhog_json_rpc_client::SubmitAndPollError::SendRawTransaction(error) => {
+        thruput_json_rpc_client::SubmitAndPollError::SendRawTransaction(error) => {
             match violated_bound(&error) {
                 Some(detail) => CliError::TransactionRejectedBeforeSubmission { detail },
                 None => CliError::RpcMethodFailed {
@@ -312,13 +311,13 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
                 },
             }
         }
-        groundhog_json_rpc_client::SubmitAndPollError::GetTransactionReceipt(error) => {
+        thruput_json_rpc_client::SubmitAndPollError::GetTransactionReceipt(error) => {
             CliError::RpcMethodFailed {
                 method: "getTransactionReceipt",
                 message: error.to_string(),
             }
         }
-        groundhog_json_rpc_client::SubmitAndPollError::TransactionStatus { tx_hash, status } => {
+        thruput_json_rpc_client::SubmitAndPollError::TransactionStatus { tx_hash, status } => {
             match status {
                 TransactionStatus::Invalid { reason } => CliError::TransactionInvalid {
                     tx_hash: format_tx_hash(&tx_hash),
@@ -343,7 +342,7 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
                 _ => CliError::ReceiptPollingExhausted,
             }
         }
-        groundhog_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
+        thruput_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
             tx_hash,
             attempts,
             last_status,
@@ -383,8 +382,7 @@ fn violated_bound(error: &ClientError) -> Option<TxInvalidDetail> {
 
 fn receipt_poll_duration_seconds(attempts: usize) -> u64 {
     let attempts = u32::try_from(attempts).unwrap_or(u32::MAX);
-    let duration =
-        groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL.saturating_mul(attempts);
+    let duration = thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL.saturating_mul(attempts);
     duration
         .as_secs()
         .saturating_add(u64::from(duration.subsec_nanos() != 0))
@@ -396,15 +394,15 @@ mod tests {
 
     #[test]
     fn receipt_timeout_preserves_status_without_echoing_endpoint() {
-        use groundhog_json_rpc_types::hex::Hex0x;
+        use thruput_json_rpc_types::hex::Hex0x;
         for (status, expected) in [
             (Some(TransactionStatus::Unknown), "unknown"),
             (Some(TransactionStatus::Pending), "pending"),
             (None, "unavailable"),
         ] {
-            let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x44; 32])));
+            let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
             let error = map_submit_and_poll_error(
-                groundhog_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
+                thruput_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
                     tx_hash,
                     attempts: 300,
                     last_status: status,
@@ -431,7 +429,7 @@ mod tests {
     #[test]
     fn fault_kind_summarizes_with_bundled_causes() {
         let summary = summarize_exec_status(&ExecStatus::DeterministicError {
-            kind: groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT.into(),
+            kind: thruput_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT.into(),
         });
         assert_eq!(
             summary,
@@ -489,22 +487,22 @@ mod tests {
 
     #[test]
     fn recent_bounds_failure_maps_to_actionable_cli_error() {
-        use groundhog_json_rpc_types::{
+        use thruput_json_rpc_types::{
             BlockHeight,
             hex::{Hex0x, HexBytes},
             transaction::{ConflictCode, ConflictDiagnostic},
         };
 
-        let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x44; 32])));
+        let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
         let error = map_submit_and_poll_error(
-            groundhog_json_rpc_client::SubmitAndPollError::TransactionStatus {
+            thruput_json_rpc_client::SubmitAndPollError::TransactionStatus {
                 tx_hash,
                 status: TransactionStatus::RecentFailure {
                     attempt_height: BlockHeight::from(17),
                     cause:
-                        groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                        thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
                             conflict: ConflictDiagnostic {
-                                address: Hex0x(groundhog_xdr::types::ContractAddress::from(
+                                address: Hex0x(thruput_xdr::types::ContractAddress::from(
                                     [0x55; 32],
                                 )),
                                 key: HexBytes(vec![0, 0, 0, 1]),
@@ -526,11 +524,11 @@ mod tests {
 
     #[test]
     fn contract_rejection_preserves_diagnostic_in_cli_error() {
-        use groundhog_json_rpc_types::transaction::{ContractRejectCode, TransactionFailureCause};
+        use thruput_json_rpc_types::transaction::{ContractRejectCode, TransactionFailureCause};
         let error = map_submit_and_poll_error(
-            groundhog_json_rpc_client::SubmitAndPollError::TransactionStatus {
-                tx_hash: TxHash(groundhog_json_rpc_types::hex::Hex0x(
-                    groundhog_xdr::types::SHA256Hash::from([0x44; 32]),
+            thruput_json_rpc_client::SubmitAndPollError::TransactionStatus {
+                tx_hash: TxHash(thruput_json_rpc_types::hex::Hex0x(
+                    thruput_xdr::types::SHA256Hash::from([0x44; 32]),
                 )),
                 status: TransactionStatus::RecentFailure {
                     attempt_height: 17.into(),
@@ -559,7 +557,7 @@ mod tests {
     #[test]
     fn default_receipt_timeout_stays_thirty_seconds() {
         assert_eq!(
-            receipt_poll_duration_seconds(groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,),
+            receipt_poll_duration_seconds(thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,),
             30
         );
     }

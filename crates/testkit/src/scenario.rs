@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use groundhog_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
+use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -352,8 +352,8 @@ async fn acquire_network(
             let allocations = crate::manifest::derive_native_accounts(accounts, seed, None)
                 .iter()
                 .map(|account| {
-                    groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-                        groundhog_json_rpc_types::hex::Hex0x(
+                    thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+                        thruput_json_rpc_types::hex::Hex0x(
                             account.signer.verifying_key_bytes().into(),
                         ),
                         config.initial_account_tokens.to_string(),
@@ -388,7 +388,7 @@ async fn acquire_network(
 }
 
 fn account_source(
-    manifest: groundhog_json_rpc_types::runtime_manifest::RuntimeManifest,
+    manifest: thruput_json_rpc_types::runtime_manifest::RuntimeManifest,
     seed: &str,
     use_bootstrap: bool,
     count: usize,
@@ -408,7 +408,7 @@ fn account_source(
 
 async fn start_local(
     config: LocalNetworkConfig,
-    allocations: Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>,
+    allocations: Vec<thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>,
 ) -> Result<NodeSupervisorHandle> {
     let block_driver = config.block_driver;
     let mut hogd = HogdDevConfig::default()

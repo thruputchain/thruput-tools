@@ -1,7 +1,7 @@
 //! Text encodings shared by native clients. `StrKeys` encode type and checksum, not network.
 //! Contract addresses, public keys and private seeds are deliberately separate operations.
 
-use groundhog_xdr::types::ContractAddress;
+use thruput_xdr::types::ContractAddress;
 use zeroize::Zeroizing;
 
 /// Invalid encoding, checksum, length or `StrKey` type. Never includes the supplied text.

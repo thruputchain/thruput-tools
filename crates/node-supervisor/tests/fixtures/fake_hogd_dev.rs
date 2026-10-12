@@ -1,4 +1,3 @@
-use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::{
     collections::HashMap,
     env, fs,
@@ -13,23 +12,27 @@ use std::{
     thread,
     time::Duration,
 };
+use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
 use async_trait::async_trait;
-use groundhog_db_gateway::AddressAndKeyBatch;
-use groundhog_db_gateway::{
+use rpc_driver::{ProgramError, RpcServer, ServiceMap};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use thruput_db_gateway::AddressAndKeyBatch;
+use thruput_db_gateway::{
     DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayIntroOutcome,
     DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
 };
-use groundhog_indexer::{
+use thruput_indexer::{
     AddressTransactionQuery, EventPage, EventPageResult, EventQuery,
     IndexerBlockExplorer_IndexerBlockExplorer1,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
     TransactionPage, TransactionPageResult, TransactionQuery, TransactionRefPage,
     TransactionRefPageResult, TxInfo, TxInfoResult,
 };
-use groundhog_json_rpc_types::hex::Hex0x;
-use groundhog_json_rpc_types::protocol_token::protocol_text;
-use groundhog_scheduler::{
+use thruput_json_rpc_types::hex::Hex0x;
+use thruput_json_rpc_types::protocol_token::protocol_text;
+use thruput_scheduler::{
     BlockID, ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, ExpectedDBTip,
     ParallelBatch, ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
     ParallelTransactionHashBatch, PendingTxCount, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
@@ -39,25 +42,20 @@ use groundhog_scheduler::{
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
     sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
 };
-use groundhog_xdr::PROTOCOL_VERSION;
-use groundhog_xdr::contract::{ContractType, DeployedContractHash};
-use groundhog_xdr::event::IdentifiedEvent;
-use groundhog_xdr::genesis::GenesisConfiguration;
-use groundhog_xdr::header::{ProposalContext, ProposalHeader};
-use groundhog_xdr::network::ProtocolCommit;
-use groundhog_xdr::network_config::NetworkConfig;
-use groundhog_xdr::storage_item::WireStorageItem;
-use groundhog_xdr::transaction::{
-    OptSignedTransactionBatch, TransactionHash, TransactionHashBatch,
-};
-use groundhog_xdr::types::{
+use thruput_xdr::PROTOCOL_VERSION;
+use thruput_xdr::contract::{ContractType, DeployedContractHash};
+use thruput_xdr::event::IdentifiedEvent;
+use thruput_xdr::genesis::GenesisConfiguration;
+use thruput_xdr::header::{ProposalContext, ProposalHeader};
+use thruput_xdr::network::ProtocolCommit;
+use thruput_xdr::network_config::NetworkConfig;
+use thruput_xdr::storage_item::WireStorageItem;
+use thruput_xdr::transaction::{OptSignedTransactionBatch, TransactionHash, TransactionHashBatch};
+use thruput_xdr::types::{
     BlockHeight, ConfigHash, ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash, Protocol,
     SHA256Hash, StorageKey, StorageShortHash, TimePoint, TxsHash,
 };
-use groundhog_xdr::validator::ValidatorID;
-use rpc_driver::{ProgramError, RpcServer, ServiceMap};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use thruput_xdr::validator::ValidatorID;
 use tokio::{net::TcpListener, runtime::Runtime};
 use xdr_common::{BytesM, VecM};
 
@@ -73,7 +71,7 @@ static TERMINATED: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone)]
 struct FakeStartupConfig {
     accounts: Vec<Value>,
-    network_hash: groundhog_json_rpc_types::NetworkHashHex,
+    network_hash: thruput_json_rpc_types::NetworkHashHex,
 }
 
 impl FakeStartupConfig {
@@ -90,7 +88,7 @@ impl FakeStartupConfig {
             };
         };
         let path = &pair[1];
-        let manifest: groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifest =
+        let manifest: thruput_json_rpc_types::bootstrap_manifest::BootstrapManifest =
             serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(manifest.schema_version, 4);
         let accounts = std::iter::once(&manifest.bootstrap_faucet)
@@ -99,8 +97,7 @@ impl FakeStartupConfig {
             .map(|(position, allocation)| {
                 let public_key: [u8; 32] = allocation.public_key.as_ref().try_into().unwrap();
                 let address =
-                    groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0)
-                        .address();
+                    thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address();
                 json!({
                     "role": if position == 0 { "faucet" } else { "local_user" },
                     "publicKey": allocation.public_key,
@@ -895,15 +892,17 @@ impl FakeScheduler {
                 contract_type: ContractType::kNative,
             },
             network_config: NetworkConfig::_0 {
-                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+                v0: thruput_xdr::network_config::NetworkConfigV0 {
                     params: vec![
-                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxSHA256Buffers {
+                        thruput_xdr::network_config::ConfigParam::kConfigParamMaxSHA256Buffers {
                             max_sha256_buffers: 0,
                         },
-                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxCrossInvokeDepth {
+                        thruput_xdr::network_config::ConfigParam::kConfigParamMaxCrossInvokeDepth {
                             max_cross_invoke_depth: 0,
                         },
-                    ].try_into().expect("bug: fixture parameters fit"),
+                    ]
+                    .try_into()
+                    .expect("bug: fixture parameters fit"),
                 },
             },
             value: ConsensusValue {
@@ -1034,7 +1033,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
     async fn schedulercoord_intro_coord(
         &self,
-        _card: groundhog_scheduler::CoordCard,
+        _card: thruput_scheduler::CoordCard,
     ) -> Result<CoordinatorRegistrationOutcome, ProgramError> {
         Ok(CoordinatorRegistrationOutcome::CoordinatorRegistrationOK)
     }
@@ -1223,8 +1222,8 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
     async fn schedulercoord_commit_genesis_ceremony(
         &self,
-        _request: groundhog_scheduler::GenesisCeremonyRequest,
-    ) -> Result<groundhog_scheduler::GenesisCeremonyResult, ProgramError> {
+        _request: thruput_scheduler::GenesisCeremonyRequest,
+    ) -> Result<thruput_scheduler::GenesisCeremonyResult, ProgramError> {
         Err(ProgramError::msg("not implemented in fake hogd-dev"))
     }
 
@@ -1240,7 +1239,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         hashes: TransactionHashBatch,
     ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-        use groundhog_scheduler::{
+        use thruput_scheduler::{
             SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
             SchedulerTransactionStatus,
         };
@@ -1322,7 +1321,7 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
         &self,
         hashes: TransactionHashBatch,
     ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-        use groundhog_scheduler::{
+        use thruput_scheduler::{
             SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
             SchedulerTransactionStatus,
         };
@@ -1406,22 +1405,22 @@ struct FakeDbGateway {
 impl DbGateway_DbGateway1 for FakeDbGateway {
     async fn dbgateway_get_config(
         &self,
-    ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+    ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
         let tip = self
             .tip
             .lock()
             .expect("bug: fake tip mutex poisoned")
             .clone();
         let Some(tip) = tip else {
-            return Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
+            return Ok(thruput_db_gateway::DbGatewayConfigResult::Default {
                 error: RPCError::kRPCNotFound.0,
             });
         };
-        Ok(groundhog_db_gateway::DbGatewayConfigResult::kRPCNone {
-            config: groundhog_db_gateway::DbGatewayConfig {
+        Ok(thruput_db_gateway::DbGatewayConfigResult::kRPCNone {
+            config: thruput_db_gateway::DbGatewayConfig {
                 effective_config: tip.network_config.clone(),
                 tip,
-                storage_cost_model: groundhog_xdr::storage_cost::StorageCostModelXdr {
+                storage_cost_model: thruput_xdr::storage_cost::StorageCostModelXdr {
                     ext: ExtensionPoint::_0,
                     base_data_item_cost: 12_000,
                     bytestring_cost_per_byte: 10,
@@ -1473,7 +1472,7 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
             .collect();
         Ok(DbGatewayResult::kRPCNone {
             payload: DbGatewayPayload {
-                block_height: groundhog_xdr::types::BlockHeight::from(CANNED_STORAGE_HEIGHT),
+                block_height: thruput_xdr::types::BlockHeight::from(CANNED_STORAGE_HEIGHT),
                 items: VecM(items),
             },
         })
@@ -1561,14 +1560,14 @@ impl FakeIndexer {
     /// Build a minimal `ProposedTransaction` to stand in for a `TxInfo.tx`
     /// body. The transaction is not valid on-chain; it only needs to be
     /// present so the committed dataset round-trips through the indexer RPC.
-    fn dummy_proposed_transaction() -> groundhog_xdr::transaction::ProposedTransaction {
-        use groundhog_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
-        use groundhog_xdr::contract::ContractEntrypointID;
-        use groundhog_xdr::transaction::{
+    fn dummy_proposed_transaction() -> thruput_xdr::transaction::ProposedTransaction {
+        use thruput_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
+        use thruput_xdr::contract::ContractEntrypointID;
+        use thruput_xdr::transaction::{
             Invocation, NondeterministicProposalData, ProposedTransaction, SignedTransaction,
             Transaction, Uniquifier,
         };
-        use groundhog_xdr::types::{ContractAddress, GasAmount};
+        use thruput_xdr::types::{ContractAddress, GasAmount};
         ProposedTransaction {
             signed_tx: SignedTransaction {
                 tx: Transaction {
@@ -1601,7 +1600,7 @@ impl FakeIndexer {
     }
 
     fn build_committed_set() -> CommittedSet {
-        use groundhog_xdr::{
+        use thruput_xdr::{
             event::TxEventLog, exec_result::ExecResult, transaction::InvocationFrameOutput,
         };
 
@@ -1641,7 +1640,7 @@ impl FakeIndexer {
     }
 
     fn build_event_pages() -> EventPages {
-        use groundhog_xdr::{event::TxEmittedEvent, types::ContractAddress};
+        use thruput_xdr::{event::TxEmittedEvent, types::ContractAddress};
 
         // Page 1: two events, non-empty cursor pointing to page 2.
         let event1 = IdentifiedEvent {
@@ -1737,7 +1736,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         match self.committed.get(&key) {
             Some(info) => Ok(TxInfoResult::TxInfoFound { info: info.clone() }),
             None => Ok(TxInfoResult::Default {
-                outcome: groundhog_indexer::TxInfoOutcome::TxInfoNotFound.0,
+                outcome: thruput_indexer::TxInfoOutcome::TxInfoNotFound.0,
             }),
         }
     }
@@ -1745,8 +1744,8 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     #[tracing::instrument(skip_all)]
     async fn get_block_by_height(
         &self,
-        _height: groundhog_xdr::types::BlockHeight,
-    ) -> Result<groundhog_indexer::BlockLookupResult, ProgramError> {
+        _height: thruput_xdr::types::BlockHeight,
+    ) -> Result<thruput_indexer::BlockLookupResult, ProgramError> {
         Err(ProgramError::msg("fake indexer does not serve blocks"))
     }
 
@@ -1807,7 +1806,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     #[tracing::instrument(skip_all)]
     async fn get_transactions_by_block(
         &self,
-        _query: groundhog_indexer::BlockTransactionQuery,
+        _query: thruput_indexer::BlockTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
         Err(ProgramError::msg(
             "fake indexer does not serve transactions by block",
@@ -1828,13 +1827,13 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
 mod tests {
     use std::{net::SocketAddr, time::Duration};
 
-    use groundhog_indexer::{
+    use rpc_driver::{FixedSerialPool, RpcError};
+    use thruput_indexer::{
         BlockAnchor, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1_Client, IterationOrder,
         TxInfoResult,
     };
-    use groundhog_xdr::transaction::TransactionHash;
-    use groundhog_xdr::types::SHA256Hash;
-    use rpc_driver::{FixedSerialPool, RpcError};
+    use thruput_xdr::transaction::TransactionHash;
+    use thruput_xdr::types::SHA256Hash;
     use tokio::net::TcpListener;
     use xdr_common::{BytesM, VecM};
 
@@ -1901,11 +1900,9 @@ mod tests {
         }
     }
 
-    fn expect_event_page(
-        result: groundhog_indexer::EventPageResult,
-    ) -> groundhog_indexer::EventPage {
+    fn expect_event_page(result: thruput_indexer::EventPageResult) -> thruput_indexer::EventPage {
         match result {
-            groundhog_indexer::EventPageResult::IndexerQueryOk { page } => page,
+            thruput_indexer::EventPageResult::IndexerQueryOk { page } => page,
             other => panic!("expected successful event page, got {other:?}"),
         }
     }
@@ -1980,7 +1977,7 @@ mod tests {
             matches!(
                 result,
                 TxInfoResult::Default { outcome }
-                    if outcome == groundhog_indexer::TxInfoOutcome::TxInfoNotFound.0
+                    if outcome == thruput_indexer::TxInfoOutcome::TxInfoNotFound.0
             ),
             "expected TxInfoNotFound for unknown hash, got {result:?}"
         );

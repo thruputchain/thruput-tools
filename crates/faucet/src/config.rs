@@ -4,17 +4,17 @@ use crate::key_source::{
     FaucetSecretKeySource,
 };
 use axum::http::HeaderValue;
-use groundhog_json_rpc_types::hex::HexBytes;
-use groundhog_json_rpc_types::network_descriptor::{
-    AirdropDescriptor, FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor,
-    NetworkDescriptorEndpoints,
-};
-use groundhog_json_rpc_types::{ContractAddress, NetworkHash, NetworkHashHex, SHA256Hash};
-use groundhog_signing::{LocalSigner, PubkeyAccount};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::time::{Duration, SystemTime};
+use thruput_json_rpc_types::hex::HexBytes;
+use thruput_json_rpc_types::network_descriptor::{
+    AirdropDescriptor, FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor,
+    NetworkDescriptorEndpoints,
+};
+use thruput_json_rpc_types::{ContractAddress, NetworkHash, NetworkHashHex, SHA256Hash};
+use thruput_signing::{LocalSigner, PubkeyAccount};
 
 pub(crate) const MIN_AIRDROP_TERMINAL_RETENTION_SECS: u64 = 12 * 60 * 60;
 
@@ -47,7 +47,7 @@ pub struct FaucetConfigParts {
     /// Private airdrop execution config.
     pub airdrop: AirdropRuntimeConfig,
     /// Network hash every faucet-signed transaction is bound to.
-    pub network_hash: groundhog_xdr::types::NetworkHash,
+    pub network_hash: thruput_xdr::types::NetworkHash,
     /// Browser origins allowed to call the API.
     pub cors_allowed_origins: Vec<HeaderValue>,
     /// Private-preview policy controls.
@@ -453,8 +453,8 @@ impl AirdropConfig {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use groundhog_json_rpc_types::hex::HexBytes;
-    use groundhog_signing::{LocalSigner, PubkeyAccount};
+    use thruput_json_rpc_types::hex::HexBytes;
+    use thruput_signing::{LocalSigner, PubkeyAccount};
     use zeroize::Zeroizing;
 
     use crate::key_source::{
@@ -623,7 +623,7 @@ mod tests {
 
         assert_eq!(
             descriptor.schema_version,
-            groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION
+            thruput_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION
         );
         assert_eq!(descriptor.kind, "groundhog-network");
         assert_eq!(descriptor.network_id, "devnet-preview");
@@ -757,7 +757,7 @@ mod tests {
     async fn config_rejects_secret_that_does_not_match_faucet_public_key() {
         let mut config: FaucetConfigFile = toml::from_str(&test_config()).unwrap();
         config.network.faucet.public_key = HexBytes(vec![0xaa; 32]);
-        config.network.faucet.wallet_address = groundhog_json_rpc_types::hex::Hex0x(
+        config.network.faucet.wallet_address = thruput_json_rpc_types::hex::Hex0x(
             PubkeyAccount::from_public_key_bytes([0xaa; 32], 0).address(),
         );
         let error = config
@@ -785,7 +785,7 @@ mod tests {
     #[tokio::test]
     async fn config_rejects_wrong_native_address_before_loading_secret() {
         let mut config: FaucetConfigFile = toml::from_str(&test_config()).unwrap();
-        config.network.faucet.wallet_address = groundhog_json_rpc_types::hex::Hex0x(
+        config.network.faucet.wallet_address = thruput_json_rpc_types::hex::Hex0x(
             PubkeyAccount::from_public_key_bytes(
                 LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes(),
                 1,

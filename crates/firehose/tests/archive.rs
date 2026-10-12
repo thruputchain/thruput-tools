@@ -1,8 +1,8 @@
-use groundhog_firehose::{
+use thruput_firehose::{
     client::{Outcome, outcome},
     store::Store,
 };
-use groundhog_indexer::{EventIndexerPullResult, IndexerProgress};
+use thruput_indexer::{EventIndexerPullResult, IndexerProgress};
 
 mod common;
 use common::{fixture, next, rehash};
@@ -75,12 +75,12 @@ fn recovery_rejects_corrupt_events_transactions_and_consensus() {
             }
             2 => {
                 block.block.payload.consensus_value.proposal_header.txs_hash =
-                    groundhog_xdr::types::TxsHash::new([0; 32].into());
+                    thruput_xdr::types::TxsHash::new([0; 32].into());
                 rehash(&mut block);
             }
             _ => {
                 block.block.identity.consensus_hash =
-                    groundhog_xdr::types::ConsensusValueHash::new([0; 32].into());
+                    thruput_xdr::types::ConsensusValueHash::new([0; 32].into());
             }
         }
         std::fs::write(

@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use groundhog_json_rpc_client::GroundhogApiClient;
-use groundhog_json_rpc_types::{
+use serde_json::json;
+use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_types::{
     ContractAddress, balance::BalanceResponse, runtime_manifest::RuntimeManifestStorageCostModel,
 };
-use serde_json::json;
 
 use crate::account_resolution::resolve_address_target_or_default_wallet;
 use crate::checks::{Finding, FindingLevel};
@@ -183,8 +183,8 @@ fn parse_storage_cost(field: &str, raw: &str) -> Result<u128, CliError> {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestStorageCostModel;
     use serde_json::json;
+    use thruput_json_rpc_types::runtime_manifest::RuntimeManifestStorageCostModel;
 
     use super::{local_funding_projection, low_local_faucet_balance_warning};
 

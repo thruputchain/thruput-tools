@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use groundhog_json_rpc_types::airdrop::{ClientNonce, ClientNonceError, MAX_CLIENT_NONCE_BYTES};
+use thruput_json_rpc_types::airdrop::{ClientNonce, ClientNonceError, MAX_CLIENT_NONCE_BYTES};
 
 #[test]
 fn client_nonce_roundtrips() {
@@ -46,7 +46,7 @@ fn airdrop_request_accepts_legacy_recipient_forms() {
             "clientNonce": "0x01"
         });
         assert!(
-            serde_json::from_value::<groundhog_json_rpc_types::airdrop::AirdropRequest>(request)
+            serde_json::from_value::<thruput_json_rpc_types::airdrop::AirdropRequest>(request)
                 .is_ok()
         );
     }
@@ -63,16 +63,14 @@ fn airdrop_response_accepts_future_additive_fields() {
     });
 
     assert!(
-        serde_json::from_value::<groundhog_json_rpc_types::airdrop::AirdropAttemptResponse>(
-            response
-        )
-        .is_ok()
+        serde_json::from_value::<thruput_json_rpc_types::airdrop::AirdropAttemptResponse>(response)
+            .is_ok()
     );
 }
 
 #[test]
 fn local_funding_rejects_noncanonical_amounts_and_unknown_fields() {
-    use groundhog_json_rpc_types::airdrop::FundAccountRequest;
+    use thruput_json_rpc_types::airdrop::FundAccountRequest;
     let valid = json!({ "recipient": format!("0x{}", "11".repeat(32)),
         "faucet": format!("0x{}", "22".repeat(32)), "clientNonce": "0x01", "rawAmount": "42" });
     assert_eq!(

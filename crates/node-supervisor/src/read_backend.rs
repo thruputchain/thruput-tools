@@ -3,7 +3,7 @@
 //! [`HogdDevReadBackend`] implements [`ReadPlane`] against hogd-dev's indexer
 //! x23 endpoint. `transaction_receipt` and `contract_events` are pure indexer
 //! calls; `transaction_status` runs the indexer-and-scheduler probe the gateway
-//! runs, from `groundhog_hogd_backend::status`, so both answer alike.
+//! runs, from `thruput_hogd_backend::status`, so both answer alike.
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
 //!
@@ -13,15 +13,15 @@
 use std::{fmt, net::SocketAddr};
 
 use async_trait::async_trait;
-use groundhog_db_gateway::{DbGateway_DbGateway1_Client, DbGatewayPayload};
-use groundhog_hogd_backend::{
+use thruput_db_gateway::{DbGateway_DbGateway1_Client, DbGatewayPayload};
+use thruput_hogd_backend::{
     db_gateway as shared_db_gateway, indexer as shared_indexer, intro, receipt as shared_receipt,
     scheduler as shared_scheduler, status as shared_status,
 };
-use groundhog_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, indexer::TxInfo};
-use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
-use groundhog_json_rpc_types::protocol_token::protocol_from_text;
-use groundhog_json_rpc_types::{
+use thruput_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, indexer::TxInfo};
+use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
+use thruput_json_rpc_types::protocol_token::protocol_from_text;
+use thruput_json_rpc_types::{
     ContractAddress,
     address_auth::AddressAuthDataResponse,
     events::{EventPage, EventQuery},
@@ -32,9 +32,9 @@ use groundhog_json_rpc_types::{
         TransactionStatus, TxHash,
     },
 };
-use groundhog_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client;
-use groundhog_x23_transport::{connect, connect_with_config, hogd_large_message_config};
-use groundhog_xdr::types::{AddressAndKey, StorageKey};
+use thruput_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client;
+use thruput_x23_transport::{connect, connect_with_config, hogd_large_message_config};
+use thruput_xdr::types::{AddressAndKey, StorageKey};
 
 use crate::{
     NodeSupervisorError,
@@ -302,7 +302,7 @@ impl ReadPlane for HogdDevReadBackend {
     }
 
     /// Status by the probe order shared with the gateway; see
-    /// `groundhog_hogd_backend::status::transaction_status`. The whole
+    /// `thruput_hogd_backend::status::transaction_status`. The whole
     /// probe runs under the caller's request deadline.
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
@@ -325,7 +325,7 @@ impl ReadPlane for HogdDevReadBackend {
         query: EventQuery,
     ) -> Result<EventPage, RpcServerError> {
         within_request_deadline(context, async {
-            let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
+            let wire_query: thruput_indexer::indexer::EventQuery = query.into();
             let result = self
                 .indexer
                 .get_events(&wire_query)
@@ -357,7 +357,7 @@ impl ReadPlane for HogdDevReadBackend {
         query: RpcAddressTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
         within_request_deadline(context, async {
-            let wire_query: groundhog_indexer::indexer::AddressTransactionQuery = query.into();
+            let wire_query: thruput_indexer::indexer::AddressTransactionQuery = query.into();
             let result = self
                 .indexer
                 .get_transactions_by_address(&wire_query)

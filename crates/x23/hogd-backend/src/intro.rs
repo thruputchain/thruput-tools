@@ -7,10 +7,10 @@
 //! supervisor at the hogd-dev binary it launched — so this module classifies
 //! the outcome and names it, and stops there.
 
-use groundhog_db_gateway::DbGatewayIntroOutcome;
-use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
-use groundhog_scheduler::SchedGatewayIntroOutcome;
-use groundhog_view::ViewGatewayIntroOutcome;
+use thruput_db_gateway::DbGatewayIntroOutcome;
+use thruput_indexer::IndexerBlockExplorerIntroOutcome;
+use thruput_scheduler::SchedGatewayIntroOutcome;
+use thruput_view::ViewGatewayIntroOutcome;
 
 /// One service's answer to the protocol intro handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

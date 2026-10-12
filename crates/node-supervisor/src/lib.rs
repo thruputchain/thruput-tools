@@ -41,8 +41,6 @@ pub use config::{
     NodeSupervisorConfig,
 };
 pub use error::NodeSupervisorError;
-pub use groundhog_json_rpc_server::batch::RpcBatchConcurrency;
-pub use groundhog_tx_validation::{ConfigParamName, UnknownConfigParamName};
 pub use hogd_dev::{
     DEFAULT_HOGD_DEV_BINARY, DEVNODE_BINARY_ENV, HogdDevEndpoints, HogdDevProcess,
     HogdDevReadiness, build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line,
@@ -50,6 +48,8 @@ pub use hogd_dev::{
 };
 pub use process::{ChildProcessSpec, ChildSupervisor, SupervisedChild};
 pub use server::{BackendPlanes, NodeSupervisorHandle, PlaneStatus, SupervisorStop};
+pub use thruput_json_rpc_server::batch::RpcBatchConcurrency;
+pub use thruput_tx_validation::{ConfigParamName, UnknownConfigParamName};
 
 /// Private chain files included with persistent local-state backups.
 pub use local_state::{LOCAL_FAUCET_KEY_FILE, LOCAL_FUNDING_ATTEMPTS_FILE};

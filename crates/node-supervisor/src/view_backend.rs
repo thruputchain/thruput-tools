@@ -3,12 +3,12 @@
 use std::{fmt, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
-use groundhog_hogd_backend::{intro, view as shared_view};
-use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError, ViewPlane};
-use groundhog_json_rpc_types::protocol_token::protocol_from_text;
-use groundhog_json_rpc_types::view::{ViewRequest, ViewResponse};
-use groundhog_view::ViewGateway_ViewGateway1_Client;
-use groundhog_x23_transport::connect;
+use thruput_hogd_backend::{intro, view as shared_view};
+use thruput_json_rpc_server::{RpcRequestContext, RpcServerError, ViewPlane};
+use thruput_json_rpc_types::protocol_token::protocol_from_text;
+use thruput_json_rpc_types::view::{ViewRequest, ViewResponse};
+use thruput_view::ViewGateway_ViewGateway1_Client;
+use thruput_x23_transport::connect;
 
 use crate::{
     NodeSupervisorError, request_deadline::within_request_deadline, service::VIEW_GATEWAY,
@@ -96,10 +96,10 @@ impl ViewPlane for HogdDevViewBackend {
     async fn view_batch(
         &self,
         context: RpcRequestContext,
-        request: groundhog_json_rpc_types::view::ViewBatchRequest,
+        request: thruput_json_rpc_types::view::ViewBatchRequest,
         gas_limit: u64,
-        limits: groundhog_json_rpc_server::ViewBatchConfig,
-    ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+        limits: thruput_json_rpc_server::ViewBatchConfig,
+    ) -> Result<thruput_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
         let Self::Gateway {
             client,
             request_timeout,

@@ -1,10 +1,10 @@
 use serde_json::json;
 use tempfile::{NamedTempFile, tempdir};
 
-use groundhog_sim::compare::{COMPARE_DIFF_SCHEMA_VERSION, ResultDiff, load_result};
-use groundhog_sim::error::SimError;
-use groundhog_sim::manifest::WorkloadKind;
-use groundhog_sim::result::{AssertionStatus, SIM_RESULT_SCHEMA_VERSION, SimResult, SimRunOutcome};
+use thruput_sim::compare::{COMPARE_DIFF_SCHEMA_VERSION, ResultDiff, load_result};
+use thruput_sim::error::SimError;
+use thruput_sim::manifest::WorkloadKind;
+use thruput_sim::result::{AssertionStatus, SIM_RESULT_SCHEMA_VERSION, SimResult, SimRunOutcome};
 
 #[tokio::test]
 async fn load_result_rejects_future_schema_version() {

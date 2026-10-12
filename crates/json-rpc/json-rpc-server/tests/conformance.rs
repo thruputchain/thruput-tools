@@ -13,12 +13,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use groundhog_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
-use groundhog_json_rpc_server::{
+use thruput_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
+use thruput_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
     RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
     address_auth::{AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey, AuthSigner},
     block::{BlockInfo, ChainTip},
@@ -124,10 +124,10 @@ impl ChainPlane for ScriptedBackend {
         Ok(TipReading::new(
             ChainTip {
                 height: BlockHeight::from(0),
-                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
+                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0u8; 32])),
             },
-            groundhog_xdr::network_config::NetworkConfig::_0 {
-                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+            thruput_xdr::network_config::NetworkConfig::_0 {
+                v0: thruput_xdr::network_config::NetworkConfigV0 {
                     params: VecM(vec![]),
                 },
             },
@@ -292,7 +292,7 @@ fn server_with_view(
 }
 
 fn test_network_info() -> NetworkInfo {
-    NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
+    NetworkInfo::new(NetworkHash::from(thruput_xdr::types::SHA256Hash::from(
         [0x07; 32],
     )))
 }
@@ -301,7 +301,7 @@ fn simple_query() -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
             contract_addresses: ContractAddressList(VecM(vec![Hex0x(
-                groundhog_xdr::types::ContractAddress::from([0u8; 32]),
+                thruput_xdr::types::ContractAddress::from([0u8; 32]),
             )])),
             topics: EventTopicFilter {
                 topic0: TopicList(VecM(vec![])),
@@ -317,7 +317,7 @@ fn simple_query() -> EventQuery {
 }
 
 fn opaque_hash() -> TxHash {
-    TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0xab; 32])))
+    TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0xab; 32])))
 }
 
 fn all_shapes() -> [ScriptedBackend; 2] {
@@ -496,7 +496,7 @@ async fn event_query_validation_runs_before_dispatch_for_all_shapes() {
 
 #[tokio::test]
 async fn get_storage_at_key_length_validated_for_all_shapes() {
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]));
+    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32]));
     for backend in all_shapes() {
         let storage_calls = backend.get_storage_at_calls.clone();
         let svc = server(backend);
@@ -529,8 +529,7 @@ async fn get_storage_at_key_length_validated_for_all_shapes() {
 #[tokio::test]
 async fn get_balance_reads_native_hog_balance_storage_for_all_shapes() {
     for backend in all_shapes() {
-        let address: ContractAddress =
-            Hex0x(groundhog_xdr::types::ContractAddress::from([7u8; 32]));
+        let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([7u8; 32]));
         let backend = ScriptedBackend {
             storage_read: Arc::new(Mutex::new(Some(Ok(StorageItemRead {
                 block_height: BlockHeight::from(123),
@@ -558,7 +557,7 @@ async fn get_balance_reads_native_hog_balance_storage_for_all_shapes() {
 
 #[tokio::test]
 async fn get_balance_returns_zero_for_missing_balance_item() {
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([8u8; 32]));
+    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([8u8; 32]));
     let backend = ScriptedBackend::with_storage_read(StorageItemRead {
         block_height: BlockHeight::from(456),
         item: None,
@@ -576,7 +575,7 @@ async fn get_balance_returns_zero_for_missing_balance_item() {
 
 #[tokio::test]
 async fn get_balance_errors_for_unexpected_storage_item_kind() {
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([9u8; 32]));
+    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([9u8; 32]));
     let backend = ScriptedBackend::with_storage_read(StorageItemRead {
         block_height: BlockHeight::from(789),
         item: Some(StorageItemInfo::AuthData),
@@ -593,8 +592,7 @@ async fn get_balance_errors_for_unexpected_storage_item_kind() {
 #[tokio::test]
 async fn get_address_auth_data_reads_auth_data_for_all_shapes() {
     for backend in all_shapes() {
-        let address: ContractAddress =
-            Hex0x(groundhog_xdr::types::ContractAddress::from([10u8; 32]));
+        let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([10u8; 32]));
         let read = AddressAuthDataResponse {
             address,
             height: BlockHeight::from(321),
@@ -602,7 +600,7 @@ async fn get_address_auth_data_reads_auth_data_for_all_shapes() {
                 signers: vec![AuthSigner {
                     key_id: 0,
                     public_key: AuthPublicKey::Ed25519 {
-                        key: Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([3u8; 32])),
+                        key: Hex0x(thruput_xdr::types::Ed25519PublicKey::from([3u8; 32])),
                     },
                     max_weight: 1,
                 }],
@@ -631,7 +629,7 @@ async fn get_address_auth_data_reads_auth_data_for_all_shapes() {
 
 #[tokio::test]
 async fn get_address_auth_data_maps_backend_failures_to_rpc_errors() {
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([11u8; 32]));
+    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([11u8; 32]));
     for (failure, code) in [
         (
             RpcServerError::BackendUnavailable("db_gateway item: kRPCUnrecoverable".into()),
@@ -665,7 +663,7 @@ async fn view_entrypoint_length_validated_for_all_shapes() {
             let request = ViewRequest {
                 auth_claim: None,
                 min_height: None,
-                contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+                contract: Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32])),
                 entrypoint: HexBytes(vec![0u8; entrypoint_len]),
                 calldata: HexBytes(vec![]),
                 caller: None,
@@ -689,7 +687,7 @@ async fn view_calldata_length_validated_for_all_shapes() {
         let request = ViewRequest {
             auth_claim: None,
             min_height: None,
-            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            contract: Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![0u8; MAX_VIEW_CALLDATA_BYTES + 1]),
             caller: None,
@@ -712,7 +710,7 @@ async fn view_returns_not_implemented_until_backend_support_lands_for_all_shapes
         let request = ViewRequest {
             auth_claim: None,
             min_height: None,
-            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            contract: Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
@@ -746,7 +744,7 @@ async fn view_success_outputs_round_trip_for_all_shapes() {
             let request = ViewRequest {
                 auth_claim: None,
                 min_height: None,
-                contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+                contract: Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32])),
                 entrypoint: HexBytes(vec![0u8; 8]),
                 calldata: HexBytes(vec![]),
                 caller: None,

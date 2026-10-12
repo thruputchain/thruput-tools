@@ -1,12 +1,12 @@
 use std::path::Path;
 
-use groundhog_erc20_if::{BurnEvent, MintEvent, TransferEvent};
-use groundhog_json_rpc_types::events::{
+use thruput_erc20_if::{BurnEvent, MintEvent, TransferEvent};
+use thruput_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventQuery, EventTopicFilter,
     IterationOrder, PaginationCursor, TopicList,
 };
-use groundhog_json_rpc_types::hex::Topic;
-use groundhog_json_rpc_types::{ContractAddress, events::IdentifiedEvent};
+use thruput_json_rpc_types::hex::Topic;
+use thruput_json_rpc_types::{ContractAddress, events::IdentifiedEvent};
 use xdr_common::VecM;
 
 use crate::account_resolution::resolve_address_target;
@@ -267,7 +267,7 @@ fn decode_transfer(
         });
     }
     let participant = |index: usize| {
-        ContractAddress::from(groundhog_xdr::types::ContractAddress::from(
+        ContractAddress::from(thruput_xdr::types::ContractAddress::from(
             raw.topics[index].0,
         ))
     };
@@ -414,10 +414,10 @@ fn transfer_kind_label(kind: TokenTransferKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_erc20_if::{BurnEvent, CONTRACT_ADDR_ZERO, MintEvent, TransferEvent};
-    use groundhog_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
-    use groundhog_json_rpc_types::hex::{HexBytes, Topic};
-    use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
+    use thruput_erc20_if::{BurnEvent, CONTRACT_ADDR_ZERO, MintEvent, TransferEvent};
+    use thruput_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
+    use thruput_json_rpc_types::hex::{HexBytes, Topic};
+    use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 
     use super::{address_topic, decode_transfer_record, transfer_filters};
     use crate::token_json::{TokenTransferDecodeStatus, TokenTransferKind};
@@ -435,9 +435,9 @@ mod tests {
             block_height: BlockHeight::from(8),
             sequence_number: 0,
             event: EmittedEvent {
-                contract_address: ContractAddress::from(
-                    groundhog_xdr::types::ContractAddress::from([0x55; 32]),
-                ),
+                contract_address: ContractAddress::from(thruput_xdr::types::ContractAddress::from(
+                    [0x55; 32],
+                )),
                 topics: vec![Topic(*TransferEvent::SIGNATURE), Topic(from), Topic(to)],
                 data: HexBytes(xdrs::cxs::encode(&transfer).unwrap()),
             },
@@ -486,7 +486,7 @@ mod tests {
                 assert_eq!(record.decode_status, TokenTransferDecodeStatus::Decoded);
                 let transfer = record.transfer.unwrap();
                 let address =
-                    ContractAddress::from(groundhog_xdr::types::ContractAddress::from(participant));
+                    ContractAddress::from(thruput_xdr::types::ContractAddress::from(participant));
                 assert_eq!(
                     transfer.kind,
                     if mint {
@@ -586,9 +586,9 @@ mod tests {
 
     #[test]
     fn builds_from_to_and_account_filters() {
-        let token = ContractAddress::from(groundhog_xdr::types::ContractAddress::from([1; 32]));
-        let from = ContractAddress::from(groundhog_xdr::types::ContractAddress::from([2; 32]));
-        let to = ContractAddress::from(groundhog_xdr::types::ContractAddress::from([3; 32]));
+        let token = ContractAddress::from(thruput_xdr::types::ContractAddress::from([1; 32]));
+        let from = ContractAddress::from(thruput_xdr::types::ContractAddress::from([2; 32]));
+        let to = ContractAddress::from(thruput_xdr::types::ContractAddress::from([3; 32]));
         let signature = Topic(*TransferEvent::SIGNATURE);
 
         let from_to = transfer_filters(token, Some(from), Some(to), None);

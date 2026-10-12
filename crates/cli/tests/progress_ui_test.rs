@@ -56,7 +56,7 @@ impl Fixture {
         fs::write(
             root.join("fixture.elf"),
             support::minimal_rv32_elf_with_section(
-                groundhog_spec_tool::RAW_SECTION_NAME,
+                thruput_spec_tool::RAW_SECTION_NAME,
                 &support::minimal_contract_spec_raw(),
             ),
         )

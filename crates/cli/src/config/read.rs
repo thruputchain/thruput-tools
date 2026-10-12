@@ -59,12 +59,10 @@ impl ConfigField {
 
 /// Parse a profile or local-node network identity, accepting an optional `0x` prefix.
 /// Returns the manifest's canonical 64 lowercase hexadecimal digits.
-pub fn parse_network_hash(
-    value: &str,
-) -> Result<groundhog_json_rpc_types::NetworkHashHex, CliError> {
+pub fn parse_network_hash(value: &str) -> Result<thruput_json_rpc_types::NetworkHashHex, CliError> {
     let value = value.trim();
     let value = value.strip_prefix("0x").unwrap_or(value);
-    groundhog_json_rpc_types::NetworkHashHex::try_from(value).map_err(|_| {
+    thruput_json_rpc_types::NetworkHashHex::try_from(value).map_err(|_| {
         invalid_field(
             ConfigField::NetworkHash,
             "expected 64 lowercase hexadecimal digits, optionally 0x-prefixed",
@@ -247,8 +245,8 @@ pub struct ConfigWalletBinding {
     pub kind: super::WalletKind,
     /// Native account derivation nonce.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(with = "groundhog_json_rpc_types::decimal::option")]
-    #[schemars(with = "Option<groundhog_json_rpc_types::decimal::Decimal<u64>>")]
+    #[serde(with = "thruput_json_rpc_types::decimal::option")]
+    #[schemars(with = "Option<thruput_json_rpc_types::decimal::Decimal<u64>>")]
     pub account_nonce: Option<u64>,
 }
 

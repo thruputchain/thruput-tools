@@ -6,10 +6,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use groundhog_build_info::BuildVersion;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use thruput_build_info::BuildVersion;
 
 /// Environment override for nonstandard bundle-manifest installations.
 pub const BUNDLE_MANIFEST_ENV: &str = "THRUPUT_BUNDLE_MANIFEST";

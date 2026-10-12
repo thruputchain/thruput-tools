@@ -1,22 +1,22 @@
 //! Runtime-manifest inputs and benchmark request construction.
 
-use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::path::Path;
+use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
-use groundhog_json_rpc_types::runtime_manifest::{
+use thruput_json_rpc_types::runtime_manifest::{
     BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, BootstrapAccount, RuntimeManifest,
     RuntimeManifestParseError, parse_runtime_manifest,
 };
-use groundhog_signing::{
+use thruput_signing::{
     LocalSigner, PubkeyAccount, SignTransactionParams, derive_dev_account_signer,
     sign_and_encode_transaction_hex, transaction_hash,
 };
-use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::{ContractAddress, NetworkHash};
+use thruput_xdr::contract::ContractEntrypointID;
+use thruput_xdr::types::{ContractAddress, NetworkHash};
 use tokio::io::AsyncReadExt;
 
 use crate::BenchError;
-use groundhog_json_rpc_types::{hex::Hex0x, transaction::TxHash};
+use thruput_json_rpc_types::{hex::Hex0x, transaction::TxHash};
 
 const HOG_BALANCE_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new(0x41ac_95d6_e06e_2620_u64.to_be_bytes());
@@ -59,13 +59,13 @@ pub(super) fn generate_tx_batch(
                 PubkeyAccount::from_public_key_bytes(account.signer.verifying_key_bytes(), 0);
             let calldata = xdrs::cxs::encode(&(account.wallet_address,)).map_err(|error| {
                 BenchError::WalletCalldata {
-                    source: groundhog_signing::SigningError::XdrEncode(error.to_string()),
+                    source: thruput_signing::SigningError::XdrEncode(error.to_string()),
                 }
             })?;
-            let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
-                groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+            let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
+                thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
                     account: &native,
-                    target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
+                    target_address: thruput_signing::NATIVE_HOG_ADDRESS,
                     target_entrypoint: HOG_BALANCE_ENTRYPOINT,
                     target_calldata: &calldata,
                     gas_limit: 20_000_000,
@@ -96,7 +96,7 @@ pub(super) fn generate_tx_batch(
 
 fn manifest_bench_accounts(manifest: &RuntimeManifest) -> Result<Vec<BenchAccount>, BenchError> {
     if manifest.kind
-        != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+        != thruput_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
     {
         return Err(BenchError::InvalidConfiguration("Local runtime manifests contain public allocations only; supply --account-seed for benchmark-owned fixtures.".into()));
     }
@@ -275,9 +275,9 @@ pub(super) fn validate_method(method: &str) -> Result<(), BenchError> {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::hex::Hex0x;
-    use groundhog_xdr::types::{Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash};
     use serde_json::json;
+    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_xdr::types::{Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash};
 
     use super::*;
 
@@ -391,11 +391,11 @@ mod tests {
         let network = manifest().network_hash.to_network_hash();
         let transactions = generate_tx_batch(1, &accounts, &network, 42).unwrap();
         let bytes = hex::decode(transactions[0].hex.trim_start_matches("0x")).unwrap();
-        let signed: groundhog_xdr::transaction::SignedTransaction =
+        let signed: thruput_xdr::transaction::SignedTransaction =
             xdrs::txs::decode(&bytes).unwrap();
         assert_eq!(
             signed.tx.invocation.entrypoint,
-            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+            thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
         );
         assert_eq!(
             signed.tx.invocation.invoked_address,

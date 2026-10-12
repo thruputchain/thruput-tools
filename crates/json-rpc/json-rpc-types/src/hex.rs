@@ -12,10 +12,10 @@ use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 
-use groundhog_xdr::types::{NetworkHash, SHA256Hash};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
+use thruput_xdr::types::{NetworkHash, SHA256Hash};
 
 /// A canonical lowercase, unprefixed 32-byte network hash.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -233,7 +233,7 @@ pub fn sha256_prefixed_hex(bytes: &[u8]) -> String {
 ///
 /// The inner type must implement `AsRef<[u8]>` (for serialization) and
 /// `From<[u8; N]>` (for deserialization). This is true for all
-/// `groundhog-xdr` fixed-size byte types.
+/// `thruput-xdr` fixed-size byte types.
 ///
 /// ```json
 /// "0xa1b2c3d4e5f6..."
@@ -293,11 +293,11 @@ macro_rules! impl_try_from_slice_for {
     };
 }
 
-impl_try_from_slice_for!(groundhog_xdr::types::SHA256Hash, 32);
-impl_try_from_slice_for!(groundhog_xdr::types::ContractAddress, 32);
-impl_try_from_slice_for!(groundhog_xdr::types::Ed25519PublicKey, 32);
-impl_try_from_slice_for!(groundhog_xdr::types::StorageLongHash, 2048);
-impl_try_from_slice_for!(groundhog_xdr::validator::ValidatorID, 32);
+impl_try_from_slice_for!(thruput_xdr::types::SHA256Hash, 32);
+impl_try_from_slice_for!(thruput_xdr::types::ContractAddress, 32);
+impl_try_from_slice_for!(thruput_xdr::types::Ed25519PublicKey, 32);
+impl_try_from_slice_for!(thruput_xdr::types::StorageLongHash, 2048);
+impl_try_from_slice_for!(thruput_xdr::validator::ValidatorID, 32);
 
 impl<T: FixedHexLength + JsonSchema> JsonSchema for Hex0x<T> {
     fn schema_name() -> Cow<'static, str> {

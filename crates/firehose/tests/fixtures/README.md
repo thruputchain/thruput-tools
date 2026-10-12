@@ -3,10 +3,10 @@
 Captured from a live node on 2026-09-29 using the catalog-managed
 `aarch64-apple-darwin` release, commit
 `add9cf9f6543eec0a1ac0e409c0390033d3042f2`. The node's runtime manifest
-reported the version and protocol below; `groundhog-xdr` is the capture
+reported the version and protocol below; `thruput-xdr` is the capture
 client's resolved binding version.
 
-| Fixture | hog-devnode | Protocol token | groundhog-xdr |
+| Fixture | hog-devnode | Protocol token | thruput-xdr |
 | --- | --- | --- | --- |
 | `bootstrap.hex` | `0.1.29-rc.3` | `hogp/edeb6e904647bf4` | `0.42.0` |
 | `hundred-transactions.hex` | `0.1.29-rc.3` | `hogp/edeb6e904647bf4` | `0.42.0` |
@@ -33,7 +33,7 @@ start `hog-devnode --dev-accounts 2`, discover its event endpoint, and run
 Hex-encode the archived height-1 and height-32 records without altering their
 bytes. Confirm the transaction counts and both roots before replacing fixtures.
 
-The `groundhog-xdr` 0.42.0 bindings include `TxEventLog::gas_consumed`. Like hogd, the
+The `thruput-xdr` 0.42.0 bindings include `TxEventLog::gas_consumed`. Like hogd, the
 verifier serializes the whole event log followed by nondeterministic proposal
 data, using the leading transaction hash as the trie key and the remaining
 bytes as its value. Gas consumption is therefore included in the events-root

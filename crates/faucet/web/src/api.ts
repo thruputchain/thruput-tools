@@ -362,7 +362,7 @@ function clearRetainedClientNonce(attemptKey: string) {
 }
 
 function nonceStorageKey(attemptKey: string) {
-  return `groundhog-faucet:airdrop:${attemptKey}`
+  return `thruput-faucet:airdrop:${attemptKey}`
 }
 
 function pendingTimeoutError() {

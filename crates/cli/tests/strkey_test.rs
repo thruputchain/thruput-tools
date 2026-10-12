@@ -1,7 +1,7 @@
-use groundhog_signing::{LocalSigner, strkey};
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 use tempfile::TempDir;
+use thruput_signing::{LocalSigner, strkey};
 
 fn run(home: &TempDir, args: &[&str], input: Option<&str>) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));

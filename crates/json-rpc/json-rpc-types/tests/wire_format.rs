@@ -1,30 +1,30 @@
 use serde_json::Value;
 
-use groundhog_json_rpc_types::address_auth::{
+use thruput_json_rpc_types::address_auth::{
     AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey,
 };
-use groundhog_json_rpc_types::airdrop::{AirdropRequest, ClientNonce};
-use groundhog_json_rpc_types::block::{
+use thruput_json_rpc_types::airdrop::{AirdropRequest, ClientNonce};
+use thruput_json_rpc_types::block::{
     BlockInfo, BlockProjectionError, ChainTip, consensus_value_hash,
 };
-use groundhog_json_rpc_types::events::{
+use thruput_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EmittedEvent, EventFilter, EventFilterList, EventQuery,
     EventTopicFilter, IdentifiedEvent, IterationOrder, PaginationCursor, TopicList,
 };
-use groundhog_json_rpc_types::hex::{Hex0x, HexBytes, Topic};
-use groundhog_json_rpc_types::network_descriptor::{
+use thruput_json_rpc_types::hex::{Hex0x, HexBytes, Topic};
+use thruput_json_rpc_types::network_descriptor::{
     AirdropDescriptor, FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NativeHogDescriptor,
     NetworkDescriptor, NetworkDescriptorEndpoints,
 };
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::server_limits::ServerLimits;
-use groundhog_json_rpc_types::state::StorageItemInfo;
-use groundhog_json_rpc_types::transaction::{
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::server_limits::ServerLimits;
+use thruput_json_rpc_types::state::StorageItemInfo;
+use thruput_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
 };
-use groundhog_json_rpc_types::view::{RootInvocationOutput, ViewRequest, ViewResponse};
-use groundhog_scheduler::{ConsensusValue, ProposalTxsHash};
-use groundhog_xdr::{
+use thruput_json_rpc_types::view::{RootInvocationOutput, ViewRequest, ViewResponse};
+use thruput_scheduler::{ConsensusValue, ProposalTxsHash};
+use thruput_xdr::{
     address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt},
     header::ProposalHeader,
     types::{
@@ -34,15 +34,15 @@ use groundhog_xdr::{
     validator::ValidatorID,
 };
 
-use groundhog_json_rpc_types::{BlockHeight, SHA256Hash};
+use thruput_json_rpc_types::{BlockHeight, SHA256Hash};
 use xdr_common::{BytesM, VecM};
 
 fn zero_hash() -> SHA256Hash {
-    Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32]))
+    Hex0x(thruput_xdr::types::SHA256Hash::from([0u8; 32]))
 }
 
-fn zero_address() -> groundhog_json_rpc_types::ContractAddress {
-    Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
+fn zero_address() -> thruput_json_rpc_types::ContractAddress {
+    Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32]))
 }
 
 fn test_consensus_value() -> ConsensusValue {
@@ -69,7 +69,7 @@ fn test_consensus_value() -> ConsensusValue {
 fn test_network_descriptor() -> NetworkDescriptor {
     NetworkDescriptor::new(
         "devnet-preview".into(),
-        groundhog_json_rpc_types::NetworkHash::from(XdrHash::from([0x12; 32])),
+        thruput_json_rpc_types::NetworkHash::from(XdrHash::from([0x12; 32])),
         "x23".into(),
         zero_hash(),
         NetworkDescriptorEndpoints::new("https://rpc.devnet.example".into()),
@@ -345,7 +345,7 @@ fn exec_status_deterministic_error() {
 #[test]
 fn deterministic_error_fault_kind_wire_value() {
     let s = ExecStatus::DeterministicError {
-        kind: groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT.into(),
+        kind: thruput_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT.into(),
     };
     let v: Value = serde_json::to_value(&s).unwrap();
     assert_eq!(v["result"], "deterministicError");
@@ -534,7 +534,7 @@ fn address_transaction_query_wire_format_uses_rpc_hex_projections() {
 fn transaction_ref_page_wire_format() {
     let page = TransactionRefPage {
         refs: vec![TransactionRef {
-            tx_hash: TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0xab; 32]))),
+            tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0xab; 32]))),
             height: BlockHeight::from(7),
         }],
         cursor: PaginationCursor(vec![0x01, 0x02]),

@@ -1,8 +1,8 @@
-use groundhog_cli_macros::ErrorMeta;
-use groundhog_json_rpc_types::error::TxInvalidDetail;
 use serde_json::json;
 use std::borrow::Cow;
 use thiserror::Error;
+use thruput_cli_macros::ErrorMeta;
+use thruput_json_rpc_types::error::TxInvalidDetail;
 
 use crate::terminal::render_shell_arg;
 
@@ -275,7 +275,7 @@ pub enum CliError {
     #[error("RV32 lowering failed: {0}")]
     #[hint(expr = Some(rv32_lower_hint(_0)))]
     #[details(expr = Some(json!({ "message": _0.to_string() })))]
-    Rv32LowerFailed(#[from] groundhog_rv32_lower::LowerError),
+    Rv32LowerFailed(#[from] thruput_rv32_lower::LowerError),
     #[error("contract spec finalization failed: {0}")]
     #[hint(
         "check that your contract uses `#[contract]` and \
@@ -292,7 +292,7 @@ pub enum CliError {
     /// versions and the way out for that direction, and the SDK reports the
     /// same text, so the two toolchains agree on the diagnosis.
     #[error(transparent)]
-    RawSpecFormat(groundhog_spec_tool::SpecToolError),
+    RawSpecFormat(thruput_spec_tool::SpecToolError),
     #[error("key `{0}` already exists")]
     #[hint(
         "use a different name, or remove the existing key \
@@ -797,21 +797,21 @@ pub enum CliError {
     TransactionRecentFailure {
         tx_hash: String,
         attempt_height: i64,
-        cause: groundhog_json_rpc_types::transaction::TransactionFailureCause,
+        cause: thruput_json_rpc_types::transaction::TransactionFailureCause,
     },
     #[error("transaction {tx_hash} needs resubmission: {error:?}")]
     #[hint("resubmit the same transaction; the mempool does not retry it automatically")]
     #[details]
     TransactionRetry {
         tx_hash: String,
-        error: groundhog_json_rpc_types::transaction::SchedulerTransactionError,
+        error: thruput_json_rpc_types::transaction::SchedulerTransactionError,
     },
     #[error("transaction {tx_hash} was dropped: {error:?}")]
     #[hint("modify the transaction before resubmitting; inspect its error source and code")]
     #[details]
     TransactionDropped {
         tx_hash: String,
-        error: groundhog_json_rpc_types::transaction::SchedulerTransactionError,
+        error: thruput_json_rpc_types::transaction::SchedulerTransactionError,
     },
     #[error("internal error: receipt polling exhausted unexpectedly")]
     ReceiptPollingExhausted,
@@ -892,17 +892,17 @@ pub enum CliError {
     #[error("toolchain catalog error: {0}")]
     #[code("toolchain_catalog_error")]
     #[hint(expr = Some(toolchain_catalog_hint(_0)))]
-    ToolchainCatalog(#[from] groundhog_toolchain::CatalogError),
+    ToolchainCatalog(#[from] thruput_toolchain::CatalogError),
     /// A verified bundle could not be installed or accessed in the local cache.
     #[error("toolchain installation error: {0}")]
     #[code("toolchain_install_error")]
     #[hint(expr = Some(toolchain_install_hint(_0)))]
-    ToolchainInstall(groundhog_toolchain::InstallError),
+    ToolchainInstall(thruput_toolchain::InstallError),
     /// The artifact source could not provide the selected bundle.
     #[error("toolchain source error: {0}")]
     #[code("toolchain_source_error")]
     #[hint(text = TOOLCHAIN_RETRY_HINT)]
-    ToolchainSource(#[from] groundhog_toolchain::SourceError),
+    ToolchainSource(#[from] thruput_toolchain::SourceError),
     /// Offline acquisition cannot satisfy the selected managed bundle.
     #[error(
         "hog-devnode {version} for {target} is not installed and offline mode forbids downloading it"
@@ -927,9 +927,9 @@ pub enum CliError {
 fn cargo_failure_hint(stderr: &str) -> Cow<'static, str> {
     Cow::Borrowed(
         if stderr
-            .contains("failed to select a version for the requirement `groundhog-json-rpc-client =")
+            .contains("failed to select a version for the requirement `thruput-json-rpc-client =")
         {
-            "the project's groundhog-json-rpc-client version is unavailable in the configured registry; \
+            "the project's thruput-json-rpc-client version is unavailable in the configured registry; \
          use a published CLI with its matching dependencies, or patch the registry dependency to \
          the matching local RPC client source when testing an unpublished CLI"
         } else if stderr.contains("incompatible with `immediate-abort`") {
@@ -954,12 +954,12 @@ fn protocol_intro_hint(expected_protocol: Option<&str>) -> Cow<'static, str> {
     match expected_protocol {
         Some(protocol) => Cow::Owned(format!(
             "pass `--hogd-protocol={}` to override, or rebuild thruput node \
-             against a matching groundhog-xdr",
+             against a matching thruput-xdr",
             render_shell_arg(protocol),
         )),
         None => Cow::Borrowed(
             "pass `--hogd-protocol <hogd-protocol>` to override, or rebuild thruput node \
-             against a matching groundhog-xdr",
+             against a matching thruput-xdr",
         ),
     }
 }
@@ -976,9 +976,9 @@ fn faucet_service_hint(retry_after_seconds: Option<u64>) -> Cow<'static, str> {
 
 /// Hint for an advisory failure of a recent proposal attempt.
 fn recent_failure_hint(
-    cause: &groundhog_json_rpc_types::transaction::TransactionFailureCause,
+    cause: &thruput_json_rpc_types::transaction::TransactionFailureCause,
 ) -> Cow<'static, str> {
-    use groundhog_json_rpc_types::transaction::{ConflictCode, TransactionFailureCause};
+    use thruput_json_rpc_types::transaction::{ConflictCode, TransactionFailureCause};
     Cow::Borrowed(match cause {
         TransactionFailureCause::DbConflict { conflict }
             if matches!(
@@ -1030,10 +1030,10 @@ fn pre_submission_hint(detail: &TxInvalidDetail) -> Cow<'static, str> {
 
 /// Hint for a catalog lookup, separating an unsupported host runtime from a
 /// selection the embedded catalog does not carry.
-fn toolchain_catalog_hint(error: &groundhog_toolchain::CatalogError) -> Cow<'static, str> {
+fn toolchain_catalog_hint(error: &thruput_toolchain::CatalogError) -> Cow<'static, str> {
     Cow::Borrowed(match error {
-        groundhog_toolchain::CatalogError::IncompatibleRuntime { .. }
-        | groundhog_toolchain::CatalogError::RuntimeProbeFailed { .. } => {
+        thruput_toolchain::CatalogError::IncompatibleRuntime { .. }
+        | thruput_toolchain::CatalogError::RuntimeProbeFailed { .. } => {
             "upgrade the host runtime, or set THRUPUT_DEVNODE_BINARY to a compatible local build"
         }
         _ => {
@@ -1045,9 +1045,9 @@ fn toolchain_catalog_hint(error: &groundhog_toolchain::CatalogError) -> Cow<'sta
 
 /// Hint for a failed installation, separating a cache another process holds
 /// from the rest.
-fn toolchain_install_hint(error: &groundhog_toolchain::InstallError) -> Cow<'static, str> {
+fn toolchain_install_hint(error: &thruput_toolchain::InstallError) -> Cow<'static, str> {
     Cow::Borrowed(match error {
-        groundhog_toolchain::InstallError::Busy { .. } => {
+        thruput_toolchain::InstallError::Busy { .. } => {
             "stop nodes using this toolchain or wait for installation to finish, then retry clean"
         }
         _ => TOOLCHAIN_RETRY_HINT,
@@ -1055,9 +1055,9 @@ fn toolchain_install_hint(error: &groundhog_toolchain::InstallError) -> Cow<'sta
 }
 
 /// Hint for a lowering failure, keyed on the stage that rejected the ELF.
-fn rv32_lower_hint(error: &groundhog_rv32_lower::LowerError) -> Cow<'static, str> {
+fn rv32_lower_hint(error: &thruput_rv32_lower::LowerError) -> Cow<'static, str> {
     Cow::Borrowed(match error {
-        groundhog_rv32_lower::LowerError::DataTooLarge { .. } => {
+        thruput_rv32_lower::LowerError::DataTooLarge { .. } => {
             "static data plus the reserved stack exceed the guest data \
              memory the contract declares; reduce static data, pass a \
              smaller `thruput build --stack-size` to shrink the stack \
@@ -1065,7 +1065,7 @@ fn rv32_lower_hint(error: &groundhog_rv32_lower::LowerError) -> Cow<'static, str
              initial_memory_bytes` if the target chain's \
              `max_rv32_memory_bytes` admits more"
         }
-        groundhog_rv32_lower::LowerError::Verify(_) => {
+        thruput_rv32_lower::LowerError::Verify(_) => {
             "this is a bug — please report this lower→verify \
              failure to the Thruput team"
         }
@@ -1094,19 +1094,19 @@ fn linker_script_hint(workspace_root: &str, member_config: Option<&str>) -> Cow<
     })
 }
 
-impl From<groundhog_toolchain::InstallError> for CliError {
-    fn from(error: groundhog_toolchain::InstallError) -> Self {
+impl From<thruput_toolchain::InstallError> for CliError {
+    fn from(error: thruput_toolchain::InstallError) -> Self {
         match error {
-            groundhog_toolchain::InstallError::Catalog(error) => Self::ToolchainCatalog(error),
-            groundhog_toolchain::InstallError::Source(error) => Self::ToolchainSource(error),
+            thruput_toolchain::InstallError::Catalog(error) => Self::ToolchainCatalog(error),
+            thruput_toolchain::InstallError::Source(error) => Self::ToolchainSource(error),
             error => Self::ToolchainInstall(error),
         }
     }
 }
 
-impl From<groundhog_client::codec::Error> for CliError {
-    fn from(error: groundhog_client::codec::Error) -> Self {
-        use groundhog_client::codec::Error;
+impl From<thruput_client::codec::Error> for CliError {
+    fn from(error: thruput_client::codec::Error) -> Self {
+        use thruput_client::codec::Error;
         match error {
             Error::SpecFailed(message) => Self::SpecFailed(message),
             Error::InvalidArgument { argument, message } => {

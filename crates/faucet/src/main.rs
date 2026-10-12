@@ -1,17 +1,15 @@
 use clap::Parser;
-use groundhog_faucet::{
-    FaucetConfig, airdrop::RpcAirdropSubmitter, config::FaucetConfigFile, serve,
-};
 use std::sync::Arc;
+use thruput_faucet::{FaucetConfig, airdrop::RpcAirdropSubmitter, config::FaucetConfigFile, serve};
 use tracing_subscriber::EnvFilter;
 
-const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
+const BUILD_VERSION: thruput_build_info::BuildVersion = thruput_build_info::build_version!();
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "groundhog-faucet",
+    name = "thruput-faucet",
     version = BUILD_VERSION.to_string(),
-    about = "Groundhog Devnet faucet service"
+    about = "Thruput Devnet faucet service"
 )]
 struct Cli {
     /// Path to faucet TOML config.

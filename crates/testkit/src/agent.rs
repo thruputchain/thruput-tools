@@ -5,10 +5,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::TransactionStatus;
-use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::transaction::TransactionStatus;
+use thruput_xdr::contract::ContractEntrypointID;
+use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
 use crate::account::{
     Account, DeployOptions, Deployed, PreparedDeploy, SubmittedDeploy, verify_deployment_receipt,

@@ -1,4 +1,4 @@
-# groundhog-rv32-lower
+# thruput-rv32-lower
 
 Turn a freestanding `riscv32im-unknown-none-elf` contract binary into a
 Groundhog **v5 RV32 artifact** (`.rv32a`).
@@ -59,10 +59,10 @@ The lowerer:
 
 ## Library
 
-The crate is also a library (`groundhog_rv32_lower`):
+The crate is also a library (`thruput_rv32_lower`):
 
 - `lower(&[u8]) -> Result<Lowered>` — the whole pipeline.
-- `groundhog-rv32-artifact` — the v5 format crate: constants, writer, and
+- `thruput-rv32-artifact` — the v5 format crate: constants, writer, and
   `verify_artifact`. **This crate is the single Rust source of truth for the
   on-disk format** and mirrors hogd's `hogd/hogexec/runtime/rv32/artifact.h`.
 - `elf` — a minimal, dependency-free ELF32-LE-RISC-V reader.
@@ -71,7 +71,7 @@ The crate is also a library (`groundhog_rv32_lower`):
 ## Tests
 
 ```sh
-cargo test -p groundhog-rv32-lower
+cargo test -p thruput-rv32-lower
 ```
 
 The suite is hermetic: it builds minimal synthetic ELFs in-process (no riscv
@@ -81,7 +81,7 @@ rule. To also byte-compare against a real contract / a known-good golden artifac
 ```sh
 RV32_LOWER_PARITY_ELF=/path/to/<contract>-rv32 \
 RV32_LOWER_PARITY_GOLDEN=/path/to/golden.rv32a \
-  cargo test -p groundhog-rv32-lower
+  cargo test -p thruput-rv32-lower
 ```
 
 (unset → that test skips, the same opt-in / out-of-default-CI posture as the
@@ -93,14 +93,14 @@ See `hogd/docs/rv32/rv32-author-toolchain.md` for the full design.
 
 It is **published to the private `thruput` registry** and consumable two ways:
 
-- **as a binary** — `cargo install --registry thruput groundhog-rv32-lower`
+- **as a binary** — `cargo install --registry thruput thruput-rv32-lower`
   puts `rv32-lower` on `$PATH`; hogd's smoke tests and other scripts can call it
   directly;
-- **as a library** — add `groundhog-rv32-lower` (registry `thruput`) as a
+- **as a library** — add `thruput-rv32-lower` (registry `thruput`) as a
   dependency and call `lower()` / `metadata` directly. `thruput build` uses
   this path. Add
-  `groundhog-rv32-artifact` for direct access to format constants, writer, and
+  `thruput-rv32-artifact` for direct access to format constants, writer, and
   validator APIs.
 
-The format surface lives in `groundhog-rv32-artifact` under `crates/rv32/artifact`;
+The format surface lives in `thruput-rv32-artifact` under `crates/rv32/artifact`;
 `rv32-lower` depends on it instead of defining or re-exporting the format.

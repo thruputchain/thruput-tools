@@ -1,8 +1,8 @@
-use groundhog_json_rpc_types::{
+use serde_json::json;
+use thruput_json_rpc_types::{
     block::ChainTip, events::BlockAnchor, server_limits::ServerLimits,
     transaction::TransactionStatus, view::ViewRequest,
 };
-use serde_json::json;
 
 #[test]
 fn protocol_heights_roundtrip_at_precision_and_signed_boundaries() {

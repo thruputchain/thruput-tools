@@ -1,17 +1,17 @@
 //! Call argument and return-value codecs for contract specs and local source metadata.
 
-use groundhog_json_rpc_types::hex::{FixedHexError, decode_fixed_hex, prefixed_hex};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use thruput_json_rpc_types::hex::{FixedHexError, decode_fixed_hex, prefixed_hex};
 
-use groundhog_contract_spec::{
+use serde_json::Value;
+use thruput_contract_spec::{
     ContractArrayType, ContractEnumDef, ContractExceptionType, ContractField, ContractSpecId,
     ContractSpecMethod, ContractSpecString, ContractStructDef, ContractType, ContractTypeDef,
     ContractUnionCase, ContractUnionCaseType, ContractUnionDef, ContractVectorType,
 };
-use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
-use serde_json::Value;
+use thruput_xdr::contract::ContractEntrypointID;
+use thruput_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 use xdrs::{Reader as _, Writer as _};
 
 /// Contract metadata, argument encoding, or value decoding failed.
@@ -35,8 +35,8 @@ pub fn method_entrypoint_id(
     version: &str,
     method: &str,
 ) -> ContractEntrypointID {
-    let sig = groundhog_contract_util::NormalizedMethodSignature::new(method);
-    let id = groundhog_contract_util::contract_entrypoint_id(Some(interface_name), version, &sig);
+    let sig = thruput_contract_util::NormalizedMethodSignature::new(method);
+    let id = thruput_contract_util::contract_entrypoint_id(Some(interface_name), version, &sig);
     let bytes: [u8; 8] = id.as_ref()[..8]
         .try_into()
         .expect("bug: entrypoint ID is always 8 bytes");
@@ -46,7 +46,7 @@ pub fn method_entrypoint_id(
 /// Resolve a method from a supplied spec, rejecting ambiguous interface matches.
 /// Returns `None` when the method is absent; does not read files or discover projects.
 pub fn resolve_spec_method(
-    spec: &groundhog_contract_spec::ContractSpec,
+    spec: &thruput_contract_spec::ContractSpec,
     method: &str,
 ) -> Result<Option<SpecMethodMetadata>, Error> {
     let mut interface_matches = Vec::new();
@@ -222,7 +222,7 @@ pub fn is_erc20_too_large(decoded_abort: Option<&Result<DecodedAbort, AbortDecod
         Some(Ok(DecodedAbort {
             exception: Some(exception),
             value: Value::String(value),
-            exception_crate: Some("groundhog-erc20-if"),
+            exception_crate: Some("thruput-erc20-if"),
             ..
         })) if exception == "ERC20Error" && value == "TooLarge"
     )
@@ -327,16 +327,14 @@ pub fn decode_abort_payload(
 
 /// Parse a C `StrKey` or legacy hex contract address, including in typed calldata.
 pub fn parse_contract_address(value: &str) -> Result<ContractAddress, Error> {
-    groundhog_signing::strkey::parse_contract_address(value).map_err(|error| {
-        Error::InvalidArgument {
-            argument: "contract address".into(),
-            message: error.to_string(),
-        }
+    thruput_signing::strkey::parse_contract_address(value).map_err(|error| Error::InvalidArgument {
+        argument: "contract address".into(),
+        message: error.to_string(),
     })
 }
 
 fn parse_public_key(value: &str) -> Result<Ed25519PublicKey, Error> {
-    groundhog_signing::strkey::parse_public_key(value)
+    thruput_signing::strkey::parse_public_key(value)
         .map(Ed25519PublicKey::from)
         .map_err(|error| Error::InvalidArgument {
             argument: "ed25519 public key".into(),
@@ -752,12 +750,12 @@ fn encode_json_scalar_value(
             |value| encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string())),
         )),
         ContractType::U256 => Some(
-            parse_json_numeric::<groundhog_u256::U256>(value, "U256", path).and_then(|value| {
+            parse_json_numeric::<thruput_u256::U256>(value, "U256", path).and_then(|value| {
                 encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string()))
             }),
         ),
         ContractType::I256 => Some(
-            parse_json_numeric::<groundhog_u256::I256>(value, "I256", path).and_then(|value| {
+            parse_json_numeric::<thruput_u256::I256>(value, "I256", path).and_then(|value| {
                 encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string()))
             }),
         ),
@@ -1218,12 +1216,12 @@ fn encode_single_value(ty: &str, value: &str, path: &str) -> Result<Vec<u8>, Err
         "u32" => encode_local_xdr_value::<u32>(parse_numeric(value, &ty)?, path),
         "u64" => encode_local_xdr_value::<u64>(parse_numeric(value, &ty)?, path),
         "u128" => encode_local_xdr_value::<u128>(parse_numeric(value, &ty)?, path),
-        "U256" => encode_local_xdr_value::<groundhog_u256::U256>(parse_numeric(value, &ty)?, path),
+        "U256" => encode_local_xdr_value::<thruput_u256::U256>(parse_numeric(value, &ty)?, path),
         "i16" => encode_local_xdr_value::<i16>(parse_numeric(value, &ty)?, path),
         "i32" => encode_local_xdr_value::<i32>(parse_numeric(value, &ty)?, path),
         "i64" => encode_local_xdr_value::<i64>(parse_numeric(value, &ty)?, path),
         "i128" => encode_local_xdr_value::<i128>(parse_numeric(value, &ty)?, path),
-        "I256" => encode_local_xdr_value::<groundhog_u256::I256>(parse_numeric(value, &ty)?, path),
+        "I256" => encode_local_xdr_value::<thruput_u256::I256>(parse_numeric(value, &ty)?, path),
         "bool" => {
             let parsed = value
                 .parse::<bool>()
@@ -1364,14 +1362,10 @@ fn encode_scalar_cli_value(ty: &ContractType, value: &str, path: &str) -> Result
             .map_err(|e| encode_value_error(path, e.to_string())),
         ContractType::I128 => encode_xdr_value(parse_numeric::<i128>(value, "i128")?)
             .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::U256 => {
-            encode_xdr_value(parse_numeric::<groundhog_u256::U256>(value, "U256")?)
-                .map_err(|e| encode_value_error(path, e.to_string()))
-        }
-        ContractType::I256 => {
-            encode_xdr_value(parse_numeric::<groundhog_u256::I256>(value, "I256")?)
-                .map_err(|e| encode_value_error(path, e.to_string()))
-        }
+        ContractType::U256 => encode_xdr_value(parse_numeric::<thruput_u256::U256>(value, "U256")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::I256 => encode_xdr_value(parse_numeric::<thruput_u256::I256>(value, "I256")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
         ContractType::String => {
             encode_xdr_value(value.to_owned()).map_err(|e| encode_value_error(path, e.to_string()))
         }
@@ -1505,11 +1499,11 @@ fn decode_spec_scalar_value_from_reader(
             Some(read_xdr_value::<i128>(reader, path).map(|value| Value::from(value.to_string())))
         }
         ContractType::U256 => Some(
-            read_xdr_value::<groundhog_u256::U256>(reader, path)
+            read_xdr_value::<thruput_u256::U256>(reader, path)
                 .map(|value| Value::from(value.to_string())),
         ),
         ContractType::I256 => Some(
-            read_xdr_value::<groundhog_u256::I256>(reader, path)
+            read_xdr_value::<thruput_u256::I256>(reader, path)
                 .map(|value| Value::from(value.to_string())),
         ),
         ContractType::String => Some(read_xdr_value::<String>(reader, path).map(Value::from)),
@@ -1779,13 +1773,13 @@ fn decode_single_value(ty: &str, bytes: &[u8]) -> Option<Value> {
         "u32" => decode_xdr_value::<u32>(bytes).map(Value::from),
         "u64" => decode_xdr_value::<u64>(bytes).map(|value| Value::from(value.to_string())),
         "u128" => decode_xdr_value::<u128>(bytes).map(|value| Value::from(value.to_string())),
-        "U256" => decode_xdr_value::<groundhog_u256::U256>(bytes)
+        "U256" => decode_xdr_value::<thruput_u256::U256>(bytes)
             .map(|value| Value::from(value.to_string())),
         "i16" => decode_xdr_value::<i16>(bytes).map(Value::from),
         "i32" => decode_xdr_value::<i32>(bytes).map(Value::from),
         "i64" => decode_xdr_value::<i64>(bytes).map(|value| Value::from(value.to_string())),
         "i128" => decode_xdr_value::<i128>(bytes).map(|value| Value::from(value.to_string())),
-        "I256" => decode_xdr_value::<groundhog_u256::I256>(bytes)
+        "I256" => decode_xdr_value::<thruput_u256::I256>(bytes)
             .map(|value| Value::from(value.to_string())),
         "bool" => decode_xdr_value::<bool>(bytes).map(Value::from),
         "String" | "str" => decode_xdr_value::<String>(bytes).map(Value::from),

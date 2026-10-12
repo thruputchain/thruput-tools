@@ -1,4 +1,4 @@
-use groundhog_json_rpc_types::receipt::ExecStatus;
+use thruput_json_rpc_types::receipt::ExecStatus;
 
 #[test]
 fn serializes_nondeterministic_error_variant() {

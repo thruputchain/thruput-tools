@@ -1,6 +1,6 @@
-use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
 use serde::Serialize;
 

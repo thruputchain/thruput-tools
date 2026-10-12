@@ -6,8 +6,8 @@
 //! command-line string. Peers compare the token byte for byte, so text that
 //! is not exactly the wire width cannot name any token a peer could accept.
 
-use groundhog_xdr::network::ProtocolCommit;
 use thiserror::Error;
+use thruput_xdr::network::ProtocolCommit;
 
 /// Number of bytes the token occupies on the wire.
 pub const PROTOCOL_COMMIT_LEN: usize = std::mem::size_of::<ProtocolCommit>();

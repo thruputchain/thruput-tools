@@ -31,9 +31,9 @@ pub enum ViewAuthClaim {
     },
 }
 
-impl From<ViewAuthClaim> for groundhog_xdr::auth_claim::AuthClaim {
+impl From<ViewAuthClaim> for thruput_xdr::auth_claim::AuthClaim {
     fn from(claim: ViewAuthClaim) -> Self {
-        use groundhog_xdr::auth_claim::{AuthClaim_source_address_claim, PubkeyAccountPreimage};
+        use thruput_xdr::auth_claim::{AuthClaim_source_address_claim, PubkeyAccountPreimage};
         match claim {
             ViewAuthClaim::SourceAddress {
                 allowed_keys,
@@ -46,7 +46,7 @@ impl From<ViewAuthClaim> for groundhog_xdr::auth_claim::AuthClaim {
             },
             ViewAuthClaim::PubkeySignature { public_key, nonce } => Self::kPubkeySignature {
                 pubkey_preimage: PubkeyAccountPreimage {
-                    pubkey: groundhog_xdr::types::PublicKey::Ed25519 {
+                    pubkey: thruput_xdr::types::PublicKey::Ed25519 {
                         ed25519: public_key.0,
                     },
                     nonce,

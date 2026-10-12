@@ -17,10 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_xdr::contract::{Contract, ContractBlob};
-use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 use sha2::{Digest, Sha256};
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_xdr::contract::{Contract, ContractBlob};
+use thruput_xdr::types::{ContractAddress, SHA256Hash};
 use tokio::sync::{Mutex, MutexGuard};
 use xdr_common::BytesM;
 
@@ -201,9 +201,9 @@ fn validate_inferred_kind(path: &Path) -> Result<()> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use groundhog_json_rpc_types::{hex::Hex0x, transaction::TxHash};
-    use groundhog_xdr::contract::Contract;
-    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+    use thruput_json_rpc_types::{hex::Hex0x, transaction::TxHash};
+    use thruput_xdr::contract::Contract;
+    use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
     use crate::nonce::NonceNamespace;
 

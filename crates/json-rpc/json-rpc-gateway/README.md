@@ -4,7 +4,7 @@ The standalone JSON-RPC gateway connects public clients to hogd's internal x23
 services. It shares the public server implementation with the local node;
 production connections, admission, deadlines, and recovery remain gateway-owned.
 Read the [gateway design](../../../docs/gateway/system-design.md) for those
-boundaries and the [OpenRPC snapshot](../open-rpc-spec/snapshots/groundhog-spec.json)
+boundaries and the [OpenRPC snapshot](../open-rpc-spec/snapshots/thruput-spec.json)
 for methods and payloads.
 
 ## Build
@@ -12,8 +12,8 @@ for methods and payloads.
 From the workspace root, with private Thruput registry access:
 
 ```sh
-cargo build --locked -p groundhog-json-rpc-gateway --bin hog-gateway
-cargo test --locked -p groundhog-json-rpc-gateway
+cargo build --locked -p thruput-json-rpc-gateway --bin hog-gateway
+cargo test --locked -p thruput-json-rpc-gateway
 ```
 
 ## Run

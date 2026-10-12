@@ -209,7 +209,7 @@ fn codegen_file_result_and_raw_stdout_preserve_the_same_source() {
     fs::write(
         &elf,
         support::minimal_rv32_elf_with_section(
-            groundhog_spec_tool::RAW_SECTION_NAME,
+            thruput_spec_tool::RAW_SECTION_NAME,
             &support::minimal_contract_spec_raw(),
         ),
     )

@@ -9,11 +9,11 @@ use crate::config::{
 use crate::keys::load_local_public_key;
 use crate::result::CommandResult;
 use crate::{CliError, Print};
-use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::Path;
+use thruput_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
 
 /// JSON contract for offline native account creation.
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 6;
@@ -37,8 +37,8 @@ pub struct WalletCreateReport {
     /// Transaction format for this account.
     pub kind: WalletKind,
     /// Nonce used to derive the account address.
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     pub account_nonce: u64,
     /// Whether saving was skipped.
     pub dry_run: bool,
@@ -58,7 +58,7 @@ struct SavedWallet {
     #[serde(skip_serializing_if = "WalletKind::is_legacy")]
     kind: WalletKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(with = "groundhog_json_rpc_types::decimal::option")]
+    #[serde(with = "thruput_json_rpc_types::decimal::option")]
     account_nonce: Option<u64>,
     is_default: bool,
 }

@@ -67,7 +67,7 @@ fn toolchain_cache_actions_render_results_and_which_stays_a_raw_path() {
     let temp = TempDir::new().unwrap();
     let cache = temp.path().join("cache");
     let config = temp.path().join("config");
-    let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+    let catalog = thruput_toolchain::Catalog::embedded().unwrap();
     let source = temp.path().join("hog-devnode-source");
     std::fs::write(
         &source,

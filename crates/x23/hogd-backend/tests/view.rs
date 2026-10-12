@@ -1,19 +1,19 @@
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_json_rpc_types::hex::HexBytes;
-use groundhog_json_rpc_types::view::RootInvocationOutput;
-use groundhog_json_rpc_types::view::ViewRequest;
-use groundhog_view::ViewGatewayResult;
-use groundhog_xdr::invoke_flag::InvokeFlag;
-use groundhog_xdr::syscall_error::SyscallErrorCode;
-use groundhog_xdr::transaction::InvocationFrameOutput;
+use thruput_json_rpc_server::RpcServerError;
+use thruput_json_rpc_types::hex::HexBytes;
+use thruput_json_rpc_types::view::RootInvocationOutput;
+use thruput_json_rpc_types::view::ViewRequest;
+use thruput_view::ViewGatewayResult;
+use thruput_xdr::invoke_flag::InvokeFlag;
+use thruput_xdr::syscall_error::SyscallErrorCode;
+use thruput_xdr::transaction::InvocationFrameOutput;
 use xdr_common::BytesM;
 use xdr_common::VecM;
 
-use groundhog_json_rpc_types::ContractAddress;
-use groundhog_view::ViewGatewayPayload;
-use groundhog_xdr::{event::TxEmittedEvent, types::ContractAddress as XdrContractAddress};
+use thruput_json_rpc_types::ContractAddress;
+use thruput_view::ViewGatewayPayload;
+use thruput_xdr::{event::TxEmittedEvent, types::ContractAddress as XdrContractAddress};
 
-use groundhog_hogd_backend::view::*;
+use thruput_hogd_backend::view::*;
 
 fn request(caller: Option<ContractAddress>) -> ViewRequest {
     ViewRequest {
@@ -29,7 +29,7 @@ fn request(caller: Option<ContractAddress>) -> ViewRequest {
 
 #[test]
 fn explicit_claim_replaces_only_the_default_auth_context() {
-    use groundhog_json_rpc_types::view::ViewAuthClaim;
+    use thruput_json_rpc_types::view::ViewAuthClaim;
     let mut input = request(None);
     let default = view_query(input.clone(), 123).unwrap();
     input.auth_claim = Some(ViewAuthClaim::SourceAddress {

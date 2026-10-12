@@ -6,13 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use groundhog_firehose::{
-    store::Store,
-    subscription::{Config, Cursor, Hub},
-};
-use groundhog_indexer::{
-    EventIndexerPullRequest, EventIndexerPullResult, EventIndexerPulledBlock, IndexerProgress,
-};
 use jsonrpsee::{
     core::client::{ClientT, Subscription, SubscriptionClientT},
     rpc_params,
@@ -20,6 +13,13 @@ use jsonrpsee::{
 };
 use rpc_driver::{ProgVers, RpcError, RpcServer, ServiceMap, handler::RpcHandler};
 use serde_json::Value;
+use thruput_firehose::{
+    store::Store,
+    subscription::{Config, Cursor, Hub},
+};
+use thruput_indexer::{
+    EventIndexerPullRequest, EventIndexerPullResult, EventIndexerPulledBlock, IndexerProgress,
+};
 use tokio::sync::Notify;
 
 mod common;
@@ -90,7 +90,7 @@ fn assert_connection_limit(error: jsonrpsee::core::client::Error, limit: u32) {
 
 #[tokio::test]
 async fn public_profile_refuses_second_subscription_and_first_keeps_delivering() {
-    use groundhog_firehose::api::FirehoseApiClient;
+    use thruput_firehose::api::FirehoseApiClient;
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();
     let hub = Hub::new(
@@ -885,8 +885,8 @@ async fn growing_archive_lag_disconnects_even_when_individual_acks_meet_deadline
 
 #[tokio::test]
 async fn typed_client_future_cursor_and_invalid_cursor() {
-    use groundhog_firehose::api::FirehoseApiClient;
-    use groundhog_firehose::types::Notification;
+    use thruput_firehose::api::FirehoseApiClient;
+    use thruput_firehose::types::Notification;
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();
     let hub = Hub::new(dir.path().to_owned(), store.height(), config());

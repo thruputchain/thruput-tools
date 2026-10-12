@@ -5,31 +5,31 @@
 //! per-key result. Only one per-item code — `kRPCNotFound` — is an absent
 //! key; every other one is a backend failure that must not read as a miss.
 
-use groundhog_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
-use groundhog_json_rpc_server::{RpcServerError, TipReading};
-use groundhog_json_rpc_types::{
+use thruput_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
+use thruput_json_rpc_server::{RpcServerError, TipReading};
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress,
     address_auth::{AddressAuthDataInfo, AddressAuthDataResponse},
     state::{StorageItemInfo, StorageItemRead},
 };
-use groundhog_scheduler::RPCError;
-use groundhog_xdr::storage_item::WireStorageItem;
-use groundhog_xdr::types::{StorageKey, StorageKeyContractData};
+use thruput_scheduler::RPCError;
+use thruput_xdr::storage_item::WireStorageItem;
+use thruput_xdr::types::{StorageKey, StorageKeyContractData};
 
 /// Project one snapshot-bound rules reading without supplying missing defaults.
 pub fn tip_reading(
     service: &str,
-    result: groundhog_db_gateway::DbGatewayConfigResult,
-    expected_network: Option<&groundhog_json_rpc_types::NetworkHashHex>,
+    result: thruput_db_gateway::DbGatewayConfigResult,
+    expected_network: Option<&thruput_json_rpc_types::NetworkHashHex>,
 ) -> Result<TipReading, RpcServerError> {
-    use groundhog_json_rpc_types::network_config::{ExecutionConfig, NetworkConfigParams};
-    let groundhog_db_gateway::DbGatewayConfigResult::kRPCNone { config } = result else {
+    use thruput_json_rpc_types::network_config::{ExecutionConfig, NetworkConfigParams};
+    let thruput_db_gateway::DbGatewayConfigResult::kRPCNone { config } = result else {
         return Err(RpcServerError::BackendUnavailable(format!(
             "{service}: configuration unavailable"
         )));
     };
     if let Some(expected) = expected_network {
-        let observed = groundhog_json_rpc_types::NetworkHashHex::from(
+        let observed = thruput_json_rpc_types::NetworkHashHex::from(
             config
                 .tip
                 .value
@@ -45,7 +45,7 @@ pub fn tip_reading(
             )));
         }
     }
-    if config.storage_cost_model.ext != groundhog_xdr::types::ExtensionPoint::_0 {
+    if config.storage_cost_model.ext != thruput_xdr::types::ExtensionPoint::_0 {
         return Err(RpcServerError::BackendUnavailable(format!(
             "{service}: unsupported storage cost model"
         )));
@@ -60,7 +60,7 @@ pub fn tip_reading(
     }
     let execution = ExecutionConfig::new(
         tip.clone(),
-        groundhog_json_rpc_types::hex::Hex0x(*config.tip.value.proposal_header.config_hash),
+        thruput_json_rpc_types::hex::Hex0x(*config.tip.value.proposal_header.config_hash),
         effective,
         (&config.storage_cost_model).into(),
     );
@@ -211,7 +211,7 @@ mod config_tests {
 
     #[test]
     fn failed_readings_never_fall_back_to_partial_configuration() {
-        use groundhog_db_gateway::DbGatewayConfigResult;
+        use thruput_db_gateway::DbGatewayConfigResult;
         for error in [
             RPCError::kRPCNotFound.0,
             RPCError::kRPCUnrecoverable.0,

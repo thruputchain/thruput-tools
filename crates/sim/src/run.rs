@@ -7,8 +7,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
+use thruput_json_rpc_types::{
     ContractAddress,
     block::ChainTip,
     events::{EventPage, EventQuery},
@@ -473,7 +473,7 @@ async fn run_resolved_target(
             &loaded_runtime.manifest,
         )?
     } else if loaded_runtime.manifest.kind
-        == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
+        == thruput_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
     {
         let fixtures = crate::manifest::NativeAccountsSpec {
             kind: crate::manifest::NativeAccountKind::Native,
@@ -1044,11 +1044,11 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::{BlockHeight, block::ChainTip, hex::Hex0x, transaction::TxHash};
-    use groundhog_signing::derive_dev_account_signer;
-    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
+    use thruput_json_rpc_types::{BlockHeight, block::ChainTip, hex::Hex0x, transaction::TxHash};
+    use thruput_signing::derive_dev_account_signer;
+    use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
     use super::*;
     use crate::event::EventWriter;
@@ -1058,7 +1058,7 @@ mod tests {
     use crate::scheduler::{generate_schedule, phase_starts};
     use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
     use crate::util::simulation_config_sha256;
-    use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
+    use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
     #[derive(Clone)]
     struct MockClient {
@@ -1227,7 +1227,7 @@ mod tests {
             Ok(Some(TransactionReceipt {
                 tx_hash,
                 height: 42.into(),
-                status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
+                status: thruput_json_rpc_types::receipt::ExecStatus::Ok,
                 events: Vec::new(),
                 return_data: None,
                 abort_data: None,
@@ -1958,8 +1958,8 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("run-test-seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x66; 32])).0,
-                network_hash: groundhog_xdr::types::NetworkHash::new(
-                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                network_hash: thruput_xdr::types::NetworkHash::new(
+                    thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
             },
             NonceNamespace::new(7).expect("namespace should fit"),

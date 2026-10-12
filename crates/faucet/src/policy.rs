@@ -729,7 +729,7 @@ mod tests {
         ));
     }
 
-    // Explicit qualification: cargo test -p groundhog-faucet retained_capacity_load -- --ignored --nocapture
+    // Explicit qualification: cargo test -p thruput-faucet retained_capacity_load -- --ignored --nocapture
     #[test]
     #[ignore = "qualifies policy scans at hosted retention occupancy"]
     fn retained_capacity_load() {

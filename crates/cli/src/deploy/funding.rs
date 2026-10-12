@@ -1,8 +1,8 @@
-use groundhog_json_rpc_client::GroundhogApiClient;
-use groundhog_json_rpc_types::{decimal, network_config::ExecutionConfig};
-use groundhog_rv32_artifact::DeclaredSizes;
 use schemars::JsonSchema;
 use serde::Serialize;
+use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_types::{decimal, network_config::ExecutionConfig};
+use thruput_rv32_artifact::DeclaredSizes;
 
 use crate::CliError;
 
@@ -108,9 +108,8 @@ pub(super) fn read(
     artifact: &[u8],
     initializer: bool,
 ) -> Result<FundingReport, CliError> {
-    groundhog_rv32_artifact::verify_artifact(artifact)
-        .map_err(|error| invalid(error.to_string()))?;
-    let sizes = groundhog_rv32_artifact::declared_sizes(artifact)
+    thruput_rv32_artifact::verify_artifact(artifact).map_err(|error| invalid(error.to_string()))?;
+    let sizes = thruput_rv32_artifact::declared_sizes(artifact)
         .ok_or_else(|| invalid("artifact does not report RV32 code and memory sizes"))?;
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
@@ -161,9 +160,9 @@ mod tests {
 
     #[test]
     fn guest_limits_are_checked_even_when_the_artifact_fits() {
-        let artifact = groundhog_rv32_artifact::build_artifact(&[0; 16], &[], 0, 4096).unwrap();
-        groundhog_rv32_artifact::verify_artifact(&artifact).unwrap();
-        let sizes = groundhog_rv32_artifact::declared_sizes(&artifact).unwrap();
+        let artifact = thruput_rv32_artifact::build_artifact(&[0; 16], &[], 0, 4096).unwrap();
+        thruput_rv32_artifact::verify_artifact(&artifact).unwrap();
+        let sizes = thruput_rv32_artifact::declared_sizes(&artifact).unwrap();
         let bytes = u64::try_from(artifact.len()).unwrap();
 
         for (code_limit, memory_limit, expected_error) in [

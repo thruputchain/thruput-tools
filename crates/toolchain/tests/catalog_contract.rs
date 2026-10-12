@@ -1,4 +1,4 @@
-use groundhog_toolchain::{Catalog, CatalogError, HostTarget};
+use thruput_toolchain::{Catalog, CatalogError, HostTarget};
 
 const PUBLIC_BASE_URL: &str =
     "https://groundhog-public-release-artifacts-017820684264.s3.us-west-2.amazonaws.com";

@@ -12,8 +12,6 @@ use std::{
 
 use crate::api::FirehoseApiServer;
 pub use crate::types::{Cursor, Record};
-use groundhog_indexer::EventIndexerPulledBlock;
-use groundhog_json_rpc_types::hex::HexBytes;
 use jsonrpsee::{
     core::server::{ConnectionId, SubscriptionMessage, SubscriptionSink},
     server::{
@@ -23,6 +21,8 @@ use jsonrpsee::{
     types::ErrorObjectOwned,
 };
 use serde::Serialize;
+use thruput_indexer::EventIndexerPulledBlock;
+use thruput_json_rpc_types::hex::HexBytes;
 use tokio::sync::Notify;
 
 /// Bounds apply independently of the upstream protocol's much larger ceiling.

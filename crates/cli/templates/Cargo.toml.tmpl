@@ -28,7 +28,7 @@ bench = false
 [features]
 entrypoints = []
 dev = ["sdk/dev"]
-thruput-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
+thruput-integration-test = ["dep:thruput-json-rpc-client", "dep:tokio"]
 
 # `sdk` is declared per target because it needs `std` on the host and forbids
 # it on the guest. Cargo resolves features per platform, so host `cargo build`
@@ -41,7 +41,7 @@ sdk = { version = "={{SDK_VERSION}}", registry = "thruput" }
 sdk = { version = "={{SDK_VERSION}}", registry = "thruput", features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 
-[target.'cfg(not(target_arch = "riscv32"))'.dependencies.groundhog-json-rpc-client]
+[target.'cfg(not(target_arch = "riscv32"))'.dependencies.thruput-json-rpc-client]
 version = "{{JSON_RPC_CLIENT_VERSION}}"
 registry = "thruput"
 optional = true

@@ -2,8 +2,8 @@
 
 use std::borrow::Cow;
 
-use groundhog_cli_macros::ErrorMeta;
 use serde_json::json;
+use thruput_cli_macros::ErrorMeta;
 
 const SHARED_HINT: &str = "shared next step";
 

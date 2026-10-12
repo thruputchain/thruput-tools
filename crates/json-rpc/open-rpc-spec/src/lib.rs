@@ -1,10 +1,10 @@
-use groundhog_json_rpc_api::types::airdrop::LocalFundingErrorData;
-use groundhog_json_rpc_api::{
+use schemars::generate::SchemaSettings;
+use thruput_json_rpc_api::types::airdrop::LocalFundingErrorData;
+use thruput_json_rpc_api::{
     AirdropApiOpenRpc, GroundhogApiOpenRpc, LocalFundingApiOpenRpc, WIRE_FORMAT_VERSION,
     types::error::{ERROR_INFOS, RpcErrorInfo, TxInvalidDetail, codes, error_info_by_code},
 };
-use groundhog_open_rpc::{Project, ProjectInfo};
-use schemars::generate::SchemaSettings;
+use thruput_open_rpc::{Project, ProjectInfo};
 
 /// Build the canonical `OpenRPC` artifact for the current RPC surface.
 ///
@@ -94,7 +94,7 @@ fn error_data_schema(code: i32) -> Option<serde_json::Value> {
         codes::VIEW_HEIGHT_UNAVAILABLE => SchemaSettings::draft2020_12()
             .with(|settings| settings.meta_schema = None)
             .into_generator()
-            .into_root_schema_for::<groundhog_json_rpc_api::types::view::ViewHeightUnavailable>(),
+            .into_root_schema_for::<thruput_json_rpc_api::types::view::ViewHeightUnavailable>(),
         codes::TX_INVALID => SchemaSettings::draft2020_12()
             .with(|settings| settings.meta_schema = None)
             .into_generator()

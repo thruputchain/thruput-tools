@@ -2,9 +2,9 @@
 
 use std::path::Path;
 
-use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
-use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, NetworkHash, SHA256Hash};
 use sha2::{Digest, Sha256};
+use thruput_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
+use thruput_xdr::types::{ContractAddress, Ed25519PublicKey, NetworkHash, SHA256Hash};
 use xdr_common::BytesM;
 
 use crate::{

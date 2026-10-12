@@ -2,8 +2,9 @@
 
 use std::time::Duration;
 
-use groundhog_json_rpc_api::{GroundhogApiClient, LocalFundingApiClient};
-use groundhog_json_rpc_types::{
+use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
+use thruput_json_rpc_api::{GroundhogApiClient, LocalFundingApiClient};
+use thruput_json_rpc_types::{
     ContractAddress, NetworkHashHex,
     airdrop::{ClientNonce, FundAccountRequest},
     bootstrap_manifest::BootstrapManifestAllocation,
@@ -12,16 +13,15 @@ use groundhog_json_rpc_types::{
     runtime_manifest::RuntimeManifestChainState,
     transaction::TxHash,
 };
-use groundhog_node_supervisor::{
+use thruput_node_supervisor::{
     BlockDriverConfig, HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle,
 };
-use groundhog_signing::{
+use thruput_signing::{
     LocalSigner, PubkeyAccount, SignTransactionParams,
     default_wallet::{BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction},
     sign_and_encode_transaction_hex, transaction_hash,
 };
-use groundhog_xdr::transaction::Transaction;
-use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
+use thruput_xdr::transaction::Transaction;
 
 fn config(
     hash: NetworkHashHex,
@@ -116,12 +116,11 @@ async fn fund(node: &NodeSupervisorHandle, recipient: ContractAddress) {
 
 fn transfer(signer: &LocalSigner, recipient: ContractAddress) -> Transaction {
     let account = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
-    let calldata =
-        groundhog_signing::native_hog_transfer_calldata(&recipient.0, 1_000_000).unwrap();
+    let calldata = thruput_signing::native_hog_transfer_calldata(&recipient.0, 1_000_000).unwrap();
     build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
         account: &account,
-        target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
-        target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+        target_address: thruput_signing::NATIVE_HOG_ADDRESS,
+        target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
         target_calldata: &calldata,
         gas_limit: 25_000_000,
         target_gas_limit: 25_000_000,
@@ -241,7 +240,7 @@ async fn distinct_domains_and_persistent_identity() {
     // Reinitialization is forbidden, even with the original hash, and preserves state.
     let journal_path = dir
         .path()
-        .join(groundhog_node_supervisor::LOCAL_FUNDING_ATTEMPTS_FILE);
+        .join(thruput_node_supervisor::LOCAL_FUNDING_ATTEMPTS_FILE);
     let journal_before = std::fs::read(&journal_path).unwrap();
     for requested in [a_hash, b_hash.clone(), [0; 32].into()] {
         let mut wrong = b_config.clone();

@@ -1,19 +1,19 @@
-use groundhog_json_rpc_types::hex::decode_fixed_hex;
 use std::path::{Path, PathBuf};
+use thruput_json_rpc_types::hex::decode_fixed_hex;
 
-use groundhog_json_rpc_types::hex::HexBytes;
-use groundhog_json_rpc_types::receipt::TransactionReceipt;
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_signing::{
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use thruput_json_rpc_types::hex::HexBytes;
+use thruput_json_rpc_types::receipt::TransactionReceipt;
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
     build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
     source_address_auth_claim,
 };
-use groundhog_xdr::transaction::Transaction;
-use groundhog_xdr::types::ContractAddress;
-use groundhog_xdr::types::{NetworkHash, SHA256Hash};
-use serde_json::json;
-use sha2::{Digest, Sha256};
+use thruput_xdr::transaction::Transaction;
+use thruput_xdr::types::ContractAddress;
+use thruput_xdr::types::{NetworkHash, SHA256Hash};
 use xdr_common::VecM;
 
 use crate::account_resolution::resolve_transaction_sender;
@@ -61,8 +61,8 @@ pub struct DeploymentOptions<'a> {
 struct InitializerReport {
     method: String,
     entrypoint_id: String,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     gas_limit: u64,
     calldata: HexBytes,
 }
@@ -75,11 +75,11 @@ struct NativeDeployment {
     network_hash: String,
     contract_hash: String,
     deployment_nonce: String,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<i64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<i64>")]
     expiry_height: i64,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     gas_limit: u64,
     funding_hog: String,
     funding_raw_amount: String,
@@ -273,7 +273,7 @@ pub fn run(
     print.group(
         if matches!(
             receipt.status,
-            groundhog_json_rpc_types::receipt::ExecStatus::Ok
+            thruput_json_rpc_types::receipt::ExecStatus::Ok
         ) {
             crate::print::Outcome::Success
         } else {
@@ -282,7 +282,7 @@ pub fn run(
         "Deployment",
         |print| {
             match &receipt.status {
-                groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
+                thruput_json_rpc_types::receipt::ExecStatus::Ok => {
                     let contract_addr_hex = contract_addr_hex
                         .as_deref()
                         .expect("bug: successful deploy must resolve a contract address");
@@ -322,7 +322,7 @@ pub fn run(
     let mut alias_warnings: Vec<crate::checks::Finding> = Vec::new();
     if matches!(
         &receipt.status,
-        groundhog_json_rpc_types::receipt::ExecStatus::Ok
+        thruput_json_rpc_types::receipt::ExecStatus::Ok
     ) {
         // `--alias` wins; otherwise the alias is the package name, which is what
         // an author reads back with `thruput call <name>`. There is no third
@@ -469,7 +469,7 @@ fn is_insufficient_deploy_funding(
     }
     if !matches!(
         receipt.status,
-        groundhog_json_rpc_types::receipt::ExecStatus::Reverted { .. }
+        thruput_json_rpc_types::receipt::ExecStatus::Reverted { .. }
     ) {
         return false;
     }
@@ -573,7 +573,7 @@ pub(crate) fn submit_prepared_deploy(
     if prepared.native.is_some() {
         return rt.block_on(async {
             let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
-            submit_native_deploy(prepared, &client, groundhog_client::PollOptions::default()).await
+            submit_native_deploy(prepared, &client, thruput_client::PollOptions::default()).await
         });
     }
     rt.block_on(async { submit_and_poll(&prepared.rpc_url, &prepared.tx_hex).await })
@@ -586,7 +586,7 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
     let (tx_hash, receipt) = submit_prepared_deploy(prepared)?;
     let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
     let (contract_address, address_source) = match &receipt.status {
-        groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
+        thruput_json_rpc_types::receipt::ExecStatus::Ok => {
             let (address, source) = if prepared.native.is_some() {
                 resolve_native_deployed_address(receipt.return_data.as_ref(), &predicted_address)?
             } else {
@@ -661,7 +661,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     artifact_path: &Path,
     rpc_url: &str,
     key_name: &str,
-    signer: groundhog_signing::LocalSigner,
+    signer: thruput_signing::LocalSigner,
     runtime_manifest: Option<PathBuf>,
 ) -> Result<PreparedDeploy, CliError> {
     let artifact_bytes = std::fs::read(artifact_path)?;
@@ -682,7 +682,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         source: None,
     };
     let account =
-        groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
+        thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
     let sender = crate::account_resolution::ResolvedTransactionSender {
         native_account: Some(account.clone()),
         key_name: key_name.into(),
@@ -781,11 +781,11 @@ fn prepare_deploy_transaction_plan(
     let artifact_bytes_len = artifact_bytes.len();
     let wallet_address = sender.wallet_address;
 
-    let blob = groundhog_xdr::contract::ContractBlob {
+    let blob = thruput_xdr::contract::ContractBlob {
         data: xdr_common::BytesM(artifact_bytes),
     };
     let contract = match artifact.kind {
-        ArtifactKind::Rv32 => groundhog_xdr::contract::Contract::kRv32 {
+        ArtifactKind::Rv32 => thruput_xdr::contract::Contract::kRv32 {
             rv32_contract: blob,
         },
     };
@@ -806,14 +806,14 @@ fn prepare_deploy_transaction_plan(
     let wallet_context = sender.signing_context(profile, &rt)?;
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
     let tx = if let Some(account) = &sender.native_account {
-        groundhog_signing::default_wallet::build_default_wallet_deploy_transaction(
-            groundhog_signing::default_wallet::BuildDefaultWalletDeployTransaction {
+        thruput_signing::default_wallet::build_default_wallet_deploy_transaction(
+            thruput_signing::default_wallet::BuildDefaultWalletDeployTransaction {
                 account,
                 deployment_nonce: deploy_nonce,
-                code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
+                code: thruput_signing::default_wallet::DeploymentCode::Attached(contract),
                 amount: funding.expect("bug: native funding validated above"),
                 initializer: init_call.as_ref().map(|(entrypoint, calldata)| {
-                    groundhog_signing::default_wallet::WalletInitCall {
+                    thruput_signing::default_wallet::WalletInitCall {
                         entrypoint: *entrypoint,
                         gas_limit: init_gas_limit,
                         calldata,
@@ -840,7 +840,7 @@ fn prepare_deploy_transaction_plan(
         })
     };
     let tx_hash = TxHash(
-        groundhog_signing::transaction_hash(&tx)
+        thruput_signing::transaction_hash(&tx)
             .map_err(|e| CliError::Other(e.to_string()))?
             .into(),
     );
@@ -933,9 +933,9 @@ fn resolve_native_funding(native: bool, fund: Option<&str>) -> Result<Option<u12
         return Ok(None);
     }
     let amount = fund.ok_or(CliError::NativeDeploymentFundingRequired)?;
-    match groundhog_signing::parse_hog_amount(amount) {
+    match thruput_signing::parse_hog_amount(amount) {
         Ok(amount) => Ok(Some(amount)),
-        Err(groundhog_signing::ParseHogAmountError::Zero) => Ok(Some(0)),
+        Err(thruput_signing::ParseHogAmountError::Zero) => Ok(Some(0)),
         Err(error) => Err(CliError::InvalidHogAmount {
             input: amount.trim().to_owned(),
             message: error.to_string(),
@@ -946,10 +946,10 @@ fn resolve_native_funding(native: bool, fund: Option<&str>) -> Result<Option<u12
 async fn submit_native_deploy(
     prepared: &PreparedDeploy,
     client: &(impl jsonrpsee::core::client::ClientT + Sync),
-    polling: groundhog_client::PollOptions,
+    polling: thruput_client::PollOptions,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
     let returned =
-        groundhog_json_rpc_client::submit_transaction_with_client(client, &prepared.tx_hex)
+        thruput_json_rpc_client::submit_transaction_with_client(client, &prepared.tx_hex)
             .await
             .map_err(|error| native_submission_error(&error))?;
     if returned != prepared.tx_hash {
@@ -961,7 +961,7 @@ async fn submit_native_deploy(
             ),
         });
     }
-    let receipt = groundhog_json_rpc_client::poll_transaction_receipt_with_client_config(
+    let receipt = thruput_json_rpc_client::poll_transaction_receipt_with_client_config(
         client,
         prepared.tx_hash,
         polling.max_attempts,
@@ -1147,15 +1147,15 @@ mod tests {
     };
     use super::{INTEGRATION_DEPLOY_FUND_HOG, resolve_native_funding};
     use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_thruput_artifact};
-    use groundhog_json_rpc_types::{
+    use serial_test::serial;
+    use tempfile::TempDir;
+    use thruput_json_rpc_types::{
         BlockHeight,
         hex::{Hex0x, HexBytes},
         receipt::{ExecStatus, TransactionReceipt},
         transaction::TxHash,
     };
-    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
-    use serial_test::serial;
-    use tempfile::TempDir;
+    use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
     #[test]
     fn integration_deploy_funds_the_contract_like_the_removed_dev_wallet() {
@@ -1217,7 +1217,7 @@ mod tests {
         let error = super::submit_native_deploy(
             &prepared,
             &client,
-            groundhog_client::PollOptions {
+            thruput_client::PollOptions {
                 max_attempts: 1,
                 interval: std::time::Duration::ZERO,
             },
@@ -1353,8 +1353,8 @@ mod tests {
     #[test]
     fn native_hog_overdraft_is_actionable_deploy_failure() {
         let abort_data = xdrs::cxs::encode(&(
-            <groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
-            groundhog_erc20_if::ERC20Error::TooLarge,
+            <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+            thruput_erc20_if::ERC20Error::TooLarge,
         ))
         .expect("bug: ERC20 exception should encode");
         let receipt = failed_receipt(Some(HexBytes(abort_data)));

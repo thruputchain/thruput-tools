@@ -1,5 +1,5 @@
-use groundhog_json_rpc_types::view::{ViewAuthClaim, ViewBatchRequest, ViewRequest};
 use serde_json::json;
+use thruput_json_rpc_types::view::{ViewAuthClaim, ViewBatchRequest, ViewRequest};
 
 fn call() -> serde_json::Value {
     json!({"contract": format!("0x{}", "07".repeat(32)), "entrypoint":"0x0000000000000000", "calldata":"0x"})
@@ -60,7 +60,7 @@ fn malformed_claims_are_rejected_consistently() {
 
 #[test]
 fn public_claims_use_existing_protocol_variants() {
-    use groundhog_xdr::auth_claim::AuthClaim;
+    use thruput_xdr::auth_claim::AuthClaim;
     let source: AuthClaim = ViewAuthClaim::SourceAddress {
         allowed_keys: 5,
         required_weight: 3,

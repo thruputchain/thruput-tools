@@ -109,28 +109,28 @@ pub struct IntegrationTestInfo {
 #[serde(rename_all = "camelCase")]
 pub struct TestSummary {
     pub source: TestSummarySource,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     pub total: u64,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     pub passed: u64,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     pub failed: u64,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     pub ignored: u64,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     pub measured: u64,
     /// Number of tests libtest reported as filtered out.
     ///
     /// For aggregated multi-run reports this is set to `0`, because
     /// libtest reports the count per invocation and those values do not
     /// compose meaningfully across rerun filters.
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     pub filtered_out: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<f64>,

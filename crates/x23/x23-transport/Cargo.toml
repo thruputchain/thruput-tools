@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-x23-transport"
+name = "thruput-x23-transport"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Shared x23 RPC transport helpers for Groundhog Rust binaries"
+description = "Shared x23 RPC transport helpers for Thruput Rust binaries"
 
 [lints]
 workspace = true
