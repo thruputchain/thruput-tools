@@ -2,25 +2,25 @@
 // in for the published packages so the type-check job needs no install. Keep
 // them in step when the generator starts naming something new.
 
-declare module "@groundhogchain/protocol" {
+declare module "@thruputchain/protocol" {
   export type ContractAddress = Uint8Array & { readonly __brand: "ContractAddress" };
   export function contractEntrypointID(bytes: Uint8Array): Uint8Array;
   export function topic(value: Uint8Array): Uint8Array;
 }
 
-declare module "@groundhogchain/protocol/utils" {
+declare module "@thruputchain/protocol/utils" {
   export function fromHex(hex: string): Uint8Array;
 }
 
-declare module "@groundhogchain/contract-spec" {
+declare module "@thruputchain/contract-spec" {
   export const ContractTypeKind: Record<string, number>;
   export const ContractTypeDefKind: Record<string, number>;
   export const ContractUnionCaseKind: Record<string, number>;
   export function contractSpecString(value: string): unknown;
 }
 
-declare module "@groundhogchain/client/contract" {
-  import type { ContractAddress } from "@groundhogchain/protocol";
+declare module "@thruputchain/client/contract" {
+  import type { ContractAddress } from "@thruputchain/protocol";
 
   export enum ContractMethodEffect {
     EffectPure = 1,

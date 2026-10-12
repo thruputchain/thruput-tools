@@ -54,7 +54,7 @@ The [artifact module](../../crates/cli/src/artifacts.rs) owns those paths.
 The RV32 lowerer is both a library used by the CLI and a standalone tool. A
 contract's `.spec.xdr` interface drives codecs and generated bindings; the CLI
 must not invent a parallel ABI. Generated TypeScript describes a contract's
-methods and events and delegates invocation to `@groundhogchain/client`.
+methods and events and delegates invocation to `@thruputchain/client`.
 See [codegen.rs](../../crates/cli/src/codegen.rs), its consumer fixtures,
 and [RV32 design](../rv32/design.md).
 

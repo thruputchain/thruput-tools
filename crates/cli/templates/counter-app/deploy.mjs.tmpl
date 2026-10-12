@@ -1,5 +1,5 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
-import { createGroundhogClient, localnet } from "@groundhogchain/client";
+import { createThruputClient, localnet } from "@thruputchain/client";
 import { buildContract, thruput, onShutdown } from "./thruput.mjs";
 
 onShutdown();
@@ -17,7 +17,7 @@ try {
 
   stage = "Connecting to the local node";
   console.log(stage);
-  const client = await createGroundhogClient({ cluster: localnet({ rpcUrl }) });
+  const client = await createThruputClient({ cluster: localnet({ rpcUrl }) });
   await client.getChainTip();
 
   stage = "Building the contract and bindings";

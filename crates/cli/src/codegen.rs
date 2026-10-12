@@ -202,10 +202,10 @@ fn declarations(spec: &ContractSpec) -> Result<Vec<Declaration<'_>>, CliError> {
 /// spec name can capture one. A binding that uses no name from a module still
 /// imports it: `noUnusedLocals` skips an unused import whose name starts with `_`.
 const RUNTIME_MODULES: &[(&str, &str)] = &[
-    ("__gh_protocol", "@groundhogchain/protocol"),
-    ("__gh_protocol_utils", "@groundhogchain/protocol/utils"),
-    ("__gh_contract_spec", "@groundhogchain/contract-spec"),
-    ("__gh_client_contract", "@groundhogchain/client/contract"),
+    ("__gh_protocol", "@thruputchain/protocol"),
+    ("__gh_protocol_utils", "@thruputchain/protocol/utils"),
+    ("__gh_contract_spec", "@thruputchain/contract-spec"),
+    ("__gh_client_contract", "@thruputchain/client/contract"),
 ];
 
 /// The names the generator declares for itself carry this prefix, which
@@ -4071,10 +4071,10 @@ export type Result =
     #[test]
     fn every_binding_imports_every_runtime_module_whole() {
         let imports = "\n\
-            import * as __gh_protocol from \"@groundhogchain/protocol\";\n\
-            import * as __gh_protocol_utils from \"@groundhogchain/protocol/utils\";\n\
-            import * as __gh_contract_spec from \"@groundhogchain/contract-spec\";\n\
-            import * as __gh_client_contract from \"@groundhogchain/client/contract\";\n";
+            import * as __gh_protocol from \"@thruputchain/protocol\";\n\
+            import * as __gh_protocol_utils from \"@thruputchain/protocol/utils\";\n\
+            import * as __gh_contract_spec from \"@thruputchain/contract-spec\";\n\
+            import * as __gh_client_contract from \"@thruputchain/client/contract\";\n";
         // Methods, events, and neither: the last uses no protocol module at all.
         let bare = counter_spec_with_interface_name("Counter", vec![], false);
         for spec in [counter_spec(), spec_with_events(), bare] {

@@ -1,11 +1,11 @@
 import {
-  createGroundhogClient,
+  createThruputClient,
   createPubkeyAccount,
   createWalletClient,
   localnet,
   PrivateKeySigner,
   addressFromHex,
-} from "@groundhogchain/client";
+} from "@thruputchain/client";
 
 // One promise per page load also prevents React remounts from creating extra wallets.
 let session: ReturnType<typeof connect> | undefined;
@@ -34,7 +34,7 @@ async function connect() {
     );
   }
   const contract = addressFromHex(config.contractAddress);
-  const client = await createGroundhogClient({
+  const client = await createThruputClient({
     cluster: localnet({ rpcUrl: new URL("/rpc", window.location.origin).href }),
   });
   const signer = new PrivateKeySigner(

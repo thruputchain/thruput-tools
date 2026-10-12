@@ -269,7 +269,7 @@ jobs:
         with:
           node-version: '22'
           registry-url: https://npm.pkg.github.com
-          scope: '@groundhogchain'
+          scope: '@thruputchain'
       - name: Build CLI and install selected runtime
         run: |
           cargo build --locked -p thruput-cli
@@ -280,7 +280,7 @@ jobs:
           npx --prefix scripts/scaffold-app playwright install --with-deps chromium
       - name: Test generated counter app
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.THRUPUT_PACKAGES_TOKEN }}
         run: npm test --prefix scripts/scaffold-app
 
   # Codegen tests assert on generated text. This job runs the real CLI over the
