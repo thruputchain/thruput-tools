@@ -27,7 +27,7 @@ See [benchmark scenarios](bench-scenarios.md) for heavier runs and saved results
 Use an installed CLI or build the binaries from this checkout. A write benchmark
 must own fixture keys and supply their public initial allocations. Prepare
 `bench-accounts.json` with keys derived from the benchmark namespace
-`thruput-bench:benchmark-fixtures-v1`; each account seed is SHA-256 of that
+`groundhog-bench:benchmark-fixtures-v1`; each account seed is SHA-256 of that
 namespace followed by `:account-N`. The smoke script shows the executable setup.
 These deterministic keys are disposable fixtures. In one terminal:
 

@@ -22,7 +22,8 @@ use crate::{
 };
 
 /// Private faucet credential included in a local-chain backup.
-pub const LOCAL_FAUCET_KEY_FILE: &str = "thruput-faucet.key";
+/// Keep this storage identity stable across tool branding changes.
+pub const LOCAL_FAUCET_KEY_FILE: &str = "groundhog-faucet.key";
 /// Retained signed funding requests included in a local-chain backup.
 pub const LOCAL_FUNDING_ATTEMPTS_FILE: &str = "groundhog-funding.json";
 const STATE_METADATA_FILE: &str = "hog-devnode-data.json";

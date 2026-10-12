@@ -362,7 +362,8 @@ function clearRetainedClientNonce(attemptKey: string) {
 }
 
 function nonceStorageKey(attemptKey: string) {
-  return `thruput-faucet:airdrop:${attemptKey}`
+  // Keep pending request identities stable across tool branding changes.
+  return `groundhog-faucet:airdrop:${attemptKey}`
 }
 
 function pendingTimeoutError() {
