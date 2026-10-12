@@ -114,16 +114,7 @@ where
     /// return value together with the receipt (for its events or gas).
     pub async fn with_receipt(self) -> Result<(R, TransactionReceipt)> {
         let receipt = self.receipt().await?;
-        let returned = match receipt.return_data.as_ref() {
-            // The account's wallet wraps the method's return, one buffer per
-            // call it made.
-            Some(data) => {
-                let bytes = decode_default_wallet_call_return(data.as_ref())
-                    .map_err(TestkitError::decode)?;
-                decode_return(&bytes)?
-            }
-            None => decode_return(&[])?,
-        };
+        let returned = decode_call_return(&receipt)?;
         Ok((returned, receipt))
     }
 }
@@ -322,6 +313,21 @@ impl Contract {
     }
 }
 
+/// Decode a successful call's return from its receipt. The account's wallet
+/// wraps the method's return, one buffer per call it made; absent return data
+/// is rejected rather than read as an empty return.
+fn decode_call_return<R>(receipt: &TransactionReceipt) -> Result<R>
+where
+    R: for<'r> ReadXDR<'r>,
+{
+    let data = receipt
+        .return_data
+        .as_ref()
+        .map_or(&[][..], |data| data.as_ref());
+    let bytes = decode_default_wallet_call_return(data).map_err(TestkitError::decode)?;
+    decode_return(&bytes)
+}
+
 fn decode_return<R>(bytes: &[u8]) -> Result<R>
 where
     R: for<'r> ReadXDR<'r>,
@@ -340,7 +346,49 @@ mod tests {
     use crate::network::Network;
     use crate::nonce::NonceNamespace;
 
-    use super::{Contract, ContractEntrypointID, decode_return, entrypoint_id, try_entrypoint_id};
+    use thruput_json_rpc_types::BlockHeight;
+    use thruput_json_rpc_types::hex::{Hex0x, HexBytes};
+    use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+    use thruput_json_rpc_types::transaction::TxHash;
+    use thruput_xdr::types::SHA256Hash;
+
+    use super::{
+        Contract, ContractEntrypointID, decode_call_return, decode_return, entrypoint_id,
+        try_entrypoint_id,
+    };
+
+    fn receipt(return_data: Option<Vec<u8>>) -> TransactionReceipt {
+        TransactionReceipt {
+            tx_hash: TxHash(Hex0x(SHA256Hash::from([1; 32]))),
+            height: BlockHeight::from(1),
+            status: ExecStatus::Ok,
+            events: Vec::new(),
+            return_data: return_data.map(HexBytes),
+            abort_data: None,
+            gas_used: 1,
+        }
+    }
+
+    #[test]
+    fn call_return_requires_exactly_one_wallet_result() {
+        let wrap = |results: Vec<Vec<u8>>| Some(xdrs::cxs::encode(&results).unwrap());
+
+        // One empty child result is a valid `()` return.
+        decode_call_return::<()>(&receipt(wrap(vec![Vec::new()]))).unwrap();
+        let value = xdrs::cxs::encode(&7u64).unwrap();
+        assert_eq!(
+            decode_call_return::<u64>(&receipt(wrap(vec![value.clone()]))).unwrap(),
+            7
+        );
+
+        // Missing data, or other than one child result, is not.
+        for return_data in [None, wrap(Vec::new()), wrap(vec![value.clone(), value])] {
+            assert!(matches!(
+                decode_call_return::<()>(&receipt(return_data)),
+                Err(TestkitError::Decode { .. })
+            ));
+        }
+    }
 
     #[test]
     fn matches_known_erc20_selector() {
