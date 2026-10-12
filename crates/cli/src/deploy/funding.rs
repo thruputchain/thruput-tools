@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::{decimal, network_config::ExecutionConfig};
 use groundhog_rv32_artifact::DeclaredSizes;
@@ -26,7 +28,7 @@ pub(super) struct FundingReport {
     pub minimum_funding_hog: String,
     /// None means initializer effects were not estimated.
     initializer_funding_raw: Option<String>,
-    pub execution: ExecutionConfig,
+    pub execution: Arc<ExecutionConfig>,
 }
 
 impl FundingReport {
@@ -60,9 +62,10 @@ fn price(value: &str) -> Result<u128, CliError> {
 fn calculate(
     bytes: u64,
     sizes: DeclaredSizes,
-    execution: ExecutionConfig,
+    execution: impl Into<Arc<ExecutionConfig>>,
     initializer: bool,
 ) -> Result<FundingReport, CliError> {
+    let execution = execution.into();
     let limits = &execution.effective_limits;
     for (name, actual, limit) in [
         ("contract size", bytes, limits.max_contract_size_bytes),

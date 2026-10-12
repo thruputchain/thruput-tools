@@ -75,6 +75,7 @@ use groundhog_json_rpc_types::{
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     view::{ViewRequest, ViewResponse},
 };
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use groundhog_xdr::network_config::NetworkConfig;
@@ -186,7 +187,10 @@ pub struct TipReading {
     /// Network config the tip carries.
     pub network_config: NetworkConfig,
     /// Effective limits and storage prices read with this committed tip.
-    pub execution: Option<groundhog_json_rpc_types::network_config::ExecutionConfig>,
+    ///
+    /// Shared from the moment the backend builds it, so caching the reading
+    /// and answering `chainConfig` from it both cost a refcount.
+    pub execution: Option<Arc<groundhog_json_rpc_types::network_config::ExecutionConfig>>,
 }
 
 impl TipReading {
@@ -203,9 +207,9 @@ impl TipReading {
     #[must_use]
     pub fn with_execution(
         mut self,
-        execution: groundhog_json_rpc_types::network_config::ExecutionConfig,
+        execution: impl Into<Arc<groundhog_json_rpc_types::network_config::ExecutionConfig>>,
     ) -> Self {
-        self.execution = Some(execution);
+        self.execution = Some(execution.into());
         self
     }
 }

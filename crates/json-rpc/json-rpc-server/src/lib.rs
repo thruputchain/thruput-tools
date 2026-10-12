@@ -10,6 +10,7 @@ pub mod batch;
 pub mod config;
 pub mod error;
 pub mod server;
+mod tip_cache;
 pub mod tx;
 
 pub use groundhog_build_info::{BuildVersion, build_version};

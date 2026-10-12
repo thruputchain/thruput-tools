@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use groundhog_xdr::network_config::{ConfigParam, NetworkConfig};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -11,8 +13,11 @@ pub struct ChainConfig {
     #[serde(flatten)]
     pub stated: NetworkConfigParams,
     /// Absent when the backend cannot supply authoritative execution rules.
+    // Shared, not owned: a server answering from a reading it already holds
+    // must not copy the storage schedule on every request. Kept off the doc
+    // comment so this note stays out of the published schema description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution: Option<ExecutionConfig>,
+    pub execution: Option<Arc<ExecutionConfig>>,
 }
 
 impl From<NetworkConfigParams> for ChainConfig {
@@ -99,10 +104,13 @@ impl ExecutionConfig {
 
 impl ChainConfig {
     /// Attach the authoritative reading without changing stated-field meanings.
-    pub fn with_execution(stated: NetworkConfigParams, execution: ExecutionConfig) -> Self {
+    pub fn with_execution(
+        stated: NetworkConfigParams,
+        execution: impl Into<Arc<ExecutionConfig>>,
+    ) -> Self {
         Self {
             stated,
-            execution: Some(execution),
+            execution: Some(execution.into()),
         }
     }
 }
