@@ -12,7 +12,12 @@
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+    # unsafe-libyaml is unmaintained, with no patched release. It reaches us
+    # only through serde_yaml in the thruput-xdr-macros proc-macro. Remove
+    # once thruput-xdr-macros drops serde_yaml.
+    { id = "RUSTSEC-2024-0449", reason = "unmaintained unsafe-libyaml via thruput-xdr-macros (serde_yaml); pending upstream fix" },
+]
 # Informational advisories (unsound, unmaintained) default to workspace-direct
 # dependencies only.
 unsound = "all"

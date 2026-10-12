@@ -65,6 +65,7 @@ async fn lost_response_reuses_request_and_returns_admitted_bytes_without_receipt
             Ok(Some(successful_receipt(hash)))
         })
         .unwrap();
+    serve_manifest_network_info(&mut module);
     let handle = server.start(module);
     let manifest = local_manifest(faucet_public_key, faucet_address);
     let network_config = NetworkConfig::existing(&url, manifest.path());
@@ -165,6 +166,7 @@ async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
             Ok::<_, ErrorObjectOwned>(Some(successful_receipt(hash)))
         })
         .unwrap();
+    serve_manifest_network_info(&mut module);
     let handle = server.start(module);
     let manifest = local_manifest(faucet_public_key, faucet_address);
     let scenario = Scenario::builder("explicit-recovery")
@@ -270,4 +272,17 @@ fn local_manifest(
     }]);
     std::fs::write(manifest.path(), serde_json::to_vec(&document).unwrap()).unwrap();
     manifest
+}
+
+/// Serve the network identity named by the runtime manifest fixture (a zero `networkHash`).
+fn serve_manifest_network_info<T: Send + Sync + 'static>(module: &mut RpcModule<T>) {
+    module
+        .register_method("groundhog_networkInfo", |_, _, _| {
+            Ok::<_, ErrorObjectOwned>(thruput_json_rpc_types::network_info::NetworkInfo::new(
+                thruput_json_rpc_types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from(
+                    [0; 32],
+                )),
+            ))
+        })
+        .unwrap();
 }

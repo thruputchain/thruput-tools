@@ -57,7 +57,7 @@ async fn read_counter(
     }
 }
 
-async fn bump_counter(ctx: &mut AgentContext, contract: ContractAddress) -> Result<()> {
+async fn bump_counter(ctx: &AgentContext, contract: ContractAddress) -> Result<()> {
     let receipt = ctx
         .call(contract, entrypoint_id(INTERFACE, VERSION, "bump"), &[])
         .await?;
@@ -101,7 +101,7 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
     let alice_barrier = Arc::clone(&barrier);
     let alice_height = Arc::clone(&call_height);
     let alice_address = addresses[0];
-    let alice = Agent::new("alice", move |mut ctx| async move {
+    let alice = Agent::new("alice", move |ctx| async move {
         let call = ctx
             .submit_call(
                 alice_address,
@@ -124,7 +124,7 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
     let bob_barrier = Arc::clone(&barrier);
     let bob_height = Arc::clone(&call_height);
     let bob_address = addresses[1];
-    let bob = Agent::new("bob", move |mut ctx| async move {
+    let bob = Agent::new("bob", move |ctx| async move {
         let call = ctx
             .submit_call(bob_address, entrypoint_id(INTERFACE, VERSION, "bump"), &[])
             .await?;
@@ -213,10 +213,10 @@ async fn caller_counter_deploy_call_read() {
             // Write/read round-trip on the first instance as this agent's wallet.
             let caller = ctx.address();
 
-            bump_counter(&mut ctx, instance1.address).await?;
+            bump_counter(&ctx, instance1.address).await?;
             let after_first = read_counter(&ctx, instance1.address, caller).await?;
 
-            bump_counter(&mut ctx, instance1.address).await?;
+            bump_counter(&ctx, instance1.address).await?;
             let after_second = read_counter(&ctx, instance1.address, caller).await?;
 
             assert!(after_first >= 1, "counter is at least 1 after one bump");
@@ -272,7 +272,7 @@ async fn multiple_runs_are_possible() {
                 .deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
                 .await?;
 
-            bump_counter(&mut ctx, caller_counter.address).await?;
+            bump_counter(&ctx, caller_counter.address).await?;
 
             Ok(())
         })]

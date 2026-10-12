@@ -18,6 +18,7 @@ use crate::artifact::{
 };
 use xdrs::{ReadXDR, WriteXDR};
 
+use crate::caller::Caller;
 use crate::clock::Clock;
 use crate::error::{Result, TestkitError};
 use crate::mailbox::{Envelope, Mailbox, Message};
@@ -106,14 +107,21 @@ impl fmt::Debug for Agent {
 /// The context is the only channel through which an agent touches the network,
 /// the clock, randomness, and other agents. Agents must not reach around it to
 /// raw I/O or `std::time`.
+///
+/// Chain operations take `&self`: they go through the agent's [`Caller`],
+/// which can also be cloned out to hold independently of the context. Only
+/// receiving messages and drawing randomness take `&mut self`, since those
+/// consume per-agent streams in order, along with artifact deployment and
+/// registration. Those treat an in-flight registration from the same agent as
+/// a retry of the same request, so overlapping requests from one agent must
+/// not be possible.
 #[derive(Debug)]
 pub struct AgentContext {
     id: AgentId,
-    network: Network,
+    caller: Caller,
     clock: Clock,
     rng: AgentRng,
     mailbox: Mailbox,
-    account: Account,
     artifacts: Arc<Registry>,
 }
 
@@ -129,29 +137,40 @@ impl AgentContext {
     ) -> Self {
         Self {
             id,
-            network,
+            caller: Caller::new(account, network),
             clock,
             rng,
             mailbox,
-            account,
             artifacts,
         }
     }
 
     /// The on-chain wallet address of this agent's assigned account.
     pub fn address(&self) -> ContractAddress {
-        self.account.address()
+        self.caller.account.address()
     }
 
     /// Index of this agent's assigned account.
     pub fn account_index(&self) -> u32 {
-        self.account.index()
+        self.caller.account.index()
     }
 
     /// Deploy an instance of a registered artifact, registering its binary once
     /// (on the first deploy of that artifact, in the same transaction) and
     /// deploying by hash thereafter. Awaits the receipt; fails if execution is
     /// not successful.
+    ///
+    /// Requests from one agent cannot overlap, since a second request would
+    /// be taken as a retry of the first:
+    ///
+    /// ```compile_fail,E0499
+    /// # async fn overlap(ctx: &mut thruput_testkit::AgentContext) {
+    /// let options = thruput_testkit::DeployOptions::funded(0);
+    /// let first = ctx.deploy_artifact("counter", options);
+    /// let second = ctx.deploy_artifact("counter", options);
+    /// let _ = (first.await, second.await);
+    /// # }
+    /// ```
     pub async fn deploy_artifact(
         &mut self,
         name: &str,
@@ -163,9 +182,9 @@ impl AgentContext {
                 Err(TestkitError::ArtifactRegistrationPending { .. }) => {
                     let entry = self.artifacts.get(name)?;
                     if let Some(deployed) = await_pending_registration(
-                        &self.network,
+                        &self.caller.network,
                         &entry,
-                        self.account.registration_owner(),
+                        self.caller.account.registration_owner(),
                     )
                     .await?
                     {
@@ -193,11 +212,11 @@ impl AgentContext {
         let entry = self.artifacts.get(name)?;
         let mut pending = entry.registration_guard().await;
         match reconcile_pending_registration(
-            &self.network,
+            &self.caller.network,
             name,
             &entry,
             &mut pending,
-            self.account.registration_owner(),
+            self.caller.account.registration_owner(),
             options,
         )
         .await?
@@ -205,16 +224,20 @@ impl AgentContext {
             RegistrationResolution::Registered => {
                 drop(pending);
                 return self
+                    .caller
                     .account
-                    .submit_deploy_entry(&self.network, &entry, false, options)
+                    .submit_deploy_entry(&self.caller.network, &entry, false, options)
                     .await;
             }
             RegistrationResolution::Recovered(submitted) => return Ok(*submitted),
             RegistrationResolution::NeedsRegistration => {}
         }
-        let prepared = self
-            .account
-            .prepare_deploy_entry(&self.network, &entry, true, options)?;
+        let prepared = self.caller.account.prepare_deploy_entry(
+            &self.caller.network,
+            &entry,
+            true,
+            options,
+        )?;
         *pending = Some(prepared.pending_registration());
         drop(pending);
         let submitted = prepared.submit().await?;
@@ -235,9 +258,9 @@ impl AgentContext {
                 Err(TestkitError::ArtifactRegistrationPending { .. }) => {
                     let entry = self.artifacts.get(name)?;
                     if let Some(deployed) = await_pending_registration(
-                        &self.network,
+                        &self.caller.network,
                         &entry,
-                        self.account.registration_owner(),
+                        self.caller.account.registration_owner(),
                     )
                     .await?
                     {
@@ -261,11 +284,11 @@ impl AgentContext {
         let entry = self.artifacts.get(name)?;
         let mut pending = entry.registration_guard().await;
         match reconcile_pending_registration(
-            &self.network,
+            &self.caller.network,
             name,
             &entry,
             &mut pending,
-            self.account.registration_owner(),
+            self.caller.account.registration_owner(),
             options,
         )
         .await?
@@ -273,16 +296,20 @@ impl AgentContext {
             RegistrationResolution::Registered => {
                 drop(pending);
                 return self
+                    .caller
                     .account
-                    .submit_deploy_entry(&self.network, &entry, true, options)
+                    .submit_deploy_entry(&self.caller.network, &entry, true, options)
                     .await;
             }
             RegistrationResolution::Recovered(submitted) => return Ok(*submitted),
             RegistrationResolution::NeedsRegistration => {}
         }
-        let prepared = self
-            .account
-            .prepare_deploy_entry(&self.network, &entry, true, options)?;
+        let prepared = self.caller.account.prepare_deploy_entry(
+            &self.caller.network,
+            &entry,
+            true,
+            options,
+        )?;
         *pending = Some(prepared.pending_registration());
         drop(pending);
         let submitted = prepared.submit().await?;
@@ -294,7 +321,7 @@ impl AgentContext {
     /// fails. Prefer [`AgentContext::deploy_artifact`] unless a test is
     /// asserting on the hash-only path.
     pub async fn deploy_registered(
-        &mut self,
+        &self,
         name: &str,
         options: DeployOptions<'_>,
     ) -> Result<Deployed> {
@@ -306,13 +333,14 @@ impl AgentContext {
 
     /// Submit a hash-only artifact deployment without waiting for its receipt.
     pub async fn submit_deploy_registered(
-        &mut self,
+        &self,
         name: &str,
         options: DeployOptions<'_>,
     ) -> Result<SubmittedDeploy> {
         let entry = self.artifacts.get(name)?;
-        self.account
-            .submit_deploy_entry(&self.network, &entry, false, options)
+        self.caller
+            .account
+            .submit_deploy_entry(&self.caller.network, &entry, false, options)
             .await
     }
 
@@ -330,7 +358,7 @@ impl AgentContext {
     /// The binary is carried in every such transaction. Fails if execution is
     /// not successful.
     pub async fn deploy(
-        &mut self,
+        &self,
         artifact: &[u8],
         kind: ArtifactKind,
         options: DeployOptions<'_>,
@@ -343,13 +371,14 @@ impl AgentContext {
 
     /// Submit a raw artifact deployment without waiting for its receipt.
     pub async fn submit_deploy(
-        &mut self,
+        &self,
         artifact: &[u8],
         _kind: ArtifactKind,
         options: DeployOptions<'_>,
     ) -> Result<SubmittedDeploy> {
-        self.account
-            .submit_deploy(&self.network, artifact, options)
+        self.caller
+            .account
+            .submit_deploy(&self.caller.network, artifact, options)
             .await
     }
 
@@ -357,7 +386,10 @@ impl AgentContext {
     /// Existing-network fixtures start empty; local fixtures receive explicit genesis allocations.
     /// Retry uncertain local funding with the same amount on this scenario/network handle.
     pub async fn submit_fund(&self, amount: u128) -> Result<SubmittedTransaction> {
-        self.network.submit_fund(self.address(), amount).await
+        self.caller
+            .network
+            .submit_fund(self.address(), amount)
+            .await
     }
 
     /// Fund this account explicitly and require a successful matching receipt.
@@ -376,27 +408,22 @@ impl AgentContext {
     /// Call a deployed contract method from this agent's account, awaiting the
     /// receipt. The receipt is returned even when execution reverted.
     pub async fn call(
-        &mut self,
+        &self,
         target: ContractAddress,
         entrypoint: ContractEntrypointID,
         calldata: &[u8],
     ) -> Result<TransactionReceipt> {
-        self.submit_call(target, entrypoint, calldata)
-            .await?
-            .await_receipt()
-            .await
+        self.caller.call(target, entrypoint, calldata).await
     }
 
     /// Submit a contract call without waiting for its receipt.
     pub async fn submit_call(
-        &mut self,
+        &self,
         target: ContractAddress,
         entrypoint: ContractEntrypointID,
         calldata: &[u8],
     ) -> Result<SubmittedTransaction> {
-        self.account
-            .submit_call(&self.network, target, entrypoint, calldata)
-            .await
+        self.caller.submit_call(target, entrypoint, calldata).await
     }
 
     /// This agent's identity.
@@ -411,7 +438,13 @@ impl AgentContext {
 
     /// Handle to the network the scenario is running against.
     pub fn network(&self) -> &Network {
-        &self.network
+        &self.caller.network
+    }
+
+    /// This agent's account bound to the network, for submitting transactions
+    /// independently of the context. Clone it to keep it past the borrow.
+    pub fn caller(&self) -> &Caller {
+        &self.caller
     }
 
     /// The scenario's virtual clock.
@@ -495,6 +528,12 @@ impl AgentContext {
         T: for<'r> ReadXDR<'r>,
     {
         self.mailbox.try_recv_from_any(from).map(Envelope::decode)
+    }
+}
+
+impl AsRef<Caller> for AgentContext {
+    fn as_ref(&self) -> &Caller {
+        &self.caller
     }
 }
 

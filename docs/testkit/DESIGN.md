@@ -15,7 +15,12 @@ make concrete assertions. It is not a load generator or a cloud launcher.
 The scenario owns setup, actor lifetimes, and result collection. It uses a
 network handle for chain access. A local network owns an ephemeral `hog-devnode`
 through the node supervisor; an existing network borrows a running endpoint.
-An offline network supports coordination tests without a chain. The owner of
+Before a scenario uses a live network, it checks that the endpoint serves the
+network hash named in its runtime manifest, so transactions are never signed for
+a different network. An offline network supports coordination tests without a
+chain. Transaction preparation, signing, and submission go through
+`thruput-client`; testkit adds its own account, nonce, and receipt policy on
+top. The owner of
 a local target must finish cleanup even when an actor fails.
 
 ## Actor identity and transaction boundaries

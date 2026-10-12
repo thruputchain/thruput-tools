@@ -77,7 +77,7 @@ async fn offline_chain_verbs_report_offline() {
         .expect("offline scenario builds");
 
     scenario
-        .run_agents([Agent::new("solo", |mut ctx| async move {
+        .run_agents([Agent::new("solo", |ctx| async move {
             let err = ctx
                 .deploy(
                     b"not-a-real-artifact",

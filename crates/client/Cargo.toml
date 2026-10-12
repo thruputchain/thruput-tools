@@ -20,6 +20,7 @@ thruput-xdr.workspace = true
 jsonrpsee.workspace = true
 thiserror.workspace = true
 hex.workspace = true
+sha2.workspace = true
 
 thruput-contract-spec.workspace = true
 thruput-contract-util.workspace = true

@@ -134,8 +134,9 @@ impl fmt::Debug for Network {
 }
 
 impl Network {
-    /// Connect to a live target and retain its explicit bootstrap faucet adapter.
-    pub(crate) fn connect(
+    /// Connect to a live target, require it to serve the manifest's network, and
+    /// retain its explicit bootstrap faucet adapter.
+    pub(crate) async fn connect(
         rpc_url: &str,
         manifest: &RuntimeManifest,
         manual_block_producer: Option<ManualBlockProducer>,
@@ -143,6 +144,17 @@ impl Network {
         let client = HttpClientBuilder::default()
             .build(rpc_url)
             .map_err(|e| TestkitError::rpc("connect", e))?;
+        thruput_client::validate_network(&client, &manifest.network_hash.to_network_hash())
+            .await
+            .map_err(|error| match error {
+                thruput_client::NetworkError::Rpc(error) => TestkitError::rpc("networkInfo", error),
+                mismatch @ thruput_client::NetworkError::Mismatch { .. } => {
+                    TestkitError::Manifest {
+                        field: "networkHash",
+                        detail: format!("{mismatch} at {rpc_url}"),
+                    }
+                }
+            })?;
         Ok(Self {
             inner: Arc::new(NetworkInner {
                 rpc_url: Some(rpc_url.to_owned()),
@@ -318,7 +330,7 @@ impl Network {
             .map_err(|e| TestkitError::rpc("getStorageAt", e))
     }
 
-    /// Simulate a contract call through `groundhog_view`.
+    /// Simulate a contract call through `thruput_view`.
     ///
     /// `caller` sets the simulated `msg.sender`; pass an agent's own address to
     /// read state keyed by that caller.
@@ -485,7 +497,7 @@ impl Network {
         ))
     }
 
-    fn require_client(&self, operation: &'static str) -> Result<&HttpClient> {
+    pub(crate) fn require_client(&self, operation: &'static str) -> Result<&HttpClient> {
         self.inner
             .client
             .as_ref()
