@@ -27,6 +27,7 @@ use tokio::{
     task::{AbortHandle, JoinHandle},
     time::Instant,
 };
+use tracing::Instrument;
 
 use crate::config::{GatewayConfig, HealthBackend, X23MultiplexConnections};
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
@@ -471,7 +472,14 @@ pub(crate) async fn connect_optional_scheduler(
     let client = SchedulerClient::new(client, lookup_client, probe_client);
     let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
-    let intro_result = client.probe_client().schedgateway_intro(&protocol).await;
+    let intro_result = client
+        .probe_client()
+        .schedgateway_intro(&protocol)
+        .instrument(crate::telemetry::backend_span(
+            "scheduler",
+            "schedgateway_intro",
+        ))
+        .await;
     if let Some(metrics) = metrics {
         let outcome = match &intro_result {
             Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess) => BackendRequestOutcome::Ok,
@@ -668,6 +676,10 @@ where
     let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
     let intro_result = tokio::time::timeout(intro_timeout, intro(client.probe_client(), &protocol))
+        .instrument(crate::telemetry::backend_span(
+            names.backend.as_str(),
+            names.intro_service,
+        ))
         .await
         .map(|result| result.map(classify));
     if let Some(metrics) = metrics {

@@ -3,15 +3,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use thruput_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 
+use crate::telemetry::submit_transaction;
 use axum::{
     Json,
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use thruput_json_rpc_client::{
-    GroundhogApiClient, HttpClientBuilder, poll_transaction_receipt, submit_transaction,
-};
+use thruput_json_rpc_client::{GroundhogApiClient, HttpClientBuilder, poll_transaction_receipt};
 use thruput_json_rpc_types::airdrop::{AirdropAttemptResponse, HostedAirdropRequest};
 use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::network_descriptor::NetworkDescriptor;
@@ -27,6 +26,7 @@ use thruput_signing::{
 };
 use thruput_xdr::contract::ContractEntrypointID;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::Instrument;
 use zeroize::Zeroizing;
 
 use crate::{
@@ -468,17 +468,20 @@ impl AirdropService {
         let execution_id = attempt.execution_id;
         let recovery_service = self.clone();
         let recovery_key = attempt.key.clone();
-        let worker = tokio::spawn(async move {
-            match tokio::time::timeout(
-                AIRDROP_EXECUTION_TIMEOUT,
-                service.execute_airdrop_attempt(request, attempt),
-            )
-            .await
-            {
-                Ok(response) => response,
-                Err(_) => timeout_service.timed_out_airdrop_task(&timeout_key, execution_id),
+        let worker = tokio::spawn(
+            async move {
+                match tokio::time::timeout(
+                    AIRDROP_EXECUTION_TIMEOUT,
+                    service.execute_airdrop_attempt(request, attempt),
+                )
+                .await
+                {
+                    Ok(response) => response,
+                    Err(_) => timeout_service.timed_out_airdrop_task(&timeout_key, execution_id),
+                }
             }
-        });
+            .in_current_span(),
+        );
         // Keep panic recovery alive even if the client disconnects while the worker runs.
         let supervisor = tokio::spawn(async move {
             let _execution_permit = execution_permit;

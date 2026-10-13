@@ -18,6 +18,7 @@ use thruput_json_rpc_types::{
     transaction::{TransactionStatus, TxHash},
 };
 use tokio::task::JoinHandle;
+use tracing::Instrument;
 
 use crate::config::HealthBackend;
 use crate::context::{GatewayContext, clear_scheduler_if_current};
@@ -193,19 +194,25 @@ async fn scheduler_transaction_status(
     let lookup_client = client.lookup_client().clone();
     let hash = shared_receipt::tx_hash_to_wire(tx_hash);
     let started_at = Instant::now();
-    let worker = tokio::spawn(async move {
-        let _admission = admission;
-        let _permit = permit;
-        let _execution = execution;
-        if Instant::now() >= deadline {
-            return None;
+    let worker = tokio::spawn(
+        async move {
+            let _admission = admission;
+            let _permit = permit;
+            let _execution = execution;
+            if Instant::now() >= deadline {
+                return None;
+            }
+            Some(
+                lookup_client
+                    .schedgateway_lookup_transaction_outcomes(std::slice::from_ref(&hash))
+                    .await,
+            )
         }
-        Some(
-            lookup_client
-                .schedgateway_lookup_transaction_outcomes(std::slice::from_ref(&hash))
-                .await,
-        )
-    });
+        .instrument(crate::telemetry::backend_span(
+            "scheduler",
+            "schedgateway_lookup_transaction_outcomes",
+        )),
+    );
     drop(scheduler);
     let mut guard = SchedulerLookupGuard::new(worker);
     let rpc_result =

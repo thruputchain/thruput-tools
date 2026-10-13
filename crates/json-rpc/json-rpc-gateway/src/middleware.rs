@@ -107,43 +107,62 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
+        let trace = crate::telemetry::HttpTrace {
+            parent: crate::telemetry::extract(req.headers()),
+            ..Default::default()
+        };
         let started_at = Instant::now();
         let metrics = self.metrics.clone();
         let endpoint = self.endpoint;
         let future = self.inner.call(req);
-        Box::pin(async move {
-            match future.await {
-                Ok(response) => {
-                    let status_class = status_class(response.status().as_u16());
-                    let duration = started_at.elapsed();
-                    tracing::debug!(
-                        endpoint,
-                        status = response.status().as_u16(),
-                        status_class,
-                        duration_ms = duration.as_millis(),
-                        "gateway HTTP request completed",
-                    );
-                    metrics.observe_http_request(endpoint, status_class, duration);
-                    Ok(response)
+        Box::pin(
+            crate::telemetry::HTTP_TRACE.scope(trace.clone(), async move {
+                match future.await {
+                    Ok(response) => {
+                        if let Ok(spans) = trace.spans.lock() {
+                            for span in spans.iter() {
+                                span.record(
+                                    "http.response.status_code",
+                                    i64::from(response.status().as_u16()),
+                                );
+                            }
+                        }
+                        let status_class = status_class(response.status().as_u16());
+                        let duration = started_at.elapsed();
+                        tracing::debug!(
+                            endpoint,
+                            status = response.status().as_u16(),
+                            status_class,
+                            duration_ms = duration.as_millis(),
+                            "gateway HTTP request completed",
+                        );
+                        metrics.observe_http_request(endpoint, status_class, duration);
+                        Ok(response)
+                    }
+                    Err(err) => {
+                        if let Ok(spans) = trace.spans.lock() {
+                            for span in spans.iter() {
+                                span.record("http.response.status_code", 500_i64);
+                            }
+                        }
+                        let duration = started_at.elapsed();
+                        tracing::debug!(
+                            endpoint,
+                            status = StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            status_class = status_class(StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
+                            duration_ms = duration.as_millis(),
+                            "gateway HTTP request failed",
+                        );
+                        metrics.observe_http_request(
+                            endpoint,
+                            status_class(StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
+                            duration,
+                        );
+                        Err(err)
+                    }
                 }
-                Err(err) => {
-                    let duration = started_at.elapsed();
-                    tracing::debug!(
-                        endpoint,
-                        status = StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                        status_class = status_class(StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
-                        duration_ms = duration.as_millis(),
-                        "gateway HTTP request failed",
-                    );
-                    metrics.observe_http_request(
-                        endpoint,
-                        status_class(StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
-                        duration,
-                    );
-                    Err(err)
-                }
-            }
-        })
+            }),
+        )
     }
 }
 
@@ -157,6 +176,63 @@ mod tests {
     use axum::body::Body;
     use std::time::Duration;
     use tower::{ServiceExt, service_fn};
+
+    #[tokio::test]
+    async fn http_service_success_records_200_on_all_rpc_spans() {
+        let (capture, _provider, subscriber) = crate::telemetry::test_support::subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let mut service = HttpMetricsService {
+            inner: service_fn(|_: Request<Body>| async {
+                let _first = crate::telemetry::rpc_span("groundhog_chainTip");
+                let _second = crate::telemetry::rpc_span("groundhog_chainTip");
+                Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
+            }),
+            metrics: GatewayMetrics::for_tests(),
+            endpoint: "jsonrpc",
+        };
+        let response = service.call(Request::new(Body::empty())).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let spans = capture.spans.lock().unwrap();
+        assert_eq!(spans.len(), 2);
+        for span in spans.iter() {
+            assert!(
+                span.attributes.iter().any(|attribute| {
+                    attribute.key.as_str() == "http.response.status_code"
+                        && attribute.value == opentelemetry::Value::I64(200)
+                }),
+                "{:?}",
+                span.attributes
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn http_service_error_records_500_on_all_rpc_spans() {
+        let (capture, _provider, subscriber) = crate::telemetry::test_support::subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let mut service = HttpMetricsService {
+            inner: service_fn(|_: Request<Body>| async {
+                let _first = crate::telemetry::rpc_span("groundhog_chainTip");
+                let _second = crate::telemetry::rpc_span("groundhog_chainTip");
+                Err::<Response<Body>, _>(std::io::Error::other("test service failure"))
+            }),
+            metrics: GatewayMetrics::for_tests(),
+            endpoint: "jsonrpc",
+        };
+        assert!(service.call(Request::new(Body::empty())).await.is_err());
+        let spans = capture.spans.lock().unwrap();
+        assert_eq!(spans.len(), 2);
+        for span in spans.iter() {
+            assert!(
+                span.attributes.iter().any(|attribute| {
+                    attribute.key.as_str() == "http.response.status_code"
+                        && attribute.value == opentelemetry::Value::I64(500)
+                }),
+                "{:?}",
+                span.attributes
+            );
+        }
+    }
 
     #[tokio::test]
     async fn http_middleware_records_timeout_status_class() {

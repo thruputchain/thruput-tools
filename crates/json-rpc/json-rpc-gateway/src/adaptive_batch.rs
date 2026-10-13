@@ -24,6 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
+use tracing::Instrument;
 
 pub(crate) use thruput_hogd_backend::submit::deadline_cohorts;
 
@@ -52,7 +53,7 @@ pub(crate) trait BatchProcessor: Send + Sync + 'static {
 /// Per-shard state owned by one batcher task.  Private to the module;
 /// the public surface is [`AdaptiveBatcher`].
 struct Shard<P: BatchProcessor> {
-    ingress: mpsc::Receiver<P::Item>,
+    ingress: mpsc::Receiver<(P::Item, tracing::Span)>,
     max_inflight: u32,
     max_size: usize,
     processor: Arc<P>,
@@ -84,12 +85,17 @@ impl<P: BatchProcessor> Shard<P> {
                 // new items pile up in the bounded mpsc until it fills,
                 // at which point handlers see `Overloaded` from `try_send`.
                 maybe_item = self.ingress.recv(), if workers.len() < self.max_inflight as usize => {
-                    let Some(first) = maybe_item else { break; };
+                    let Some((first_item, parent)) = maybe_item else { break; };
                     let mut items = Vec::with_capacity(self.max_size.min(64));
-                    items.push(first);
+                    let span = crate::telemetry::shared_work_span(self.component, &parent);
+                    crate::telemetry::link_request(&span, &parent);
+                    items.push(first_item);
                     while items.len() < self.max_size {
                         match self.ingress.try_recv() {
-                            Ok(item) => items.push(item),
+                            Ok((item, parent)) => {
+                                crate::telemetry::link_request(&span, &parent);
+                                items.push(item);
+                            }
                             Err(_) => break,
                         }
                     }
@@ -98,7 +104,7 @@ impl<P: BatchProcessor> Shard<P> {
                     workers.spawn(async move {
                         let _in_flight = in_flight;
                         processor.process(items).await;
-                    });
+                    }.instrument(span));
                 }
             }
         }
@@ -112,7 +118,7 @@ impl<P: BatchProcessor> Shard<P> {
 /// the caller's chosen shard index. Drop the last clone to shut shard
 /// tasks down (they exit on the ingress channel closing).
 struct AdaptiveBatcherInner<I: Send + 'static> {
-    shards: Arc<[mpsc::Sender<I>]>,
+    shards: Arc<[mpsc::Sender<(I, tracing::Span)>]>,
     tasks: Box<[AbortHandle]>,
 }
 
@@ -211,21 +217,23 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
                 self.inner.shards.len(),
             )));
         };
-        sender.try_send(item).map_err(|e| match e {
-            mpsc::error::TrySendError::Full(_) => {
-                self.metrics
-                    .observe_internal_batch_rejected(self.component, REASON_INGRESS_FULL);
-                RpcServerError::Overloaded(format!(
-                    "gateway {} ingress queue full (shard {shard_idx})",
-                    self.name
-                ))
-            }
-            mpsc::error::TrySendError::Closed(_) => {
-                self.metrics
-                    .observe_internal_batch_rejected(self.component, REASON_CLOSED);
-                RpcServerError::BackendUnavailable(format!("{} shut down", self.name))
-            }
-        })
+        sender
+            .try_send((item, tracing::Span::current()))
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => {
+                    self.metrics
+                        .observe_internal_batch_rejected(self.component, REASON_INGRESS_FULL);
+                    RpcServerError::Overloaded(format!(
+                        "gateway {} ingress queue full (shard {shard_idx})",
+                        self.name
+                    ))
+                }
+                mpsc::error::TrySendError::Closed(_) => {
+                    self.metrics
+                        .observe_internal_batch_rejected(self.component, REASON_CLOSED);
+                    RpcServerError::BackendUnavailable(format!("{} shut down", self.name))
+                }
+            })
     }
 }
 
@@ -304,6 +312,106 @@ mod tests {
             max_size: 10,
             ingress_queue_depth: 10,
         }
+    }
+
+    struct ReplyProcessor;
+
+    #[async_trait]
+    impl BatchProcessor for ReplyProcessor {
+        type Item = TestItem;
+
+        async fn process(&self, items: Vec<TestItem>) {
+            for item in items {
+                let _ = item.reply.send(());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_batch_links_every_request() {
+        use opentelemetry::trace::TraceContextExt;
+        use tracing::instrument::WithSubscriber;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        // Other tests exercise this same span callsite without a subscriber.
+        // Isolate tracing's global callsite interest cache, as the telemetry tests do.
+        if std::env::var_os("GROUNDHOG_TEST_BATCH_TRACE").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "adaptive_batch::tests::shared_batch_links_every_request",
+                    "--nocapture",
+                ])
+                .env("GROUNDHOG_TEST_BATCH_TRACE", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let (capture, _provider, subscriber) = crate::telemetry::test_support::subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (sender, ingress) = tokio::sync::mpsc::channel(200);
+        let mut expected = Vec::new();
+        let mut replies = Vec::new();
+        for index in 0..150 {
+            let parent = tracing::info_span!(parent: None, "request", index);
+            expected.push(parent.context().span().span_context().clone());
+            let (reply, receiver) = oneshot::channel();
+            sender.try_send((TestItem { reply }, parent)).unwrap();
+            replies.push(receiver);
+        }
+        let task = tokio::spawn(
+            super::Shard {
+                ingress,
+                max_inflight: 1,
+                max_size: 200,
+                processor: Arc::new(ReplyProcessor),
+                component: "test",
+                metrics: GatewayMetrics::for_tests(),
+            }
+            .run()
+            .with_current_subscriber(),
+        );
+        for reply in replies {
+            reply.await.unwrap();
+        }
+        drop(sender);
+        task.await.unwrap();
+        // Join completion can precede Tokio dropping the task's instrumented future.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if capture
+                    .spans
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|span| span.name == "shared_work")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("batch span should close after its worker finishes");
+        let spans = capture.spans.lock().unwrap();
+        let work = spans
+            .iter()
+            .find(|span| span.name == "shared_work")
+            .unwrap();
+        assert_eq!(
+            work.links
+                .links
+                .iter()
+                .map(|link| link.span_context.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
     }
 
     #[tokio::test]

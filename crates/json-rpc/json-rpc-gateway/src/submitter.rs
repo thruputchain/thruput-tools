@@ -20,6 +20,7 @@ use thruput_json_rpc_types::error::outcome_for_code;
 use thruput_json_rpc_types::transaction::TxHash;
 use thruput_scheduler::SchedGatewaySubmitOutcomeBatch;
 use tokio::sync::{RwLock, oneshot};
+use tracing::Instrument;
 
 use crate::adaptive_batch::{
     AdaptiveBatcher, BatchProcessor, deadline_cohorts, shard_index_by_routing_key,
@@ -86,8 +87,11 @@ impl SubmitSink for SchedulerSink {
                 if timeout.is_zero() {
                     return Err(RpcServerError::BackendTimeout);
                 }
-                let mut call =
-                    tokio::spawn(async move { c.schedgateway_submit_tx_batch(&batch).await });
+                let mut call = tokio::spawn(
+                    async move { c.schedgateway_submit_tx_batch(&batch).await }.instrument(
+                        crate::telemetry::backend_span("scheduler", "schedgateway_submit_tx_batch"),
+                    ),
+                );
                 let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
                 let result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
                     Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))

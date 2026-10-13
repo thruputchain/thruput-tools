@@ -25,6 +25,7 @@ use thruput_json_rpc_types::{
 };
 use thruput_xdr::types::{AddressAndKey, StorageKey};
 use tokio::sync::{RwLock, oneshot};
+use tracing::Instrument;
 use xdr_common::VecM;
 
 use crate::adaptive_batch::{
@@ -89,7 +90,12 @@ impl StorageReadSink for DbGatewaySink {
         if timeout.is_zero() {
             return Err(RpcServerError::BackendTimeout);
         }
-        let outer_result = tokio::time::timeout(timeout, client.dbgateway_get_items(&batch)).await;
+        let outer_result = tokio::time::timeout(timeout, client.dbgateway_get_items(&batch))
+            .instrument(crate::telemetry::backend_span(
+                "db_gateway",
+                "dbgateway_get_items",
+            ))
+            .await;
         self.metrics.observe_backend_request(
             HealthBackend::DbGateway,
             "dbgateway_get_items",

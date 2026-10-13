@@ -5,12 +5,16 @@ mod error;
 /// Faucet signing-key source configuration and loaders.
 pub mod key_source;
 pub mod policy;
+/// Optional OpenTelemetry setup and shutdown.
+pub mod telemetry;
 mod utils;
 
 use axum::{
     Json, Router,
-    extract::{FromRef, State},
+    extract::{FromRef, MatchedPath, Request, State},
     http::{HeaderValue, Method, header},
+    middleware::Next,
+    response::Response,
     routing::{get, post},
 };
 use serde::Serialize;
@@ -20,8 +24,36 @@ use std::sync::Arc;
 use thruput_json_rpc_types::network_descriptor::NetworkDescriptor;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:8081";
+
+async fn trace_request(request: Request, next: Next) -> Response {
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or("unknown", MatchedPath::as_str);
+    let span = tracing::info_span!(
+        target: "groundhog_otel",
+        "http",
+        otel.name = route,
+        otel.kind = "server",
+        http.route = route,
+        http.request.method = %request.method(),
+        http.response.status_code = tracing::field::Empty
+    );
+    if span.is_disabled() {
+        return next.run(request).await;
+    }
+    let _ = span.set_parent(telemetry::extract(request.headers()));
+    let response = next.run(request).instrument(span.clone()).await;
+    span.record(
+        "http.response.status_code",
+        i64::from(response.status().as_u16()),
+    );
+    response
+}
 
 #[derive(Clone)]
 pub struct FaucetConfig {
@@ -113,7 +145,8 @@ pub fn app(config: FaucetConfig) -> Router {
         .route("/health", get(health))
         .route("/v1/network", get(network))
         .route("/v1/airdrop", post(airdrop::request_airdrop))
-        .with_state(state);
+        .with_state(state)
+        .layer(axum::middleware::from_fn(trace_request));
     if cors_allowed_origins.is_empty() {
         router
     } else {
@@ -192,6 +225,56 @@ async fn network(State(state): State<AppState>) -> Json<NetworkDescriptor> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use opentelemetry::trace::TracerProvider;
+    use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider, SpanData, SpanExporter};
+    use std::sync::Mutex;
+    use tower::ServiceExt;
+    use tracing::instrument::WithSubscriber;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    #[derive(Clone, Debug, Default)]
+    struct CaptureExporter(Arc<Mutex<Vec<SpanData>>>);
+
+    impl SpanExporter for CaptureExporter {
+        async fn export(&self, spans: Vec<SpanData>) -> opentelemetry_sdk::error::OTelSdkResult {
+            self.0.lock().unwrap().extend(spans);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn trace_request_records_integer_http_status() {
+        let exporter = CaptureExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_sampler(Sampler::AlwaysOn)
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+        let router = Router::new()
+            .route("/test", get(|| async { axum::http::StatusCode::OK }))
+            .layer(axum::middleware::from_fn(trace_request));
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/test")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .with_subscriber(subscriber)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        provider.force_flush().unwrap();
+        let spans = exporter.0.lock().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].name, "/test");
+        assert!(spans[0].attributes.iter().any(|attribute| {
+            attribute.key.as_str() == "http.response.status_code"
+                && attribute.value == opentelemetry::Value::I64(200)
+        }));
+    }
 
     #[cfg(unix)]
     #[tokio::test]

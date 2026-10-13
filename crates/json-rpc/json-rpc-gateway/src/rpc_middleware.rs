@@ -6,8 +6,59 @@ use jsonrpsee::{
     types::Request,
 };
 use thruput_json_rpc_types::error::outcome_for_code;
+use tracing::Instrument;
 
 use crate::metrics::GatewayMetrics;
+
+/// Trace each RPC call and notification with its method and error outcome.
+#[derive(Clone)]
+pub(crate) struct RpcTracingService<S>(S);
+
+impl<S> RpcTracingService<S> {
+    pub(crate) fn new(inner: S) -> Self {
+        Self(inner)
+    }
+}
+
+impl<S> RpcServiceT for RpcTracingService<S>
+where
+    S: RpcServiceT<
+            MethodResponse = MethodResponse,
+            BatchResponse = MethodResponse,
+            NotificationResponse = MethodResponse,
+        > + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    type MethodResponse = MethodResponse;
+    type BatchResponse = MethodResponse;
+    type NotificationResponse = MethodResponse;
+    fn call<'a>(&self, req: Request<'a>) -> impl Future<Output = MethodResponse> + Send + 'a {
+        let inner = self.0.clone();
+        async move {
+            let span =
+                crate::telemetry::rpc_span(GatewayMetrics::bound_rpc_method(req.method_name()));
+            let response = inner.call(req).instrument(span.clone()).await;
+            if let Some(code) = response.as_error_code() {
+                span.record("rpc.jsonrpc.error_code", code);
+            }
+            response
+        }
+    }
+    fn batch<'a>(&self, batch: Batch<'a>) -> impl Future<Output = MethodResponse> + Send + 'a {
+        self.0.batch(batch)
+    }
+    fn notification<'a>(
+        &self,
+        notification: Notification<'a>,
+    ) -> impl Future<Output = MethodResponse> + Send + 'a {
+        let span = crate::telemetry::rpc_span(GatewayMetrics::bound_rpc_method(
+            notification.method_name(),
+        ));
+        self.0.notification(notification).instrument(span)
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct RpcMetricsService<S> {
@@ -156,6 +207,93 @@ mod tests {
         health::{GatewayHealthSnapshot, HealthStatus},
         metrics::GatewayMetrics,
     };
+
+    #[derive(Clone, Debug, Default)]
+    struct CaptureExporter(Arc<Mutex<Vec<opentelemetry_sdk::trace::SpanData>>>);
+
+    impl opentelemetry_sdk::trace::SpanExporter for CaptureExporter {
+        async fn export(
+            &self,
+            spans: Vec<opentelemetry_sdk::trace::SpanData>,
+        ) -> opentelemetry_sdk::error::OTelSdkResult {
+            self.0.lock().unwrap().extend(spans);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn rpc_spans_bound_names_record_errors_and_preserve_remote_parent() {
+        use opentelemetry::trace::{SpanKind, TracerProvider};
+        use tracing::instrument::WithSubscriber;
+        use tracing_subscriber::layer::SubscriberExt;
+        let exporter = CaptureExporter::default();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+                .parse()
+                .unwrap(),
+        );
+        let trace = crate::telemetry::HttpTrace {
+            parent: crate::telemetry::extract(&headers),
+            ..Default::default()
+        };
+        crate::telemetry::HTTP_TRACE
+            .scope(trace.clone(), async {
+                let service = RpcTracingService::new(MockRpcService::default());
+                service
+                    .call(Request::borrowed("groundhog_chainTip", None, Id::Number(1)))
+                    .await;
+                service
+                    .call(Request::borrowed("untrusted_method", None, Id::Number(2)))
+                    .await;
+                for span in trace.spans.lock().unwrap().drain(..) {
+                    span.record("http.response.status_code", 200_i64);
+                }
+            })
+            .with_subscriber(subscriber)
+            .await;
+        provider.force_flush().unwrap();
+        let spans = exporter.0.lock().unwrap();
+        let method = spans
+            .iter()
+            .find(|span| span.name == "groundhog_chainTip")
+            .unwrap();
+        assert_eq!(method.span_kind, SpanKind::Server);
+        assert!(method.parent_span_is_remote);
+        assert_eq!(method.parent_span_id.to_string(), "0123456789abcdef");
+        for (key, value) in [
+            ("rpc.system", "jsonrpc"),
+            ("rpc.method", "groundhog_chainTip"),
+        ] {
+            assert!(
+                method
+                    .attributes
+                    .iter()
+                    .any(|attribute| attribute.key.as_str() == key
+                        && attribute.value.to_string() == value)
+            );
+        }
+        assert!(method.attributes.iter().any(|attribute| {
+            attribute.key.as_str() == "http.response.status_code"
+                && attribute.value == opentelemetry::Value::I64(200)
+        }));
+        let unknown = spans.iter().find(|span| span.name == "unknown").unwrap();
+        assert!(
+            unknown
+                .attributes
+                .iter()
+                .any(
+                    |attribute| attribute.key.as_str() == "rpc.jsonrpc.error_code"
+                        && attribute.value.to_string() == "-32601"
+                )
+        );
+    }
 
     #[derive(Clone, Default)]
     struct MockRpcService {

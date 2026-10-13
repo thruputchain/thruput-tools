@@ -12,6 +12,7 @@ mod observability;
 mod rpc_middleware;
 mod storage_batcher;
 mod submitter;
+mod telemetry;
 mod tip_coalescer;
 
 use std::{future::Future, path::Path, sync::Arc, time::Duration};
@@ -156,10 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         tracing_subscriber::fmt::format::FmtSpan::NONE
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_span_events(span_events)
-        .init();
+    let telemetry = telemetry::init("hog-gateway", env_filter, span_events);
 
     tracing::info!(
         component_version = bundle_identity.build_version().crate_version(),
@@ -272,7 +270,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             batch_ctx
                 .config
                 .batch_service(inner, max_response_body_size)
-        });
+        })
+        .layer_fn(rpc_middleware::RpcTracingService::new);
     let server = jsonrpsee::server::Server::builder()
         .set_config(server_cfg)
         .set_http_middleware(http_mw)
@@ -314,6 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
     ctx.abort_request_workers();
+    telemetry::shutdown(telemetry).await;
     shutdown_result?;
 
     Ok(())
