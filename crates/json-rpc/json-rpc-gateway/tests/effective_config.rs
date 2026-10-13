@@ -17,6 +17,9 @@ fn configuration_dump_is_only_json_with_default_or_verbose_logging() {
             "--trace-spans",
         ]);
         command.env_remove("RUST_LOG");
+        // Diagnostics must work even on hosts without jemalloc profiling support.
+        command.env("GROUNDHOG_HEAP_PROFILING", "1");
+        command.env("MALLOC_CONF", "prof:false");
         if let Some(filter) = filter {
             command.env("RUST_LOG", filter);
         }

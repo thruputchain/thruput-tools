@@ -1,0 +1,33 @@
+[package]
+name = "groundhog-heap-profiling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Opt-in heap profiling for Groundhog services"
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+# Linux jemalloc profile control, dump conversion, and in-process symbolization.
+jemalloc = ["dep:tikv-jemalloc-sys", "dep:backtrace", "dep:object"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemalloc-sys = { workspace = true, optional = true }
+backtrace = { workspace = true, optional = true }
+object = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tikv-jemallocator = { workspace = true }

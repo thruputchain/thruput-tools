@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/heap-profiling",
     "crates/build-info",
     "crates/client",
     "crates/bundle-identity",
@@ -68,6 +69,7 @@ thruput-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.28.0", reg
 thruput-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.28.0", registry = "thruput" }
 thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.28.0", registry = "thruput" }
 thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.28.0", registry = "thruput" }
+groundhog-heap-profiling = { path = "crates/heap-profiling", version = "=0.28.0" }
 thruput-signing = { path = "crates/signing", version = "=0.28.0", registry = "thruput" }
 thruput-tx-validation = { path = "crates/tx-validation", version = "=0.28.0", registry = "thruput" }
 thruput-node-supervisor = { path = "crates/node-supervisor", version = "=0.28.0", registry = "thruput" }
@@ -152,6 +154,10 @@ pretty_assertions = "1"
 vt100 = "0.16"
 
 # --- Observability ---
+tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+tikv-jemalloc-sys = { version = "0.7", features = ["profiling"] }
+backtrace = "0.3"
+object = { version = "0.37", default-features = false, features = ["read_core", "elf", "std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 prometheus = { version = "0.14", default-features = false }
