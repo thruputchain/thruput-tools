@@ -1024,14 +1024,14 @@ changed. The CLI requires a successful installation report: the upstream global
 update check can exit successfully after a source-check failure.
 
 These commands wrap `skills@1.7.0` and require Node.js 22.20 or newer, npm, Git,
-and network access. The skill source is `groundhogchain/agent-skills`. While
+and network access. The skill source is `thruputchain/agent-skills`. While
 private, it requires repository access and Git credentials, GitHub CLI
 authentication, or SSH authentication. The equivalent direct commands are:
 
 ```sh
-npx skills@1.7.0 add groundhogchain/agent-skills --skill thruput
+npx skills@1.7.0 add thruputchain/agent-skills --skill thruput
 npx skills@1.7.0 update thruput --project
-npx skills@1.7.0 add groundhogchain/agent-skills --skill thruput --global --yes --json
+npx skills@1.7.0 add thruputchain/agent-skills --skill thruput --global --yes --json
 ```
 
 For automation, authorize setup with `--yes` and select the installation agent:
