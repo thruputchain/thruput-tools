@@ -17,10 +17,10 @@ pub const SCAFFOLD_SDK_VERSION: &str = "0.51.0";
 
 /// `thruput-json-rpc-client` version pinned into scaffolded projects.
 ///
-/// Published before the matching CLI in the release workflow. Release PR CI
-/// tests the checked-out client until publication. The caret requirement lets
-/// scaffolds pick up newer compatible releases.
-pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = "0.28.0";
+/// Shares the CLI's workspace version and is published before the matching CLI.
+/// Registry consumer checks require that version to be published. The caret
+/// requirement lets scaffolds pick up newer compatible releases.
+pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Toolchain channel pinned into scaffolded projects' `rust-toolchain.toml`.
 ///
