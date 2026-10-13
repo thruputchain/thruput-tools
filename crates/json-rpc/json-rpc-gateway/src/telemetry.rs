@@ -53,7 +53,10 @@ fn provider(
     let use_tls = endpoint
         .parse::<axum::http::Uri>()
         .ok()
-        .and_then(|uri| uri.scheme_str().map(|scheme| scheme.eq_ignore_ascii_case("https")))
+        .and_then(|uri| {
+            uri.scheme_str()
+                .map(|scheme| scheme.eq_ignore_ascii_case("https"))
+        })
         .unwrap_or(false);
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
@@ -221,11 +224,25 @@ fn subscriber(
     );
     match provider {
         Some(provider) => Box::new(
-            subscriber
-                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer(default_service))),
+            subscriber.with(
+                tracing_opentelemetry::layer()
+                    .with_tracer(provider.tracer(default_service))
+                    .with_filter(otel_filter()),
+            ),
         ),
         None => Box::new(subscriber),
     }
+}
+
+/// Export the OTLP-only spans and this crate's INFO-and-above spans. The fmt
+/// layer's `RUST_LOG` filter does not apply to this sibling layer, so without
+/// its own filter it would record every dependency span (h2 polls, frames).
+fn otel_filter() -> tracing_subscriber::filter::FilterFn<impl Fn(&tracing::Metadata<'_>) -> bool> {
+    tracing_subscriber::filter::filter_fn(|metadata| {
+        metadata.target() == "groundhog_otel"
+            || (metadata.target().starts_with(env!("CARGO_CRATE_NAME"))
+                && *metadata.level() <= tracing::Level::INFO)
+    })
 }
 
 /// Flush on a blocking worker, with a separate one-second exporter stop budget.
@@ -387,6 +404,37 @@ mod tests {
                 .unwrap();
             assert!(output.status.success(), "{endpoint}: {output:?}");
         }
+    }
+
+    #[test]
+    fn otel_layer_ignores_dependency_and_verbose_spans() {
+        if std::env::var_os("GROUNDHOG_TEST_OTEL_FILTER").is_some() {
+            let provider = SdkTracerProvider::builder().build();
+            let subscriber = subscriber(
+                "test",
+                EnvFilter::new("off"),
+                tracing_subscriber::fmt::format::FmtSpan::NONE,
+                Some(&provider),
+            );
+            tracing::subscriber::with_default(subscriber, || {
+                assert!(tracing::trace_span!(target: "h2::proto::streams", "poll").is_disabled());
+                assert!(tracing::info_span!(target: "hyper::client", "connect").is_disabled());
+                assert!(tracing::debug_span!("verbose").is_disabled());
+                assert!(!tracing::info_span!("request").is_disabled());
+                assert!(!tracing::debug_span!(target: "groundhog_otel", "rpc").is_disabled());
+            });
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "telemetry::tests::otel_layer_ignores_dependency_and_verbose_spans",
+                "--nocapture",
+            ])
+            .env("GROUNDHOG_TEST_OTEL_FILTER", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
     }
 
     fn assert_disabled_tracing() {
