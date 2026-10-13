@@ -14,7 +14,7 @@ use std::{
 
 const SKILL_DIRECTORY: &str = ".agents/skills/thruput";
 const SKILLS_PACKAGE: &str = "skills@1.7.0";
-const REPOSITORY: &str = "groundhogchain/agent-skills";
+const REPOSITORY: &str = "thruputchain/agent-skills";
 
 /// Errors reading or installing the Thruput skill.
 #[derive(Debug, thiserror::Error)]
@@ -40,7 +40,7 @@ pub enum SkillError {
     #[error("Node.js 22.20 or newer is required; installed version is {0}")]
     NodeVersion(String),
     #[error(
-        "Thruput is not installed from groundhogchain/agent-skills in this scope; run `thruput skill install` with the same scope"
+        "Thruput is not installed from thruputchain/agent-skills in this scope; run `thruput skill install` with the same scope"
     )]
     NotInstalled,
     #[error("cannot read the skills installation report: {0}")]

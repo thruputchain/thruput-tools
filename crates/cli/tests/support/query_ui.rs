@@ -21,7 +21,7 @@ fn skill_setup_collects_consent_before_forwarding_the_installer_ui() {
         ("git", "#!/bin/sh\nexit 0\n"),
         (
             "npx",
-            "#!/bin/sh\nif [ \"$3\" = list ]; then\n  if [ \"$SKILL_UI_GLOBAL\" = 1 ] && [ \"$5\" != --global ]; then\n    printf '[]\\n'\n  else\n    printf '%s\\n' '[{\"name\":\"thruput\",\"source\":\"groundhogchain/agent-skills\"}]'\n  fi\n  exit 0\nfi\nprintf 'installer-agent-selection: '\nread -r agent\nprintf '%s' \"$agent\" > selected-agent\n",
+            "#!/bin/sh\nif [ \"$3\" = list ]; then\n  if [ \"$SKILL_UI_GLOBAL\" = 1 ] && [ \"$5\" != --global ]; then\n    printf '[]\\n'\n  else\n    printf '%s\\n' '[{\"name\":\"thruput\",\"source\":\"thruputchain/agent-skills\"}]'\n  fi\n  exit 0\nfi\nprintf 'installer-agent-selection: '\nread -r agent\nprintf '%s' \"$agent\" > selected-agent\n",
         ),
     ] {
         let path = root.path().join(name);

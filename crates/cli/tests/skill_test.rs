@@ -320,7 +320,7 @@ mod installer {
             ("git", "#!/bin/sh\nexit 0\n"),
             (
                 "npx",
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$SKILL_ARGS\"\nif [ \"$3\" = list ]; then\n  printf '%s\\n' '[{\"name\":\"thruput\",\"source\":\"groundhogchain/agent-skills\"}]'\nelse\n  printf 'installer output\\n'\n  if read -r answer; then exit 99; fi\nfi\nexit \"${SKILL_EXIT:-0}\"\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$SKILL_ARGS\"\nif [ \"$3\" = list ]; then\n  printf '%s\\n' '[{\"name\":\"thruput\",\"source\":\"thruputchain/agent-skills\"}]'\nelse\n  printf 'installer output\\n'\n  if read -r answer; then exit 99; fi\nfi\nexit \"${SKILL_EXIT:-0}\"\n",
             ),
         ] {
             let path = root.path().join(name);
@@ -365,7 +365,7 @@ mod installer {
         assert!(String::from_utf8_lossy(&result.stderr).contains("installer output"));
         assert_eq!(
             fs::read_to_string(root.path().join("args")).unwrap(),
-            "--yes\nskills@1.7.0\nadd\ngroundhogchain/agent-skills\n--skill\nthruput\n--global\n--agent\nopencode\n--json\n--yes\n--yes\nskills@1.7.0\nlist\n--json\n--global\n"
+            "--yes\nskills@1.7.0\nadd\nthruputchain/agent-skills\n--skill\nthruput\n--global\n--agent\nopencode\n--json\n--yes\n--yes\nskills@1.7.0\nlist\n--json\n--global\n"
         );
     }
 
@@ -400,7 +400,7 @@ mod installer {
 printf '%s\n' "$@" >> "$SKILL_ARGS"
 case "$3" in
   list)
-    printf '%s\n' '[{"name":"thruput","source":"groundhogchain/agent-skills"}]'
+    printf '%s\n' '[{"name":"thruput","source":"thruputchain/agent-skills"}]'
     ;;
   update)
     printf 'Failed to check skills\nAll global skills are up to date\n'
@@ -418,7 +418,7 @@ esac
         root
     }
 
-    const REFRESHED: &str = r#"[{"name":"thruput","status":"installed","source":"groundhogchain/agent-skills","scope":"global"}]"#;
+    const REFRESHED: &str = r#"[{"name":"thruput","status":"installed","source":"thruputchain/agent-skills","scope":"global"}]"#;
 
     fn global_update(root: &tempfile::TempDir, report: &str) -> Command {
         let mut cmd = command(root);
@@ -446,7 +446,7 @@ esac
             assert_eq!(report["data"]["scope"], "global");
             assert!(String::from_utf8_lossy(&result.stderr).contains("source diagnostics"));
         }
-        let invocation = "--yes\nskills@1.7.0\nlist\n--json\n--global\n--yes\nskills@1.7.0\nadd\ngroundhogchain/agent-skills\n--skill\nthruput\n--global\n--yes\n--json\n--yes\nskills@1.7.0\nlist\n--json\n--global\n";
+        let invocation = "--yes\nskills@1.7.0\nlist\n--json\n--global\n--yes\nskills@1.7.0\nadd\nthruputchain/agent-skills\n--skill\nthruput\n--global\n--yes\n--json\n--yes\nskills@1.7.0\nlist\n--json\n--global\n";
         assert_eq!(
             fs::read_to_string(root.path().join("args")).unwrap(),
             invocation.repeat(2)
@@ -463,8 +463,9 @@ esac
             r#"[{"name":"thruput","status":"skipped","reason":"source unavailable"}]"#,
             r#"[{"name":"thruput","status":"installed"}]"#,
             r#"[{"name":"thruput","status":"installed","source":"other/source","scope":"global"}]"#,
-            r#"[{"name":"thruput","status":"installed","source":"groundhogchain/agent-skills","scope":"project"}]"#,
-            r#"[{"name":"other","status":"installed","source":"groundhogchain/agent-skills","scope":"global"}]"#,
+            r#"[{"name":"thruput","status":"installed","source":"groundhogchain/agent-skills","scope":"global"}]"#,
+            r#"[{"name":"thruput","status":"installed","source":"thruputchain/agent-skills","scope":"project"}]"#,
+            r#"[{"name":"other","status":"installed","source":"thruputchain/agent-skills","scope":"global"}]"#,
         ] {
             let result = global_update(&root, report).output().unwrap();
             assert!(!result.status.success(), "{report}: {result:?}");
