@@ -14,8 +14,12 @@ if [[ $# -ne 1 ]]; then
     exit 2
 fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Escape backslashes and double quotes for the TOML basic string.
+client_path="$REPO_ROOT/crates/json-rpc/json-rpc-client"
+client_path="${client_path//\\/\\\\}"
+client_path="${client_path//\"/\\\"}"
 mkdir -p "$1/.cargo"
 cat > "$1/.cargo/config.toml" <<TOML
 [patch.thruput]
-thruput-json-rpc-client = { path = "$REPO_ROOT/crates/json-rpc/json-rpc-client" }
+thruput-json-rpc-client = { path = "$client_path" }
 TOML
