@@ -32,7 +32,7 @@ jobs:
   workflow-lint:
     permissions:
       contents: read
-    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@f1b1a2cb8c69bab5f24f5f9976d50b6a9ab548fc
+    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@21f8d7cd8b80908dca701ac9dc8efd89798da085
     with:
       lint-app-id: ${{ vars.PROTOCOL_SYNCHRONIZER_APP_ID }}
     secrets:

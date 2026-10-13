@@ -3,19 +3,6 @@
 # https://docs.zizmor.sh/configuration/
 
 rules:
-  # Allow tag-pinning our own workflows
-  unpinned-uses:
-    config:
-      policies:
-        groundhogchain/*: ref-pin
-
-  # Style: prefers '$/...' over './...' for same-repo composite actions,
-  # but that offends actionlint.
-  self-repository:
-    ignore:
-      - publish.yml
-      - publish_dry_run.yml
-
   # Informational: `gh release` could replace softprops/action-gh-release.
   superfluous-actions:
     ignore:
