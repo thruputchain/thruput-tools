@@ -172,16 +172,6 @@ jobs:
             thruput new my-${{ matrix.template }} --template ${{ matrix.template }}
           fi
 
-      # A release PR advances the scaffold to a client version that does not
-      # exist in the registry until after merge. Exercise that exact source
-      # without weakening the version emitted for real generated projects.
-      - name: Use checked-out RPC client before registry publication
-        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
-        run: |
-          printf '\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\nthruput-json-rpc-client = { path = "%s" }\n' \
-            "$GITHUB_WORKSPACE/crates/json-rpc/json-rpc-client" \
-            >> .cargo/config.toml
-
       # Plain `cargo build` is what IDEs run; it must succeed without `dev`.
       - name: Host build (cargo build)
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
