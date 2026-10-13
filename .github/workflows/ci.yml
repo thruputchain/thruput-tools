@@ -161,6 +161,12 @@ jobs:
       - name: Put thruput on PATH
         run: echo "${GITHUB_WORKSPACE}/target/debug" >> "$GITHUB_PATH"
 
+      # The scaffold pins thruput-json-rpc-client to this CLI version, which is
+      # unpublished until the release runs. Build it against this checkout's
+      # crate. publish.yml repeats the smoke against the registry only.
+      - name: Use this checkout's thruput-json-rpc-client
+        run: scripts/use-checkout-client.sh "$RUNNER_TEMP"
+
       # Scaffold outside the repo so the generated project stands on its own
       # config rather than inheriting the workspace.
       - name: Scaffold project (thruput new)
@@ -280,9 +286,13 @@ jobs:
         run: |
           npm ci --prefix scripts/scaffold-app
           npx --prefix scripts/scaffold-app playwright install --with-deps chromium
+      # smoke.mjs scaffolds under TMPDIR; see cli-smoke for why it is patched.
+      - name: Use this checkout's thruput-json-rpc-client
+        run: scripts/use-checkout-client.sh "$RUNNER_TEMP"
       - name: Test generated counter app
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TMPDIR: ${{ runner.temp }}
         run: npm test --prefix scripts/scaffold-app
 
   # Codegen tests assert on generated text. This job runs the real CLI over the

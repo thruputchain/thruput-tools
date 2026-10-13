@@ -13,6 +13,7 @@ cargo build -p thruput-cli --manifest-path "$REPO_ROOT/Cargo.toml"
 CLI="$REPO_ROOT/target/debug/thruput"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+"$REPO_ROOT/scripts/use-checkout-client.sh" "$WORK"
 
 for tmpl in counter minimal; do
     echo "==> Scaffolding template: $tmpl"
