@@ -9,7 +9,7 @@ use crate::{CatalogError, HostTarget, Result};
 const CATALOG_SCHEMA_VERSION: u32 = 1;
 const ARCHIVE_LAYOUT_VERSION: u32 = 1;
 const COMPONENT: &str = "hog-devnode";
-const SOURCE_REPOSITORY: &str = "groundhogchain/hogd";
+const SOURCE_REPOSITORY: &str = "thruputchain/hogd";
 const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 const EMBEDDED_CATALOG: &[u8] = include_bytes!("../catalog/hog-devnode.json");
 

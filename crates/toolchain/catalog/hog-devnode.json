@@ -1,12 +1,75 @@
 {
   "component": "hog-devnode",
   "schemaVersion": 1,
-  "defaultVersion": "0.1.31-rc.3",
+  "defaultVersion": "0.1.31-rc.4",
   "versions": {
+    "0.1.31-rc.4": {
+      "source": {
+        "ref": "v0.1.31-rc.4",
+        "repository": "thruputchain/hogd"
+      },
+      "targets": {
+        "aarch64-apple-darwin": {
+          "archive": "hog-devnode_0.1.31-rc.4_aarch64-apple-darwin.tar.gz",
+          "compatibility": {
+            "minimumVersion": "26.0",
+            "os": "macos"
+          },
+          "files": [
+            { "kind": "artifact", "path": "contracts/genesis_root.rv32a" },
+            { "kind": "executable", "path": "hog-devnode" },
+            { "kind": "runtimeLibrary", "path": "lib/libc++.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libc++abi.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libcrypto.3.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libjemalloc.2.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/liblz4.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libsnappy.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libssl.3.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libunwind.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libz.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libzstd.1.dylib" }
+          ],
+          "layoutVersion": 1,
+          "objectKey": "hog-devnode/0.1.31-rc.4/hog-devnode_0.1.31-rc.4_aarch64-apple-darwin.tar.gz",
+          "sha256": "646baf8c6c09a72e21584b7e2215ef997b55f62075dba618896ba301b9a4cead",
+          "size": 10685701
+        },
+        "aarch64-unknown-linux-gnu": {
+          "archive": "hog-devnode_0.1.31-rc.4_aarch64-unknown-linux-gnu.tar.gz",
+          "compatibility": {
+            "libc": "glibc",
+            "minimumVersion": "2.38"
+          },
+          "files": [
+            { "kind": "artifact", "path": "contracts/genesis_root.rv32a" },
+            { "kind": "executable", "path": "hog-devnode" }
+          ],
+          "layoutVersion": 1,
+          "objectKey": "hog-devnode/0.1.31-rc.4/hog-devnode_0.1.31-rc.4_aarch64-unknown-linux-gnu.tar.gz",
+          "sha256": "62aebeccab540af721dbc987646de424c647cfeb67674ed927be84b90cfbc61f",
+          "size": 8673796
+        },
+        "x86_64-unknown-linux-gnu": {
+          "archive": "hog-devnode_0.1.31-rc.4_x86_64-unknown-linux-gnu.tar.gz",
+          "compatibility": {
+            "libc": "glibc",
+            "minimumVersion": "2.38"
+          },
+          "files": [
+            { "kind": "artifact", "path": "contracts/genesis_root.rv32a" },
+            { "kind": "executable", "path": "hog-devnode" }
+          ],
+          "layoutVersion": 1,
+          "objectKey": "hog-devnode/0.1.31-rc.4/hog-devnode_0.1.31-rc.4_x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "c3b0cd9061e28cc16b7251db35f22b95c45b14edce2bcfdef20a5ac17e3fce64",
+          "size": 9434628
+        }
+      }
+    },
     "0.1.31-rc.3": {
       "source": {
         "ref": "v0.1.31-rc.3",
-        "repository": "groundhogchain/hogd"
+        "repository": "thruputchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
@@ -69,7 +132,7 @@
     "0.1.31-rc.2": {
       "source": {
         "ref": "v0.1.31-rc.2",
-        "repository": "groundhogchain/hogd"
+        "repository": "thruputchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
@@ -132,7 +195,7 @@
     "0.1.31-rc.1": {
       "source": {
         "ref": "v0.1.31-rc.1",
-        "repository": "groundhogchain/hogd"
+        "repository": "thruputchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
@@ -195,7 +258,7 @@
     "0.1.30-rc.6": {
       "source": {
         "ref": "v0.1.30-rc.6",
-        "repository": "groundhogchain/hogd"
+        "repository": "thruputchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
@@ -258,7 +321,7 @@
     "0.1.29-rc.5": {
       "source": {
         "ref": "v0.1.29-rc.5",
-        "repository": "groundhogchain/hogd"
+        "repository": "thruputchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
@@ -369,7 +432,7 @@
     "0.1.30-rc.1": {
       "source": {
         "ref": "v0.1.30-rc.1",
-        "repository": "groundhogchain/hogd"
+        "repository": "thruputchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
@@ -480,7 +543,7 @@
     "0.1.30-rc.2": {
       "source": {
         "ref": "v0.1.30-rc.2",
-        "repository": "groundhogchain/hogd"
+        "repository": "thruputchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
@@ -591,7 +654,7 @@
     "0.1.30-rc.3": {
       "source": {
         "ref": "v0.1.30-rc.3",
-        "repository": "groundhogchain/hogd"
+        "repository": "thruputchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
@@ -702,7 +765,7 @@
     "0.1.30-rc.5": {
       "source": {
         "ref": "v0.1.30-rc.5",
-        "repository": "groundhogchain/hogd"
+        "repository": "thruputchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
