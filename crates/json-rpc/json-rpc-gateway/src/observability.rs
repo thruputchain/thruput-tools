@@ -34,6 +34,8 @@ pub async fn spawn_observability_server(
     health: GatewayHealth,
     metrics: GatewayMetrics,
     shutdown: oneshot::Receiver<()>,
+    heap_dump: Option<groundhog_heap_profiling::Dump>,
+    allow_remote: bool,
 ) -> Result<ObservabilityServer, std::io::Error> {
     let listener = TcpListener::bind(listen_address).await?;
     let local_addr = listener.local_addr()?;
@@ -43,6 +45,12 @@ pub async fn spawn_observability_server(
         .route("/readyz", get(readyz))
         .route("/health", get(healthz))
         .route("/metrics", get(metrics_endpoint))
+        // Only heap profiles check Host; metrics and health support hostname scrapes.
+        .merge(crate::heap_profiling::routes_for_listener(
+            heap_dump,
+            local_addr,
+            allow_remote,
+        ))
         .fallback(unknown_endpoint)
         .method_not_allowed_fallback(method_not_allowed_endpoint)
         .with_state(state);
@@ -177,9 +185,10 @@ mod tests {
         let metrics =
             GatewayMetrics::new(build_version, None).expect("bug: metrics should register");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx)
-            .await
-            .expect("observability server should bind");
+        let server =
+            spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx, None, false)
+                .await
+                .expect("observability server should bind");
 
         let livez = request(server.local_addr, "/livez").await;
         assert!(livez.starts_with("HTTP/1.1 200 OK"), "{livez}");
@@ -223,6 +232,9 @@ mod tests {
         let unknown = request(server.local_addr, "/missing").await;
         assert!(unknown.starts_with("HTTP/1.1 404 Not Found"), "{unknown}");
 
+        let heap = request(server.local_addr, "/debug/pprof/heap").await;
+        assert!(heap.starts_with("HTTP/1.1 404 Not Found"), "{heap}");
+
         let method_not_allowed = request_with_method(server.local_addr, "POST", "/livez").await;
         assert!(
             method_not_allowed.starts_with("HTTP/1.1 405 Method Not Allowed"),
@@ -262,9 +274,10 @@ mod tests {
 
         let metrics = GatewayMetrics::for_tests();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx)
-            .await
-            .expect("observability server should bind");
+        let server =
+            spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx, None, false)
+                .await
+                .expect("observability server should bind");
 
         let readyz = request(server.local_addr, "/readyz").await;
         assert!(
@@ -288,19 +301,151 @@ mod tests {
             .expect("observability server should stop cleanly");
     }
 
+    #[tokio::test]
+    async fn non_loopback_listener_preserves_metrics() {
+        let config = GatewayConfig::default();
+        let health = GatewayHealth::new(&config, BuildVersion::new("test", None), None);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = spawn_observability_server(
+            "0.0.0.0:0",
+            health,
+            GatewayMetrics::for_tests(),
+            shutdown_rx,
+            Some(|| Ok(b"profile".to_vec())),
+            false,
+        )
+        .await
+        .unwrap();
+        let addr = SocketAddr::from(([127, 0, 0, 1], server.local_addr.port()));
+        let metrics = request(addr, "/metrics").await;
+        assert!(metrics.starts_with("HTTP/1.1 200 OK"), "{metrics}");
+        let heap = request(addr, "/debug/pprof/heap").await;
+        assert!(heap.starts_with("HTTP/1.1 404 Not Found"), "{heap}");
+        let _ = shutdown_tx.send(());
+        server.handle.await.unwrap().unwrap();
+    }
+
     async fn request(addr: SocketAddr, path: &str) -> String {
         request_with_method(addr, "GET", path).await
     }
 
+    #[tokio::test]
+    async fn heap_route_guards_real_listener() {
+        for (listen, remote) in [("127.0.0.1:0", false), ("0.0.0.0:0", true)] {
+            let health = GatewayHealth::new(
+                &GatewayConfig::default(),
+                BuildVersion::new("test", None),
+                None,
+            );
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let server = spawn_observability_server(
+                listen,
+                health,
+                GatewayMetrics::for_tests(),
+                shutdown_rx,
+                Some(|| Ok(b"profile".to_vec())),
+                remote,
+            )
+            .await
+            .unwrap();
+            let addr = SocketAddr::from(([127, 0, 0, 1], server.local_addr.port()));
+            for (host, origin, method, status) in [
+                (Some("evil.example"), None, "GET", 403),
+                (Some("127.0.0.1"), None, "GET", 200),
+                (Some("localhost"), None, "GET", 200),
+                (Some("[::1]"), None, "GET", 200),
+                (Some("127.0.0.1:9647"), None, "GET", 200),
+                (
+                    Some("10.0.0.5:9646"),
+                    None,
+                    "GET",
+                    if remote { 200 } else { 403 },
+                ),
+                (
+                    Some("localhost:9647"),
+                    Some("http://evil.example"),
+                    "GET",
+                    403,
+                ),
+                (
+                    Some("localhost:9647"),
+                    Some("http://localhost:9647"),
+                    "GET",
+                    200,
+                ),
+                (None, None, "GET", 403),
+                (Some("localhost"), None, "POST", 405),
+                (Some("localhost"), None, "HEAD", 200),
+                (Some("localhost"), Some("null"), "GET", 403),
+            ] {
+                let headers: Vec<_> = origin.into_iter().map(|value| ("Origin", value)).collect();
+                let response =
+                    request_with_headers(addr, method, "/debug/pprof/heap", host, &headers).await;
+                assert!(
+                    response.starts_with(&format!("HTTP/1.1 {status} ")),
+                    "{host:?} {origin:?} {method}: {response}"
+                );
+                if status == 200 && method == "GET" {
+                    assert!(response.ends_with("profile"), "{response}");
+                }
+                if status == 405 {
+                    assert!(response.contains("allow: GET, HEAD"), "{response}");
+                }
+            }
+            for (path, status) in [
+                ("http://evil.example/debug/pprof/heap", 403),
+                ("http://localhost/debug/pprof/heap", 200),
+            ] {
+                let response =
+                    request_with_headers(addr, "GET", path, Some("localhost"), &[]).await;
+                assert!(
+                    response.starts_with(&format!("HTTP/1.1 {status} ")),
+                    "{path}: {response}"
+                );
+            }
+            for path in ["/metrics", "/livez", "/readyz", "/health"] {
+                let response =
+                    request_with_headers(addr, "GET", path, Some("evil.example"), &[]).await;
+                let status = if matches!(path, "/readyz" | "/health") {
+                    503
+                } else {
+                    200
+                };
+                assert!(
+                    response.starts_with(&format!("HTTP/1.1 {status} ")),
+                    "{response}"
+                );
+            }
+            let _ = shutdown_tx.send(());
+            server.handle.await.unwrap().unwrap();
+        }
+    }
+
     async fn request_with_method(addr: SocketAddr, method: &str, path: &str) -> String {
+        request_with_headers(addr, method, path, Some("localhost"), &[]).await
+    }
+
+    async fn request_with_headers(
+        addr: SocketAddr,
+        method: &str,
+        path: &str,
+        host: Option<&str>,
+        headers: &[(&str, &str)],
+    ) -> String {
+        use std::fmt::Write;
         let mut stream = tokio::net::TcpStream::connect(addr)
             .await
             .expect("test client should connect");
+        let mut request = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
+        if let Some(host) = host {
+            write!(request, "Host: {host}\r\n").unwrap();
+        }
+        for (name, value) in headers {
+            write!(request, "{name}: {value}\r\n").unwrap();
+        }
+        request.push_str("\r\n");
         stream
-            .write_all(
-                format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-                    .as_bytes(),
-            )
+            .write_all(request.as_bytes())
             .await
             .expect("test request should write");
         let mut response = Vec::new();
