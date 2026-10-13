@@ -1,6 +1,8 @@
 //! Optional OTLP tracing; exporter failures never affect service availability.
 use opentelemetry::{propagation::Extractor, trace::TracerProvider};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{
+    WithExportConfig, WithTonicConfig, tonic_types::transport::ClientTlsConfig,
+};
 use opentelemetry_sdk::{
     Resource,
     trace::{Sampler, SdkTracerProvider, SpanData, SpanExporter},
@@ -47,10 +49,21 @@ fn provider(
     let Some(endpoint) = endpoint else {
         return Ok(None);
     };
+    let endpoint = endpoint.to_string_lossy().into_owned();
+    let use_tls = endpoint
+        .parse::<axum::http::Uri>()
+        .ok()
+        .and_then(|uri| uri.scheme_str().map(|scheme| scheme.eq_ignore_ascii_case("https")))
+        .unwrap_or(false);
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .with_endpoint(endpoint.to_string_lossy().into_owned())
-        .build()?;
+        .with_endpoint(endpoint);
+    let exporter = if use_tls {
+        exporter.with_tls_config(ClientTlsConfig::new().with_enabled_roots())
+    } else {
+        exporter
+    }
+    .build()?;
     Ok(Some(
         provider_builder()
             .with_resource(resource(default_service))
@@ -347,6 +360,34 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn collector_endpoint_builds_provider() {
+        if let Ok(endpoint) = std::env::var("GROUNDHOG_TEST_COLLECTOR_ENDPOINT") {
+            let provider = provider("test", Some(endpoint.into())).unwrap();
+            assert!(provider.is_some());
+            shutdown(provider).await;
+            return;
+        }
+        for endpoint in [
+            "http://collector.example.com:4317",
+            "https://collector.example.com:4317",
+            "HTTPS://collector.example.com:4317",
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "telemetry::tests::collector_endpoint_builds_provider",
+                    "--nocapture",
+                ])
+                .env("GROUNDHOG_TEST_COLLECTOR_ENDPOINT", endpoint)
+                .env_remove("OTEL_SDK_DISABLED")
+                .env_remove("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{endpoint}: {output:?}");
+        }
+    }
 
     fn assert_disabled_tracing() {
         assert!(tracing::info_span!("ordinary").is_disabled());
