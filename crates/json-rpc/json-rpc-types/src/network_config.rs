@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use groundhog_xdr::network_config::{ConfigParam, NetworkConfig};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thruput_xdr::network_config::{ConfigParam, NetworkConfig};
 
 /// Chain configuration with an optional authoritative execution reading.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -73,8 +73,8 @@ pub struct StorageCosts {
     pub balance_cost: String,
 }
 
-impl From<&groundhog_xdr::storage_cost::StorageCostModelXdr> for StorageCosts {
-    fn from(value: &groundhog_xdr::storage_cost::StorageCostModelXdr) -> Self {
+impl From<&thruput_xdr::storage_cost::StorageCostModelXdr> for StorageCosts {
+    fn from(value: &thruput_xdr::storage_cost::StorageCostModelXdr) -> Self {
         Self {
             base_data_item_cost: value.base_data_item_cost.to_string(),
             bytestring_cost_per_byte: value.bytestring_cost_per_byte.to_string(),

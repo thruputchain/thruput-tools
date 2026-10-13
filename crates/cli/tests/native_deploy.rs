@@ -1,10 +1,4 @@
 //! Process-level native deployment contract and failure-recovery tests.
-use groundhog_signing::{
-    PubkeyAccount, derive_deploy_address, transaction_hash, wallet_contract_hash,
-};
-use groundhog_xdr::{
-    contract::ContractEntrypointID, transaction::SignedTransaction, types::SHA256Hash,
-};
 use jsonrpsee::{
     RpcModule,
     server::{ServerBuilder, ServerHandle},
@@ -14,6 +8,12 @@ use serde_json::{Value, json};
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
+use thruput_signing::{
+    PubkeyAccount, derive_deploy_address, transaction_hash, wallet_contract_hash,
+};
+use thruput_xdr::{
+    contract::ContractEntrypointID, transaction::SignedTransaction, types::SHA256Hash,
+};
 
 type InitCalldata = (ContractEntrypointID, u64, Vec<u8>);
 type DeployCalldata = (SHA256Hash, SHA256Hash, u128, Option<InitCalldata>);
@@ -92,7 +92,7 @@ async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
         .as_str()
         .unwrap();
     let account = PubkeyAccount::from_public_key_bytes(
-        groundhog_signing::strkey::parse_public_key(owner).unwrap(),
+        thruput_signing::strkey::parse_public_key(owner).unwrap(),
         0,
     );
     profile.remove("wallets");
@@ -108,7 +108,7 @@ async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
                 .output()
                 .unwrap(),
             "signedTx",
-            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
+            thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
         ),
         (
             fixture
@@ -117,12 +117,12 @@ async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
                 .output()
                 .unwrap(),
             "signedTransaction",
-            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
+            thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
         ),
         (
             fixture.deploy(&["--fund", "0", "--dry-run"]),
             "signedTx",
-            groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
+            thruput_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
         ),
     ];
     for (output, field, entrypoint) in outputs {
@@ -205,12 +205,12 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
                     None::<()>,
                 )),
                 Outcome::SendError => Err(ErrorObjectOwned::owned(
-                    groundhog_json_rpc_types::error::codes::BACKEND_TIMEOUT,
+                    thruput_json_rpc_types::error::codes::BACKEND_TIMEOUT,
                     "post-admission response failure",
                     None::<()>,
                 )),
                 Outcome::ConnectionLost => Err(ErrorObjectOwned::owned(
-                    groundhog_json_rpc_types::error::codes::BACKEND_UNAVAILABLE,
+                    thruput_json_rpc_types::error::codes::BACKEND_UNAVAILABLE,
                     "scheduler connection lost after dispatch",
                     None::<()>,
                 )),
@@ -233,7 +233,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
             Outcome::Reverted => { receipt["status"] = json!({"result":"reverted"}); receipt.as_object_mut().unwrap().remove("returnData"); },
             Outcome::FundingRejected | Outcome::InitializerRejected => {
                 let abort = if matches!(state.outcome, Outcome::FundingRejected) {
-                    xdrs::cxs::encode(&(<groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR, groundhog_erc20_if::ERC20Error::TooLarge)).unwrap()
+                    xdrs::cxs::encode(&(<thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR, thruput_erc20_if::ERC20Error::TooLarge)).unwrap()
                 } else { xdrs::cxs::encode(&(42u64, 7u64)).unwrap() };
                 receipt["status"] = json!({"result":"reverted"});
                 receipt["abortData"] = json!(format!("0x{}", hex::encode(abort)));
@@ -327,7 +327,7 @@ async fn native_deploy_dry_run_describes_canonical_effects_without_sending() {
     assert_eq!(data["predictedAddress"], address);
     assert_eq!(
         tx.tx.invocation.entrypoint,
-        groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT
+        thruput_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT
     );
     let (nonce, code_hash, amount, initializer): DeployCalldata =
         xdrs::cxs::decode(&tx.tx.invocation.calldata.0).unwrap();
@@ -351,7 +351,7 @@ async fn native_deploy_dry_run_describes_canonical_effects_without_sending() {
         .unwrap()
         .to_owned();
     let account = PubkeyAccount::from_public_key_bytes(
-        groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+        thruput_signing::strkey::parse_public_key(&owner).unwrap(),
         0,
     );
     assert_eq!(tx.tx.invocation.invoked_address, account.address());
@@ -391,7 +391,7 @@ fn initializer_options_require_a_method_and_valid_arguments_before_rpc() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments() {
-    use groundhog_contract_spec::{
+    use thruput_contract_spec::{
         ContractField, ContractSpec, ContractSpecInterface, ContractSpecMethod, ContractType,
     };
     let (url, handle, state) = server(Outcome::Success).await;
@@ -446,7 +446,7 @@ async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments()
     let tx = signed(report["data"]["signedTx"].as_str().unwrap());
     assert_eq!(
         tx.tx.invocation.gas_limit,
-        groundhog_signing::DEFAULT_TX_GAS_LIMIT + thruput_cli::call::DEFAULT_CALL_GAS_LIMIT
+        thruput_signing::DEFAULT_TX_GAS_LIMIT + thruput_cli::call::DEFAULT_CALL_GAS_LIMIT
     );
     assert_eq!(
         init["gasLimit"],
@@ -493,7 +493,7 @@ async fn native_deploy_decodes_funding_errors_without_misattributing_initializer
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_deploy_decodes_the_prepared_initializer_spec() {
-    use groundhog_contract_spec::{
+    use thruput_contract_spec::{
         ContractExceptionType, ContractSpec, ContractSpecInterface, ContractSpecMethod,
         ContractType,
     };
@@ -599,7 +599,7 @@ async fn zero_funding_and_initializer_are_preserved_in_dry_run_and_recovery() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_deploy_reports_definitive_rejections_without_reconciliation() {
-    use groundhog_json_rpc_types::error::codes;
+    use thruput_json_rpc_types::error::codes;
     for code in [
         codes::INVALID_PARAMS,
         codes::TX_INVALID,

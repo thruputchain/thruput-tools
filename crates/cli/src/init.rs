@@ -202,12 +202,12 @@ fn usable_default_key_for_init(
     let key = report.effective_default_key_summary()?;
     // A public summary alone does not establish that the private key is usable.
     let signer = crate::keys::load_local_signer(&key.name).ok()?;
-    let address = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+    let address = thruput_signing::PubkeyAccount::from_public_key_bytes(
         signer.verifying_key_bytes(),
-        groundhog_signing::DEFAULT_PUBKEY_ACCOUNT_NONCE,
+        thruput_signing::DEFAULT_PUBKEY_ACCOUNT_NONCE,
     )
     .address();
-    (groundhog_json_rpc_types::hex::prefixed_hex(address.as_ref()) == key.address).then_some(key)
+    (thruput_json_rpc_types::hex::prefixed_hex(address.as_ref()) == key.address).then_some(key)
 }
 
 fn can_generate_initial_key(report: &crate::checks::StatusReport) -> bool {

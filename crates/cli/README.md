@@ -35,7 +35,7 @@ THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-runtime-manifest-bench
 ```
 
 That smoke starts `thruput node`, extracts `data.runtime_manifest.path`,
-drives `groundhog-bench` against the CLI node, starts
+drives `thruput-bench` against the CLI node, starts
 `hog-gateway --runtime-manifest`, and drives the same benchmark traffic
 against the standalone gateway. Set `BENCH_SCENARIO=gateway-baseline` or
 `BENCH_SCENARIO=submit-ramp` for repeatable heavier local runs.
@@ -98,7 +98,7 @@ For signed benchmark traffic, supply the matching fixture allocations and
 
 ```bash
 hog-gateway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
-groundhog-bench --url http://127.0.0.1:9546 \
+thruput-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --method chainTip
 ```
@@ -281,7 +281,7 @@ thruput build --profile testnet   # resolve profile from thruput.toml
 thruput build -- --verbose   # pass extra args to cargo
 ```
 
-The RV32 target uses the built-in `groundhog-rv32-lower` library (v4 dispatch
+The RV32 target uses the built-in `thruput-rv32-lower` library (v4 dispatch
 lives in the guest, so stripped release builds are valid), then writes
 `target/thruput/<package>.rv32a`, build metadata, and `.spec.json` / `.spec.xdr`
 contract-spec sidecars.
@@ -732,7 +732,7 @@ thruput node --hog-devnode-binary /path/to/hog-devnode --contract-artifacts-dir 
 thruput node --hog-devnode-binary /path/to/hog-devnode --hogd-protocol hogp/<hash>
 thruput node --rpc-max-connections 2000
 thruput node -v
-RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug thruput node
+RUST_LOG=thruput_node_supervisor=debug,hogd_dev=debug thruput node
 ```
 
 `thruput node --json` emits the startup payload with a connectable `rpc_url`,
@@ -846,7 +846,7 @@ Forwarded child logs carry `hogd_target`, `hogd_file`, `hogd_line`, and
 `hogd_fields` metadata, plus `hogd_timestamp_ms` when emitted by hog-devnode, so
 subsystem, source location, and child emission time survive the bridge.
 The default human-mode filter is intentionally quiet:
-`groundhog_node_supervisor=info`. Use `thruput node --verbose` when you want
+`thruput_node_supervisor=info`. Use `thruput node --verbose` when you want
 the normal debugging view with forwarded hog-devnode info logs; `-v` is an alias.
 Use `RUST_LOG`
 only when you need exact filters or debug/trace-level output; if set,
@@ -1026,14 +1026,14 @@ changed. The CLI requires a successful installation report: the upstream global
 update check can exit successfully after a source-check failure.
 
 These commands wrap `skills@1.7.0` and require Node.js 22.20 or newer, npm, Git,
-and network access. The skill source is `groundhogchain/agent-skills`. While
+and network access. The skill source is `thruputchain/agent-skills`. While
 private, it requires repository access and Git credentials, GitHub CLI
 authentication, or SSH authentication. The equivalent direct commands are:
 
 ```sh
-npx skills@1.7.0 add groundhogchain/agent-skills --skill thruput
+npx skills@1.7.0 add thruputchain/agent-skills --skill thruput
 npx skills@1.7.0 update thruput --project
-npx skills@1.7.0 add groundhogchain/agent-skills --skill thruput --global --yes --json
+npx skills@1.7.0 add thruputchain/agent-skills --skill thruput --global --yes --json
 ```
 
 For automation, authorize setup with `--yes` and select the installation agent:

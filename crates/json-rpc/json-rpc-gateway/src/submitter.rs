@@ -13,13 +13,14 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
-use groundhog_hogd_backend::scheduler as shared_scheduler;
-use groundhog_hogd_backend::submit::{self as shared_submit, SubmitBatch};
-use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::error::outcome_for_code;
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_scheduler::SchedGatewaySubmitOutcomeBatch;
+use thruput_hogd_backend::scheduler as shared_scheduler;
+use thruput_hogd_backend::submit::{self as shared_submit, SubmitBatch};
+use thruput_json_rpc_server::RpcRequestContext;
+use thruput_json_rpc_types::error::outcome_for_code;
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_scheduler::SchedGatewaySubmitOutcomeBatch;
 use tokio::sync::{RwLock, oneshot};
+use tracing::Instrument;
 
 use crate::adaptive_batch::{
     AdaptiveBatcher, BatchProcessor, deadline_cohorts, shard_index_by_routing_key,
@@ -27,7 +28,7 @@ use crate::adaptive_batch::{
 use crate::config::AdaptiveBatchConfig;
 use crate::context::{AbortTaskOnDrop, SchedulerClient, clear_scheduler_if_current};
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
-use groundhog_json_rpc_server::RpcServerError;
+use thruput_json_rpc_server::RpcServerError;
 
 /// Backend for batched submissions.  In production this wraps the
 /// scheduler client; tests substitute a mock.
@@ -86,8 +87,11 @@ impl SubmitSink for SchedulerSink {
                 if timeout.is_zero() {
                     return Err(RpcServerError::BackendTimeout);
                 }
-                let mut call =
-                    tokio::spawn(async move { c.schedgateway_submit_tx_batch(&batch).await });
+                let mut call = tokio::spawn(
+                    async move { c.schedgateway_submit_tx_batch(&batch).await }.instrument(
+                        crate::telemetry::backend_span("scheduler", "schedgateway_submit_tx_batch"),
+                    ),
+                );
                 let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
                 let result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
                     Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
@@ -377,7 +381,7 @@ fn outcome_for_submit_error(err: &RpcServerError) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_scheduler::SchedGatewaySubmitOutcome;
+    use thruput_scheduler::SchedGatewaySubmitOutcome;
     use xdr_common::VecM;
 
     use super::*;
@@ -501,8 +505,8 @@ mod tests {
     fn hash_from_u32(x: u32) -> TxHash {
         let mut bytes = [0u8; 32];
         bytes[..4].copy_from_slice(&x.to_be_bytes());
-        TxHash(groundhog_json_rpc_types::hex::Hex0x(
-            groundhog_xdr::types::SHA256Hash::from(bytes),
+        TxHash(thruput_json_rpc_types::hex::Hex0x(
+            thruput_xdr::types::SHA256Hash::from(bytes),
         ))
     }
 

@@ -59,7 +59,7 @@ struct FaucetErrorDetail {
     #[serde(
         default,
         rename = "retryAfterSeconds",
-        with = "groundhog_json_rpc_types::decimal::option"
+        with = "thruput_json_rpc_types::decimal::option"
     )]
     retry_after_seconds: Option<u64>,
 }

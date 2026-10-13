@@ -3,19 +3,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use groundhog_bundle_identity::{BundleIdentity, BundleSubject};
-use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
-use groundhog_json_rpc_server::BuildVersion;
-use groundhog_json_rpc_types::{
-    airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
-    error::codes,
-    hex::Hex0x,
-};
 use jsonrpsee::core::{ClientError, client::ClientT};
 use jsonrpsee::http_client::HttpClientBuilder;
 use serial_test::serial;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+use thruput_bundle_identity::{BundleIdentity, BundleSubject};
+use thruput_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
+use thruput_json_rpc_server::BuildVersion;
+use thruput_json_rpc_types::{
+    airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
+    error::codes,
+    hex::Hex0x,
+};
 
 use super::*;
 use crate::{
@@ -299,7 +299,7 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
 
     let airdrop_error = client
         .request_airdrop(AirdropRequest {
-            recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
+            recipient: Hex0x(thruput_xdr::types::ContractAddress::from([0x88; 32])),
             client_nonce: ClientNonce::new(vec![0x99])
                 .expect("bug: test client nonce should validate"),
         })
@@ -1132,7 +1132,7 @@ async fn custom_network_preserves_independent_scheduler_and_gateway_checks() {
         let error = NodeSupervisorHandle::start(config).await.unwrap_err();
         assert!(
             matches!(error, NodeSupervisorError::SchedulerNetworkHashMismatch { expected, .. }
-            if expected == groundhog_json_rpc_types::NetworkHashHex::from([0xab; 32])),
+            if expected == thruput_json_rpc_types::NetworkHashHex::from([0xab; 32])),
             "{mode}"
         );
     }
@@ -1177,8 +1177,8 @@ async fn start_rolls_back_hogd_dev_when_scheduler_network_hash_mismatches_manife
             NodeSupervisorError::SchedulerNetworkHashMismatch {
                 expected,
                 observed,
-            } if expected == &groundhog_json_rpc_types::NetworkHashHex::from([0; 32])
-                && observed == &groundhog_json_rpc_types::NetworkHashHex::from([0xff; 32])
+            } if expected == &thruput_json_rpc_types::NetworkHashHex::from([0; 32])
+                && observed == &thruput_json_rpc_types::NetworkHashHex::from([0xff; 32])
         ),
         "expected SchedulerNetworkHashMismatch, got {err:?}",
     );
@@ -1544,7 +1544,7 @@ async fn start_with_indexer_reports_hogd_dev_full_backend_planes() {
 
     let response = client
         .request_airdrop(AirdropRequest {
-            recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
+            recipient: Hex0x(thruput_xdr::types::ContractAddress::from([0x88; 32])),
             client_nonce: ClientNonce::new(vec![0x99])
                 .expect("bug: test client nonce should validate"),
         })
@@ -1581,7 +1581,7 @@ async fn start_with_gateway_without_indexer_reports_storage_only_backend_planes(
         .expect("bug: jsonrpsee http client builds");
     let error = client
         .request_airdrop(AirdropRequest {
-            recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
+            recipient: Hex0x(thruput_xdr::types::ContractAddress::from([0x88; 32])),
             client_nonce: ClientNonce::new(vec![0x99])
                 .expect("bug: test client nonce should validate"),
         })

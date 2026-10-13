@@ -13,14 +13,14 @@ use std::path::Path;
 /// newer nightly. The CI `cli-smoke` job builds and tests a fresh scaffold
 /// against the real registry, so an unpublished or incompatible pin fails
 /// there (and stays red until the pinned SDK is published).
-pub const SCAFFOLD_SDK_VERSION: &str = "0.49.0";
+pub const SCAFFOLD_SDK_VERSION: &str = "0.51.0";
 
-/// `groundhog-json-rpc-client` version pinned into scaffolded projects.
+/// `thruput-json-rpc-client` version pinned into scaffolded projects.
 ///
-/// Published before the matching CLI in the release workflow. Release PR CI
-/// tests the checked-out client until publication. The caret requirement lets
-/// scaffolds pick up newer compatible releases.
-pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = "0.26.1";
+/// Shares the CLI's workspace version and is published before the matching CLI.
+/// Registry consumer checks require that version to be published. The caret
+/// requirement lets scaffolds pick up newer compatible releases.
+pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Toolchain channel pinned into scaffolded projects' `rust-toolchain.toml`.
 ///
@@ -74,7 +74,7 @@ const RUST_KEYWORDS: &[&str] = &[
 /// A project named after one of these declares the same extern name twice.
 /// `every_scaffold_dependency_name_is_reserved` in `tests/scaffold_test.rs`
 /// keeps this in step with the template.
-const SCAFFOLD_DEPENDENCIES: &[&str] = &["groundhog_json_rpc_client", "sdk", "tokio"];
+const SCAFFOLD_DEPENDENCIES: &[&str] = &["thruput_json_rpc_client", "sdk", "tokio"];
 
 /// Subdirectories Cargo creates under `target/<triple>/<profile>`.
 ///

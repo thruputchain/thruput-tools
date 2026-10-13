@@ -6,18 +6,18 @@
 //! either a value or an [`RpcServerError`], so a backend failure can never
 //! reach a client as an empty page or a missing receipt.
 
-use groundhog_indexer::{
+use thruput_indexer::{
     EventPage, EventPageResult, IndexerQueryOutcome, TransactionRefPage, TransactionRefPageResult,
     indexer::{TxInfo, TxInfoOutcome, TxInfoResult},
 };
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_server::RpcServerError;
+use thruput_json_rpc_types::{
     BlockHeight,
     events::{EventPage as PublicEventPage, IdentifiedEvent},
     hex::Hex0x,
     transaction::{TransactionStatus, TxHash},
 };
-use groundhog_trace::TxFailureDiagnostic;
+use thruput_trace::TxFailureDiagnostic;
 
 use crate::event::parse_emitted_event;
 

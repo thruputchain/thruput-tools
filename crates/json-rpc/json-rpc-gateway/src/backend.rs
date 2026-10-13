@@ -1,11 +1,11 @@
 use std::{future::Future, sync::Arc};
 
 use async_trait::async_trait;
-use groundhog_json_rpc_server::{
+use thruput_json_rpc_server::{
     ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading,
     ValidatedTransaction, ViewPlane,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress,
     address_auth::AddressAuthDataResponse,
     block::BlockInfo,
@@ -214,10 +214,10 @@ impl ViewPlane for GatewayBackend {
     async fn view_batch(
         &self,
         context: RpcRequestContext,
-        request: groundhog_json_rpc_types::view::ViewBatchRequest,
+        request: thruput_json_rpc_types::view::ViewBatchRequest,
         gas_limit: u64,
-        limits: groundhog_json_rpc_server::ViewBatchConfig,
-    ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+        limits: thruput_json_rpc_server::ViewBatchConfig,
+    ) -> Result<thruput_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
         handlers::view::view_batch(&self.ctx, context, request, gas_limit, limits).await
     }
 

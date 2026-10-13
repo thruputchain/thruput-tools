@@ -1,18 +1,18 @@
 use std::time::Duration;
 
-use groundhog_json_rpc_client::{
+use thruput_json_rpc_client::{
     PollTransactionReceiptError, poll_transaction_receipt_with_client_config,
     submit_transaction_with_client,
 };
-use groundhog_json_rpc_types::hex::HexBytes;
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
-use groundhog_signing::{
+use thruput_json_rpc_types::hex::HexBytes;
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_signing::{
     DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams, encode_signed_transaction_xdr,
     sign_transaction, transaction_hash,
 };
-use groundhog_xdr::transaction::Transaction;
-use groundhog_xdr::types::NetworkHash;
+use thruput_xdr::transaction::Transaction;
+use thruput_xdr::types::NetworkHash;
 
 use crate::account_resolution::{
     bind_sender_to_network, resolve_address_target, resolve_sender_account,
@@ -39,12 +39,12 @@ struct PreparedTransfer {
     profile: String,
     rpc_url: String,
     rpc_url_cli_override: bool,
-    sender: groundhog_xdr::types::ContractAddress,
+    sender: thruput_xdr::types::ContractAddress,
     sender_wallet: Option<String>,
-    signer_public_key: groundhog_xdr::types::Ed25519PublicKey,
+    signer_public_key: thruput_xdr::types::Ed25519PublicKey,
     recipient_input: String,
-    recipient: groundhog_xdr::types::ContractAddress,
-    token_address: groundhog_xdr::types::ContractAddress,
+    recipient: thruput_xdr::types::ContractAddress,
+    token_address: thruput_xdr::types::ContractAddress,
     amount: String,
     raw_amount: u128,
     tx_hash: TxHash,
@@ -57,12 +57,12 @@ struct TransferPlan {
     profile: String,
     rpc_url: String,
     rpc_url_cli_override: bool,
-    sender: groundhog_xdr::types::ContractAddress,
+    sender: thruput_xdr::types::ContractAddress,
     sender_wallet: Option<String>,
-    signer_public_key: groundhog_xdr::types::Ed25519PublicKey,
+    signer_public_key: thruput_xdr::types::Ed25519PublicKey,
     recipient_input: String,
-    recipient: groundhog_xdr::types::ContractAddress,
-    token_address: groundhog_xdr::types::ContractAddress,
+    recipient: thruput_xdr::types::ContractAddress,
+    token_address: thruput_xdr::types::ContractAddress,
     amount: String,
     raw_amount: u128,
     tx_hash: TxHash,
@@ -172,8 +172,8 @@ fn prepare_plan(
     let wallet_context = resolved_sender.signing_context(&profile, &rt)?;
     let expiry_height = rt.block_on(resolve_block_expiry_height(&rpc_url))?;
 
-    let tx = groundhog_client::prepare_call(
-        groundhog_client::CallRequest {
+    let tx = thruput_client::prepare_call(
+        thruput_client::CallRequest {
             wallet: resolved_sender.wallet(wallet_context.entrypoints.do_action),
             target_address: token_address,
             target_entrypoint: hog::transfer_entrypoint(),
@@ -199,7 +199,7 @@ fn prepare_plan(
         rpc_url_cli_override: profile.rpc_url_cli_override,
         sender,
         sender_wallet: resolved_sender.wallet_name,
-        signer_public_key: groundhog_xdr::types::Ed25519PublicKey::from(
+        signer_public_key: thruput_xdr::types::Ed25519PublicKey::from(
             resolved_sender.signer.verifying_key_bytes(),
         ),
         recipient_input: recipient_input.to_owned(),
@@ -367,8 +367,8 @@ async fn poll_local_hash(
 }
 
 fn receipt_poll_config() -> (usize, Duration) {
-    let mut attempts = groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS;
-    let mut interval = groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL;
+    let mut attempts = thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS;
+    let mut interval = thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL;
     if cfg!(debug_assertions) {
         if let Ok(value) = std::env::var("THRUPUT_TEST_RECEIPT_POLL_ATTEMPTS")
             && let Ok(value) = value.parse::<usize>()

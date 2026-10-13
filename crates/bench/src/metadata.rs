@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 
-use groundhog_json_rpc_types::version::VersionInfo;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use thruput_json_rpc_types::version::VersionInfo;
 
 use crate::{
     BenchError,

@@ -1,17 +1,17 @@
 //! Qualification against a compatible real runtime; run explicitly with --ignored.
 
-use groundhog_json_rpc_api::{GroundhogApiClient, LocalFundingApiClient};
-use groundhog_json_rpc_types::{
+use jsonrpsee::http_client::HttpClientBuilder;
+use thruput_json_rpc_api::{GroundhogApiClient, LocalFundingApiClient};
+use thruput_json_rpc_types::{
     airdrop::{ClientNonce, FundAccountRequest},
     hex::Hex0x,
     receipt::ExecStatus,
 };
-use groundhog_node_supervisor::{
+use thruput_node_supervisor::{
     BlockDriverConfig, HogdDevConfig, LOCAL_FAUCET_KEY_FILE, LOCAL_FUNDING_ATTEMPTS_FILE,
     NodeSupervisorConfig, NodeSupervisorHandle,
 };
-use groundhog_signing::{LocalSigner, PubkeyAccount};
-use jsonrpsee::http_client::HttpClientBuilder;
+use thruput_signing::{LocalSigner, PubkeyAccount};
 
 #[tokio::test]
 #[ignore = "requires THRUPUT_DEVNODE_BINARY pointing to a schema-4 real runtime"]
@@ -95,7 +95,7 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
 #[tokio::test]
 #[ignore = "requires THRUPUT_DEVNODE_BINARY pointing to a schema-4 real runtime"]
 async fn stopped_raw_process_handle_releases_persistent_chain_lock() {
-    use groundhog_node_supervisor::HogdDevProcess;
+    use thruput_node_supervisor::HogdDevProcess;
     let binary = std::env::var_os("THRUPUT_DEVNODE_BINARY").expect("runtime binary is required");
     let dir = tempfile::tempdir().unwrap();
     let config = HogdDevConfig::default()

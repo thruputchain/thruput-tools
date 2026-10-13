@@ -141,7 +141,7 @@ cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
-cargo test -p groundhog-firehose --test subscriptions \
+cargo test -p thruput-firehose --test subscriptions \
   measure_fanout_and_catchup -- --ignored --nocapture
 ```
 

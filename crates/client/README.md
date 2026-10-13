@@ -1,4 +1,4 @@
-# groundhog-client
+# thruput-client
 
 Reusable contract invocation and spec codec for native Groundhog clients.
 Groundhog CLI and the experimental Stellar adapter supply their own configuration,
@@ -30,6 +30,24 @@ not contact the network. Submission is not retried by this library. After an
 ambiguous submission error or receipt timeout, reconcile by the retained hash
 before deciding what to do next.
 
+## Native deployment
+
+`prepare_deploy(DeployRequest, NetworkHash)` builds a `DefaultWallet` deployment
+for a native account. The code is either attached, which registers the binary in
+the same transaction, or an already registered `contract_hash`. The request can
+also fund and initialize the new contract in that transaction. The deployment salt
+is `deployment_nonce(nonce)`, so the new contract's address is known before
+signing: `UnsignedDeploy::address`.
+
+Deployment then follows the same sign, submit and wait phases as calls, through
+`SignedDeploy` and `SubmittedDeploy`. `SubmittedDeploy::verify` requires the
+receipt to match the transaction hash. It also requires a successful deployment
+to return exactly the predicted address. The caller interprets execution status.
+`submit_signed_transaction` resubmits retained signed bytes of a call or
+deployment by their canonical hash; it is for reconciliation, not retry.
+
+## Codec
+
 The `codec` module decodes canonical specs, resolves methods, derives selectors,
 encodes positional arguments and decodes returns/declared aborts. The caller
 loads any files and supplies the metadata. Best-effort return decoding can return
@@ -42,13 +60,13 @@ Groundhog CLI, node supervisor, compiler/lowerer, toolchain manager, JSON-RPC
 server crate and contract SDK. Existing RPC, signing, XDR and spec types are
 re-exported so adapters can use matching versions.
 
-Node management remains a separate capability based on `groundhog-node-supervisor`.
+Node management remains a separate capability based on `thruput-node-supervisor`.
 Adding a node adapter to another CLI should not expand this crate's dependencies.
 
 ## Text encodings for host applications
 
-`groundhog_client::strkey` re-exports the encoding helpers from
-`groundhog-signing`. Use `parse_contract_address` / `format_contract_address`
+`thruput_client::strkey` re-exports the encoding helpers from
+`thruput-signing`. Use `parse_contract_address` / `format_contract_address`
 for C StrKeys, `parse_public_key` / `format_public_key` for G public keys, and
 `parse_secret_seed` / `format_secret_seed` for explicit S seed import/export.
 Parsing also accepts legacy 32-byte hex. Invalid checksum, length or type is

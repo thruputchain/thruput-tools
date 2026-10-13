@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-json-rpc-types"
+name = "thruput-json-rpc-types"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Shared JSON-RPC wire types for Groundhog"
+description = "Shared JSON-RPC wire types for Thruput"
 
 exclude = [
     "tests/",
@@ -20,10 +20,10 @@ exclude = [
 workspace = true
 
 [dependencies]
-groundhog-trace = { workspace = true }
-groundhog-xdr = { workspace = true }
-groundhog_indexer = { workspace = true }
-groundhog_scheduler = { workspace = true }
+thruput-trace = { workspace = true }
+thruput-xdr = { workspace = true }
+thruput-indexer = { workspace = true }
+thruput-scheduler = { workspace = true }
 schemars = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }

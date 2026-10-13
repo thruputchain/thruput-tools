@@ -1,7 +1,7 @@
-use groundhog_firehose::client;
-use groundhog_xdr::network::ProtocolCommit;
 use serde::Serialize;
 use std::time::Duration;
+use thruput_firehose::client;
+use thruput_xdr::network::ProtocolCommit;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

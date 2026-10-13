@@ -2,9 +2,9 @@
 
 use std::{fmt, io, path::PathBuf, process::ExitStatus, time::Duration};
 
-use groundhog_hogd_backend::IntroOutcome;
-use groundhog_json_rpc_types::NetworkHashHex;
-use groundhog_x23_transport::ConnectError;
+use thruput_hogd_backend::IntroOutcome;
+use thruput_json_rpc_types::NetworkHashHex;
+use thruput_x23_transport::ConnectError;
 
 /// Unix child-process signal used by the supervisor.
 #[cfg(unix)]
@@ -65,7 +65,7 @@ pub enum NodeSupervisorError {
     InvalidProtocolOverride {
         /// Why the text cannot name a protocol token.
         #[from]
-        source: groundhog_json_rpc_types::protocol_token::ProtocolTokenWidthError,
+        source: thruput_json_rpc_types::protocol_token::ProtocolTokenWidthError,
     },
     /// A configured binary path does not exist.
     #[error("configured hog-devnode binary path does not exist: {}", path.display())]

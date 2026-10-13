@@ -1,9 +1,10 @@
-use groundhog_json_rpc_client::poll_receipt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use thruput_json_rpc_client::poll_receipt;
 
-use groundhog_json_rpc_types::{
+use sha2::{Digest, Sha256};
+use thruput_json_rpc_types::{
     BlockHeight,
     events::{
         BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
@@ -15,7 +16,6 @@ use groundhog_json_rpc_types::{
     transaction::TxHash,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
@@ -776,7 +776,7 @@ fn prepare_contract_call_workload(
         tx: build_contract_call_transaction(
             actor,
             call.contract,
-            groundhog_xdr::contract::ContractEntrypointID::from(entrypoint),
+            thruput_xdr::contract::ContractEntrypointID::from(entrypoint),
             &call.calldata,
         )?,
     })
@@ -794,7 +794,7 @@ fn prepare_read_after_write_workload(
         tx: build_contract_call_transaction(
             actor,
             entry.contract,
-            groundhog_xdr::contract::ContractEntrypointID::from(write_entrypoint),
+            thruput_xdr::contract::ContractEntrypointID::from(write_entrypoint),
             &entry.write_calldata,
         )?,
         caller: actor.wallet_address,
@@ -3847,7 +3847,7 @@ struct PreparedReceiptPoll {
 #[derive(Debug, Clone)]
 struct PreparedViewWorkload {
     view: PreparedViewCall,
-    caller: groundhog_xdr::types::ContractAddress,
+    caller: thruput_xdr::types::ContractAddress,
 }
 
 #[derive(Debug, Clone)]
@@ -3873,7 +3873,7 @@ struct PreparedReadAfterWriteWorkload {
     tx: BuiltSubmitTransaction,
     /// Caller identity for the `get()` read-back; matches the write's effective
     /// `msg.sender` (the actor wallet).
-    caller: groundhog_xdr::types::ContractAddress,
+    caller: thruput_xdr::types::ContractAddress,
     /// Actor read-after-write belief snapshot at prepare time.
     state: ReadAfterWriteState,
 }
@@ -3952,7 +3952,7 @@ fn rpc_method(workload: WorkloadKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::{
+    use thruput_json_rpc_types::{
         BlockHeight,
         block::ChainTip,
         hex::Hex0x,
@@ -3960,8 +3960,8 @@ mod tests {
         state::StorageItemRead,
         view::{RootInvocationOutput, ViewResponse},
     };
-    use groundhog_signing::derive_dev_account_signer;
-    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+    use thruput_signing::derive_dev_account_signer;
+    use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
     use crate::rpc::SimRpcError;
     use serde_json::json;
@@ -4103,7 +4103,7 @@ mod tests {
                 .replay("chainTip")?;
             Ok(ChainTip {
                 height: height.into(),
-                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
+                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0; 32])),
             })
         }
     }
@@ -4436,7 +4436,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4463,7 +4463,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4490,7 +4490,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4533,7 +4533,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4578,7 +4578,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4619,7 +4619,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4659,7 +4659,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4708,7 +4708,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4751,7 +4751,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -7087,8 +7087,8 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("executor-test-seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x99; 32])).0,
-                network_hash: groundhog_xdr::types::NetworkHash::new(
-                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                network_hash: thruput_xdr::types::NetworkHash::new(
+                    thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
             },
             NonceNamespace::new(1).expect("namespace should fit"),
@@ -7163,7 +7163,7 @@ mod tests {
     }
 
     fn event_page(
-        events: Vec<groundhog_json_rpc_types::events::IdentifiedEvent>,
+        events: Vec<thruput_json_rpc_types::events::IdentifiedEvent>,
         cursor: Vec<u8>,
         latest_block: i64,
         oldest_block: i64,
@@ -7217,7 +7217,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }

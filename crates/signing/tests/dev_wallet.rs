@@ -1,16 +1,16 @@
-use groundhog_signing::SignTransactionParams;
-use groundhog_signing::SigningError;
-use groundhog_signing::transaction_hash;
-use groundhog_xdr::contract::Contract;
-use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::ContractAddress;
-use groundhog_xdr::types::Ed25519PublicKey;
-use groundhog_xdr::types::NetworkHash;
-use groundhog_xdr::types::SHA256Hash;
 use std::path::Path;
+use thruput_signing::SignTransactionParams;
+use thruput_signing::SigningError;
+use thruput_signing::transaction_hash;
+use thruput_xdr::contract::Contract;
+use thruput_xdr::contract::ContractEntrypointID;
+use thruput_xdr::types::ContractAddress;
+use thruput_xdr::types::Ed25519PublicKey;
+use thruput_xdr::types::NetworkHash;
+use thruput_xdr::types::SHA256Hash;
 
-use groundhog_signing::dev_wallet::*;
-use groundhog_signing::{DEFAULT_TX_GAS_LIMIT, LocalSigner};
+use thruput_signing::dev_wallet::*;
+use thruput_signing::{DEFAULT_TX_GAS_LIMIT, LocalSigner};
 
 #[test]
 fn create_wallet_calldata_round_trips_expected_tuple() {
@@ -44,7 +44,7 @@ fn signed_hog_transfer_retains_exact_bytes_and_canonical_hash() {
         &signer,
     )
     .expect("bug: native HOG transfer should build and sign");
-    let decoded: groundhog_xdr::transaction::SignedTransaction =
+    let decoded: thruput_xdr::transaction::SignedTransaction =
         xdrs::txs::decode(&transfer.bytes).expect("bug: signed transfer bytes should decode");
 
     assert_eq!(

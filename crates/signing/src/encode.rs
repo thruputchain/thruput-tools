@@ -1,7 +1,7 @@
 //! XDR encoding helpers.
 
 use crate::SigningError;
-use groundhog_xdr::transaction::{SignedTransaction, Transaction};
+use thruput_xdr::transaction::{SignedTransaction, Transaction};
 
 /// Encodes a transaction to XDR bytes.
 pub fn encode_transaction_xdr(tx: &Transaction) -> Result<Vec<u8>, SigningError> {

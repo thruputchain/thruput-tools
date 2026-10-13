@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-client"
+name = "thruput-client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,20 +10,21 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Embeddable Groundhog contract invocation client"
+description = "Embeddable Thruput contract invocation client"
 
 [dependencies]
-groundhog-signing.workspace = true
-groundhog-json-rpc-client.workspace = true
-groundhog-json-rpc-types.workspace = true
-groundhog-xdr.workspace = true
+thruput-signing.workspace = true
+thruput-json-rpc-client.workspace = true
+thruput-json-rpc-types.workspace = true
+thruput-xdr.workspace = true
 jsonrpsee.workspace = true
 thiserror.workspace = true
 hex.workspace = true
+sha2.workspace = true
 
-groundhog-contract-spec.workspace = true
-groundhog-contract-util.workspace = true
-groundhog-u256 = { workspace = true, features = ["std"] }
+thruput-contract-spec.workspace = true
+thruput-contract-util.workspace = true
+thruput-u256 = { workspace = true, features = ["std"] }
 serde_json.workspace = true
 xdrs.workspace = true
 

@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use groundhog_json_rpc_client::GroundhogApiClient;
-use groundhog_json_rpc_types::ContractAddress;
-use groundhog_json_rpc_types::events::{BlockAnchor, IterationOrder, PaginationCursor};
-use groundhog_json_rpc_types::hex::decode_fixed_hex;
-use groundhog_json_rpc_types::receipt::TransactionReceipt;
-use groundhog_json_rpc_types::transaction::{
+use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_types::ContractAddress;
+use thruput_json_rpc_types::events::{BlockAnchor, IterationOrder, PaginationCursor};
+use thruput_json_rpc_types::hex::decode_fixed_hex;
+use thruput_json_rpc_types::receipt::TransactionReceipt;
+use thruput_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash,
 };
 
@@ -183,7 +183,7 @@ fn parse_tx_hash(input: &str) -> Result<TxHash, CliError> {
             display_input: terminal_safe(input),
             message: error.to_string(),
         })?;
-    Ok(TxHash(groundhog_xdr::types::SHA256Hash::from(bytes).into()))
+    Ok(TxHash(thruput_xdr::types::SHA256Hash::from(bytes).into()))
 }
 
 async fn fetch_transaction(
@@ -355,7 +355,7 @@ fn format_cursor(cursor: &PaginationCursor) -> String {
 mod tests {
     use super::{format_cursor, parse_tx_hash};
     use crate::tx_utils::format_tx_hash;
-    use groundhog_json_rpc_types::events::PaginationCursor;
+    use thruput_json_rpc_types::events::PaginationCursor;
 
     #[test]
     fn transaction_hash_parser_accepts_shared_hex_forms() {

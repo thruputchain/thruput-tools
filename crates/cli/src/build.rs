@@ -1,12 +1,12 @@
 use crate::artifacts::{self, ArtifactKind, ArtifactOptions, ManifestFlags};
 use crate::checks::{Finding, FindingLevel};
 use crate::{CliError, Print};
-use groundhog_contract_spec::ContractSpec;
 use serde::Serialize;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use thruput_contract_spec::ContractSpec;
 
 pub(crate) const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
 
@@ -31,14 +31,14 @@ pub struct BuildResult {
     pub spec_xdr: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bindings_ts: Option<PathBuf>,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
     pub size_bytes: u64,
     /// Bytes in the artifact's code section.
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
     pub code_bytes: usize,
     /// Guest data address space the artifact declares (`memory_bytes` in its
     /// header).
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
     pub memory_bytes: usize,
     pub target: ArtifactKind,
     pub profile: crate::config::ResolvedProfile,
@@ -292,7 +292,7 @@ impl GuestLayout {
     /// The data address space stamped into the artifact, in bytes.
     fn memory_bytes(self) -> usize {
         self.initial_memory_bytes
-            .map_or(groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES, |bytes| {
+            .map_or(thruput_rv32_artifact::DEFAULT_MEMORY_BYTES, |bytes| {
                 bytes as usize
             })
     }
@@ -491,9 +491,9 @@ pub fn build_rv32_project(
 
     print.phase("Lowering RV32 ELF...");
     let elf_bytes = fs::read(&elf)?;
-    let lowered = groundhog_rv32_lower::lower_with(
+    let lowered = thruput_rv32_lower::lower_with(
         &elf_bytes,
-        &groundhog_rv32_lower::LowerOptions {
+        &thruput_rv32_lower::LowerOptions {
             memory_bytes: layout.memory_bytes(),
         },
     )?;
@@ -515,7 +515,7 @@ pub fn build_rv32_project(
         ));
     }
     let lower_metadata_doc =
-        groundhog_rv32_lower::render_metadata(&groundhog_rv32_lower::MetadataInput {
+        thruput_rv32_lower::render_metadata(&thruput_rv32_lower::MetadataInput {
             elf: &elf_bytes,
             artifact: &lowered.artifact,
             code: &lowered.code,
@@ -768,10 +768,12 @@ pub fn cargo_metadata_with_artifacts(
 
     serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
 }
-/// The SDK crate whose manifest declares the raw spec wire format a contract
-/// emits. It owns the fragment types, so the format version travels with it
+/// The SDK packages whose manifests declare the raw spec wire format a contract
+/// emits. They own the fragment types, so the format version travels with them
 /// and no version table has to be maintained here.
-const CONTRACT_SPEC_PACKAGE: &str = "groundhog-contract-spec";
+///
+/// Released SDKs use the old identity. Both packages declare the same metadata.
+const CONTRACT_SPEC_PACKAGES: &[&str] = &["thruput-contract-spec", "groundhog-contract-spec"];
 
 /// `cargo metadata` output read for the resolved dependency graph.
 ///
@@ -817,9 +819,9 @@ struct DependencySpecMetadata {
 impl DependencyPackage {
     /// The raw spec format this package declares.
     ///
-    /// A `groundhog-contract-spec` predating the manifest key is
-    /// pre-versioning, which is format 0 — genuinely unsupported, so absence
-    /// is not treated as "unknown, allow it".
+    /// A contract-spec package predating the manifest key is
+    /// pre-versioning and uses unsupported format 0. Missing metadata is not
+    /// treated as "unknown, allow it".
     fn raw_spec_format(&self) -> u32 {
         self.metadata
             .as_ref()
@@ -965,10 +967,12 @@ fn check_dependency_raw_spec_format(
     }
 
     for package in &metadata.packages {
-        if package.name != CONTRACT_SPEC_PACKAGE || !seen.contains(package.id.as_str()) {
+        if !CONTRACT_SPEC_PACKAGES.contains(&package.name.as_str())
+            || !seen.contains(package.id.as_str())
+        {
             continue;
         }
-        groundhog_spec_tool::check_raw_spec_format(package.raw_spec_format())
+        thruput_spec_tool::check_raw_spec_format(package.raw_spec_format())
             .map_err(CliError::RawSpecFormat)?;
     }
     Ok(())
@@ -977,15 +981,15 @@ fn check_dependency_raw_spec_format(
 /// Verify the contract's raw spec format before compiling it.
 ///
 /// The raw spec section is written by the SDK compiled into the contract and
-/// read by the `groundhog-spec-tool` linked into this CLI, and the two are
+/// read by the `thruput-spec-tool` linked into this CLI, and the two are
 /// released independently. Reading the format out of the dependency graph
 /// costs one `cargo metadata` call, so skew is reported in seconds instead of
 /// as a fragment parse failure after a full contract compile.
 ///
-/// A project with no `groundhog-contract-spec` in its graph is not a
-/// Thruput contract and is left alone. An unavailable dependency graph
-/// warns rather than refuses, so an offline or vendored build still
-/// completes: only a format this build genuinely cannot read is a hard error.
+/// A project with neither `thruput-contract-spec` nor `groundhog-contract-spec`
+/// in its graph is not a Thruput contract and is left alone. An unavailable
+/// dependency graph warns rather than refuses, so an offline or vendored
+/// build still completes. Only an unreadable format is a hard error.
 ///
 /// This is the first thing a build does that reads the registry, so it is
 /// also where a registry problem first shows up. Cargo says what it is
@@ -1006,7 +1010,7 @@ fn check_contract_raw_spec_format(
                  `{}` — the embedded spec section format, not a crate \
                  version — so a mismatch will now surface as a spec parse \
                  failure after the build instead",
-                groundhog_spec_tool::RAW_SECTION_NAME
+                thruput_spec_tool::RAW_SECTION_NAME
             ));
             Ok(())
         }
@@ -1199,8 +1203,8 @@ mod tests {
     };
     use crate::codegen::generate_ts_bindings;
     use crate::contract_spec::load_contract_spec_from_xdr;
-    use groundhog_contract_spec::{ContractStructDef, ContractTypeDef};
     use tempfile::TempDir;
+    use thruput_contract_spec::{ContractStructDef, ContractTypeDef};
 
     fn tokens(raw: &[&str]) -> Vec<String> {
         raw.iter().map(|token| (*token).to_string()).collect()
@@ -1428,7 +1432,7 @@ mod tests {
         let layout = GuestLayout::default();
         assert_eq!(
             layout.memory_bytes(),
-            groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES
+            thruput_rv32_artifact::DEFAULT_MEMORY_BYTES
         );
         assert!(!layout.needs_defsym());
         assert!(layout.defsym_flags().is_empty());
@@ -1519,7 +1523,7 @@ mod tests {
 
 #[cfg(test)]
 mod raw_spec_format_preflight_tests {
-    use groundhog_spec_tool::RAW_SPEC_FORMAT;
+    use thruput_spec_tool::RAW_SPEC_FORMAT;
 
     const SELECTED: &str = "demo-contract";
     const SELECTED_ID: &str = "path+file:///ws/demo#demo-contract@0.1.0";
@@ -1583,6 +1587,29 @@ mod raw_spec_format_preflight_tests {
     }
 
     #[test]
+    fn checks_thruput_contract_spec_formats_in_the_selected_subtree() {
+        for (dependency, accepted) in [
+            (SpecDep::Format(RAW_SPEC_FORMAT), true),
+            (SpecDep::Format(RAW_SPEC_FORMAT + 1), false),
+            (SpecDep::Format(RAW_SPEC_FORMAT - 1), false),
+            (SpecDep::PreVersioning, false),
+        ] {
+            let json = workspace_json(dependency, SpecDep::Format(RAW_SPEC_FORMAT))
+                .replace("groundhog-contract-spec", "thruput-contract-spec");
+            assert_eq!(check(&json).is_ok(), accepted, "metadata: {json}");
+        }
+    }
+
+    #[test]
+    fn ignores_unrelated_thruput_contract_spec_formats() {
+        for selected in [SpecDep::Absent, SpecDep::Format(RAW_SPEC_FORMAT)] {
+            let json = workspace_json(selected, SpecDep::Format(RAW_SPEC_FORMAT + 1))
+                .replace("groundhog-contract-spec", "thruput-contract-spec");
+            assert!(check(&json).is_ok(), "metadata: {json}");
+        }
+    }
+
+    #[test]
     fn accepts_the_format_this_build_reads() {
         let json = workspace_json(SpecDep::Format(RAW_SPEC_FORMAT), SpecDep::Absent);
 
@@ -1599,7 +1626,7 @@ mod raw_spec_format_preflight_tests {
             .to_string();
 
         assert!(
-            message.contains("newer Groundhog SDK") && message.contains(&newer.to_string()),
+            message.contains("newer Thruput SDK") && message.contains(&newer.to_string()),
             "expected a version-skew diagnosis naming {newer}, got: {message}"
         );
     }
@@ -1613,7 +1640,7 @@ mod raw_spec_format_preflight_tests {
             .to_string();
 
         assert!(
-            message.contains("older Groundhog SDK"),
+            message.contains("older Thruput SDK"),
             "expected a version-skew diagnosis, got: {message}"
         );
     }
@@ -1627,7 +1654,7 @@ mod raw_spec_format_preflight_tests {
             .to_string();
 
         assert!(
-            message.contains("older Groundhog SDK"),
+            message.contains("older Thruput SDK"),
             "expected a version-skew diagnosis, got: {message}"
         );
     }

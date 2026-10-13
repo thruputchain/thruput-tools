@@ -7,19 +7,19 @@
 //!   cargo run -p thruput-cli -- node --hog-devnode-binary /path/to/hog-devnode
 //!
 //! Then run:
-//!   cargo test -p groundhog-e2e-tests -- --ignored
+//!   cargo test -p thruput-e2e-tests -- --ignored
 //!
 //! Tests are marked #[ignore] so they don't run in `cargo test --workspace`.
 
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-use groundhog_json_rpc_types::ContractAddress;
-use groundhog_json_rpc_types::events::{
+use thruput_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use thruput_json_rpc_types::ContractAddress;
+use thruput_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventQuery, EventTopicFilter,
     IterationOrder, PaginationCursor, TopicList,
 };
-use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
-use groundhog_json_rpc_types::state::StorageItemInfo;
-use groundhog_json_rpc_types::transaction::TransactionStatus;
+use thruput_json_rpc_types::hex::{Hex0x, HexBytes};
+use thruput_json_rpc_types::state::StorageItemInfo;
+use thruput_json_rpc_types::transaction::TransactionStatus;
 use xdr_common::VecM;
 
 fn rpc_url() -> String {
@@ -32,14 +32,14 @@ fn client() -> impl GroundhogApiClient {
         .expect("bug: HTTP client should build")
 }
 
-fn zero_hash() -> groundhog_json_rpc_types::transaction::TxHash {
-    groundhog_json_rpc_types::transaction::TxHash(groundhog_json_rpc_types::hex::Hex0x(
-        groundhog_xdr::types::SHA256Hash::from([0u8; 32]),
+fn zero_hash() -> thruput_json_rpc_types::transaction::TxHash {
+    thruput_json_rpc_types::transaction::TxHash(thruput_json_rpc_types::hex::Hex0x(
+        thruput_xdr::types::SHA256Hash::from([0u8; 32]),
     ))
 }
 
 fn zero_address() -> ContractAddress {
-    Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
+    Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32]))
 }
 
 #[tokio::test]
@@ -156,7 +156,7 @@ fn events_for_address(
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
             contract_addresses: ContractAddressList(VecM(vec![Hex0x(
-                groundhog_xdr::types::ContractAddress::from(addr),
+                thruput_xdr::types::ContractAddress::from(addr),
             )])),
             topics: EventTopicFilter {
                 topic0: TopicList(VecM(vec![])),
@@ -256,11 +256,11 @@ async fn get_events_cursor_walks_or_terminates() {
 #[tokio::test]
 #[ignore = "requires running hog-devnode local node or gateway"]
 async fn invalid_signature_returns_transaction_rejection() {
-    use groundhog_signing::{
+    use thruput_signing::{
         BuildCallTransaction, LocalSigner, PubkeyAccount, SignTransactionParams, Signer,
         build_call_transaction, encode_signed_transaction_xdr, sign_transaction,
     };
-    use groundhog_xdr::{
+    use thruput_xdr::{
         contract::ContractEntrypointID,
         types::{NetworkHash, Signature},
     };
@@ -300,7 +300,7 @@ async fn invalid_signature_returns_transaction_rejection() {
         jsonrpsee::core::ClientError::Call(error) => {
             assert_eq!(
                 error.code(),
-                groundhog_json_rpc_types::error::codes::TX_REJECTED
+                thruput_json_rpc_types::error::codes::TX_REJECTED
             );
         }
         other => panic!("expected a typed transaction rejection, got {other}"),

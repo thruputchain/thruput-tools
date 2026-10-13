@@ -3,7 +3,7 @@
 #
 # Starts a real hog-devnode-backed `thruput node`, extracts the runtime manifest
 # path from the CLI startup JSON, starts a standalone gateway from the same
-# manifest, then runs a named groundhog-bench scenario.
+# manifest, then runs a named thruput-bench scenario.
 #
 # Required environment:
 #   THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode
@@ -239,7 +239,7 @@ import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     result = json.load(handle)
 if result.get("schemaVersion") != 2 or result.get("kind") != "groundhog-bench-result":
-    raise SystemExit("invalid groundhog-bench result envelope")
+    raise SystemExit("invalid thruput-bench result envelope")
 PY
         mv "$BENCH_RESULT_TMP" "$output"
         BENCH_RESULT_TMP=""
@@ -396,7 +396,7 @@ case "$BENCH_BUILD_PROFILE" in
 esac
 CLI="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/thruput"
 GATEWAY="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/hog-gateway"
-BENCH="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/groundhog-bench"
+BENCH="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/thruput-bench"
 
 unset GROUNDHOG_BENCH_GIT_COMMIT GROUNDHOG_BENCH_GIT_DIRTY
 if GROUNDHOG_BENCH_GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)"; then
@@ -413,7 +413,7 @@ fi
 
 log "Building $BENCH_BUILD_PROFILE CLI, gateway, and bench"
 cargo build "${BENCH_BUILD_ARGS[@]}" \
-    -p thruput-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
+    -p thruput-cli -p thruput-json-rpc-gateway -p thruput-bench \
     --manifest-path "$REPO_ROOT/Cargo.toml"
 
 if [[ -n "$BENCH_RESULTS_DIR" ]]; then
@@ -551,7 +551,7 @@ case "$BENCH_SCENARIO" in
         run_smoke "$NODE_RPC_URL" "$GATEWAY_RPC_URL" "$RUNTIME_MANIFEST"
         for admission_url in "$NODE_RPC_URL" "$GATEWAY_RPC_URL"; do
             RPC_URL="$admission_url" cargo test --manifest-path "$REPO_ROOT/Cargo.toml" \
-                -p groundhog-e2e-tests \
+                -p thruput-e2e-tests \
                 invalid_signature_returns_transaction_rejection -- --ignored
         done
         ;;

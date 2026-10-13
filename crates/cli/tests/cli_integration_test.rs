@@ -16,9 +16,9 @@ use std::sync::{Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(unix)]
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use tempfile::TempDir;
+#[cfg(unix)]
+use thruput_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 
 mod support;
 #[cfg(unix)]
@@ -76,7 +76,7 @@ fn write_bundle_manifest(path: &std::path::Path, version: &str, source_commit: &
 }
 
 fn embedded_source_commit() -> Option<&'static str> {
-    let commit = groundhog_build_info::build_version!().source_commit();
+    let commit = thruput_build_info::build_version!().source_commit();
     if let Ok(required) = std::env::var("GROUNDHOG_SOURCE_COMMIT") {
         assert_eq!(commit, Some(required.as_str()));
     }
@@ -138,8 +138,8 @@ fn write_chain_data_fixture(root: &std::path::Path) {
     std::fs::write(root.join("events/block.events"), b"event-state").unwrap();
     std::fs::write(root.join("indexer/CURRENT"), b"MANIFEST-1\n").unwrap();
     for relative in [
-        groundhog_node_supervisor::LOCAL_FAUCET_KEY_FILE,
-        groundhog_node_supervisor::LOCAL_FUNDING_ATTEMPTS_FILE,
+        thruput_node_supervisor::LOCAL_FAUCET_KEY_FILE,
+        thruput_node_supervisor::LOCAL_FUNDING_ATTEMPTS_FILE,
     ] {
         let path = root.join(relative);
         std::fs::write(&path, b"private fixture").unwrap();
@@ -263,8 +263,8 @@ fn install_fake_managed_toolchain(
     cache_home: &std::path::Path,
     source_binary: &std::path::Path,
 ) -> std::path::PathBuf {
-    let catalog = groundhog_toolchain::Catalog::embedded().expect("bug: catalog should load");
-    let target = groundhog_toolchain::HostTarget::current().expect("bug: host should be managed");
+    let catalog = thruput_toolchain::Catalog::embedded().expect("bug: catalog should load");
+    let target = thruput_toolchain::HostTarget::current().expect("bug: host should be managed");
     let version = catalog.default_version();
     let artifact = catalog
         .artifact(version, target)
@@ -640,7 +640,7 @@ fn version_flag_works() {
     let output = thruput().arg("--version").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let expected = groundhog_build_info::build_version!();
+    let expected = thruput_build_info::build_version!();
     let commit = expected
         .source_commit()
         .map_or("unavailable", |commit| &commit[..8]);
@@ -2094,7 +2094,7 @@ fn node_explicit_managed_version_uses_cache_before_path_offline() {
         .arg("0")
         .arg("--hog-devnode-version")
         .arg(
-            groundhog_toolchain::Catalog::embedded()
+            thruput_toolchain::Catalog::embedded()
                 .unwrap()
                 .default_version(),
         )
@@ -2143,7 +2143,7 @@ fn node_explicit_managed_version_does_not_fall_back_to_path_offline() {
         .arg("0")
         .arg("--hog-devnode-version")
         .arg(
-            groundhog_toolchain::Catalog::embedded()
+            thruput_toolchain::Catalog::embedded()
                 .unwrap()
                 .default_version(),
         )
@@ -2167,7 +2167,7 @@ fn node_saved_managed_version_does_not_fall_back_to_path_offline() {
     let cache_home = TempDir::new().unwrap();
     let path_dir = TempDir::new().unwrap();
     support::write_versioned_devnode(path_dir.path());
-    let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+    let catalog = thruput_toolchain::Catalog::embedded().unwrap();
     write_global_config(
         config_home.path(),
         &format!(
@@ -2197,7 +2197,7 @@ fn node_managed_download_stops_on_sigint() {
     let child = thruput()
         .args(["--json", "node", "--hog-devnode-version"])
         .arg(
-            groundhog_toolchain::Catalog::embedded()
+            thruput_toolchain::Catalog::embedded()
                 .unwrap()
                 .default_version(),
         )
@@ -2228,9 +2228,9 @@ fn node_managed_download_stops_on_sigint() {
         !status.success(),
         "cancelled acquisition must report that the node never started"
     );
-    let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
-    let target = groundhog_toolchain::HostTarget::current().unwrap();
-    let installer = groundhog_toolchain::Installer::new(cache_home.path().join("thruput"));
+    let catalog = thruput_toolchain::Catalog::embedded().unwrap();
+    let target = thruput_toolchain::HostTarget::current().unwrap();
+    let installer = thruput_toolchain::Installer::new(cache_home.path().join("thruput"));
     assert!(
         installer
             .find(&catalog, catalog.default_version(), target)
@@ -3097,8 +3097,8 @@ fn key_generation_stores_dev_named_keys_without_implicit_derivation() {
 fn status_checks_wallet_owner_without_private_key_bytes() {
     let (_tmp, project, config) = empty_wallet_fixture();
     let owner = generate_key_public_key(&config, "other");
-    let public_key = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
-    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 7);
+    let public_key = thruput_signing::strkey::parse_public_key(&owner).unwrap();
+    let account = thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 7);
     let original = std::fs::read_to_string(project.join("thruput.toml")).unwrap();
     std::fs::write(
         project.join("thruput.toml"),
@@ -3907,7 +3907,7 @@ fn build_default_json_success_reports_rv32_artifact_paths() {
     std::fs::write(
         &elf_fixture,
         support::minimal_rv32_elf_with_section(
-            groundhog_spec_tool::RAW_SECTION_NAME,
+            thruput_spec_tool::RAW_SECTION_NAME,
             &support::minimal_contract_spec_raw(),
         ),
     )
@@ -3973,7 +3973,7 @@ fn build_default_json_success_reports_rv32_artifact_paths() {
         serde_json::from_str(&std::fs::read_to_string(&metadata).unwrap()).unwrap();
     assert_eq!(
         metadata_json["artifact_format_fingerprint"],
-        format!("{:#018x}", groundhog_rv32_lower::FORMAT_FINGERPRINT)
+        format!("{:#018x}", thruput_rv32_lower::FORMAT_FINGERPRINT)
     );
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -4448,7 +4448,7 @@ fn integration_managed_startup_cancellation_reports_test_schema() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
-        let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+        let catalog = thruput_toolchain::Catalog::embedded().unwrap();
         let child = thruput()
             .args([
                 "--json",
@@ -4529,13 +4529,13 @@ fn integration_managed_startup_cancellation_reports_test_schema() {
         assert!(report.runs.is_empty());
         assert!(report.integration.is_none());
         assert!(report.artifact.path.is_file());
-        let installer = groundhog_toolchain::Installer::new(cache.path().join("thruput"));
+        let installer = thruput_toolchain::Installer::new(cache.path().join("thruput"));
         assert!(
             installer
                 .find(
                     &catalog,
                     catalog.default_version(),
-                    groundhog_toolchain::HostTarget::current().unwrap()
+                    thruput_toolchain::HostTarget::current().unwrap()
                 )
                 .unwrap()
                 .is_none()
@@ -5473,7 +5473,7 @@ fn wallet_create_uses_public_metadata_and_signing_still_checks_ownership() {
     let output = create_empty_wallet(&project, &config, &[]);
     assert!(output.status.success());
     let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0);
+    let account = thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 0);
     assert_eq!(
         actual["data"]["wallet"],
         format!("0x{}", hex::encode(account.address().as_ref()))
@@ -5555,9 +5555,9 @@ fn wallet_use_preserves_bindings_and_checks_owner_without_signer() {
             serde_json::from_slice(&std::fs::read(config.join("thruput/keys/owner.json")).unwrap())
                 .unwrap();
         let owner = keyfile["public_key_hex"].as_str().unwrap();
-        let public_key = groundhog_signing::strkey::parse_public_key(owner).unwrap();
+        let public_key = thruput_signing::strkey::parse_public_key(owner).unwrap();
         let address = if native {
-            let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 7);
+            let account = thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 7);
             format!("0x{}", hex::encode(account.address().as_ref()))
         } else {
             format!("0x{}", "ab".repeat(32))
@@ -6161,8 +6161,8 @@ fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again(
         let config_home = tmp.path().join("config");
         std::fs::create_dir_all(&project).unwrap();
         let owner = generate_key_public_key(&config_home, "alice");
-        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
-            groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+        let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
+            thruput_signing::strkey::parse_public_key(&owner).unwrap(),
             0,
         );
         make_local_keypair_unavailable(&config_home, "alice");
@@ -6212,10 +6212,9 @@ fn airdrop_default_submits_without_recipient_signer() {
             let config_home = tmp.path().join("config");
             std::fs::create_dir_all(&project).unwrap();
             let owner = generate_key_public_key(&config_home, "alice");
-            let owner_bytes = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+            let owner_bytes = thruput_signing::strkey::parse_public_key(&owner).unwrap();
             let nonce = if selection == "native" { 7 } else { 0 };
-            let account =
-                groundhog_signing::PubkeyAccount::from_public_key_bytes(owner_bytes, nonce);
+            let account = thruput_signing::PubkeyAccount::from_public_key_bytes(owner_bytes, nonce);
             let recipient = if selection == "legacy" {
                 format!("0x{}", "ab".repeat(32))
             } else {
@@ -6299,8 +6298,8 @@ fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
     let cache_home = tmp.path().join("cache");
     std::fs::create_dir_all(&project).unwrap();
     let owner = generate_key_public_key(&config_home, "alice");
-    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
-        groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+    let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
+        thruput_signing::strkey::parse_public_key(&owner).unwrap(),
         0,
     );
     let recipient = format!("0x{}", hex::encode(account.address().as_ref()));
@@ -6333,7 +6332,7 @@ fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
     let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     let hash = format!(
         "0x{}",
-        hex::encode(groundhog_signing::transaction_hash(&signed.tx).unwrap())
+        hex::encode(thruput_signing::transaction_hash(&signed.tx).unwrap())
     );
     assert_eq!(report["error"]["code"], "local_funding_unresolved");
     assert_eq!(report["error"]["details"]["txHash"], hash);
@@ -6351,7 +6350,7 @@ fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
 fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
     let bare_address = "ab".repeat(32);
     let prefixed_address = format!("0x{bare_address}");
-    let strkey_address = groundhog_signing::strkey::format_contract_address(&[0xab; 32].into());
+    let strkey_address = thruput_signing::strkey::format_contract_address(&[0xab; 32].into());
     for (selection, key_name) in [
         ("unsaved", "alice"),
         ("unsaved", "Charlie"),
@@ -6372,9 +6371,9 @@ fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
         let owner = generate_key_public_key(&config_home, key_name);
         let global_config = config_home.join("thruput/config.toml");
         let before = std::fs::read(&global_config).unwrap();
-        let owner_bytes = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+        let owner_bytes = thruput_signing::strkey::parse_public_key(&owner).unwrap();
         let nonce = if selection == "native" { 7 } else { 0 };
-        let native = groundhog_signing::PubkeyAccount::from_public_key_bytes(owner_bytes, nonce);
+        let native = thruput_signing::PubkeyAccount::from_public_key_bytes(owner_bytes, nonce);
         let native_address = format!("0x{}", hex::encode(native.address().as_ref()));
         let legacy_address = format!("0x{}", "ab".repeat(32));
         let expected = match selection {
@@ -6795,7 +6794,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
         format!(
             "0x{}",
             hex::encode(
-                groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes()
+                thruput_signing::derive_default_dev_account_signer(0).verifying_key_bytes()
             )
         )
     );
@@ -6834,13 +6833,13 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
         data["txHash"],
         format!(
             "0x{}",
-            hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
+            hex::encode(thruput_signing::transaction_hash(&signed_tx.tx).unwrap())
         )
     );
     let (target, entrypoint, target_calldata) = decode_wallet_action(&signed_tx);
     assert_eq!(target, format!("0x{}01", "00".repeat(31)));
     assert_eq!(entrypoint, "0x63285b3523f9dc3f");
-    let (calldata_recipient, raw_amount): (groundhog_xdr::types::ContractAddress, u128) =
+    let (calldata_recipient, raw_amount): (thruput_xdr::types::ContractAddress, u128) =
         xdrs::cxs::decode(&target_calldata).unwrap();
     assert_eq!(
         format!("0x{}", hex::encode(calldata_recipient.as_ref())),
@@ -6884,13 +6883,13 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     let public_key = format!(
         "0x{}",
-        hex::encode(groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes())
+        hex::encode(thruput_signing::derive_default_dev_account_signer(0).verifying_key_bytes())
     );
     assert!(stderr.contains(&format!("sender: {sender}")));
     assert!(stderr.contains(&format!("signer public key: {public_key}")));
     assert!(stderr.contains("signed transaction can be submitted until its expiry height"));
     assert!(stderr.contains("submitted: no (--dry-run)"));
-    assert!(!stderr.contains(groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED));
+    assert!(!stderr.contains(thruput_signing::DEFAULT_DEV_ACCOUNT_SEED));
 }
 
 #[test]
@@ -7072,8 +7071,8 @@ fn native_wallet_transfer_discovers_unconfigured_hosted_network_identity() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config");
     let owner = generate_key_public_key(&config_home, "alice");
-    let owner = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
-    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(owner, 0);
+    let owner = thruput_signing::strkey::parse_public_key(&owner).unwrap();
+    let account = thruput_signing::PubkeyAccount::from_public_key_bytes(owner, 0);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     std::fs::write(tmp.path().join("thruput.toml"), format!(
@@ -7553,8 +7552,8 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
 #[test]
 fn transfer_live_decodes_standard_exception_abort() {
     let abort_data = xdrs::cxs::encode(&(
-        <groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
-        groundhog_erc20_if::ERC20Error::TooLarge,
+        <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+        thruput_erc20_if::ERC20Error::TooLarge,
     ))
     .expect("bug: ERC20 exception should encode");
     let abort_hex: &'static str =
@@ -7579,7 +7578,7 @@ fn transfer_live_decodes_standard_exception_abort() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["data"]["abortData"], abort_hex);
     assert_eq!(stdout["data"]["abortException"], "ERC20Error");
-    assert_eq!(stdout["data"]["abortExceptionCrate"], "groundhog-erc20-if");
+    assert_eq!(stdout["data"]["abortExceptionCrate"], "thruput-erc20-if");
     assert_eq!(stdout["data"]["abortExceptionVersion"], "0.1");
     assert_eq!(stdout["data"]["abortValue"], "TooLarge");
     assert!(stdout["data"].get("abortDecodeError").is_none());
@@ -8147,7 +8146,7 @@ fn assert_deploy_estimate(
         "default_profile = 'default'\n[profile.default]\n",
     )
     .unwrap();
-    let artifact = groundhog_rv32_artifact::build_artifact(&[0; 16], &[], 0, 4096).unwrap();
+    let artifact = thruput_rv32_artifact::build_artifact(&[0; 16], &[], 0, 4096).unwrap();
     let path = tmp.path().join("estimate.rv32a");
     std::fs::write(&path, &artifact).unwrap();
     let listener = MockListener::bind();
@@ -9047,10 +9046,9 @@ fn view_json_resolves_named_callers_without_private_key_bytes() {
         std::fs::create_dir_all(&project).unwrap();
         let owner = generate_key_public_key(&config, "owner");
         make_local_keypair_unavailable(&config, "owner");
-        let public_key = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+        let public_key = thruput_signing::strkey::parse_public_key(&owner).unwrap();
         let native_address = |nonce| {
-            let account =
-                groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, nonce);
+            let account = thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, nonce);
             format!("0x{}", hex::encode(account.address().as_ref()))
         };
         let alias_address = format!("0x{}", "33".repeat(32));
@@ -9964,8 +9962,8 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(signed_tx.tx.invocation.gas_limit, 25_000_000);
     let inner: Vec<u8> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata.0).unwrap();
     let (_, _, target_gas, _): (
-        groundhog_xdr::types::ContractAddress,
-        groundhog_xdr::contract::ContractEntrypointID,
+        thruput_xdr::types::ContractAddress,
+        thruput_xdr::contract::ContractEntrypointID,
         u64,
         Vec<u8>,
     ) = xdrs::txs::decode(&inner).unwrap();
@@ -10173,8 +10171,8 @@ fn call_human_raw_return_uses_child_bytes_for_native_and_legacy_wallets() {
                 spawn_transaction_rpc(42, receipt, DevDetailRpcResponse::MethodNotFound);
             let owner = write_project_config_with_alice_wallet(tmp.path(), &rpc, &config);
             if native {
-                let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                    groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+                let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
+                    thruput_signing::strkey::parse_public_key(&owner).unwrap(),
                     0,
                 );
                 let path = tmp.path().join("thruput.toml");
@@ -10448,7 +10446,7 @@ fn call_live_human_fails_after_printing_receipt_context() {
 }
 
 fn write_counter_with_exception_spec(project: &std::path::Path, selector: u64) {
-    use groundhog_contract_spec::{
+    use thruput_contract_spec::{
         ContractExceptionType, ContractSpec, ContractSpecInterface, ContractSpecMethod,
         ContractType,
     };
@@ -10639,8 +10637,8 @@ fn call_live_json_decodes_erc20_permit_abort() {
     // No local metadata declares the exception, so it resolves through the
     // same standard-exception registry an ERC20 abort does.
     let abort_data = xdrs::cxs::encode(&(
-        <groundhog_erc20_permit_if::ERC20PermitError as sdk::exn::Exn>::SELECTOR,
-        groundhog_erc20_permit_if::ERC20PermitError::ExceedsGrant,
+        <thruput_erc20_permit_if::ERC20PermitError as sdk::exn::Exn>::SELECTOR,
+        thruput_erc20_permit_if::ERC20PermitError::ExceedsGrant,
     ))
     .expect("bug: ERC20 permit exception should encode");
     let abort_hex = format!("0x{}", hex::encode(&abort_data));
@@ -10679,7 +10677,7 @@ fn call_live_json_decodes_erc20_permit_abort() {
     assert_eq!(stdout["data"]["abortException"], "ERC20PermitError");
     assert_eq!(
         stdout["data"]["abortExceptionCrate"],
-        "groundhog-erc20-permit-if"
+        "thruput-erc20-permit-if"
     );
     assert_eq!(stdout["data"]["abortExceptionVersion"], "0.1");
     assert_eq!(stdout["data"]["abortValue"], "ExceedsGrant");
@@ -11014,7 +11012,7 @@ fn keys_export_outputs_client_compatible_private_key() {
     assert_eq!(private_key, format!("0x{}", &stored_keypair[..64]));
 
     let private_key_bytes: [u8; 32] = hex::decode(&private_key[2..]).unwrap().try_into().unwrap();
-    let signer = groundhog_signing::LocalSigner::from_secret_key(private_key_bytes);
+    let signer = thruput_signing::LocalSigner::from_secret_key(private_key_bytes);
     assert_eq!(
         format!("0x{}", hex::encode(signer.verifying_key_bytes())),
         generated["data"]["key"]["public_key"]
@@ -12681,7 +12679,7 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
 }
 
 fn write_event_spec(tmp: &TempDir) -> std::path::PathBuf {
-    use groundhog_contract_spec::{
+    use thruput_contract_spec::{
         ContractEventDef, ContractField, ContractSpec, ContractSpecId, ContractSpecString,
         ContractType,
     };
@@ -13342,11 +13340,11 @@ fn events_list_explicit_runtime_manifest_overrides_profile_manifest_for_dev_acco
     let tmp = TempDir::new().unwrap();
     let explicit_tmp = TempDir::new().unwrap();
     let profile_address = advertised_dev_wallet_address(7);
-    let explicit_signer = groundhog_signing::derive_dev_account_signer("alternate-event-seed", 7);
+    let explicit_signer = thruput_signing::derive_dev_account_signer("alternate-event-seed", 7);
     let explicit_address = format!(
         "0x{}",
         hex::encode(
-            groundhog_signing::PubkeyAccount::from_public_key_bytes(
+            thruput_signing::PubkeyAccount::from_public_key_bytes(
                 explicit_signer.verifying_key_bytes(),
                 0
             )
@@ -13852,22 +13850,16 @@ fn events_list_classifies_capability_and_ordinary_rpc_errors() {
 fn transfer_signature() -> String {
     format!(
         "0x{}",
-        hex::encode(*groundhog_erc20_if::TransferEvent::SIGNATURE)
+        hex::encode(*thruput_erc20_if::TransferEvent::SIGNATURE)
     )
 }
 
 fn mint_signature() -> String {
-    format!(
-        "0x{}",
-        hex::encode(*groundhog_erc20_if::MintEvent::SIGNATURE)
-    )
+    format!("0x{}", hex::encode(*thruput_erc20_if::MintEvent::SIGNATURE))
 }
 
 fn burn_signature() -> String {
-    format!(
-        "0x{}",
-        hex::encode(*groundhog_erc20_if::BurnEvent::SIGNATURE)
-    )
+    format!("0x{}", hex::encode(*thruput_erc20_if::BurnEvent::SIGNATURE))
 }
 
 fn all_token_event_filters(token: &str) -> serde_json::Value {
@@ -14590,7 +14582,7 @@ fn spawn_network_descriptor_with_hash(
             }
         }
         let body = serde_json::to_vec(&serde_json::json!({
-            "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
+            "schemaVersion": thruput_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet",
             "networkHash": format!("0x{network_hash}"),
@@ -14812,24 +14804,24 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
         let signed_tx = serve_local_funding_transaction(&listener, deadline, &faucet, &recipient);
         assert_eq!(
             signed_tx.tx.invocation.entrypoint,
-            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+            thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
         );
         let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
         assert_eq!(
             target,
             format!(
                 "0x{}",
-                hex::encode(groundhog_signing::NATIVE_HOG_ADDRESS.as_ref())
+                hex::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
             )
         );
         assert_eq!(
             entrypoint,
             format!(
                 "0x{}",
-                hex::encode(groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref())
+                hex::encode(thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref())
             )
         );
-        let (actual_recipient, amount): (groundhog_xdr::types::ContractAddress, u128) =
+        let (actual_recipient, amount): (thruput_xdr::types::ContractAddress, u128) =
             xdrs::cxs::decode(&calldata).unwrap();
         assert_eq!(
             format!("0x{}", hex::encode(actual_recipient.as_ref())),
@@ -14843,14 +14835,14 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
             ),
             faucet
         );
-        let sponsor = groundhog_signing::derive_default_dev_account_signer(0);
-        let network_hash = groundhog_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
+        let sponsor = thruput_signing::derive_default_dev_account_signer(0);
+        let network_hash = thruput_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
             .unwrap()
             .to_network_hash();
-        let expected = groundhog_signing::sign_transaction(
+        let expected = thruput_signing::sign_transaction(
             signed_tx.tx.clone(),
             &sponsor,
-            groundhog_signing::SignTransactionParams::default(),
+            thruput_signing::SignTransactionParams::default(),
             &network_hash,
         )
         .unwrap();
@@ -14869,7 +14861,7 @@ fn serve_local_funding_transaction(
     deadline: Instant,
     faucet: &str,
     recipient: &str,
-) -> groundhog_xdr::transaction::SignedTransaction {
+) -> thruput_xdr::transaction::SignedTransaction {
     serve_local_funding_transaction_with_receipt_failure(
         listener, deadline, faucet, recipient, false,
     )
@@ -14881,43 +14873,43 @@ fn serve_local_funding_transaction_with_receipt_failure(
     faucet: &str,
     recipient: &str,
     fail_receipt: bool,
-) -> groundhog_xdr::transaction::SignedTransaction {
+) -> thruput_xdr::transaction::SignedTransaction {
     let (stream, request) = read_jsonrpc_request(listener, deadline, "fundAccount");
     assert_eq!(request["method"], "groundhog_fundAccount");
     assert_eq!(request["params"][0]["faucet"], faucet);
     assert_eq!(request["params"][0]["recipient"], recipient);
     assert_eq!(request["params"][0]["rawAmount"], "100000000");
-    let sponsor = groundhog_signing::derive_default_dev_account_signer(0);
-    let network = groundhog_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
+    let sponsor = thruput_signing::derive_default_dev_account_signer(0);
+    let network = thruput_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
         .unwrap()
         .to_network_hash();
     let account =
-        groundhog_signing::PubkeyAccount::from_public_key_bytes(sponsor.verifying_key_bytes(), 0);
-    let recipient_address = groundhog_signing::strkey::parse_contract_address(recipient).unwrap();
+        thruput_signing::PubkeyAccount::from_public_key_bytes(sponsor.verifying_key_bytes(), 0);
+    let recipient_address = thruput_signing::strkey::parse_contract_address(recipient).unwrap();
     let calldata = xdrs::cxs::encode(&(recipient_address, 100_000_000u128)).unwrap();
-    let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
-        groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+    let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
+        thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
             account: &account,
-            target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
-            target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            target_address: thruput_signing::NATIVE_HOG_ADDRESS,
+            target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
             target_calldata: &calldata,
-            gas_limit: groundhog_signing::DEFAULT_TX_GAS_LIMIT * 2,
-            target_gas_limit: groundhog_signing::DEFAULT_TX_GAS_LIMIT,
+            gas_limit: thruput_signing::DEFAULT_TX_GAS_LIMIT * 2,
+            target_gas_limit: thruput_signing::DEFAULT_TX_GAS_LIMIT,
             block_expiry_height: 100,
             nonce: 42,
         },
     )
     .unwrap();
-    let signed_tx = groundhog_signing::sign_transaction(
+    let signed_tx = thruput_signing::sign_transaction(
         tx,
         &sponsor,
-        groundhog_signing::SignTransactionParams::default(),
+        thruput_signing::SignTransactionParams::default(),
         &network,
     )
     .unwrap();
     let tx_hash = format!(
         "0x{}",
-        hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
+        hex::encode(thruput_signing::transaction_hash(&signed_tx.tx).unwrap())
     );
     send_jsonrpc_response(
         stream,
@@ -15201,7 +15193,7 @@ fn spawn_transfer_rpc(
         let signed_tx = decode_signed_tx(signed_hex);
         let local_hash = format!(
             "0x{}",
-            hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
+            hex::encode(thruput_signing::transaction_hash(&signed_tx.tx).unwrap())
         );
         local_hash_tx.send(local_hash.clone()).unwrap();
         assert_eq!(
@@ -15214,7 +15206,7 @@ fn spawn_transfer_rpc(
         let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
         assert_eq!(target, format!("0x{}01", "00".repeat(31)));
         assert_eq!(entrypoint, "0x63285b3523f9dc3f");
-        let (recipient, raw_amount): (groundhog_xdr::types::ContractAddress, u128) =
+        let (recipient, raw_amount): (thruput_xdr::types::ContractAddress, u128) =
             xdrs::cxs::decode(&calldata).unwrap();
         assert_eq!(
             format!("0x{}", hex::encode(recipient.as_ref())),
@@ -15589,9 +15581,9 @@ fn spawn_view_rpc_inner_with_events(
 }
 
 fn advertised_dev_wallet_address(index: u8) -> String {
-    let signer = groundhog_signing::derive_default_dev_account_signer(index as usize);
+    let signer = thruput_signing::derive_default_dev_account_signer(index as usize);
     let address =
-        groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+        thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
             .address();
     format!("0x{}", hex::encode(address.as_ref()))
 }
@@ -15623,7 +15615,7 @@ fn write_runtime_manifest(
         dir,
         index,
         address,
-        groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED,
+        thruput_signing::DEFAULT_DEV_ACCOUNT_SEED,
         public_key_override,
     )
 }
@@ -15635,7 +15627,7 @@ fn write_runtime_manifest_with_seed(
     seed: &str,
     public_key_override: Option<[u8; 32]>,
 ) -> std::path::PathBuf {
-    let signer = groundhog_signing::dev_account::derive_dev_account_signer(seed, index);
+    let signer = thruput_signing::dev_account::derive_dev_account_signer(seed, index);
     let public_key = public_key_override.unwrap_or_else(|| signer.verifying_key_bytes());
     let path = dir.join(format!("runtime-manifest-{index}.json"));
     let manifest = serde_json::json!({
@@ -15657,9 +15649,9 @@ fn write_runtime_manifest_with_seed(
             "publicKey": format!("0x{}", hex::encode(public_key)),
             "walletAddress": address,
             "initialStorageTokens": if index == 0 {
-                groundhog_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS
+                thruput_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS
             } else {
-                groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS
+                thruput_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS
             }.to_string()
         }],
         "bootstrap": {
@@ -15763,21 +15755,20 @@ fn generate_key_public_key(config_home: &std::path::Path, name: &str) -> String 
 
 fn signed_tx_invoked_address(tx_hex: &str) -> String {
     let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex)).unwrap();
-    let signed_tx: groundhog_xdr::transaction::SignedTransaction =
-        xdrs::txs::decode(&bytes).unwrap();
+    let signed_tx: thruput_xdr::transaction::SignedTransaction = xdrs::txs::decode(&bytes).unwrap();
     format!(
         "0x{}",
         hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
     )
 }
 
-fn decode_signed_tx(tx_hex: &str) -> groundhog_xdr::transaction::SignedTransaction {
+fn decode_signed_tx(tx_hex: &str) -> thruput_xdr::transaction::SignedTransaction {
     let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex)).unwrap();
     xdrs::txs::decode(&bytes).unwrap()
 }
 
 fn signed_tx_entrypoint_from_decoded(
-    signed_tx: &groundhog_xdr::transaction::SignedTransaction,
+    signed_tx: &thruput_xdr::transaction::SignedTransaction,
 ) -> String {
     format!(
         "0x{}",
@@ -15786,21 +15777,21 @@ fn signed_tx_entrypoint_from_decoded(
 }
 
 fn decode_wallet_action(
-    signed_tx: &groundhog_xdr::transaction::SignedTransaction,
+    signed_tx: &thruput_xdr::transaction::SignedTransaction,
 ) -> (String, String, Vec<u8>) {
     if signed_tx.tx.invocation.entrypoint
-        == groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+        == thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
     {
         type Call = (
-            groundhog_xdr::types::ContractAddress,
-            groundhog_xdr::contract::ContractEntrypointID,
+            thruput_xdr::types::ContractAddress,
+            thruput_xdr::contract::ContractEntrypointID,
             u64,
             Vec<u8>,
         );
         let calls: Vec<Call> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata).unwrap();
         assert_eq!(calls.len(), 1);
         let (address, entrypoint, gas, calldata) = &calls[0];
-        assert_eq!(*gas, groundhog_signing::DEFAULT_TX_GAS_LIMIT);
+        assert_eq!(*gas, thruput_signing::DEFAULT_TX_GAS_LIMIT);
         return (
             format!("0x{}", hex::encode(address.as_ref())),
             format!("0x{}", hex::encode(entrypoint.as_ref())),
@@ -15809,12 +15800,12 @@ fn decode_wallet_action(
     }
     let inner: Vec<u8> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata.0).unwrap();
     let (target, entrypoint, gas_limit, calldata): (
-        groundhog_xdr::types::ContractAddress,
-        groundhog_xdr::contract::ContractEntrypointID,
+        thruput_xdr::types::ContractAddress,
+        thruput_xdr::contract::ContractEntrypointID,
         u64,
         Vec<u8>,
     ) = xdrs::txs::decode(&inner).unwrap();
-    assert_eq!(gas_limit, groundhog_signing::DEFAULT_TX_GAS_LIMIT);
+    assert_eq!(gas_limit, thruput_signing::DEFAULT_TX_GAS_LIMIT);
     (
         format!("0x{}", hex::encode(target.as_ref())),
         format!("0x{}", hex::encode(entrypoint.as_ref())),
@@ -15824,8 +15815,7 @@ fn decode_wallet_action(
 
 fn signed_tx_entrypoint(tx_hex: &str) -> String {
     let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex)).unwrap();
-    let signed_tx: groundhog_xdr::transaction::SignedTransaction =
-        xdrs::txs::decode(&bytes).unwrap();
+    let signed_tx: thruput_xdr::transaction::SignedTransaction = xdrs::txs::decode(&bytes).unwrap();
     format!(
         "0x{}",
         hex::encode(signed_tx.tx.invocation.entrypoint.as_ref())
@@ -15834,8 +15824,7 @@ fn signed_tx_entrypoint(tx_hex: &str) -> String {
 
 fn signed_tx_deploy_contract_kind(tx_hex: &str) -> &'static str {
     let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex)).unwrap();
-    let signed_tx: groundhog_xdr::transaction::SignedTransaction =
-        xdrs::txs::decode(&bytes).unwrap();
+    let signed_tx: thruput_xdr::transaction::SignedTransaction = xdrs::txs::decode(&bytes).unwrap();
     let contract = signed_tx
         .tx
         .contracts_to_deploy
@@ -15843,7 +15832,7 @@ fn signed_tx_deploy_contract_kind(tx_hex: &str) -> &'static str {
         .first()
         .expect("bug: deploy tx should include contract bytes");
     match contract {
-        groundhog_xdr::contract::Contract::kRv32 { .. } => "rv32",
+        thruput_xdr::contract::Contract::kRv32 { .. } => "rv32",
         _ => "other",
     }
 }
@@ -15912,7 +15901,7 @@ fn spawn_transaction_rpc(
         let signed_tx = decode_signed_tx(request["params"][0].as_str().unwrap());
         let tx_hash = format!(
             "0x{}",
-            hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
+            hex::encode(thruput_signing::transaction_hash(&signed_tx.tx).unwrap())
         );
         receipt["txHash"] = serde_json::json!(tx_hash);
         send_jsonrpc_response(stream, &request["id"], serde_json::json!(tx_hash));
@@ -15971,8 +15960,8 @@ fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
 
 fn sample_insufficient_funding_deploy_receipt(height: i64) -> serde_json::Value {
     let abort_data = xdrs::cxs::encode(&(
-        <groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
-        groundhog_erc20_if::ERC20Error::TooLarge,
+        <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+        thruput_erc20_if::ERC20Error::TooLarge,
     ))
     .expect("bug: ERC20 exception should encode");
     serde_json::json!({
@@ -16028,14 +16017,14 @@ fn sample_reverted_call_receipt(height: i64, abort_hex: &str) -> serde_json::Val
 /// Wire-encode a no-payload `LibraryExn` abort buffer for `case_name`:
 /// cxs varint selector followed by the union case discriminant.
 fn library_abort_hex(case_name: &str) -> String {
-    let library = groundhog_spec_tool::describe::lookup("LibraryExn")
+    let library = thruput_spec_tool::describe::lookup("LibraryExn")
         .expect("LibraryExn should be registered in the describe registry");
-    let described = groundhog_spec_tool::describe::build_describe(library);
+    let described = thruput_spec_tool::describe::build_describe(library);
     let discriminant = described
         .type_defs
         .iter()
         .find_map(|def| match def {
-            groundhog_contract_spec::ContractTypeDef::TypeDefUnion { union_def }
+            thruput_contract_spec::ContractTypeDef::TypeDefUnion { union_def }
                 if AsRef::<[u8]>::as_ref(&union_def.name.declared) == b"LibraryExn" =>
             {
                 union_def

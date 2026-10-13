@@ -31,8 +31,8 @@ impl ViewBatchConfig {
     pub const fn server_limits(
         self,
         timeout_ms: u64,
-    ) -> groundhog_json_rpc_types::server_limits::ViewBatchLimits {
-        groundhog_json_rpc_types::server_limits::ViewBatchLimits {
+    ) -> thruput_json_rpc_types::server_limits::ViewBatchLimits {
+        thruput_json_rpc_types::server_limits::ViewBatchLimits {
             max_calls: self.max_calls,
             max_calldata_bytes: self.max_calldata_bytes,
             max_gas: self.max_gas,

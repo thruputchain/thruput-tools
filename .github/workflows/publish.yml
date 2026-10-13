@@ -10,27 +10,27 @@ env:
   CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
   CARGO_REGISTRIES_THRUPUT_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
   PUBLISH_PACKAGES: >-
-    groundhog-build-info
-    groundhog-bundle-identity
-    groundhog-json-rpc-types
-    groundhog-open-rpc
-    groundhog-open-rpc-macros
-    groundhog-json-rpc-api
-    groundhog-open-rpc-spec
-    groundhog-x23-transport
-    groundhog-rv32-artifact
-    groundhog-tx-validation
-    groundhog-json-rpc-server
-    groundhog-hogd-backend
-    groundhog-json-rpc-client
-    groundhog-signing
-    groundhog-client
-    groundhog-node-supervisor
-    groundhog-rv32-lower
-    groundhog-toolchain
-    groundhog-cli-macros
+    thruput-build-info
+    thruput-bundle-identity
+    thruput-json-rpc-types
+    thruput-open-rpc
+    thruput-open-rpc-macros
+    thruput-json-rpc-api
+    thruput-open-rpc-spec
+    thruput-x23-transport
+    thruput-rv32-artifact
+    thruput-tx-validation
+    thruput-json-rpc-server
+    thruput-hogd-backend
+    thruput-json-rpc-client
+    thruput-signing
+    thruput-client
+    thruput-node-supervisor
+    thruput-rv32-lower
+    thruput-toolchain
+    thruput-cli-macros
     thruput-cli
-    groundhog-testkit
+    thruput-testkit
 
 permissions:
   contents: read
@@ -43,28 +43,10 @@ jobs:
     runs-on: namespace-profile-hogd-linux-2604
 
     steps:
-      - name: Setup SSH Agent
-        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
-        with:
-          ssh-private-key: |
-            ${{ secrets.ACTIONS_KEY }}
-
       - name: Checkout
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
         with:
           persist-credentials: true
-
-      - name: Configure git to use SSH
-        run: |
-          git config --global url."git@github.com:".insteadOf "https://github.com/"
-
-      - name: Checkout actions repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          repository: groundhogchain/actions
-          persist-credentials: false
-          path: actions
-          ref: 16e3402eca906d0771f171ee95fcba8a0be8b0aa # configurable dry-run registry
 
       - name: Configure Namespace Cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
@@ -81,8 +63,8 @@ jobs:
       - name: Verify managed toolchain catalog and public bundles
         shell: bash
         run: |
-          cargo test --locked -p groundhog-toolchain --test catalog_contract
-          cargo test --locked -p groundhog-toolchain --test install_contract public_catalog_installs_all_targets -- --ignored --exact --color never | tee "$RUNNER_TEMP/public-bundle-tests.log"
+          cargo test --locked -p thruput-toolchain --test catalog_contract
+          cargo test --locked -p thruput-toolchain --test install_contract public_catalog_installs_all_targets -- --ignored --exact --color never | tee "$RUNNER_TEMP/public-bundle-tests.log"
           grep -q '^test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/public-bundle-tests.log"
 
       - name: Verify managed toolchain startup with a fresh cache
@@ -91,19 +73,19 @@ jobs:
           scripts/smoke-managed-toolchain.sh
 
       - name: dry run
-        uses: ./actions/cargo-publish-dry-run
+        uses: thruputchain/actions/cargo-publish-dry-run@6693fac8133585728ad3a4ca14e3441073b6def8
         with:
           registry-name: thruput
           packages: ${{ env.PUBLISH_PACKAGES }}
 
       - name: tag commit with version
         id: publish-tag
-        uses: ./actions/cargo-version-tag
+        uses: thruputchain/actions/cargo-version-tag@6693fac8133585728ad3a4ca14e3441073b6def8
         with:
           packages: ${{ env.PUBLISH_PACKAGES }}
 
       - name: publish
-        uses: ./actions/cargo-publish
+        uses: thruputchain/actions/cargo-publish@6693fac8133585728ad3a4ca14e3441073b6def8
         with:
           packages: ${{ env.PUBLISH_PACKAGES }}
           git-tag: ${{ steps.publish-tag.outputs.tag }}
@@ -136,7 +118,6 @@ jobs:
             # Tag doesn't exist on remote, push it
             git push origin "$TAG"
           fi
-          git remote set-url origin "git@github.com:${REPO}.git"
 
       - name: trigger binary release
         env:

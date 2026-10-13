@@ -1,6 +1,6 @@
 //! hogd-dev genesis readiness probe.
 
-use groundhog_scheduler::{
+use thruput_scheduler::{
     DbTip, SchedulerGetTipResult, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
 

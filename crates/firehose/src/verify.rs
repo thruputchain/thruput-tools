@@ -1,8 +1,8 @@
 //! Commitment encoding mirrors hogd's Merkle trie node encoding and
 //! `hogd/xdr/indexer_payload_validation.cc`. These are Patricia roots, not hashes
 //! of the serialized batches. Prefix tries always have branch roots.
-use groundhog_indexer::EventIndexerPulledBlock;
 use sha2::{Digest, Sha256};
+use thruput_indexer::EventIndexerPulledBlock;
 
 use crate::{Error, encode, invalid};
 

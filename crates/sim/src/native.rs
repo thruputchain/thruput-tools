@@ -6,23 +6,23 @@ use crate::{
     runtime::SimAccount,
     util::write_json_pretty_atomic,
 };
-use groundhog_json_rpc_client::{
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::{path::Path, time::Duration};
+use thruput_json_rpc_client::{
     AirdropApiClient, GroundhogApiClient, HttpClientBuilder, LocalFundingApiClient,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     airdrop::{AirdropRequest, ClientNonce, FundAccountRequest},
     hex::Hex0x,
     runtime_manifest::RuntimeManifest,
 };
-use groundhog_signing::{
+use thruput_signing::{
     BuildCallTransaction, PubkeyAccount, build_call_transaction, derive_dev_account_signer,
 };
-use groundhog_xdr::{
+use thruput_xdr::{
     contract::ContractEntrypointID, transaction::Transaction, types::ContractAddress,
 };
-use serde_json::json;
-use sha2::{Digest, Sha256};
-use std::{path::Path, time::Duration};
 
 /// Native `DefaultWallet` entrypoint for executing a vector of wallet calls.
 pub const EXECUTE: ContractEntrypointID =
@@ -63,7 +63,7 @@ pub fn execute(
     calldata: &[u8],
     nonce: u64,
     expiry: i64,
-) -> Result<Transaction, groundhog_signing::SigningError> {
+) -> Result<Transaction, thruput_signing::SigningError> {
     let calls = vec![(
         target,
         entrypoint,
@@ -71,7 +71,7 @@ pub fn execute(
         xdr_common::BytesM::<{ u32::MAX }>(calldata.to_vec()),
     )];
     let calldata = xdrs::cxs::encode(&(calls,))
-        .map_err(|error| groundhog_signing::SigningError::XdrEncode(error.to_string()))?;
+        .map_err(|error| thruput_signing::SigningError::XdrEncode(error.to_string()))?;
     Ok(build_call_transaction(BuildCallTransaction {
         invoked_address: actor.wallet_address,
         entrypoint: EXECUTE,
@@ -95,8 +95,7 @@ pub async fn prepare_accounts(
 ) -> Result<(), SimError> {
     if !cfg!(unix)
         && spec.funding == NativeAccountFunding::Faucet
-        && runtime.kind
-            == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
+        && runtime.kind == thruput_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
     {
         return Err(SimError::Executor(
             "local faucet setup requires a Unix filesystem for durable funding evidence; pre-fund fixtures on this platform".into(),
@@ -171,7 +170,7 @@ async fn prepare_account(
     spec: &NativeAccountsSpec,
     actor: &ActorState,
     runtime: &RuntimeManifest,
-    client: &groundhog_json_rpc_client::HttpClient,
+    client: &thruput_json_rpc_client::HttpClient,
     minimum: u128,
     out_dir: &Path,
     records: &mut [serde_json::Value],
@@ -203,7 +202,7 @@ async fn prepare_account(
             minimum
         )));
     }
-    if runtime.kind == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND {
+    if runtime.kind == thruput_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND {
         fund_local_account(spec, actor, runtime, client, out_dir, records).await?;
         let balance = tokio::time::timeout(
             Duration::from_secs(30),
@@ -279,12 +278,12 @@ async fn fund_local_account(
     spec: &NativeAccountsSpec,
     actor: &ActorState,
     runtime: &RuntimeManifest,
-    client: &groundhog_json_rpc_client::HttpClient,
+    client: &thruput_json_rpc_client::HttpClient,
     out_dir: &Path,
     records: &mut [serde_json::Value],
 ) -> Result<(), SimError> {
     let mut faucets = runtime.bootstrap_accounts.iter().filter(|a| {
-        a.role == groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET
+        a.role == thruput_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET
     });
     let faucet = faucets
         .next()
@@ -327,10 +326,10 @@ async fn fund_local_account(
             }
         }
     }).await.map_err(|_| SimError::Executor("local funding response remained uncertain; reconcile the retained request in native-accounts.json".into()))??;
-    let signed: groundhog_xdr::transaction::SignedTransaction =
+    let signed: thruput_xdr::transaction::SignedTransaction =
         xdrs::txs::decode(&response.signed_transaction.0)
             .map_err(|e| SimError::Executor(e.to_string()))?;
-    let hash = groundhog_signing::transaction_hash(&signed.tx)
+    let hash = thruput_signing::transaction_hash(&signed.tx)
         .map_err(|e| SimError::Executor(e.to_string()))?;
     if response.recipient != request.recipient
         || response.raw_amount != request.raw_amount
@@ -342,7 +341,7 @@ async fn fund_local_account(
     }
     records.last_mut().expect("bug: current actor record")["funding"] = json!(response);
     save_accounts(out_dir, records).await?;
-    let receipt = groundhog_json_rpc_client::poll_transaction_receipt_with_client_config(
+    let receipt = thruput_json_rpc_client::poll_transaction_receipt_with_client_config(
         client,
         response.tx_hash,
         120,
@@ -353,7 +352,7 @@ async fn fund_local_account(
     if receipt.tx_hash != response.tx_hash
         || !matches!(
             receipt.status,
-            groundhog_json_rpc_types::receipt::ExecStatus::Ok
+            thruput_json_rpc_types::receipt::ExecStatus::Ok
         )
     {
         return Err(SimError::Executor(
@@ -364,10 +363,10 @@ async fn fund_local_account(
 }
 
 async fn verify_funded_balance(
-    client: &groundhog_json_rpc_client::HttpClient,
+    client: &thruput_json_rpc_client::HttpClient,
     actor: &ActorState,
     minimum: u128,
-) -> Result<groundhog_json_rpc_types::balance::BalanceResponse, SimError> {
+) -> Result<thruput_json_rpc_types::balance::BalanceResponse, SimError> {
     loop {
         let balance = client
             .get_balance(Hex0x(actor.wallet_address))
@@ -394,11 +393,11 @@ async fn verify_funded_balance(
 mod tests {
     use super::*;
     use crate::nonce::NonceNamespace;
-    use groundhog_xdr::types::{NetworkHash, SHA256Hash};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    use thruput_xdr::types::{NetworkHash, SHA256Hash};
 
     fn hosted_runtime() -> RuntimeManifest {
         serde_json::from_str(include_str!(
@@ -424,21 +423,21 @@ mod tests {
 
     fn local_funding_response(
         request: &FundAccountRequest,
-    ) -> groundhog_json_rpc_types::airdrop::FundAccountResponse {
-        use groundhog_signing::{
+    ) -> thruput_json_rpc_types::airdrop::FundAccountResponse {
+        use thruput_signing::{
             SignTransactionParams, sign_and_encode_transaction_hex, transaction_hash,
         };
         let faucet = derive_dev_account_signer("local-faucet-fixture", 0);
-        let calldata = groundhog_signing::native_hog_transfer_calldata(
+        let calldata = thruput_signing::native_hog_transfer_calldata(
             &request.recipient.0,
             request.amount().unwrap(),
         )
         .unwrap();
-        let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
-            groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+        let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
+            thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
                 account: &PubkeyAccount::from_public_key_bytes(faucet.verifying_key_bytes(), 0),
-                target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
-                target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+                target_address: thruput_signing::NATIVE_HOG_ADDRESS,
+                target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
                 target_calldata: &calldata,
                 gas_limit: 20_000_000,
                 target_gas_limit: 10_000_000,
@@ -448,7 +447,7 @@ mod tests {
         )
         .unwrap();
         let hash =
-            groundhog_json_rpc_types::transaction::TxHash(Hex0x(transaction_hash(&tx).unwrap()));
+            thruput_json_rpc_types::transaction::TxHash(Hex0x(transaction_hash(&tx).unwrap()));
         let encoded = sign_and_encode_transaction_hex(
             tx,
             &faucet,
@@ -456,11 +455,11 @@ mod tests {
             &NetworkHash::new([0; 32].into()),
         )
         .unwrap();
-        groundhog_json_rpc_types::airdrop::FundAccountResponse::new(
+        thruput_json_rpc_types::airdrop::FundAccountResponse::new(
             request.recipient,
             request.raw_amount.clone(),
             hash,
-            groundhog_json_rpc_types::hex::HexBytes(
+            thruput_json_rpc_types::hex::HexBytes(
                 hex::decode(encoded.trim_start_matches("0x")).unwrap(),
             ),
         )
@@ -530,7 +529,7 @@ mod tests {
             })
             .unwrap();
         module.register_method("groundhog_getTransactionReceipt", |params, _, _| {
-            let hash: groundhog_json_rpc_types::transaction::TxHash = params.one()?;
+            let hash: thruput_json_rpc_types::transaction::TxHash = params.one()?;
             Ok::<_, jsonrpsee::types::ErrorObjectOwned>(json!({"txHash":hash,"height":"3","status":{"result":"ok"},"events":[],"gasUsed":"1"}))
         }).unwrap();
         let handle = server.start(module);
@@ -591,7 +590,7 @@ mod tests {
         assert_ne!(actor.wallet_address, ContractAddress::from([9; 32]));
         let tx = execute(
             &actor,
-            groundhog_signing::NATIVE_HOG_ADDRESS,
+            thruput_signing::NATIVE_HOG_ADDRESS,
             BALANCE,
             &[1, 2, 3],
             42,
@@ -604,7 +603,7 @@ mod tests {
         let (calls,): (Vec<Call>,) =
             xdrs::cxs::decode(&tx.invocation.calldata.0).expect("native ABI");
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, groundhog_signing::NATIVE_HOG_ADDRESS);
+        assert_eq!(calls[0].0, thruput_signing::NATIVE_HOG_ADDRESS);
         assert_eq!(calls[0].1, BALANCE);
         assert_eq!(calls[0].3.0, [1, 2, 3]);
     }

@@ -1,6 +1,6 @@
-use groundhog_signing::{SignTransactionParams, sign_and_encode_transaction_hex};
-use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::ContractAddress;
+use thruput_signing::{SignTransactionParams, sign_and_encode_transaction_hex};
+use thruput_xdr::contract::ContractEntrypointID;
+use thruput_xdr::types::ContractAddress;
 
 use crate::actor::ActorState;
 
@@ -15,12 +15,12 @@ pub fn build_wallet_submit_smoke_transaction(
 ) -> Result<BuiltSubmitTransaction, TransactionBuildError> {
     let calldata = xdrs::cxs::encode(&(actor.wallet_address,)).map_err(|error| {
         TransactionBuildError::BuildWalletAction {
-            source: groundhog_signing::SigningError::XdrEncode(error.to_string()),
+            source: thruput_signing::SigningError::XdrEncode(error.to_string()),
         }
     })?;
     build_contract_call_transaction(
         actor,
-        groundhog_signing::NATIVE_HOG_ADDRESS,
+        thruput_signing::NATIVE_HOG_ADDRESS,
         crate::native::BALANCE,
         &calldata,
     )
@@ -68,20 +68,20 @@ pub enum TransactionBuildError {
     #[error("failed to build wallet action transaction: {source}")]
     BuildWalletAction {
         #[source]
-        source: groundhog_signing::SigningError,
+        source: thruput_signing::SigningError,
     },
     #[error("failed to sign and encode simulation transaction: {source}")]
     SignAndEncode {
         #[source]
-        source: groundhog_signing::SigningError,
+        source: thruput_signing::SigningError,
     },
 }
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::hex::Hex0x;
-    use groundhog_signing::derive_dev_account_signer;
-    use groundhog_xdr::types::ContractAddress;
+    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_signing::derive_dev_account_signer;
+    use thruput_xdr::types::ContractAddress;
 
     use super::*;
     use crate::{actor::ActorState, nonce::NonceNamespace, runtime::SimAccount};
@@ -94,8 +94,8 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("expiry-test", 0),
                 wallet_address: ContractAddress::from([0; 32]),
-                network_hash: groundhog_xdr::types::NetworkHash::new(
-                    groundhog_xdr::types::SHA256Hash::new([0; 32]),
+                network_hash: thruput_xdr::types::NetworkHash::new(
+                    thruput_xdr::types::SHA256Hash::new([0; 32]),
                 ),
             },
             NonceNamespace::new(1).expect("namespace"),
@@ -116,7 +116,7 @@ mod tests {
         .expect("native call");
         for built in [smoke, call] {
             let bytes = hex::decode(built.tx_hex.trim_start_matches("0x")).expect("hex");
-            let signed: groundhog_xdr::transaction::SignedTransaction =
+            let signed: thruput_xdr::transaction::SignedTransaction =
                 xdrs::txs::decode(&bytes).expect("signed tx");
             assert_eq!(signed.tx.uniquifier.block_expiry_height, 20_001_000.into());
         }
@@ -143,8 +143,8 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
-                network_hash: groundhog_xdr::types::NetworkHash::new(
-                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                network_hash: thruput_xdr::types::NetworkHash::new(
+                    thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
             },
             NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
@@ -171,8 +171,8 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
-                network_hash: groundhog_xdr::types::NetworkHash::new(
-                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                network_hash: thruput_xdr::types::NetworkHash::new(
+                    thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
             },
             NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
@@ -200,8 +200,8 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
-                network_hash: groundhog_xdr::types::NetworkHash::new(
-                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                network_hash: thruput_xdr::types::NetworkHash::new(
+                    thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
             },
             NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
@@ -215,7 +215,7 @@ mod tests {
         let tx = build_contract_call_transaction(
             &actor,
             ContractAddress::from([0x88; 32]),
-            groundhog_xdr::contract::ContractEntrypointID::from([0x11; 8]),
+            thruput_xdr::contract::ContractEntrypointID::from([0x11; 8]),
             &[0x2a, 0x64],
         )
         .expect("transaction should build");

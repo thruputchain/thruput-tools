@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use groundhog_contract_spec::{ContractSpec, ContractSpecInterface};
+use thruput_contract_spec::{ContractSpec, ContractSpecInterface};
 
 use crate::codec::spec_string_text;
 use crate::{CliError, Print};
@@ -90,9 +90,9 @@ fn file_modified(path: &Path) -> Result<Option<std::time::SystemTime>, CliError>
 }
 
 fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpec>, CliError> {
-    use groundhog_spec_tool::{SpecSection, check_raw_spec_format, classify_section};
+    use thruput_spec_tool::{SpecSection, check_raw_spec_format, classify_section};
 
-    let sections = groundhog_rv32_lower::elf::parse_elf(bytes)
+    let sections = thruput_rv32_lower::elf::parse_elf(bytes)
         .map_err(|e| CliError::SpecFailed(format!("failed to read rv32 ELF contract spec: {e}")))?;
     let mut raw_fragments = Vec::new();
     let mut final_data: Option<&[u8]> = None;
@@ -123,7 +123,7 @@ fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpe
             // desynchronizes the parse instead of failing cleanly.
             SpecSection::Raw(format) => {
                 check_raw_spec_format(format).map_err(CliError::RawSpecFormat)?;
-                raw_fragments.extend(groundhog_spec_tool::parse_raw_fragments(data).map_err(
+                raw_fragments.extend(thruput_spec_tool::parse_raw_fragments(data).map_err(
                     |e| {
                         CliError::SpecFailed(format!("failed to parse rv32 raw contract spec: {e}"))
                     },
@@ -158,11 +158,11 @@ fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpe
 }
 
 fn canonicalize_rv32_raw_fragments(
-    raw_fragments: &[groundhog_spec_tool::SpecFragment],
+    raw_fragments: &[thruput_spec_tool::SpecFragment],
 ) -> Result<Option<ContractSpec>, CliError> {
-    match groundhog_spec_tool::canonicalize_spec(raw_fragments) {
+    match thruput_spec_tool::canonicalize_spec(raw_fragments) {
         Ok(spec) => Ok(Some(spec)),
-        Err(groundhog_spec_tool::SpecToolError::NoSpecFragments) => Ok(None),
+        Err(thruput_spec_tool::SpecToolError::NoSpecFragments) => Ok(None),
         Err(e) => Err(CliError::SpecFailed(format!(
             "failed to canonicalize rv32 contract spec: {e}"
         ))),
@@ -256,7 +256,7 @@ fn write_spec_sidecars(
 ) -> Result<FinalizedSpec, CliError> {
     let spec_json_path = spec_json_sidecar_path(artifact);
 
-    let json_str = groundhog_spec_tool::render_spec_json(&spec);
+    let json_str = thruput_spec_tool::render_spec_json(&spec);
     std::fs::write(&spec_json_path, json_str.as_bytes()).map_err(|e| {
         CliError::Other(format!("failed to write {}: {e}", spec_json_path.display()))
     })?;
@@ -300,7 +300,7 @@ fn remove_spec_sidecars(artifact: &Path) -> Result<(), CliError> {
 mod tests {
     use std::path::Path;
 
-    use groundhog_contract_spec::{
+    use thruput_contract_spec::{
         ContractField, ContractSpec, ContractSpecInterface, ContractSpecMethod, ContractType,
     };
 
@@ -329,9 +329,9 @@ mod tests {
 
     #[test]
     fn rv32_raw_fragments_without_interfaces_are_no_spec() {
-        let fragments = [groundhog_spec_tool::SpecFragment::SpecTypeDef {
-            type_def: groundhog_spec_tool::ContractTypeDef::TypeDefStruct {
-                struct_def: groundhog_spec_tool::ContractStructDef {
+        let fragments = [thruput_spec_tool::SpecFragment::SpecTypeDef {
+            type_def: thruput_spec_tool::ContractTypeDef::TypeDefStruct {
+                struct_def: thruput_spec_tool::ContractStructDef {
                     name: spec_id("Payload"),
                     fields: vec![].try_into().unwrap(),
                 },
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn rendered_spec_json_includes_events() {
         let mut spec = sample_contract_spec();
-        spec.events = vec![groundhog_contract_spec::ContractEventDef {
+        spec.events = vec![thruput_contract_spec::ContractEventDef {
             name: spec_id("PingEvent"),
             signature: [0xAB; 32].into(),
             topics: vec![ContractField {
@@ -515,7 +515,7 @@ mod tests {
         .try_into()
         .unwrap();
 
-        let json = groundhog_spec_tool::render_spec_json(&spec);
+        let json = thruput_spec_tool::render_spec_json(&spec);
         assert!(
             json.contains("\"events\""),
             "rendered spec JSON missing events: {json}"
@@ -563,14 +563,14 @@ mod tests {
         }
     }
 
-    fn spec_string_bytes(value: &str) -> groundhog_spec_tool::ContractSpecString {
+    fn spec_string_bytes(value: &str) -> thruput_spec_tool::ContractSpecString {
         value.try_into().expect("bug: test string should fit")
     }
 
     /// A fixture id: one crate, one module, so the declared name is what
     /// tells these types apart.
-    fn spec_id(declared: &str) -> groundhog_contract_spec::ContractSpecId {
-        groundhog_contract_spec::ContractSpecId {
+    fn spec_id(declared: &str) -> thruput_contract_spec::ContractSpecId {
+        thruput_contract_spec::ContractSpecId {
             crate_name: spec_string_bytes("demo"),
             major: spec_string_bytes("1"),
             module_path: spec_string_bytes("demo"),

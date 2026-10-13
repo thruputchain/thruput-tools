@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use groundhog_sim::result::*;
+use thruput_sim::result::*;
 
 #[test]
 fn metric_availability_is_explicit_not_zero_filled() {

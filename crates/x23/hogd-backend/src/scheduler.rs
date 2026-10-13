@@ -1,9 +1,9 @@
 //! Decode `SchedGateway` results: admission and processing outcomes, and
 //! the committed chain tip.
 
-use groundhog_json_rpc_server::{RpcServerError, TipReading};
-use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
-use groundhog_scheduler::{
+use thruput_json_rpc_server::{RpcServerError, TipReading};
+use thruput_json_rpc_types::block::{ChainTip, consensus_value_hash};
+use thruput_scheduler::{
     DbTip, ExpectedDBTip, RPCError, SchedGatewaySubmitOutcome, consensus::ConsensusValue,
 };
 
@@ -48,12 +48,12 @@ pub fn submit_result(outcome: SchedGatewaySubmitOutcome) -> Result<(), RpcServer
 /// unknown protocol values are backend failures, never an absent transaction.
 pub fn transaction_outcome(
     service: &str,
-    results: &groundhog_scheduler::SchedulerTransactionOutcomeBatch,
-) -> Result<Option<groundhog_json_rpc_types::transaction::TransactionStatus>, RpcServerError> {
-    use groundhog_json_rpc_types::transaction::{
+    results: &thruput_scheduler::SchedulerTransactionOutcomeBatch,
+) -> Result<Option<thruput_json_rpc_types::transaction::TransactionStatus>, RpcServerError> {
+    use thruput_json_rpc_types::transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource, TransactionStatus,
     };
-    use groundhog_scheduler::{
+    use thruput_scheduler::{
         SchedulerTransactionErrorSource as Source, SchedulerTransactionStatus as Status,
     };
     let [outcome] = results.0.as_slice() else {

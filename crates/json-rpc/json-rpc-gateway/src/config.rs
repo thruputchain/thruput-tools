@@ -2,7 +2,7 @@ use std::{fmt, str::FromStr, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     NetworkHash, NetworkHashHex, SHA256Hash,
     network_info::NetworkInfo,
     runtime_manifest::{
@@ -274,7 +274,7 @@ pub struct GatewayConfig {
     pub max_connections: u32,
 
     /// Active plus buffered entries per JSON-RPC array (1..=1024, default 128).
-    pub rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency,
+    pub rpc_batch_concurrency: thruput_json_rpc_server::batch::RpcBatchConcurrency,
 
     /// Private health/metrics HTTP listener.
     pub observability_listen: String,
@@ -346,11 +346,11 @@ pub struct GatewayConfig {
     /// Maximum time to wait for one `ViewGateway` execution RPC.
     pub view_timeout_ms: u64,
     /// Aggregate limits shared with the embedded JSON-RPC server.
-    pub view_batch: groundhog_json_rpc_server::ViewBatchConfig,
+    pub view_batch: thruput_json_rpc_server::ViewBatchConfig,
 
     /// Optional protocol string used for hogd intro handshakes.
     ///
-    /// Defaults to the protocol embedded in the linked `groundhog-xdr` crate.
+    /// Defaults to the protocol embedded in the linked `thruput-xdr` crate.
     /// This override is intended for local cross-repo smoke tests before a
     /// matching Rust protocol crate has been published.
     pub hogd_protocol_override: Option<String>,
@@ -394,7 +394,7 @@ impl Default for GatewayConfig {
             listen_address: "127.0.0.1:8545".into(),
             request_timeout_ms: 60_000,
             max_connections: 2000,
-            rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
+            rpc_batch_concurrency: thruput_json_rpc_server::batch::RpcBatchConcurrency::default(),
             observability_listen: "127.0.0.1:9646".into(),
             health_required_backends: vec![
                 HealthBackend::Scheduler,
@@ -413,10 +413,10 @@ impl Default for GatewayConfig {
             db_gateway_address: None,
             view_gateway_address: None,
             view_timeout_ms: 30_000,
-            view_batch: groundhog_json_rpc_server::ViewBatchConfig::default(),
+            view_batch: thruput_json_rpc_server::ViewBatchConfig::default(),
             hogd_protocol_override: None,
             max_view_calldata_bytes: 64 * 1024,
-            view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
+            view_gas_limit: thruput_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             max_events_per_page: 200,
             max_transactions_per_page: 200,
             max_cursor_bytes: 256,
@@ -432,8 +432,8 @@ impl GatewayConfig {
         &self,
         inner: S,
         max_response_body_size: u32,
-    ) -> groundhog_json_rpc_server::batch::ConcurrentBatchService<S> {
-        groundhog_json_rpc_server::batch::ConcurrentBatchService::new(
+    ) -> thruput_json_rpc_server::batch::ConcurrentBatchService<S> {
+        thruput_json_rpc_server::batch::ConcurrentBatchService::new(
             inner,
             max_response_body_size,
             self.rpc_batch_concurrency,
@@ -479,7 +479,7 @@ impl GatewayConfig {
     ) -> Result<(), RuntimeManifestConfigError> {
         let expected_schema = match manifest.kind.as_str() {
             HOSTED_DEVNET_RUNTIME_MANIFEST_KIND => 3,
-            _ => groundhog_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION,
+            _ => thruput_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION,
         };
         if manifest.schema_version != expected_schema {
             return Err(RuntimeManifestConfigError::UnsupportedSchemaVersion {
@@ -625,7 +625,7 @@ mod tests {
         assert_eq!(config.view_timeout_ms, 60_000);
         assert_eq!(
             config.view_batch,
-            groundhog_json_rpc_server::ViewBatchConfig {
+            thruput_json_rpc_server::ViewBatchConfig {
                 max_calls: 32,
                 max_calldata_bytes: 131_072,
                 max_gas: 320_000_000,
@@ -636,15 +636,15 @@ mod tests {
         assert_eq!(partial.view_batch.max_calls, 4);
         assert_eq!(
             partial.view_batch.max_gas,
-            groundhog_json_rpc_server::ViewBatchConfig::default().max_gas
+            thruput_json_rpc_server::ViewBatchConfig::default().max_gas
         );
         assert!(toml::from_str::<super::GatewayConfig>("[view_batch]\nmax_call = 4").is_err());
     }
     use std::time::Duration;
 
-    use groundhog_json_rpc_types::{NetworkHashHex, hex::Hex0x, runtime_manifest::RuntimeManifest};
-    use groundhog_xdr::types::SHA256Hash;
     use serde_json::json;
+    use thruput_json_rpc_types::{NetworkHashHex, hex::Hex0x, runtime_manifest::RuntimeManifest};
+    use thruput_xdr::types::SHA256Hash;
 
     use super::{GatewayConfig, NetworkIdentityConfigError, RuntimeManifestConfigError};
 
@@ -1026,7 +1026,7 @@ network_hash = "0x1234"
         .expect("bug: manifest JSON should parse")
     }
 
-    fn hash(byte: u8) -> groundhog_json_rpc_types::SHA256Hash {
+    fn hash(byte: u8) -> thruput_json_rpc_types::SHA256Hash {
         Hex0x(SHA256Hash::from([byte; 32]))
     }
 }

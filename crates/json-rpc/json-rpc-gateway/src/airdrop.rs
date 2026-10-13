@@ -4,9 +4,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use groundhog_json_rpc_api::AirdropApiServer;
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_json_rpc_types::{
+use jsonrpsee::{RpcModule, core::RpcResult, types::ErrorObjectOwned};
+use reqwest::{StatusCode, Url};
+use serde::Deserialize;
+use thruput_json_rpc_api::AirdropApiServer;
+use thruput_json_rpc_server::RpcServerError;
+use thruput_json_rpc_types::{
     SHA256Hash,
     airdrop::{AirdropAttemptResponse, AirdropRequest, HostedAirdropRequest},
     network_descriptor::{
@@ -15,9 +18,6 @@ use groundhog_json_rpc_types::{
     network_info::NetworkInfo,
     receipt::ExecStatus,
 };
-use jsonrpsee::{RpcModule, core::RpcResult, types::ErrorObjectOwned};
-use reqwest::{StatusCode, Url};
-use serde::Deserialize;
 use tokio::sync::Semaphore;
 
 use crate::{
@@ -507,15 +507,15 @@ mod tests {
         response::IntoResponse,
         routing::{get, post},
     };
-    use groundhog_json_rpc_types::error::codes;
     use serde_json::json;
+    use thruput_json_rpc_types::error::codes;
     use tokio::{net::TcpListener, sync::Notify};
 
     use super::*;
 
     #[tokio::test]
     async fn registered_http_small_array_waits_without_raising_execution_limit() {
-        use groundhog_json_rpc_server::batch::{ConcurrentBatchService, RpcBatchConcurrency};
+        use thruput_json_rpc_server::batch::{ConcurrentBatchService, RpcBatchConcurrency};
 
         for concurrency in [1, RpcBatchConcurrency::default().get()] {
             let gate = Arc::new(Semaphore::new(0));
@@ -1612,7 +1612,7 @@ mod tests {
     fn config(base_url: &str) -> GatewayConfig {
         GatewayConfig {
             network_id: Some("devnet".into()),
-            network_hash: Some(groundhog_json_rpc_types::NetworkHashHex::from([0x12; 32])),
+            network_hash: Some(thruput_json_rpc_types::NetworkHashHex::from([0x12; 32])),
             genesis_hash: Some(genesis_hash()),
             faucet_url: Some(base_url.into()),
             request_timeout_ms: 200,

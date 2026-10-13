@@ -16,7 +16,7 @@ pub fn binary() -> PathBuf {
                     "--locked",
                     "--message-format=json",
                     "-p",
-                    "groundhog-node-supervisor",
+                    "thruput-node-supervisor",
                     "--example",
                     "fake_hogd_dev",
                 ])

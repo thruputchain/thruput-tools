@@ -1,30 +1,30 @@
 //! Public testkit API checks against a recording RPC, including ambiguous outcomes.
 use std::sync::{Arc, Mutex};
 
-use groundhog_signing::default_wallet::{
+use jsonrpsee::{
+    RpcModule,
+    server::{ServerBuilder, ServerHandle},
+    types::ErrorObjectOwned,
+};
+use thruput_signing::default_wallet::{
     DEFAULT_WALLET_DEPLOY_ENTRYPOINT, DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
 };
-use groundhog_signing::{
+use thruput_signing::{
     PubkeyAccount, derive_deploy_address, derive_dev_account_signer, transaction_hash,
 };
-use groundhog_testkit::rpc_types::{
+use thruput_testkit::rpc_types::{
     hex::{Hex0x, HexBytes},
     receipt::{ExecStatus, TransactionReceipt},
     transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource, TransactionStatus, TxHash,
     },
 };
-use groundhog_testkit::xdr::{
+use thruput_testkit::xdr::{
     contract::ContractEntrypointID, transaction::SignedTransaction, types::SHA256Hash,
 };
-use groundhog_testkit::{
+use thruput_testkit::{
     Agent, ArtifactKind, Contract, DeployOptions, NetworkConfig, Scenario, TestkitError,
     WalletInitCall,
-};
-use jsonrpsee::{
-    RpcModule,
-    server::{ServerBuilder, ServerHandle},
-    types::ErrorObjectOwned,
 };
 
 #[derive(Clone, Copy)]
@@ -69,6 +69,7 @@ impl Fixture {
         let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", server.local_addr().unwrap());
         let mut module = RpcModule::new(state.clone());
+        serve_manifest_network_info(&mut module);
         module
             .register_method("groundhog_sendRawTransaction", |params, state, _| {
                 let (encoded,): (String,) = params.parse()?;
@@ -195,7 +196,7 @@ async fn repeated_scenarios_fund_the_same_account_with_distinct_transactions() {
         let scenario = fixture.scenario(false).await;
         scenario
             .run_agents([Agent::new("alice", |ctx| async move {
-                let signer = derive_dev_account_signer("groundhog-testkit:native-test", 0);
+                let signer = derive_dev_account_signer("thruput-testkit:native-test", 0);
                 assert_eq!(
                     ctx.address(),
                     PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
@@ -261,8 +262,8 @@ async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_retur
     let scenario = fixture.scenario(false).await;
     assert!(fixture.state.submitted.lock().unwrap().is_empty());
     scenario
-        .run_agents([Agent::new("alice", |mut ctx| async move {
-            let signer = derive_dev_account_signer("groundhog-testkit:native-test", 0);
+        .run_agents([Agent::new("alice", |ctx| async move {
+            let signer = derive_dev_account_signer("thruput-testkit:native-test", 0);
             assert_eq!(
                 ctx.address(),
                 PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
@@ -270,9 +271,7 @@ async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_retur
             ctx.fund(12345).await?;
             let contract = Contract::new([3; 32].into(), "Counter", "0.1.0");
             assert_eq!(
-                contract
-                    .call_returning::<_, u64>(&mut ctx, "get", &())
-                    .await?,
+                contract.call_returning::<_, u64>(&ctx, "get", &()).await?,
                 42
             );
             Ok(())
@@ -362,7 +361,7 @@ async fn ambiguous_submissions_keep_signed_identity_and_reserve_nonce() {
         let fixture = Fixture::new(outcome).await;
         let scenario = fixture.scenario(false).await;
         scenario
-            .run_agents([Agent::new("alice", |mut ctx| async move {
+            .run_agents([Agent::new("alice", |ctx| async move {
                 for _ in 0..2 {
                     let error = ctx
                         .submit_deploy(&[1, 2, 3], ArtifactKind::Rv32, DeployOptions::funded(0))
@@ -445,7 +444,7 @@ async fn high_level_raw_deploy_preserves_unverified_attempt() {
         let fixture = Fixture::new(outcome).await;
         let scenario = fixture.scenario(false).await;
         scenario
-            .run_agents([Agent::new("alice", |mut ctx| async move {
+            .run_agents([Agent::new("alice", |ctx| async move {
                 let error = ctx
                     .deploy(&[1, 2, 3], ArtifactKind::Rv32, DeployOptions::funded(123))
                     .await
@@ -578,4 +577,17 @@ async fn a_later_run_retries_registration_without_taking_the_original_deployment
         transaction_hash(&submitted[2].tx).unwrap()
     );
     assert!(submitted[2].tx.contracts_to_deploy.is_empty());
+}
+
+/// Serve the network identity named by the runtime manifest fixture (a zero `networkHash`).
+fn serve_manifest_network_info<T: Send + Sync + 'static>(module: &mut RpcModule<T>) {
+    module
+        .register_method("groundhog_networkInfo", |_, _, _| {
+            Ok::<_, ErrorObjectOwned>(thruput_json_rpc_types::network_info::NetworkInfo::new(
+                thruput_json_rpc_types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from(
+                    [0; 32],
+                )),
+            ))
+        })
+        .unwrap();
 }

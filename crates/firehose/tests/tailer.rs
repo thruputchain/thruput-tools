@@ -1,0 +1,324 @@
+use std::{
+    fs,
+    time::{Duration, SystemTime},
+};
+
+use jsonrpsee::{
+    core::client::{ClientT, SubscriptionClientT},
+    rpc_params,
+    ws_client::WsClientBuilder,
+};
+use serde_json::Value;
+use thruput_firehose::{
+    metrics::Metrics,
+    store::Store,
+    subscription::{Config, Cursor, Hub},
+    tailer::Tailer,
+};
+
+mod common;
+use common::{fixture, next};
+
+fn config() -> Config {
+    Config {
+        request_window: 42_428,
+        ws_listen: "127.0.0.1:0".parse().unwrap(),
+        allow_remote: false,
+        max_subscribers: 64,
+        max_subscriptions_per_connection: None,
+        subscriber_queue: 8,
+        subscriber_queue_bytes: 2 * 1024 * 1024,
+        max_record_bytes: 4 * 1024 * 1024,
+        live_timeout_ms: 5000,
+        catchup_timeout_ms: 10000,
+        catchup_progress_ms: 30000,
+    }
+}
+
+#[test]
+fn discovery_verifies_only_the_tip_and_empty_has_startup_grace() {
+    let dir = tempfile::tempdir().unwrap();
+    let absent = dir.path().join("absent");
+    let metrics = Metrics::new().unwrap();
+    let tailer = Tailer::new(absent.clone()).unwrap();
+    tailer.update_health(&metrics, Duration::from_mins(1));
+    assert_eq!(tailer.tip(), -1);
+    assert!(metrics.is_healthy());
+    assert!(metrics.tip_age.get().is_nan());
+    tailer.update_health(&metrics, Duration::ZERO);
+    assert!(!metrics.is_healthy());
+    assert!(!absent.exists());
+    fs::write(dir.path().join("pending"), b"not a record").unwrap();
+    fs::write(dir.path().join("origin.xdr"), b"not decoded").unwrap();
+    for height in [2, 9, 10] {
+        fs::write(dir.path().join(format!("{height:020}.xdr")), b"not decoded").unwrap();
+    }
+    let mut tip = fixture();
+    tip.block
+        .payload
+        .consensus_value
+        .proposal_header
+        .block_height = 10.into();
+    common::rehash(&mut tip);
+    fs::write(
+        dir.path().join(format!("{:020}.xdr", 10)),
+        xdrs::txs::encode(&tip).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(Tailer::new(dir.path().to_owned()).unwrap().tip(), 10);
+    assert!(!dir.path().join("LOCK").exists());
+}
+
+#[tokio::test]
+async fn empty_archive_publishes_first_nonzero_record_to_tip_subscriber() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+    let hub = Hub::new(dir.path().to_owned(), tailer.tip(), config());
+    let (address, server) = hub.serve().await.unwrap();
+    let client = WsClientBuilder::default()
+        .build(format!("ws://{address}"))
+        .await
+        .unwrap();
+    let mut sub = client
+        .subscribe::<Value, _>(
+            "firehose_subscribe",
+            rpc_params![Cursor::Tip],
+            "firehose_unsubscribe",
+        )
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        tailer.poll(&hub).await.unwrap();
+        assert_eq!(tailer.tip(), -1);
+    }
+    let mut first = fixture();
+    first.origin.first_height = 700_000.into();
+    first
+        .block
+        .payload
+        .consensus_value
+        .proposal_header
+        .block_height = 700_000.into();
+    common::rehash(&mut first);
+    let mut writer = Store::open(dir.path()).unwrap();
+    writer.append(&first).unwrap();
+    writer.append(&next(&first)).unwrap();
+    tailer.poll(&hub).await.unwrap();
+    let message = tokio::time::timeout(Duration::from_secs(2), sub.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(message["block"]["height"], 700_000);
+    assert_eq!(tailer.tip(), 700_001);
+    server.stop().unwrap();
+    drop(sub);
+    drop(client);
+    server.stopped().await;
+}
+
+#[tokio::test]
+async fn writer_stops_and_returns_without_disconnect_gap_or_duplicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut writer = Store::open(dir.path()).unwrap();
+    let first = fixture();
+    writer.append(&first).unwrap();
+    let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+    let hub = Hub::new(dir.path().to_owned(), tailer.tip(), config());
+    let (address, server) = hub.serve().await.unwrap();
+    let client = WsClientBuilder::default()
+        .build(format!("ws://{address}"))
+        .await
+        .unwrap();
+    let mut sub = client
+        .subscribe::<Value, _>(
+            "firehose_subscribe",
+            rpc_params![Cursor::Tip],
+            "firehose_unsubscribe",
+        )
+        .await
+        .unwrap();
+    let mut current = first;
+    for _ in 0..3 {
+        current = next(&current);
+        writer.append(&current).unwrap();
+    }
+    tailer.poll(&hub).await.unwrap();
+    for height in 2..=4 {
+        let message = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(message["block"]["height"], height);
+        client
+            .request::<(), _>(
+                "firehose_ack",
+                rpc_params![message["subscriberId"].as_u64().unwrap(), height],
+            )
+            .await
+            .unwrap();
+    }
+    drop(writer);
+    tailer.poll(&hub).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), sub.next())
+            .await
+            .is_err()
+    );
+    assert_eq!(hub.stats()["subscribers"][0]["nextHeight"], 5);
+    let mut writer = Store::open(dir.path()).unwrap();
+    current = next(&current);
+    writer.append(&current).unwrap();
+    tailer.poll(&hub).await.unwrap();
+    tailer.poll(&hub).await.unwrap();
+    let message = sub.next().await.unwrap().unwrap();
+    assert_eq!(message["block"]["height"], 5);
+    client
+        .request::<(), _>(
+            "firehose_ack",
+            rpc_params![message["subscriberId"].as_u64().unwrap(), 5],
+        )
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), sub.next())
+            .await
+            .is_err()
+    );
+    server.stop().unwrap();
+    drop(sub);
+    drop(client);
+    server.stopped().await;
+}
+
+#[tokio::test]
+async fn stale_tip_survives_reader_restart_and_new_records_restore_health() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut writer = Store::open(dir.path()).unwrap();
+    let first = fixture();
+    writer.append(&first).unwrap();
+    let path = dir.path().join(format!("{:020}.xdr", 1));
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_mins(2))
+        .unwrap();
+    let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+    let metrics = Metrics::new().unwrap();
+    tailer.update_health(&metrics, Duration::from_mins(1));
+    assert!(!metrics.is_healthy());
+    assert!(metrics.tip_age.get() >= 120.);
+    assert!(
+        String::from_utf8(metrics.render().unwrap())
+            .unwrap()
+            .contains("firehose_healthy 0")
+    );
+    let hub = Hub::new(dir.path().to_owned(), tailer.tip(), config());
+    writer.append(&next(&first)).unwrap();
+    tailer.poll(&hub).await.unwrap();
+    tailer.update_health(&metrics, Duration::from_mins(1));
+    assert!(metrics.is_healthy());
+    assert!(metrics.tip_age.get() < 60.);
+}
+
+#[tokio::test]
+async fn corrupt_or_misnamed_records_never_advance_the_tip() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut writer = Store::open(dir.path()).unwrap();
+    writer.append(&fixture()).unwrap();
+    let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+    let hub = Hub::new(dir.path().to_owned(), tailer.tip(), config());
+    let path = dir.path().join(format!("{:020}.xdr", 2));
+    let mut corrupt = next(&fixture());
+    corrupt.block.identity.consensus_hash = fixture().block.identity.consensus_hash;
+    fs::write(&path, xdrs::txs::encode(&corrupt).unwrap()).unwrap();
+    assert!(tailer.poll(&hub).await.is_err());
+    assert_eq!(tailer.tip(), 1);
+    fs::write(&path, xdrs::txs::encode(&fixture()).unwrap()).unwrap();
+    assert!(tailer.poll(&hub).await.is_err());
+    assert_eq!(tailer.tip(), 1);
+}
+
+#[tokio::test]
+async fn invalid_startup_tip_is_unhealthy_and_retried_without_reading_history() {
+    for bytes in [
+        b"truncated".to_vec(),
+        {
+            let mut block = fixture();
+            block.block.identity.consensus_hash = next(&block).block.identity.consensus_hash;
+            xdrs::txs::encode(&block).unwrap()
+        },
+        xdrs::txs::encode(&next(&fixture())).unwrap(),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("{:020}.xdr", 1));
+        fs::write(&path, bytes).unwrap();
+        let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+        let metrics = Metrics::new().unwrap();
+        tailer.update_health(&metrics, Duration::from_mins(1));
+        assert_eq!(tailer.tip(), -1);
+        assert!(!metrics.is_healthy());
+        assert_eq!(metrics.height.get(), -1);
+        let hub = Hub::new(dir.path().to_owned(), tailer.tip(), config());
+        assert!(tailer.poll(&hub).await.is_err());
+        assert_eq!(tailer.tip(), -1);
+        // Retry the maximum name even when earlier history is corrupt.
+        fs::write(dir.path().join(format!("{:020}.xdr", 0)), b"bad history").unwrap();
+        fs::write(path, xdrs::txs::encode(&fixture()).unwrap()).unwrap();
+        tailer.poll(&hub).await.unwrap();
+        tailer.update_health(&metrics, Duration::from_mins(1));
+        assert_eq!(tailer.tip(), 1);
+        assert!(metrics.is_healthy());
+    }
+}
+
+#[tokio::test]
+async fn pruned_archive_restarts_serves_retained_history_and_tails_new_blocks() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = fixture();
+    let second = next(&first);
+    let third = next(&second);
+    let mut store = Store::open(dir.path()).unwrap();
+    store.adopt(&first.origin).unwrap();
+    for block in [&first, &second, &third] {
+        store.append(block).unwrap();
+    }
+    store
+        .prune(thruput_firehose::store::Retention {
+            duration: Duration::MAX,
+            bytes: 0,
+            min_blocks: 2,
+        })
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(dir.path()).unwrap();
+    let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+    let hub = Hub::new(dir.path().to_owned(), tailer.tip(), config());
+    let (address, server) = hub.serve().await.unwrap();
+    let client = WsClientBuilder::default()
+        .build(format!("ws://{address}"))
+        .await
+        .unwrap();
+    let mut sub = client
+        .subscribe::<Value, _>(
+            "firehose_subscribe",
+            rpc_params![Cursor::Height { height: 2 }],
+            "firehose_unsubscribe",
+        )
+        .await
+        .unwrap();
+    let retained = tokio::time::timeout(Duration::from_secs(3), sub.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained["block"]["height"], 2);
+    let fourth = next(&third);
+    store.append(&fourth).unwrap();
+    tailer.poll(&hub).await.unwrap();
+    assert_eq!(tailer.tip(), 4);
+    server.stop().unwrap();
+    server.stopped().await;
+}

@@ -2,5 +2,5 @@
 
 #[tokio::main]
 async fn main() {
-    groundhog_bench::run_cli().await;
+    thruput_bench::run_cli().await;
 }

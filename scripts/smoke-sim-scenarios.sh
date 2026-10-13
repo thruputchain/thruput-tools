@@ -261,7 +261,7 @@ if [[ -n "$CONTRACT_ARTIFACT_ROOT" ]]; then
     ENV_ARGS+=("GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT=$CONTRACT_ARTIFACT_ROOT")
 fi
 env "${ENV_ARGS[@]}" \
-    cargo test -p groundhog-sim --test local_target_smoke local_scenario_catalog_smoke -- --ignored --nocapture
+    cargo test -p thruput-sim --test local_target_smoke local_scenario_catalog_smoke -- --ignored --nocapture
 
 if [[ "${GROUNDHOG_SIM_RUN_SOAKS:-0}" == "1" ]]; then
     log "running gated local scenario soak"
@@ -275,7 +275,7 @@ if [[ "${GROUNDHOG_SIM_RUN_SOAKS:-0}" == "1" ]]; then
         SOAK_ENV_ARGS+=("GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT=$CONTRACT_ARTIFACT_ROOT")
     fi
     env "${SOAK_ENV_ARGS[@]}" \
-        cargo test -p groundhog-sim --test local_target_smoke local_scenario_catalog_soak -- --ignored --nocapture
+        cargo test -p thruput-sim --test local_target_smoke local_scenario_catalog_soak -- --ignored --nocapture
 else
     log "skipping local scenario soak; set GROUNDHOG_SIM_RUN_SOAKS=1 to run it"
 fi
@@ -303,7 +303,7 @@ log "running existing-provider baseline scenario against $RPC_URL"
 GROUNDHOG_SIM_RPC_URL="$RPC_URL" \
 GROUNDHOG_SIM_RUNTIME_MANIFEST="$RUNTIME_MANIFEST" \
 GROUNDHOG_SIM_EXISTING_ROOT="$WORKDIR/existing-provider" \
-    cargo test -p groundhog-sim --test existing_target_smoke existing_target_chain_tip_baseline_smoke -- --ignored --nocapture
+    cargo test -p thruput-sim --test existing_target_smoke existing_target_chain_tip_baseline_smoke -- --ignored --nocapture
 
 terminate_node "$NODE_PID"
 NODE_PID=""

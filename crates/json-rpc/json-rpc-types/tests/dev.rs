@@ -1,19 +1,19 @@
-use groundhog_json_rpc_types::BlockHeight;
-use groundhog_json_rpc_types::dev::{
+use serde_json::Value;
+use thruput_json_rpc_types::BlockHeight;
+use thruput_json_rpc_types::dev::{
     FrameOutputInfo, InvocationInfo, StorageDeltaInfo, SyscallInfo, TraceInfo, TransactionDetail,
 };
-use groundhog_json_rpc_types::events::EmittedEvent;
-use groundhog_json_rpc_types::hex::{Hex0x, HexBytes, Topic};
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::TxHash;
-use serde_json::Value;
+use thruput_json_rpc_types::events::EmittedEvent;
+use thruput_json_rpc_types::hex::{Hex0x, HexBytes, Topic};
+use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::transaction::TxHash;
 
 #[test]
 fn transaction_detail_serializes_hex_and_camel_case() {
-    let address = groundhog_xdr::types::ContractAddress::from([0x11; 32]);
+    let address = thruput_xdr::types::ContractAddress::from([0x11; 32]);
     let detail = TransactionDetail {
         receipt: TransactionReceipt {
-            tx_hash: TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x22; 32]))),
+            tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x22; 32]))),
             height: BlockHeight::from(7),
             status: ExecStatus::Ok,
             events: vec![EmittedEvent {
@@ -47,7 +47,7 @@ fn transaction_detail_serializes_hex_and_camel_case() {
                 number: 23,
                 gas_remaining_at_start: 100,
                 gas_remaining_at_end: 90,
-                status: groundhog_json_rpc_types::dev::SyscallStatusInfo {
+                status: thruput_json_rpc_types::dev::SyscallStatusInfo {
                     code: 0,
                     label: "SyscallErrorCode::kSyscallErrorCodeNone".into(),
                 },

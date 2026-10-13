@@ -1,7 +1,7 @@
-use groundhog_json_rpc_types::{
+use serde::Serialize;
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress, events::EmittedEvent, view::RootInvocationOutput,
 };
-use serde::Serialize;
 
 /// Schema version for the `thruput view --json` payload.
 ///
@@ -21,10 +21,10 @@ pub struct ViewJsonPayload<'a> {
     pub calldata: &'a str,
     pub caller: &'a Option<ContractAddress>,
     pub selector: serde_json::Value,
-    #[serde(serialize_with = "groundhog_json_rpc_types::decimal::serialize::<BlockHeight, _>")]
+    #[serde(serialize_with = "thruput_json_rpc_types::decimal::serialize::<BlockHeight, _>")]
     pub height: &'a BlockHeight,
     /// Gas the viewed invocation consumed.
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
     pub gas_used: u64,
     pub output: &'a RootInvocationOutput,
     pub events: &'a [EmittedEvent],

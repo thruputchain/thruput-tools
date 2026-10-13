@@ -702,7 +702,7 @@ fn local_node_args(options: LocalNodeArgOptions<'_>) -> Vec<String> {
 
 fn local_public_allocations(
     manifest: &SimulationManifest,
-) -> Result<Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>, SimError>
+) -> Result<Vec<thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>, SimError>
 {
     let Some(spec) = &manifest.accounts else {
         return Ok(Vec::new());
@@ -721,9 +721,9 @@ fn local_public_allocations(
     }
     let allocations = (0..required_bootstrap_accounts(manifest) as usize)
         .map(|index| {
-            let signer = groundhog_signing::derive_dev_account_signer(&spec.seed, index);
-            groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-                groundhog_json_rpc_types::hex::Hex0x(signer.verifying_key_bytes().into()),
+            let signer = thruput_signing::derive_dev_account_signer(&spec.seed, index);
+            thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+                thruput_json_rpc_types::hex::Hex0x(signer.verifying_key_bytes().into()),
                 amount.to_owned(),
             )
         })
@@ -1655,10 +1655,10 @@ mod tests {
         let allocations = local_public_allocations(&manifest).expect("allocations");
         assert_eq!(allocations.len(), 2);
         for (index, allocation) in allocations.iter().enumerate() {
-            let expected = groundhog_signing::derive_dev_account_signer(&seed, index);
+            let expected = thruput_signing::derive_dev_account_signer(&seed, index);
             assert_eq!(
                 allocation.public_key,
-                groundhog_json_rpc_types::hex::Hex0x(expected.verifying_key_bytes().into())
+                thruput_json_rpc_types::hex::Hex0x(expected.verifying_key_bytes().into())
             );
             assert_eq!(allocation.initial_storage_tokens, "123456789");
         }

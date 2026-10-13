@@ -1,6 +1,6 @@
 //! Experimental standalone firehose wire types; independent of gateway methods.
-use groundhog_json_rpc_types::hex::HexBytes;
 use serde::{Deserialize, Serialize};
+use thruput_json_rpc_types::hex::HexBytes;
 
 /// Inclusive archive height, or the first publication after subscription registration.
 #[derive(Clone, Debug, Serialize, Deserialize)]

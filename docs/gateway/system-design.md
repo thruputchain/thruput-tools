@@ -186,7 +186,7 @@ Opaque cursors are returned verbatim. The projection belongs in
 separate gateway and client copies.
 
 [json-rpc-api](../../crates/json-rpc/json-rpc-api/src/lib.rs) owns method signatures
-and the wire-format version. The [OpenRPC snapshot](../../crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json)
+and the wire-format version. The [OpenRPC snapshot](../../crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json)
 is generated from those definitions. Its version is independent of the workspace
 release; implementation and release identity fields are diagnostic.
 

@@ -2,7 +2,7 @@
 //! `initial_memory_start` load-base semantics, and the canonicality rules the
 //! verifier enforces on it.
 
-use groundhog_rv32_artifact::{
+use thruput_rv32_artifact::{
     DEFAULT_MEMORY_BYTES, HEADER_BYTES, build_artifact, sha256, verify_artifact,
 };
 
@@ -152,7 +152,7 @@ fn build_stamps_the_requested_memory_bytes() {
 
 #[test]
 fn declared_sizes_reads_the_header_and_nothing_else() {
-    use groundhog_rv32_artifact::{DeclaredSizes, declared_sizes};
+    use thruput_rv32_artifact::{DeclaredSizes, declared_sizes};
     let code = [0u8; 12];
     let memory = vec![1u8; 16];
     let larger = 2 * DEFAULT_MEMORY_BYTES;

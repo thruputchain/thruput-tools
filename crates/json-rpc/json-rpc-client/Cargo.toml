@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-json-rpc-client"
+name = "thruput-json-rpc-client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Typed client for the Groundhog JSON-RPC API"
+description = "Typed client for the Thruput JSON-RPC API"
 
 exclude = [
     "tests/",
@@ -20,16 +20,16 @@ exclude = [
 workspace = true
 
 [dependencies]
-groundhog-json-rpc-api = { workspace = true }
-groundhog-json-rpc-types = { workspace = true }
+thruput-json-rpc-api = { workspace = true }
+thruput-json-rpc-types = { workspace = true }
 jsonrpsee = { workspace = true, features = ["macros", "http-client"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-groundhog-json-rpc-server = { workspace = true }
-groundhog-xdr = { workspace = true }
+thruput-json-rpc-server = { workspace = true }
+thruput-xdr = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server"] }
 serde_json = { workspace = true }
 xdr-common = { workspace = true }

@@ -1,8 +1,8 @@
-use groundhog_json_rpc_types::hex::prefixed_hex;
 use std::path::Path;
+use thruput_json_rpc_types::hex::prefixed_hex;
 
-use groundhog_json_rpc_client::GroundhogApiClient;
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_types::{
     ContractAddress,
     hex::HexBytes,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
@@ -396,7 +396,7 @@ mod tests {
             contract_address_hex: format!("0x{}", "11".repeat(32)),
             method: "get".into(),
             resolved: ResolvedCall {
-                entrypoint: groundhog_xdr::contract::ContractEntrypointID::from([0u8; 8]),
+                entrypoint: thruput_xdr::contract::ContractEntrypointID::from([0u8; 8]),
                 metadata: Some(CallMetadata::Local(metadata)),
             },
             entrypoint_id: "0x0000000000000000".into(),
@@ -404,7 +404,7 @@ mod tests {
             request: ViewRequest {
                 auth_claim: None,
                 min_height: None,
-                contract: ContractAddress::from(groundhog_xdr::types::ContractAddress::from(
+                contract: ContractAddress::from(thruput_xdr::types::ContractAddress::from(
                     [0u8; 32],
                 )),
                 entrypoint: HexBytes(vec![0u8; 8]),
@@ -419,7 +419,7 @@ mod tests {
                 return_data: HexBytes(return_data),
             },
             events: vec![],
-            height: groundhog_json_rpc_types::BlockHeight::from(12),
+            height: thruput_json_rpc_types::BlockHeight::from(12),
             gas_used: 0,
         };
 

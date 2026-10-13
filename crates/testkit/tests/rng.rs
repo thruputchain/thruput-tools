@@ -1,4 +1,4 @@
-use groundhog_testkit::AgentRng;
+use thruput_testkit::AgentRng;
 
 #[test]
 fn choose_index_stays_in_range() {

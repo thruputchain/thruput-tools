@@ -18,9 +18,9 @@ env:
   CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
   CARGO_REGISTRIES_THRUPUT_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
   RELEASE_CRATES: >-
-    groundhog-bundle-identity
+    thruput-bundle-identity
     thruput-cli
-    groundhog-rv32-lower
+    thruput-rv32-lower
 
 permissions:
   # The publish job raises this to "write"
@@ -38,14 +38,18 @@ jobs:
             release_target: x86_64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-2604
             artifact_name: groundhog-rpc-x86_64-release-artifacts
-            release_apps: hog-gateway thruput rv32-lower hogsim groundhog-faucet
+            release_apps: >-
+              hog-gateway thruput rv32-lower hogsim thruput-faucet
+              hog-firehose-store hog-firehose-serve
           - architecture: arm64
             machine: aarch64
             platform: linux
             release_target: aarch64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-arm64
             artifact_name: groundhog-rpc-arm64-release-artifacts
-            release_apps: hog-gateway thruput rv32-lower hogsim groundhog-faucet
+            release_apps: >-
+              hog-gateway thruput rv32-lower hogsim thruput-faucet
+              hog-firehose-store hog-firehose-serve
           - architecture: arm64
             machine: arm64
             platform: macos
@@ -114,14 +118,15 @@ jobs:
           source_commit=$(git rev-parse HEAD)
           export GROUNDHOG_SOURCE_COMMIT="$source_commit"
           cargo build --locked --release \
-            -p groundhog-json-rpc-gateway \
+            -p thruput-json-rpc-gateway \
             -p thruput-cli \
-            -p groundhog-rv32-lower \
-            -p groundhog-sim \
-            -p groundhog-faucet \
+            -p thruput-rv32-lower \
+            -p thruput-sim \
+            -p thruput-faucet \
+            -p thruput-firehose \
             --bins
 
-          for app in hog-gateway thruput rv32-lower hogsim groundhog-faucet; do
+          for app in ${{ matrix.release_apps }}; do
             app_version="$CRATE_VERSION"
             if [ "$app" = thruput ] || [ "$app" = hog-gateway ]; then
               app_version="$CRATE_VERSION (commit ${source_commit:0:8})"
@@ -143,22 +148,51 @@ jobs:
           echo "EXPECTED_BINARY_VERSION=$expected_version" >> "$GITHUB_ENV"
           echo "EXPECTED_SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
 
+          # Gateway and faucet ship with jemalloc and inactive heap profiling;
+          # GROUNDHOG_HEAP_PROFILING=1 turns it on. The feature is Linux-only.
           package_args=()
+          features=()
           for app in $RELEASE_APPS; do
             case "$app" in
-              hog-gateway) package_args+=(-p groundhog-json-rpc-gateway) ;;
+              hog-gateway)
+                package_args+=(-p thruput-json-rpc-gateway)
+                features+=(thruput-json-rpc-gateway/heap-profiling)
+                ;;
               thruput) package_args+=(-p thruput-cli) ;;
-              rv32-lower) package_args+=(-p groundhog-rv32-lower) ;;
-              hogsim) package_args+=(-p groundhog-sim) ;;
-              groundhog-faucet) package_args+=(-p groundhog-faucet) ;;
+              rv32-lower) package_args+=(-p thruput-rv32-lower) ;;
+              hogsim) package_args+=(-p thruput-sim) ;;
+              thruput-faucet)
+                package_args+=(-p thruput-faucet)
+                features+=(thruput-faucet/heap-profiling)
+                ;;
+              hog-firehose-store|hog-firehose-serve)
+                package_args+=(-p thruput-firehose) ;;
               *)
                 echo "unsupported release app: $app" >&2
                 exit 1
                 ;;
             esac
           done
+          if [ "${{ matrix.platform }}" = linux ] && [ "${#features[@]}" -gt 0 ]; then
+            package_args+=(--features "$(IFS=,; echo "${features[*]}")")
+          fi
 
           cargo build --locked --release "${package_args[@]}" --bins
+
+          if [ "${{ matrix.platform }}" = linux ]; then
+            for app in $RELEASE_APPS; do
+              case "$app" in
+                hog-gateway | thruput-faucet) want=1 ;;
+                *) want=0 ;;
+              esac
+              have=0
+              if grep -aq '<jemalloc>' "target/release/$app"; then have=1; fi
+              if [ "$have" != "$want" ]; then
+                echo "$app: jemalloc linked=$have, expected $want" >&2
+                exit 1
+              fi
+            done
+          fi
 
       - name: Verify macOS CLI portability
         if: matrix.platform == 'macos'
@@ -230,7 +264,8 @@ jobs:
           unset GROUNDHOG_DISTRIBUTION_VERSION
           export GROUNDHOG_SOURCE_COMMIT="$EXPECTED_SOURCE_COMMIT"
           cargo build --locked --release --target x86_64-unknown-linux-gnu \
-            -p groundhog-json-rpc-gateway --bin hog-gateway
+            -p thruput-json-rpc-gateway --bin hog-gateway --features heap-profiling
+          grep -aq '<jemalloc>' target/znver5/x86_64-unknown-linux-gnu/release/hog-gateway
           release_ref=${GITHUB_REF_NAME//\//-}
           archive_base="hog-gateway-${release_ref}-x86_64-unknown-linux-gnu-znver5"
           mkdir -p "package/$archive_base"
@@ -276,7 +311,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
-          test "${#archives[@]}" -eq 24
+          test "${#archives[@]}" -eq 32
           for archive in "${archives[@]}"; do
             test -s "$archive"
           done

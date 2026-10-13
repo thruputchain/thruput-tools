@@ -2,28 +2,28 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use groundhog_sim::catalog::{
+use serde::Serialize;
+use thruput_sim::catalog::{
     ScenarioCatalogEntry, ScenarioContractRef, default_catalog_path, load_catalog,
     resolve_scenario_path,
 };
-use groundhog_sim::compare::{ResultDiff, load_result};
-use groundhog_sim::error::SimError;
-use groundhog_sim::manifest::SimulationManifest;
-use groundhog_sim::result::{SimResult, SimRunOutcome};
-use groundhog_sim::run::{RunOptions, RunSummary, run_target};
-use groundhog_sim::sweep::{SweepEntryState, sweep_runs};
-use groundhog_sim::util::load_simulation_manifest;
-use groundhog_sim::validation::validate_manifest;
-use serde::Serialize;
+use thruput_sim::compare::{ResultDiff, load_result};
+use thruput_sim::error::SimError;
+use thruput_sim::manifest::SimulationManifest;
+use thruput_sim::result::{SimResult, SimRunOutcome};
+use thruput_sim::run::{RunOptions, RunSummary, run_target};
+use thruput_sim::sweep::{SweepEntryState, sweep_runs};
+use thruput_sim::util::load_simulation_manifest;
+use thruput_sim::validation::validate_manifest;
 
 const HOGSIM_COMMAND_JSON_SCHEMA_VERSION: u32 = 1;
-const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
+const BUILD_VERSION: thruput_build_info::BuildVersion = thruput_build_info::build_version!();
 
 #[derive(Debug, Parser)]
 #[command(name = "hogsim")]
 #[command(
     version = BUILD_VERSION.to_string(),
-    about = "Groundhog stateful simulation and soak-test harness"
+    about = "Thruput stateful simulation and soak-test harness"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -611,7 +611,7 @@ mod tests {
             run_id: "run-1".into(),
             out_dir: PathBuf::from("hogsim-runs/run-1-local-smoke"),
             outcome: SimRunOutcome::Passed,
-            counts: groundhog_sim::run::RunSummaryCounts {
+            counts: thruput_sim::run::RunSummaryCounts {
                 scheduled: 5,
                 completed: 4,
                 failed: 0,

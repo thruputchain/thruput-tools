@@ -1,14 +1,14 @@
-use groundhog_contract_spec::ContractField;
-use groundhog_contract_spec::ContractSpecId;
-use groundhog_contract_spec::ContractSpecMethod;
-use groundhog_contract_spec::ContractSpecString;
-use groundhog_contract_spec::ContractType;
-use groundhog_contract_spec::ContractTypeDef;
-use groundhog_contract_spec::ContractUnionCase;
-use groundhog_contract_spec::ContractUnionCaseType;
-use groundhog_contract_spec::ContractUnionDef;
+use thruput_contract_spec::ContractField;
+use thruput_contract_spec::ContractSpecId;
+use thruput_contract_spec::ContractSpecMethod;
+use thruput_contract_spec::ContractSpecString;
+use thruput_contract_spec::ContractType;
+use thruput_contract_spec::ContractTypeDef;
+use thruput_contract_spec::ContractUnionCase;
+use thruput_contract_spec::ContractUnionCaseType;
+use thruput_contract_spec::ContractUnionDef;
 
-use groundhog_client::codec::*;
+use thruput_client::codec::*;
 
 fn spec_string(s: &str) -> ContractSpecString {
     s.try_into().unwrap()
@@ -116,17 +116,17 @@ fn nested_wide_integers_preserve_precision_and_type_boundaries() {
         &[
             "0".parse().unwrap(),
             "1".parse().unwrap(),
-            groundhog_u256::U256::MAX,
+            thruput_u256::U256::MAX,
         ],
     );
     assert_numeric_tuple_roundtrip(
         ContractType::I256,
         &[
-            groundhog_u256::I256::MIN,
+            thruput_u256::I256::MIN,
             "-1".parse().unwrap(),
             "0".parse().unwrap(),
             "1".parse().unwrap(),
-            groundhog_u256::I256::MAX,
+            thruput_u256::I256::MAX,
         ],
     );
 }
@@ -270,7 +270,7 @@ fn throwing_spec_metadata() -> SpecMethodMetadata {
             effect: None,
         },
         type_defs: counter_error_type_defs(),
-        throws: vec![groundhog_contract_spec::ContractExceptionType {
+        throws: vec![thruput_contract_spec::ContractExceptionType {
             selector: COUNTER_ERROR_SELECTOR,
             ty: ContractType::Named {
                 named: spec_id("CounterError"),
@@ -432,8 +432,8 @@ fn decode_abort_reports_unreadable_selector() {
 #[test]
 fn strkey_contract_arguments_match_hex_and_reject_wrong_type() {
     let hex_address = format!("0x{}", "42".repeat(32));
-    let contract_strkey = groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
-    let public_key_strkey = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
+    let contract_strkey = thruput_signing::strkey::format_contract_address(&[0x42; 32].into());
+    let public_key_strkey = thruput_signing::strkey::format_public_key(&[0x42; 32]);
     let metadata = CallMetadata::Local(ContractMetadata {
         interface_name: "test".into(),
         version: "1".into(),
@@ -453,8 +453,8 @@ fn strkey_contract_arguments_match_hex_and_reject_wrong_type() {
 #[test]
 fn strkey_public_key_arguments_match_hex_and_reject_wrong_type() {
     let hex_address = format!("0x{}", "42".repeat(32));
-    let contract_strkey = groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
-    let public_key_strkey = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
+    let contract_strkey = thruput_signing::strkey::format_contract_address(&[0x42; 32].into());
+    let public_key_strkey = thruput_signing::strkey::format_public_key(&[0x42; 32]);
     let metadata = CallMetadata::Local(ContractMetadata {
         interface_name: "test".into(),
         version: "1".into(),
@@ -474,8 +474,8 @@ fn strkey_public_key_arguments_match_hex_and_reject_wrong_type() {
 #[test]
 fn strkey_spec_address_arguments_match_hex_and_reject_wrong_type() {
     let hex_address = format!("0x{}", "42".repeat(32));
-    let contract_strkey = groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
-    let public_key_strkey = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
+    let contract_strkey = thruput_signing::strkey::format_contract_address(&[0x42; 32].into());
+    let public_key_strkey = thruput_signing::strkey::format_public_key(&[0x42; 32]);
     let metadata = CallMetadata::Spec(SpecMethodMetadata {
         interface_name: "test".into(),
         version: "1".into(),

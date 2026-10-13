@@ -1,4 +1,4 @@
-use groundhog_signing::{NATIVE_HOG_SCALE as SCALE, ParseHogAmountError, parse_hog_amount};
+use thruput_signing::{NATIVE_HOG_SCALE as SCALE, ParseHogAmountError, parse_hog_amount};
 
 #[test]
 fn parses_valid_amounts_to_raw_units() {

@@ -14,7 +14,7 @@ jobs:
     name: Check dependency policy
     permissions:
       contents: read
-    uses: groundhogchain/actions/.github/workflows/rust-dependency-policy.yml@v1
+    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@6693fac8133585728ad3a4ca14e3441073b6def8
     with:
       checks: advisories
       registry-name: thruput
@@ -29,4 +29,4 @@ jobs:
     permissions:
       contents: read
       issues: write
-    uses: groundhogchain/actions/.github/workflows/rust-advisory-issue.yml@v1
+    uses: thruputchain/actions/.github/workflows/rust-advisory-issue.yml@6693fac8133585728ad3a4ca14e3441073b6def8

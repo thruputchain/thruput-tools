@@ -3,13 +3,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use groundhog_hogd_backend::status::{StatusProbe, transaction_status};
-use groundhog_json_rpc_server::RpcServerError;
-use groundhog_json_rpc_types::{
+use thruput_hogd_backend::status::{StatusProbe, transaction_status};
+use thruput_json_rpc_server::RpcServerError;
+use thruput_json_rpc_types::{
     hex::Hex0x,
     transaction::{TransactionStatus, TxHash},
 };
-use groundhog_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
+use thruput_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
 
 type IndexerAnswer = Result<Option<TransactionStatus>, RpcServerError>;
 type MempoolAnswer = Result<Option<TransactionStatus>, RpcServerError>;
@@ -57,7 +57,7 @@ impl StatusProbe for Scripted {
 }
 
 fn hash() -> TxHash {
-    TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x11; 32])))
+    TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x11; 32])))
 }
 
 fn committed() -> TransactionStatus {
@@ -67,11 +67,11 @@ fn committed() -> TransactionStatus {
 fn recent_failure() -> TransactionStatus {
     TransactionStatus::from(&TxFailureDiagnostic {
         attempt_height: 43.into(),
-        cause: groundhog_trace::TxFailureCause::TxFailureDbConflict {
+        cause: thruput_trace::TxFailureCause::TxFailureDbConflict {
             conflict: DbConflictDiagnostic {
-                addrkey: groundhog_xdr::types::AddressAndKey {
+                addrkey: thruput_xdr::types::AddressAndKey {
                     address: [0; 32].into(),
-                    key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
+                    key: thruput_xdr::types::StorageKey::FreeNativeTokenBalance,
                 },
                 code: DbConflictCode::ExclusiveLockDenied,
             },
@@ -159,7 +159,7 @@ async fn a_diagnostic_does_not_hide_a_scheduler_error() {
 
 #[tokio::test]
 async fn scheduler_outcomes_override_advisory_indexer_failures() {
-    use groundhog_json_rpc_types::transaction::{
+    use thruput_json_rpc_types::transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource,
     };
     for status in [

@@ -9,15 +9,15 @@
 
 use std::{future::Future, io, net::SocketAddr, process::ExitStatus};
 
-use groundhog_bundle_identity::BundleIdentity;
-use groundhog_json_rpc_api::{AirdropApiServer, GroundhogApiServer, LocalFundingApiServer};
-use groundhog_json_rpc_server::batch::{ConcurrentBatchService, MAX_RPC_BATCH_REQUESTS};
-use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-use groundhog_json_rpc_types::protocol_token::protocol_text;
-use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
-use groundhog_xdr::PROTOCOL_VERSION;
 use jsonrpsee::server::{RpcModule, Server, ServerConfig, ServerHandle};
 use serde::Serialize;
+use thruput_bundle_identity::BundleIdentity;
+use thruput_json_rpc_api::{AirdropApiServer, GroundhogApiServer, LocalFundingApiServer};
+use thruput_json_rpc_server::batch::{ConcurrentBatchService, MAX_RPC_BATCH_REQUESTS};
+use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use thruput_json_rpc_types::protocol_token::protocol_text;
+use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
+use thruput_xdr::PROTOCOL_VERSION;
 
 use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
@@ -372,7 +372,7 @@ async fn start_rpc_server(
     config: &NodeSupervisorConfig,
     readiness: &HogdDevReadiness,
     protocol_version: &str,
-    signer: std::sync::Arc<groundhog_signing::LocalSigner>,
+    signer: std::sync::Arc<thruput_signing::LocalSigner>,
     journal: std::sync::Arc<std::sync::Mutex<crate::funding_journal::FundingJournal>>,
     lock_lease: Option<std::sync::Arc<std::fs::File>>,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
@@ -524,9 +524,9 @@ fn rpc_server_options(
 }
 
 fn validated_local_airdrop_context(
-    manifest: &groundhog_json_rpc_types::runtime_manifest::RuntimeManifest,
+    manifest: &thruput_json_rpc_types::runtime_manifest::RuntimeManifest,
     config: &NodeSupervisorConfig,
-    signer: std::sync::Arc<groundhog_signing::LocalSigner>,
+    signer: std::sync::Arc<thruput_signing::LocalSigner>,
     journal: std::sync::Arc<std::sync::Mutex<crate::funding_journal::FundingJournal>>,
     lock_lease: Option<std::sync::Arc<std::fs::File>>,
 ) -> Result<LocalAirdropContext, NodeSupervisorError> {
@@ -538,7 +538,7 @@ fn validated_local_airdrop_context(
 }
 
 struct RpcServerOptions {
-    view_batch: groundhog_json_rpc_server::ViewBatchConfig,
+    view_batch: thruput_json_rpc_server::ViewBatchConfig,
     view_timeout_ms: u64,
     network_info: NetworkInfo,
     local_airdrop: Option<LocalAirdropContext>,
@@ -546,7 +546,7 @@ struct RpcServerOptions {
     view_gas_limit: u64,
     block_driver_config: BlockDriverConfig,
     rpc_max_connections: u32,
-    rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency,
+    rpc_batch_concurrency: thruput_json_rpc_server::batch::RpcBatchConcurrency,
     bundle_identity: Option<BundleIdentity>,
 }
 
@@ -558,8 +558,8 @@ async fn start_rpc_server_with_read<R, V>(
     options: RpcServerOptions,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
-    R: groundhog_json_rpc_server::ReadPlane + Clone,
-    V: groundhog_json_rpc_server::ViewPlane,
+    R: thruput_json_rpc_server::ReadPlane + Clone,
+    V: thruput_json_rpc_server::ViewPlane,
 {
     let RpcServerOptions {
         view_batch,
@@ -624,7 +624,7 @@ where
             .with_view_timeout_ms(view_timeout_ms)
             .with_view_batch(view_batch),
         BuildInfo::from_build_version(
-            groundhog_json_rpc_server::build_version!(),
+            thruput_json_rpc_server::build_version!(),
             option_env!("GIT_COMMIT"),
         ),
     );

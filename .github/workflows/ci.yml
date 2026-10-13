@@ -22,7 +22,7 @@ jobs:
   dependency-policy:
     permissions:
       contents: read
-    uses: groundhogchain/actions/.github/workflows/rust-dependency-policy.yml@v1
+    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@6693fac8133585728ad3a4ca14e3441073b6def8
     with:
       registry-name: thruput
     secrets:
@@ -32,7 +32,11 @@ jobs:
   workflow-lint:
     permissions:
       contents: read
-    uses: groundhogchain/actions/.github/workflows/workflow-lint.yml@v1
+    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@21f8d7cd8b80908dca701ac9dc8efd89798da085
+    with:
+      lint-app-id: ${{ vars.PROTOCOL_SYNCHRONIZER_APP_ID }}
+    secrets:
+      lint-app-private-key: ${{ secrets.PROTOCOL_SYNCHRONIZER_SECRET_KEY }}
 
   clippy:
     needs: dependency-policy # Check deps before building anything
@@ -51,6 +55,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Clippy (heap-profiling feature)
+        run: cargo clippy --locked -p groundhog-heap-profiling -p thruput-json-rpc-gateway -p thruput-faucet --all-targets --features groundhog-heap-profiling/jemalloc,thruput-json-rpc-gateway/heap-profiling,thruput-faucet/heap-profiling -- -D warnings
 
   test:
     needs: dependency-policy # Check deps before building anything
@@ -81,30 +88,35 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      - name: Test (heap-profiling feature)
+        run: |
+          cargo test --locked -p groundhog-heap-profiling --features jemalloc
+          cargo test --locked -p groundhog-heap-profiling --features jemalloc --release
+
       - name: Verify component version and source reporting
         run: |
           set -euo pipefail
 
           package_args=(
-            -p groundhog-json-rpc-gateway
+            -p thruput-json-rpc-gateway
             -p thruput-cli
-            -p groundhog-rv32-lower
-            -p groundhog-sim
-            -p groundhog-faucet
+            -p thruput-rv32-lower
+            -p thruput-sim
+            -p thruput-faucet
           )
           targets=(
-            groundhog-json-rpc-gateway:hog-gateway
+            thruput-json-rpc-gateway:hog-gateway
             thruput-cli:thruput
-            groundhog-rv32-lower:rv32-lower
-            groundhog-sim:hogsim
-            groundhog-faucet:groundhog-faucet
+            thruput-rv32-lower:rv32-lower
+            thruput-sim:hogsim
+            thruput-faucet:thruput-faucet
           )
           source_commit=$(git rev-parse HEAD)
           export GROUNDHOG_SOURCE_COMMIT="$source_commit"
 
           cargo test --quiet --locked -p thruput-cli \
             --test cli_integration_test version_flag
-          cargo test --quiet --locked -p groundhog-json-rpc-gateway \
+          cargo test --quiet --locked -p thruput-json-rpc-gateway \
             --test version_identity
 
           env -u GROUNDHOG_DISTRIBUTION_VERSION \
@@ -159,16 +171,6 @@ jobs:
           else
             thruput new my-${{ matrix.template }} --template ${{ matrix.template }}
           fi
-
-      # A release PR advances the scaffold to a client version that does not
-      # exist in the registry until after merge. Exercise that exact source
-      # without weakening the version emitted for real generated projects.
-      - name: Use checked-out RPC client before registry publication
-        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
-        run: |
-          printf '\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\ngroundhog-json-rpc-client = { path = "%s" }\n' \
-            "$GITHUB_WORKSPACE/crates/json-rpc/json-rpc-client" \
-            >> .cargo/config.toml
 
       # Plain `cargo build` is what IDEs run; it must succeed without `dev`.
       - name: Host build (cargo build)
@@ -269,7 +271,7 @@ jobs:
         with:
           node-version: '22'
           registry-url: https://npm.pkg.github.com
-          scope: '@groundhogchain'
+          scope: '@thruputchain'
       - name: Build CLI and install selected runtime
         run: |
           cargo build --locked -p thruput-cli

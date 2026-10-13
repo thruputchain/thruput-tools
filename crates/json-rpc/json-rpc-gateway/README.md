@@ -4,7 +4,7 @@ The standalone JSON-RPC gateway connects public clients to hogd's internal x23
 services. It shares the public server implementation with the local node;
 production connections, admission, deadlines, and recovery remain gateway-owned.
 Read the [gateway design](../../../docs/gateway/system-design.md) for those
-boundaries and the [OpenRPC snapshot](../open-rpc-spec/snapshots/groundhog-spec.json)
+boundaries and the [OpenRPC snapshot](../open-rpc-spec/snapshots/thruput-spec.json)
 for methods and payloads.
 
 ## Build
@@ -12,8 +12,8 @@ for methods and payloads.
 From the workspace root, with private Thruput registry access:
 
 ```sh
-cargo build --locked -p groundhog-json-rpc-gateway --bin hog-gateway
-cargo test --locked -p groundhog-json-rpc-gateway
+cargo build --locked -p thruput-json-rpc-gateway --bin hog-gateway
+cargo test --locked -p thruput-json-rpc-gateway
 ```
 
 ## Run
@@ -38,6 +38,31 @@ in the faucet service. See [airdrop.rs](src/airdrop.rs) for startup and degraded
 behavior.
 
 ## Operate and measure
+
+Heap profiling is opt-in on the existing private observability listener:
+
+- Set `GROUNDHOG_HEAP_PROFILING=1` to activate profiling. The path returns 404
+  when the switch is unset. `--dump-effective-config` bypasses profiling initialization.
+- On a non-loopback `--observability-listen` address, the heap route stays 404
+  unless `--pprof-allow-remote` or `GROUNDHOG_PPROF_ALLOW_REMOTE=1` is set.
+  Metrics and health are unaffected; startup logs why the heap route is disabled.
+- The heap route answers only GET/HEAD, and only when the `Host` header is
+  `localhost` or a loopback IP (with the remote opt-in, any IP literal). DNS-name
+  Hosts and cross-origin `Origin` headers get 403 to block DNS rebinding, so remote
+  scrapes must address the listener by IP. `/metrics` and the health routes do not
+  check `Host`, so Prometheus can still scrape by hostname.
+- `GET /debug/pprof/heap` returns an uncompressed pprof protobuf with
+  `Content-Type: application/octet-stream`.
+- Dump and conversion run on a blocking worker; a concurrent dump request returns HTTP 429.
+- Dumps require a writable temporary directory. Private dump files use mode 0600
+  and are removed after each request.
+- Build on Linux with `--features heap-profiling` to use jemalloc profiling with
+  a 512 KiB average allocation sampling interval. Linux release archives,
+  including the Zen 5 build, are built this way, with profiling inactive until
+  `GROUNDHOG_HEAP_PROFILING=1`. Default builds keep the system allocator and
+  fail startup if `GROUNDHOG_HEAP_PROFILING=1`.
+- Profiles are symbolized in process with function names, plus file and line when
+  debuginfo is present. Mappings carry GNU build IDs.
 
 - [Health and metrics](../../../docs/gateway/observability-smoke-test.md)
 - [Local benchmark scenarios](../../../docs/gateway/bench-scenarios.md)

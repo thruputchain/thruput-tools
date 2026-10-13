@@ -6,12 +6,13 @@ use std::sync::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use groundhog_json_rpc_api::{AirdropApiServer, LocalFundingApiServer};
-use groundhog_json_rpc_server::{
+use jsonrpsee::core::RpcResult;
+use thruput_json_rpc_api::{AirdropApiServer, LocalFundingApiServer};
+use thruput_json_rpc_server::{
     ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane,
     tx::validate_raw_transaction_bytes,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     ContractAddress,
     airdrop::{
         AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse,
@@ -22,12 +23,11 @@ use groundhog_json_rpc_types::{
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, RuntimeManifest},
     transaction::{SchedulerTransactionError, TransactionStatus, TxHash},
 };
-use groundhog_signing::{
+use thruput_signing::{
     DEFAULT_TX_GAS_LIMIT, LocalSigner, PubkeyAccount, SignTransactionParams,
     encode_signed_transaction_xdr, sign_transaction, transaction_hash,
 };
-use groundhog_tx_validation::NetworkConfigParams;
-use jsonrpsee::core::RpcResult;
+use thruput_tx_validation::NetworkConfigParams;
 use tokio::sync::Semaphore;
 
 use crate::{
@@ -42,7 +42,7 @@ const LOCAL_AIRDROP_RETRY_AFTER_SECONDS: u64 = 1;
 
 #[derive(Clone)]
 pub(crate) struct LocalAirdropContext {
-    network_hash: groundhog_xdr::types::NetworkHash,
+    network_hash: thruput_xdr::types::NetworkHash,
     signer: Arc<LocalSigner>,
     config: LocalAirdropConfig,
     journal: Arc<Mutex<FundingJournal>>,
@@ -156,10 +156,10 @@ impl LocalAirdropRpc {
             lock_lease: None,
             timeout: config.request_timeout,
             raw_amount: config.raw_amount,
-            faucet: Hex0x(groundhog_xdr::types::ContractAddress::from([0; 32])),
+            faucet: Hex0x(thruput_xdr::types::ContractAddress::from([0; 32])),
             journal: Arc::new(Mutex::new(FundingJournal::memory(
                 [0; 32].into(),
-                Hex0x(groundhog_xdr::types::ContractAddress::from([0; 32])),
+                Hex0x(thruput_xdr::types::ContractAddress::from([0; 32])),
             ))),
             block_driver,
         }
@@ -291,7 +291,7 @@ impl LocalAirdropRpc {
         let request = attempt.request.clone();
         let retained = RetainedFundingTransaction {
             tx_hash: signed.tx_hash,
-            signed_transaction: groundhog_json_rpc_types::hex::HexBytes(signed.bytes.clone()),
+            signed_transaction: thruput_json_rpc_types::hex::HexBytes(signed.bytes.clone()),
         };
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -388,7 +388,7 @@ impl LocalAirdropRpc {
                 attempt.request.recipient,
                 attempt.request.raw_amount.clone(),
                 signed.tx_hash,
-                groundhog_json_rpc_types::hex::HexBytes(signed.bytes.clone()),
+                thruput_json_rpc_types::hex::HexBytes(signed.bytes.clone()),
             )
         };
         if replay {
@@ -771,7 +771,7 @@ trait AirdropTransactionBuilder: Send + Sync + 'static {
 }
 
 struct NativeAirdropBuilder {
-    network_hash: groundhog_xdr::types::NetworkHash,
+    network_hash: thruput_xdr::types::NetworkHash,
     signer: Arc<LocalSigner>,
     next_nonce: AtomicU64,
 }
@@ -781,10 +781,10 @@ struct NativeAirdropBuilder {
 pub(crate) fn validate_retained_funding(
     request: &FundAccountRequest,
     retained: &RetainedFundingTransaction,
-    network_hash: groundhog_xdr::types::NetworkHash,
+    network_hash: thruput_xdr::types::NetworkHash,
     signer: Arc<LocalSigner>,
 ) -> Result<(), String> {
-    let retained_tx: groundhog_xdr::transaction::SignedTransaction =
+    let retained_tx: thruput_xdr::transaction::SignedTransaction =
         xdrs::txs::decode(&retained.signed_transaction.0)
             .map_err(|_| "retained funding transaction is malformed")?;
     let expected = NativeAirdropBuilder {
@@ -816,13 +816,12 @@ impl AirdropTransactionBuilder for NativeAirdropBuilder {
         let build = || {
             let account =
                 PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0);
-            let calldata =
-                groundhog_signing::native_hog_transfer_calldata(&recipient.0, raw_amount)?;
-            let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
-                groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+            let calldata = thruput_signing::native_hog_transfer_calldata(&recipient.0, raw_amount)?;
+            let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
+                thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
                     account: &account,
-                    target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
-                    target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+                    target_address: thruput_signing::NATIVE_HOG_ADDRESS,
+                    target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
                     target_calldata: &calldata,
                     gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
                     target_gas_limit: DEFAULT_TX_GAS_LIMIT,
@@ -838,7 +837,7 @@ impl AirdropTransactionBuilder for NativeAirdropBuilder {
                 &self.network_hash,
             )?;
             let bytes = encode_signed_transaction_xdr(&signed)?;
-            Ok::<_, groundhog_signing::SigningError>(SignedAirdrop {
+            Ok::<_, thruput_signing::SigningError>(SignedAirdrop {
                 bytes,
                 tx_hash: TxHash(Hex0x(tx_hash)),
             })
@@ -856,7 +855,7 @@ trait AirdropBackend: Send + Sync + 'static {
     async fn chain_tip(
         &self,
         context: RpcRequestContext,
-    ) -> Result<groundhog_json_rpc_types::block::ChainTip, RpcServerError>;
+    ) -> Result<thruput_json_rpc_types::block::ChainTip, RpcServerError>;
     async fn submit(
         &self,
         context: RpcRequestContext,
@@ -866,7 +865,7 @@ trait AirdropBackend: Send + Sync + 'static {
         &self,
         context: RpcRequestContext,
         tx_hash: TxHash,
-    ) -> Result<Option<groundhog_json_rpc_types::receipt::TransactionReceipt>, RpcServerError>;
+    ) -> Result<Option<thruput_json_rpc_types::receipt::TransactionReceipt>, RpcServerError>;
     async fn status(
         &self,
         context: RpcRequestContext,
@@ -888,7 +887,7 @@ where
     async fn chain_tip(
         &self,
         context: RpcRequestContext,
-    ) -> Result<groundhog_json_rpc_types::block::ChainTip, RpcServerError> {
+    ) -> Result<thruput_json_rpc_types::block::ChainTip, RpcServerError> {
         within_request_deadline(context, async {
             Ok(self.submit_chain.chain_tip(context).await?.tip)
         })
@@ -923,7 +922,7 @@ where
         &self,
         context: RpcRequestContext,
         tx_hash: TxHash,
-    ) -> Result<Option<groundhog_json_rpc_types::receipt::TransactionReceipt>, RpcServerError> {
+    ) -> Result<Option<thruput_json_rpc_types::receipt::TransactionReceipt>, RpcServerError> {
         within_request_deadline(context, self.read.transaction_receipt(context, tx_hash)).await
     }
 

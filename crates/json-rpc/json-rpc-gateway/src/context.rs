@@ -7,26 +7,27 @@ use std::{
     time::Duration,
 };
 
-use groundhog_db_gateway::DbGateway_DbGateway1_Client;
-use groundhog_hogd_backend::{IntroOutcome, intro};
-use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
-use groundhog_json_rpc_types::protocol_token::{protocol_from_text, protocol_text};
-use groundhog_scheduler::sched_gateway::{
+use rpc_driver::{CanceledCallPolicy, ConnectionConfig, RpcSender};
+use thruput_db_gateway::DbGateway_DbGateway1_Client;
+use thruput_hogd_backend::{IntroOutcome, intro};
+use thruput_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
+use thruput_json_rpc_types::protocol_token::{protocol_from_text, protocol_text};
+use thruput_scheduler::sched_gateway::{
     SchedGateway_SchedGateway1_Client, SchedGatewayIntroOutcome,
 };
-use groundhog_scp::network::ProtocolCommit;
-use groundhog_view::ViewGateway_ViewGateway1_Client;
-use groundhog_x23_transport::{
+use thruput_scp::network::ProtocolCommit;
+use thruput_view::ViewGateway_ViewGateway1_Client;
+use thruput_x23_transport::{
     ConnectError, PoolKind, hogd_large_message_config, try_connect, try_connect_pool,
     try_connect_with_canceled_call_policy,
 };
-use groundhog_xdr::PROTOCOL_VERSION;
-use rpc_driver::{CanceledCallPolicy, ConnectionConfig, RpcSender};
+use thruput_xdr::PROTOCOL_VERSION;
 use tokio::{
     sync::{RwLock, Semaphore},
     task::{AbortHandle, JoinHandle},
     time::Instant,
 };
+use tracing::Instrument;
 
 use crate::config::{GatewayConfig, HealthBackend, X23MultiplexConnections};
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
@@ -471,7 +472,14 @@ pub(crate) async fn connect_optional_scheduler(
     let client = SchedulerClient::new(client, lookup_client, probe_client);
     let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
-    let intro_result = client.probe_client().schedgateway_intro(&protocol).await;
+    let intro_result = client
+        .probe_client()
+        .schedgateway_intro(&protocol)
+        .instrument(crate::telemetry::backend_span(
+            "scheduler",
+            "schedgateway_intro",
+        ))
+        .await;
     if let Some(metrics) = metrics {
         let outcome = match &intro_result {
             Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess) => BackendRequestOutcome::Ok,
@@ -516,7 +524,7 @@ fn intro_rejection_reason(outcome: IntroOutcome, protocol_version: &str) -> Stri
             "{service} intro mismatch: gateway speaks protocol {protocol_version}, \
              but the backend rejected it ({name}); pass `--hogd-protocol`/\
              `hogd_protocol_override` for a matching backend protocol, or rebuild the gateway \
-             against a matching groundhog-xdr"
+             against a matching thruput-xdr"
         );
     }
 
@@ -668,6 +676,10 @@ where
     let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
     let intro_result = tokio::time::timeout(intro_timeout, intro(client.probe_client(), &protocol))
+        .instrument(crate::telemetry::backend_span(
+            names.backend.as_str(),
+            names.intro_service,
+        ))
         .await
         .map(|result| result.map(classify));
     if let Some(metrics) = metrics {
@@ -787,35 +799,35 @@ pub(crate) async fn connect_optional_view_gateway(
 
 #[cfg(test)]
 mod tests {
-    use groundhog_scp::network::ProtocolCommit as Protocol;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use thruput_scp::network::ProtocolCommit as Protocol;
 
     use async_trait::async_trait;
-    use groundhog_db_gateway::DbGatewayIntroOutcome;
-    use groundhog_db_gateway::{
+    use rpc_driver::{ProgramError, RpcServer, ServiceMap};
+    use thruput_db_gateway::DbGatewayIntroOutcome;
+    use thruput_db_gateway::{
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
     };
-    use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
-    use groundhog_indexer::{
+    use thruput_indexer::IndexerBlockExplorerIntroOutcome;
+    use thruput_indexer::{
         AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPageResult,
         EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, TransactionPageResult,
         TransactionQuery, TransactionRefPageResult, TxInfoResult,
     };
-    use groundhog_scheduler::{
+    use thruput_scheduler::{
         ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount,
         SchedGatewaySubmitOutcomeBatch, SchedulerTransactionOutcomeBatch,
         sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
     };
-    use groundhog_view::ViewGatewayIntroOutcome;
-    use groundhog_view::{
+    use thruput_view::ViewGatewayIntroOutcome;
+    use thruput_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
     };
-    use groundhog_xdr::transaction::{
+    use thruput_xdr::transaction::{
         OptSignedTransactionBatch, TransactionHash, TransactionHashBatch,
     };
-    use groundhog_xdr::view::TransactionViewQuery;
-    use rpc_driver::{ProgramError, RpcServer, ServiceMap};
+    use thruput_xdr::view::TransactionViewQuery;
     use tokio::net::TcpListener;
 
     use super::*;
@@ -929,8 +941,8 @@ mod tests {
     impl ViewGateway_ViewGateway1 for IntroRejectedViewGateway {
         async fn viewgateway_view_batch(
             &self,
-            _: groundhog_view::ViewGatewayBatchQuery,
-        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            _: thruput_view::ViewGatewayBatchQuery,
+        ) -> Result<thruput_view::ViewGatewayBatchResult, ProgramError> {
             panic!("batch is not used by this connection test")
         }
         async fn viewgateway_intro(
@@ -981,7 +993,7 @@ mod tests {
 
         async fn get_block_by_height(
             &self,
-            _arg0: groundhog_xdr::types::BlockHeight,
+            _arg0: thruput_xdr::types::BlockHeight,
         ) -> Result<BlockLookupResult, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
@@ -1016,9 +1028,9 @@ mod tests {
     impl DbGateway_DbGateway1 for TestDbGateway {
         async fn dbgateway_get_config(
             &self,
-        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
-            Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
-                error: groundhog_scheduler::RPCError::kRPCUnimplemented.0,
+        ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+            Ok(thruput_db_gateway::DbGatewayConfigResult::Default {
+                error: thruput_scheduler::RPCError::kRPCUnimplemented.0,
             })
         }
         async fn dbgateway_intro(
@@ -1054,8 +1066,8 @@ mod tests {
     impl ViewGateway_ViewGateway1 for ProtocolCheckingViewGateway {
         async fn viewgateway_view_batch(
             &self,
-            _: groundhog_view::ViewGatewayBatchQuery,
-        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            _: thruput_view::ViewGatewayBatchQuery,
+        ) -> Result<thruput_view::ViewGatewayBatchResult, ProgramError> {
             panic!("batch is not used by this connection test")
         }
         async fn viewgateway_intro(
@@ -1081,8 +1093,8 @@ mod tests {
     impl ViewGateway_ViewGateway1 for SlowIntroViewGateway {
         async fn viewgateway_view_batch(
             &self,
-            _: groundhog_view::ViewGatewayBatchQuery,
-        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            _: thruput_view::ViewGatewayBatchQuery,
+        ) -> Result<thruput_view::ViewGatewayBatchResult, ProgramError> {
             panic!("batch is not used by this connection test")
         }
         async fn viewgateway_intro(

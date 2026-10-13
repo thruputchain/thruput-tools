@@ -10,9 +10,9 @@
 
 use std::borrow::Cow;
 
-use groundhog_indexer::indexer as wire_indexer;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use thruput_indexer::indexer as wire_indexer;
 use xdr_common::{BytesM, VecM};
 
 use crate::hex::{HexBytes, Topic};
@@ -487,7 +487,7 @@ impl From<EventQuery> for wire_indexer::EventQuery {
     }
 }
 
-impl From<IterationOrder> for groundhog_indexer::pagination::IterationOrder {
+impl From<IterationOrder> for thruput_indexer::pagination::IterationOrder {
     fn from(value: IterationOrder) -> Self {
         match value {
             IterationOrder::Ascending => Self::IterationOrderAscending,
@@ -496,7 +496,7 @@ impl From<IterationOrder> for groundhog_indexer::pagination::IterationOrder {
     }
 }
 
-impl From<BlockAnchor> for groundhog_indexer::pagination::BlockAnchor {
+impl From<BlockAnchor> for thruput_indexer::pagination::BlockAnchor {
     fn from(value: BlockAnchor) -> Self {
         match value {
             BlockAnchor::AtBeginning => Self::AnchorAtBeginning,
@@ -506,23 +506,23 @@ impl From<BlockAnchor> for groundhog_indexer::pagination::BlockAnchor {
     }
 }
 
-impl From<PaginationCursor> for groundhog_indexer::pagination::PaginationCursor {
+impl From<PaginationCursor> for thruput_indexer::pagination::PaginationCursor {
     fn from(value: PaginationCursor) -> Self {
         BytesM(value.0)
     }
 }
 
-impl From<groundhog_indexer::pagination::PaginationCursor> for PaginationCursor {
-    fn from(value: groundhog_indexer::pagination::PaginationCursor) -> Self {
+impl From<thruput_indexer::pagination::PaginationCursor> for PaginationCursor {
+    fn from(value: thruput_indexer::pagination::PaginationCursor) -> Self {
         Self(value.0)
     }
 }
 
-fn map_topic_list(topics: TopicList) -> VecM<groundhog_xdr::event::Topic> {
+fn map_topic_list(topics: TopicList) -> VecM<thruput_xdr::event::Topic> {
     VecM(
         topics
             .into_iter()
-            .map(|topic| groundhog_xdr::event::Topic::from(topic.0))
+            .map(|topic| thruput_xdr::event::Topic::from(topic.0))
             .collect(),
     )
 }

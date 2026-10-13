@@ -1,7 +1,7 @@
 //! ELF validation and the top-level [`lower`] entry point.
 //!
 //! ELF layout checks live here and in [`elf`]; output validation uses
-//! `groundhog-rv32-artifact`. Since v4, dispatch lives in the guest (`_start`
+//! `thruput-rv32-artifact`. Since v4, dispatch lives in the guest (`_start`
 //! reads the method id seeded in registers), so the lowerer no longer scans the
 //! symbol table: the entry contract is `e_entry == 0` (enforced in [`elf::parse_elf`]) plus the
 //! `.text` layout rules below. Stripped release builds are valid inputs.
@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use crate::elf::{self, Section};
 use crate::error::{LowerError, Result, invalid};
-use groundhog_rv32_artifact::{
+use thruput_rv32_artifact::{
     DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, build_artifact, verify_artifact,
 };
 
@@ -59,7 +59,7 @@ pub const NULL_GUARD_BYTES: u32 = 8;
 /// bytes rather than decoding them. Recognizing every version keeps a spec
 /// format bump from turning into a lowering failure — or worse, spec content
 /// copied into the deployed memory image — over bytes that are discarded
-/// either way. Mirrors `groundhog_spec_tool::RAW_SECTION_PREFIX`; kept local
+/// either way. Mirrors `thruput_spec_tool::RAW_SECTION_PREFIX`; kept local
 /// so the production lowerer has no spec-tool dependency, and pinned to it by
 /// `spec_metadata_section_names_match_spec_tool`.
 pub const RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
@@ -72,7 +72,7 @@ pub const RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
 /// older `groundhogspecv0` must still be stripped rather than reaching the
 /// "unexpected alloc section" path: these bytes are discarded either way, so
 /// a format bump is no reason to fail a lowering. Mirrors
-/// `groundhog_spec_tool::FINAL_SECTION_NAME`, which this is a prefix of, and
+/// `thruput_spec_tool::FINAL_SECTION_NAME`, which this is a prefix of, and
 /// is pinned to it by `spec_metadata_section_names_match_spec_tool`.
 pub const FINAL_SPEC_SECTION_PREFIX: &str = "groundhogspecv";
 

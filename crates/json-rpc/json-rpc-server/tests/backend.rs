@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use groundhog_json_rpc_server::backend::RpcRequestContext;
+use thruput_json_rpc_server::backend::RpcRequestContext;
 
 #[test]
 fn cap_from_start_does_not_reset_after_elapsed_work() {

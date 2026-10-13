@@ -4,13 +4,14 @@
 
 use std::sync::Arc;
 
-use groundhog_json_rpc_api::GroundhogApiServer;
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
-use groundhog_json_rpc_server::{
+use jsonrpsee::server::{Server, ServerHandle};
+use thruput_json_rpc_api::GroundhogApiServer;
+use thruput_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
+use thruput_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
     RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
     address_auth::{AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey, AuthSigner},
     block::{BlockInfo, ChainTip},
@@ -26,7 +27,6 @@ use groundhog_json_rpc_types::{
         AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
     },
 };
-use jsonrpsee::server::{Server, ServerHandle};
 use tokio::sync::Mutex;
 use xdr_common::VecM;
 
@@ -42,7 +42,7 @@ const TIP_MAX_CONTRACT_SIZE_BYTES: u32 = 1_048_576;
 type StorageRead = (ContractAddress, [u8; 32]);
 
 fn test_network_info() -> NetworkInfo {
-    NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
+    NetworkInfo::new(NetworkHash::from(thruput_xdr::types::SHA256Hash::from(
         [0x07; 32],
     )))
 }
@@ -59,13 +59,11 @@ struct PopulatedReadBackend {
 fn canned_event_page() -> EventPage {
     EventPage {
         events: vec![IdentifiedEvent {
-            tx_hash: TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from(EVENT_TX_HASH))),
+            tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from(EVENT_TX_HASH))),
             block_height: BlockHeight::from(11),
             sequence_number: 3,
             event: EmittedEvent {
-                contract_address: Hex0x(groundhog_xdr::types::ContractAddress::from(
-                    EVENT_CONTRACT,
-                )),
+                contract_address: Hex0x(thruput_xdr::types::ContractAddress::from(EVENT_CONTRACT)),
                 topics: vec![Topic(EVENT_TOPIC)],
                 data: HexBytes(EVENT_DATA.to_vec()),
             },
@@ -80,11 +78,11 @@ fn canned_ref_page() -> TransactionRefPage {
     TransactionRefPage {
         refs: vec![
             TransactionRef {
-                tx_hash: TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x51; 32]))),
+                tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x51; 32]))),
                 height: BlockHeight::from(5),
             },
             TransactionRef {
-                tx_hash: TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x52; 32]))),
+                tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x52; 32]))),
                 height: BlockHeight::from(6),
             },
         ],
@@ -96,18 +94,18 @@ fn canned_ref_page() -> TransactionRefPage {
 
 fn canned_block_info() -> BlockInfo {
     BlockInfo {
-        block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x71; 32])),
-        protocol: groundhog_xdr::types::Protocol::from(4),
-        network_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x72; 32])),
-        config_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x79; 32])),
-        proposer: Hex0x(groundhog_xdr::validator::ValidatorID::from([0x73; 32])),
-        block_timepoint: groundhog_xdr::types::TimePoint::from(1_700_000_000),
+        block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x71; 32])),
+        protocol: thruput_xdr::types::Protocol::from(4),
+        network_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x72; 32])),
+        config_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x79; 32])),
+        proposer: Hex0x(thruput_xdr::validator::ValidatorID::from([0x73; 32])),
+        block_timepoint: thruput_xdr::types::TimePoint::from(1_700_000_000),
         block_height: BlockHeight::from(33),
-        txs_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x74; 32])),
-        storage_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x75; 32])),
-        events_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x76; 32])),
-        prev_block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x77; 32])),
-        proposal_txs_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x78; 32])),
+        txs_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x74; 32])),
+        storage_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x75; 32])),
+        events_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x76; 32])),
+        prev_block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x77; 32])),
+        proposal_txs_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x78; 32])),
         upgrades: vec![HexBytes(vec![0x01]), HexBytes(vec![0x02, 0x03])],
     }
 }
@@ -129,12 +127,12 @@ impl ChainPlane for PopulatedReadBackend {
         Ok(TipReading::new(
             ChainTip {
                 height: BlockHeight::from(42),
-                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(TIP_HASH)),
+                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from(TIP_HASH)),
             },
-            groundhog_xdr::network_config::NetworkConfig::_0 {
-                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+            thruput_xdr::network_config::NetworkConfig::_0 {
+                v0: thruput_xdr::network_config::NetworkConfigV0 {
                     params: VecM(vec![
-                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxContractSizeBytes {
+                        thruput_xdr::network_config::ConfigParam::kConfigParamMaxContractSizeBytes {
                             max_contract_size_bytes: TIP_MAX_CONTRACT_SIZE_BYTES,
                         },
                     ]),
@@ -248,14 +246,14 @@ fn canned_auth_data() -> AddressAuthDataInfo {
             AuthSigner {
                 key_id: 0,
                 public_key: AuthPublicKey::Ed25519 {
-                    key: Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x31; 32])),
+                    key: Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x31; 32])),
                 },
                 max_weight: 1,
             },
             AuthSigner {
                 key_id: 4,
                 public_key: AuthPublicKey::Ed25519 {
-                    key: Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x32; 32])),
+                    key: Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x32; 32])),
                 },
                 max_weight: 2,
             },
@@ -297,7 +295,7 @@ fn populated_event_query() -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
             contract_addresses: ContractAddressList(VecM(vec![Hex0x(
-                groundhog_xdr::types::ContractAddress::from(EVENT_CONTRACT),
+                thruput_xdr::types::ContractAddress::from(EVENT_CONTRACT),
             )])),
             topics: EventTopicFilter {
                 topic0: TopicList(VecM(vec![Topic(EVENT_TOPIC)])),
@@ -330,13 +328,13 @@ async fn get_events_roundtrips_a_populated_page() {
     let event = &page.events[0];
     assert_eq!(
         event.tx_hash.0.0,
-        groundhog_xdr::types::SHA256Hash::from(EVENT_TX_HASH)
+        thruput_xdr::types::SHA256Hash::from(EVENT_TX_HASH)
     );
     assert_eq!(*event.block_height, 11);
     assert_eq!(event.sequence_number, 3);
     assert_eq!(
         event.event.contract_address.0,
-        groundhog_xdr::types::ContractAddress::from(EVENT_CONTRACT)
+        thruput_xdr::types::ContractAddress::from(EVENT_CONTRACT)
     );
     assert_eq!(event.event.topics, vec![Topic(EVENT_TOPIC)]);
     assert_eq!(event.event.data.0, EVENT_DATA);
@@ -353,7 +351,7 @@ async fn get_transactions_by_address_roundtrips_a_populated_page() {
     let queries = backend.address_queries.clone();
     let (client, handle) = start_server(backend).await;
     let query = AddressTransactionQuery {
-        address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x31; 32])),
+        address: Hex0x(thruput_xdr::types::ContractAddress::from([0x31; 32])),
         order: IterationOrder::Ascending,
         anchor: BlockAnchor::AtBeginning,
         cursor: PaginationCursor(vec![]),
@@ -384,7 +382,7 @@ async fn get_storage_at_roundtrips_a_bytestring_item() {
     let backend = PopulatedReadBackend::default();
     let reads = backend.storage_reads.clone();
     let (client, handle) = start_server(backend).await;
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0x61; 32]));
+    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([0x61; 32]));
     let key = [0x62u8; 32];
 
     let read = client
@@ -407,7 +405,7 @@ async fn get_storage_at_roundtrips_a_bytestring_item() {
 #[tokio::test]
 async fn get_balance_roundtrips_a_decimal_string_balance() {
     let (client, handle) = start_server(PopulatedReadBackend::default()).await;
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0x64; 32]));
+    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([0x64; 32]));
 
     let balance = client
         .get_balance(address)
@@ -425,7 +423,7 @@ async fn get_balance_roundtrips_a_decimal_string_balance() {
 #[tokio::test]
 async fn get_address_auth_data_roundtrips_signers_and_threshold() {
     let (client, handle) = start_server(PopulatedReadBackend::default()).await;
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0x65; 32]));
+    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([0x65; 32]));
 
     let read = client
         .get_address_auth_data(address)
@@ -451,7 +449,7 @@ async fn chain_tip_roundtrips_height_and_hash() {
     assert_eq!(*tip.height, 42);
     assert_eq!(
         tip.block_hash.0,
-        groundhog_xdr::types::SHA256Hash::from(TIP_HASH)
+        thruput_xdr::types::SHA256Hash::from(TIP_HASH)
     );
 
     stop(handle).await;

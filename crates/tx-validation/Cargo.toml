@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-tx-validation"
+name = "thruput-tx-validation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,9 +16,9 @@ description = "Off-chain mirror of the bounds hogd checks before executing a tra
 workspace = true
 
 [dependencies]
-groundhog-json-rpc-types = { workspace = true }
-groundhog-rv32-artifact = { workspace = true }
-groundhog-xdr = { workspace = true }
+thruput-json-rpc-types = { workspace = true }
+thruput-rv32-artifact = { workspace = true }
+thruput-xdr = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

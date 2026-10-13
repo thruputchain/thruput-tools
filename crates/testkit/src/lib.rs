@@ -24,6 +24,7 @@
 mod account;
 pub mod agent;
 mod artifact;
+pub mod caller;
 pub mod clock;
 pub mod contract;
 pub mod error;
@@ -38,23 +39,25 @@ pub mod scenario;
 pub use account::{DeployOptions, Deployed, SubmittedDeploy};
 pub use agent::{Agent, AgentContext, AgentId};
 pub use artifact::ArtifactKind;
+pub use caller::Caller;
 pub use clock::Clock;
 pub use contract::{
-    Contract, ContractEntrypointID, SubmittedContractCall, entrypoint_id, try_entrypoint_id,
+    Contract, ContractCall, ContractEntrypointID, SubmittedContractCall, entrypoint_id,
+    try_entrypoint_id,
 };
 pub use error::{AgentFailure, AgentFailures, Result, TestkitError};
-pub use groundhog_node_supervisor::{
-    BlockDriverConfig, BlockDriverMode, BlockProductionError, LogLevel, ProducedBlock,
-};
-pub use groundhog_signing::default_wallet::WalletInitCall;
 pub use logging::init_tracing;
 pub use mailbox::{Envelope, Mailbox, Message};
 pub use network::{LocalNetworkConfig, Network, NetworkConfig, SubmittedTransaction};
 pub use rng::AgentRng;
 pub use scenario::{AgentOutcome, Scenario, ScenarioBuilder, ScenarioReport};
+pub use thruput_node_supervisor::{
+    BlockDriverConfig, BlockDriverMode, BlockProductionError, LogLevel, ProducedBlock,
+};
+pub use thruput_signing::default_wallet::WalletInitCall;
 
 // Re-exports so agent code can name RPC/XDR types and encode calldata without
 // taking direct dependencies on these crates.
-pub use groundhog_json_rpc_types as rpc_types;
-pub use groundhog_xdr as xdr;
+pub use thruput_json_rpc_types as rpc_types;
+pub use thruput_xdr as xdr;
 pub use xdrs;

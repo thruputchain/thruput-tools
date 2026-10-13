@@ -1,14 +1,15 @@
 use std::{collections::BTreeMap, future::Future, path::PathBuf, sync::Arc, time::Duration};
 
-use groundhog_build_info::BuildVersion;
-use groundhog_hogd_backend::{IntroOutcome, intro, scheduler as shared_scheduler};
-use groundhog_json_rpc_types::{BlockHeight, NetworkHashHex};
-use groundhog_scheduler::{DbTip, ExpectedDBTip};
-use groundhog_scp::network::ProtocolCommit as Protocol;
-use groundhog_x23_transport::ConnectError;
 use serde::Serialize;
+use thruput_build_info::BuildVersion;
+use thruput_hogd_backend::{IntroOutcome, intro, scheduler as shared_scheduler};
+use thruput_json_rpc_types::{BlockHeight, NetworkHashHex};
+use thruput_scheduler::{DbTip, ExpectedDBTip};
+use thruput_scp::network::ProtocolCommit as Protocol;
+use thruput_x23_transport::ConnectError;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{sync::RwLock, task::JoinHandle, time::Instant};
+use tracing::Instrument;
 
 use crate::{
     airdrop::HostedAirdrop,
@@ -933,7 +934,11 @@ async fn probe_scheduler(
     } else {
         let started_at = Instant::now();
         let probe_client = client.probe_client().clone();
-        let mut handle = tokio::spawn(async move { probe_client.schedgateway_get_tip().await });
+        let mut handle = tokio::spawn(
+            async move { probe_client.schedgateway_get_tip().await }.instrument(
+                crate::telemetry::backend_span("scheduler", "schedgateway_get_tip"),
+            ),
+        );
         if let Ok(result) = tokio::time::timeout(probe_timeout, &mut handle).await {
             (
                 result.unwrap_or(Err(rpc_driver::RpcError::SystemError)),
@@ -1048,6 +1053,10 @@ async fn probe_quarantined_scheduler(
             .probe_client()
             .schedgateway_pending_tx_count(),
     )
+    .instrument(crate::telemetry::backend_span(
+        "scheduler",
+        "schedgateway_pending_tx_count",
+    ))
     .await;
     let outcome = match &pending_count_result {
         Err(_) => BackendRequestOutcome::Timeout,
@@ -1089,6 +1098,10 @@ async fn probe_quarantined_scheduler_tip(
         probe_timeout,
         quarantined.client.probe_client().schedgateway_get_tip(),
     )
+    .instrument(crate::telemetry::backend_span(
+        "scheduler",
+        "schedgateway_get_tip",
+    ))
     .await;
     let answer = rpc_result
         .map(|result| result.map(|result| shared_scheduler::tip_answer(SCHEDULER, result)));
@@ -1227,6 +1240,10 @@ async fn probe_optional_backend<C: Clone, O>(
     };
     let started_at = Instant::now();
     let rpc_result = tokio::time::timeout(probe_timeout, intro(client.probe_client(), protocol))
+        .instrument(crate::telemetry::backend_span(
+            names.backend.as_str(),
+            names.intro_service,
+        ))
         .await
         .map(|result| result.map(classify));
     let outcome = match &rpc_result {
@@ -1308,7 +1325,7 @@ async fn probe_db_gateway(
     let result =
         tokio::time::timeout(probe_timeout, client.probe_client().dbgateway_get_config()).await;
     let outcome = match &result {
-        Ok(Ok(groundhog_db_gateway::DbGatewayConfigResult::kRPCNone { .. })) => {
+        Ok(Ok(thruput_db_gateway::DbGatewayConfigResult::kRPCNone { .. })) => {
             BackendRequestOutcome::Ok
         }
         Ok(Ok(_)) => BackendRequestOutcome::Rejected,
@@ -1324,7 +1341,7 @@ async fn probe_db_gateway(
     match result {
         Ok(Ok(result)) => {
             *timeout_streak = 0;
-            match groundhog_hogd_backend::db_gateway::tip_reading(
+            match thruput_hogd_backend::db_gateway::tip_reading(
                 "db_gateway",
                 result,
                 ctx.config.network_hash.as_ref(),
@@ -1503,42 +1520,47 @@ fn bounded_error(message: String) -> String {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use groundhog_db_gateway::DbGatewayIntroOutcome;
-    use groundhog_db_gateway::{
+    use rpc_driver::{ProgramError, RpcServer, ServiceMap};
+    use std::{
+        net::SocketAddr,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+    use thruput_db_gateway::DbGatewayIntroOutcome;
+    use thruput_db_gateway::{
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher,
         DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
     };
-    use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
-    use groundhog_indexer::{
+    use thruput_indexer::IndexerBlockExplorerIntroOutcome;
+    use thruput_indexer::{
         AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPageResult,
         EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, TransactionPageResult,
         TransactionQuery, TransactionRefPageResult, TxInfoOutcome, TxInfoResult,
     };
-    use groundhog_json_rpc_server::RpcServerError;
-    use groundhog_json_rpc_server::{ChainPlane, ReadPlane, RpcRequestContext, ViewPlane};
-    use groundhog_json_rpc_types::{
+    use thruput_json_rpc_server::RpcServerError;
+    use thruput_json_rpc_server::{ChainPlane, ReadPlane, RpcRequestContext, ViewPlane};
+    use thruput_json_rpc_types::{
         ContractAddress as RpcContractAddress,
         hex::{Hex0x, HexBytes},
         transaction::{TransactionStatus, TxHash},
         view::{RootInvocationOutput, ViewRequest},
     };
-    use groundhog_scheduler::{
+    use thruput_scheduler::{
         ConsensusValue, DbTip, ParallelSignedTransactionBatch, PendingTxCount, ProposalTxsHash,
         RPCError, SchedGatewayIntroOutcome, SchedGatewaySubmitOutcomeBatch,
         SchedulerTransactionOutcomeBatch,
         sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
     };
-    use groundhog_view::ViewGatewayIntroOutcome;
-    use groundhog_view::{
+    use thruput_view::ViewGatewayIntroOutcome;
+    use thruput_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
         ViewGatewayResult,
     };
-    use groundhog_xdr::PROTOCOL_VERSION;
-    use groundhog_xdr::transaction::{
+    use thruput_xdr::PROTOCOL_VERSION;
+    use thruput_xdr::transaction::{
         OptSignedTransactionBatch, TransactionHash, TransactionHashBatch,
     };
-    use groundhog_xdr::{
+    use thruput_xdr::{
         auth_claim::{AuthClaim, AuthClaim_source_address_claim},
         contract::{ContractEntrypointID, ContractType, DeployedContractHash},
         header::ProposalHeader,
@@ -1552,11 +1574,6 @@ mod tests {
         },
         validator::ValidatorID,
         view::TransactionViewQuery,
-    };
-    use rpc_driver::{ProgramError, RpcServer, ServiceMap};
-    use std::{
-        net::SocketAddr,
-        sync::atomic::{AtomicUsize, Ordering},
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -1618,7 +1635,7 @@ mod tests {
 
         async fn get_block_by_height(
             &self,
-            _height: groundhog_xdr::types::BlockHeight,
+            _height: thruput_xdr::types::BlockHeight,
         ) -> Result<BlockLookupResult, ProgramError> {
             panic!("probe isolation test should only issue transaction lookups")
         }
@@ -1653,7 +1670,7 @@ mod tests {
     impl DbGateway_DbGateway1 for SaturatedDbGateway {
         async fn dbgateway_get_config(
             &self,
-        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+        ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
             if self.block_config {
                 self.gate.wait().await;
             }
@@ -1679,8 +1696,8 @@ mod tests {
     impl ViewGateway_ViewGateway1 for SaturatedViewGateway {
         async fn viewgateway_view_batch(
             &self,
-            _: groundhog_view::ViewGatewayBatchQuery,
-        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            _: thruput_view::ViewGatewayBatchQuery,
+        ) -> Result<thruput_view::ViewGatewayBatchResult, ProgramError> {
             panic!("batch is not used by this health test")
         }
         async fn viewgateway_intro(
@@ -1724,13 +1741,13 @@ mod tests {
         lookup_gate: Option<HandlerGate>,
     }
 
-    fn test_db_config() -> groundhog_db_gateway::DbGatewayConfigResult {
+    fn test_db_config() -> thruput_db_gateway::DbGatewayConfigResult {
         let tip = test_db_tip([0x41; 32]);
-        groundhog_db_gateway::DbGatewayConfigResult::kRPCNone {
-            config: groundhog_db_gateway::DbGatewayConfig {
+        thruput_db_gateway::DbGatewayConfigResult::kRPCNone {
+            config: thruput_db_gateway::DbGatewayConfig {
                 effective_config: tip.network_config.clone(),
                 tip,
-                storage_cost_model: groundhog_xdr::storage_cost::StorageCostModelXdr {
+                storage_cost_model: thruput_xdr::storage_cost::StorageCostModelXdr {
                     ext: ExtensionPoint::_0,
                     base_data_item_cost: 12_000,
                     bytestring_cost_per_byte: 10,
@@ -1755,15 +1772,17 @@ mod tests {
                 contract_type: ContractType::kNative,
             },
             network_config: NetworkConfig::_0 {
-                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+                v0: thruput_xdr::network_config::NetworkConfigV0 {
                     params: vec![
-                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxSHA256Buffers {
+                        thruput_xdr::network_config::ConfigParam::kConfigParamMaxSHA256Buffers {
                             max_sha256_buffers: 0,
                         },
-                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxCrossInvokeDepth {
+                        thruput_xdr::network_config::ConfigParam::kConfigParamMaxCrossInvokeDepth {
                             max_cross_invoke_depth: 0,
                         },
-                    ].try_into().expect("bug: fixture parameters fit"),
+                    ]
+                    .try_into()
+                    .expect("bug: fixture parameters fit"),
                 },
             },
             value: ConsensusValue {
@@ -1789,9 +1808,9 @@ mod tests {
 
     #[test]
     fn db_snapshot_preserves_tip_effective_limits_and_exact_prices() {
-        use groundhog_db_gateway::DbGatewayConfigResult;
-        use groundhog_hogd_backend::db_gateway::tip_reading;
-        use groundhog_xdr::network_config::{ConfigParam, NetworkConfigV0};
+        use thruput_db_gateway::DbGatewayConfigResult;
+        use thruput_hogd_backend::db_gateway::tip_reading;
+        use thruput_xdr::network_config::{ConfigParam, NetworkConfigV0};
 
         let DbGatewayConfigResult::kRPCNone { mut config } = test_db_config() else {
             panic!("expected fixture configuration");
@@ -1833,8 +1852,8 @@ mod tests {
 
     #[test]
     fn db_snapshot_rejects_wrong_network_and_uncommitted_tip() {
-        use groundhog_db_gateway::DbGatewayConfigResult;
-        use groundhog_hogd_backend::db_gateway::tip_reading;
+        use thruput_db_gateway::DbGatewayConfigResult;
+        use thruput_hogd_backend::db_gateway::tip_reading;
         assert!(
             tip_reading(
                 "test",
@@ -1973,7 +1992,7 @@ mod tests {
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-            use groundhog_scheduler::{
+            use thruput_scheduler::{
                 SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
                 SchedulerTransactionStatus,
             };
@@ -2028,7 +2047,7 @@ mod tests {
 
         async fn get_block_by_height(
             &self,
-            _height: groundhog_xdr::types::BlockHeight,
+            _height: thruput_xdr::types::BlockHeight,
         ) -> Result<BlockLookupResult, ProgramError> {
             panic!("lifecycle test should not query blocks")
         }
@@ -2065,7 +2084,7 @@ mod tests {
     impl DbGateway_DbGateway1 for LifecycleDbGateway {
         async fn dbgateway_get_config(
             &self,
-        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+        ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
             Ok(test_db_config())
         }
         async fn dbgateway_intro(
@@ -2102,8 +2121,8 @@ mod tests {
     impl ViewGateway_ViewGateway1 for LifecycleViewGateway {
         async fn viewgateway_view_batch(
             &self,
-            _: groundhog_view::ViewGatewayBatchQuery,
-        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            _: thruput_view::ViewGatewayBatchQuery,
+        ) -> Result<thruput_view::ViewGatewayBatchResult, ProgramError> {
             panic!("batch is not used by this health test")
         }
         async fn viewgateway_intro(
@@ -2303,7 +2322,7 @@ mod tests {
 
         async fn get_block_by_height(
             &self,
-            _height: groundhog_xdr::types::BlockHeight,
+            _height: thruput_xdr::types::BlockHeight,
         ) -> Result<BlockLookupResult, ProgramError> {
             panic!("reconnect test should not issue indexer data RPCs")
         }
@@ -2731,6 +2750,8 @@ mod tests {
             health.clone(),
             GatewayMetrics::for_tests(),
             shutdown_rx,
+            None,
+            false,
         )
         .await
         .expect("observability server should start");
@@ -2984,6 +3005,8 @@ mod tests {
             health.clone(),
             metrics,
             observability_shutdown_rx,
+            None,
+            false,
         )
         .await
         .expect("observability server should start");
@@ -3711,6 +3734,8 @@ mod tests {
             health.clone(),
             metrics.clone(),
             observability_shutdown_rx,
+            None,
+            false,
         )
         .await
         .expect("observability server should start");

@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "addr2line"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b5d307320b3181d6d7954e663bd7c774a838b8220fe0593c86d9fb09f498b4b"
+dependencies = [
+ "gimli",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -72,6 +81,12 @@ dependencies = [
  "once_cell_polyfill",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "anyhow"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "approx"
@@ -569,10 +584,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "backtrace"
+version = "0.3.76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb531853791a215d7c62a30daf0dde835f381ab5de4589cfe7c649d2cbe92bd6"
+dependencies = [
+ "addr2line",
+ "cfg-if",
+ "libc",
+ "miniz_oxide 0.8.9",
+ "object",
+ "rustc-demangle",
+ "windows-link",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64-simd"
@@ -1222,7 +1258,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1266,7 +1302,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
 dependencies = [
  "crc32fast",
- "miniz_oxide",
+ "miniz_oxide 0.9.1",
  "zlib-rs",
 ]
 
@@ -1460,793 +1496,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "groundhog-access-control-if"
-version = "0.1.52"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "361cf025f8cc85a9575d721251286bc05a8f7f429346b3c952f8462784de9fee"
-dependencies = [
- "sdk",
-]
+name = "gimli"
+version = "0.32.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
-name = "groundhog-bench"
-version = "0.27.0"
+name = "groundhog-heap-profiling"
+version = "0.29.1"
 dependencies = [
- "clap",
- "groundhog-json-rpc-types",
- "groundhog-signing",
- "groundhog-xdr",
- "hdrhistogram",
- "hex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-build-info"
-version = "0.27.0"
-
-[[package]]
-name = "groundhog-bundle-identity"
-version = "0.27.0"
-dependencies = [
- "groundhog-build-info",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "groundhog-cli-macros"
-version = "0.27.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde_json",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "groundhog-client"
-version = "0.27.0"
-dependencies = [
- "groundhog-contract-spec",
- "groundhog-contract-util",
- "groundhog-json-rpc-client",
- "groundhog-json-rpc-types",
- "groundhog-signing",
- "groundhog-u256",
- "groundhog-xdr",
- "hex",
- "jsonrpsee",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-contract-spec"
-version = "0.49.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "f07de953d7e9785eac9859a0add61a8cf5d3b779721aa7917cc0abea48c4ec73"
-dependencies = [
- "groundhog-spec",
- "groundhog-xdr",
- "heapless",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-contract-util"
-version = "0.49.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "a579702febf52f030271fb737cdf004a78ba7f321f1062fdd2e70f5c17c151b5"
-dependencies = [
- "groundhog-xdr",
- "sha2",
- "syn 3.0.6",
-]
-
-[[package]]
-name = "groundhog-domain-separator"
-version = "0.49.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "28f3d5781c35be90c5d1603efddfe8b7c773e30883e0ae7d775fd106caf8cd02"
-dependencies = [
- "groundhog-contract-spec",
- "groundhog-xdr",
- "sha2",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-e2e-tests"
-version = "0.0.0"
-dependencies = [
- "getrandom 0.4.3",
- "groundhog-json-rpc-client",
- "groundhog-json-rpc-types",
- "groundhog-signing",
- "groundhog-xdr",
- "hex",
- "jsonrpsee",
- "serde_json",
- "tokio",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-erc20-if"
-version = "0.1.52"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "e9d03cb715f2e42aac88eb8b63355d29617f3aa89b425298724bacbe0a4a4eee"
-dependencies = [
- "groundhog-xdr",
- "sdk",
-]
-
-[[package]]
-name = "groundhog-erc20-pausable-if"
-version = "0.1.52"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "cd847bda92a3a15706c0a10491a80cbbb7dffd923b97a8523038488eab7dbad4"
-dependencies = [
- "sdk",
-]
-
-[[package]]
-name = "groundhog-erc20-permit-if"
-version = "0.1.52"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "cbf95089b05250eb931ae2ce33b05506cf5d69e3785d61dc4744551a82852e33"
-dependencies = [
- "groundhog-erc20-if",
- "sdk",
-]
-
-[[package]]
-name = "groundhog-event"
-version = "0.49.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "ecbcb18d5e19cf56e9f005ebd915aea6260350d8294d7b6277fabb4a12fa07b7"
-dependencies = [
- "groundhog-xdr",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-exn"
-version = "0.49.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "97cbf2f18649e4c39ae6ec7c49690c755ea55a03472a5cba0be0ff16493e17ab"
-dependencies = [
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-faucet"
-version = "0.27.0"
-dependencies = [
- "async-trait",
- "aws-config",
- "aws-sdk-secretsmanager",
- "aws-smithy-http-client",
- "aws-smithy-types",
  "axum",
- "clap",
- "groundhog-build-info",
- "groundhog-json-rpc-client",
- "groundhog-json-rpc-types",
- "groundhog-signing",
- "groundhog-xdr",
- "hex",
- "http 1.5.0",
- "jsonrpsee",
- "serde",
- "serde_json",
- "serial_test",
- "thiserror 2.0.21",
- "tokio",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "xdrs",
- "zeroize",
-]
-
-[[package]]
-name = "groundhog-firehose"
-version = "0.27.0"
-dependencies = [
- "async-trait",
- "axum",
- "clap",
- "fs2",
- "groundhog-json-rpc-types",
- "groundhog-signing",
- "groundhog-x23-transport",
- "groundhog-xdr",
- "groundhog_indexer",
- "groundhog_scheduler",
- "hex",
- "jsonrpsee",
- "prometheus",
- "rpc_driver",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.21",
+ "backtrace",
+ "object",
+ "tikv-jemalloc-sys",
+ "tikv-jemallocator",
  "tokio",
  "tracing",
- "tracing-subscriber",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-hogd-backend"
-version = "0.27.0"
-dependencies = [
- "groundhog-json-rpc-server",
- "groundhog-json-rpc-types",
- "groundhog-trace",
- "groundhog-xdr",
- "groundhog_db_gateway",
- "groundhog_indexer",
- "groundhog_scheduler",
- "groundhog_view",
- "serde_json",
- "tokio",
- "tracing",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-json-rpc-api"
-version = "0.27.0"
-dependencies = [
- "groundhog-json-rpc-types",
- "groundhog-open-rpc",
- "groundhog-open-rpc-macros",
- "jsonrpsee",
-]
-
-[[package]]
-name = "groundhog-json-rpc-client"
-version = "0.27.0"
-dependencies = [
- "async-trait",
- "groundhog-json-rpc-api",
- "groundhog-json-rpc-server",
- "groundhog-json-rpc-types",
- "groundhog-xdr",
- "jsonrpsee",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "xdr-common",
-]
-
-[[package]]
-name = "groundhog-json-rpc-gateway"
-version = "0.27.0"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "clap",
- "groundhog-build-info",
- "groundhog-bundle-identity",
- "groundhog-hogd-backend",
- "groundhog-json-rpc-api",
- "groundhog-json-rpc-server",
- "groundhog-json-rpc-types",
- "groundhog-trace",
- "groundhog-x23-transport",
- "groundhog-xdr",
- "groundhog_coordinator",
- "groundhog_db_gateway",
- "groundhog_indexer",
- "groundhog_scheduler",
- "groundhog_scp",
- "groundhog_view",
- "hex",
- "jsonrpsee",
- "prometheus",
- "reqwest",
- "rpc_driver",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "xdr-common",
-]
-
-[[package]]
-name = "groundhog-json-rpc-server"
-version = "0.27.0"
-dependencies = [
- "async-trait",
- "futures-util",
- "groundhog-build-info",
- "groundhog-bundle-identity",
- "groundhog-json-rpc-api",
- "groundhog-json-rpc-types",
- "groundhog-tx-validation",
- "groundhog-xdr",
- "hex",
- "jsonrpsee",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-json-rpc-types"
-version = "0.27.0"
-dependencies = [
- "bytes",
- "groundhog-trace",
- "groundhog-xdr",
- "groundhog_indexer",
- "groundhog_scheduler",
- "hex",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.21",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-macros"
-version = "0.49.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "389aaf2556d0ee384f743fbf70af0adb0f821111d311f09db787f0259425a88d"
-dependencies = [
- "darling",
- "groundhog-contract-util",
- "groundhog-xdr",
- "proc-macro2",
- "quote",
- "sha2",
- "syn 3.0.6",
-]
-
-[[package]]
-name = "groundhog-node-supervisor"
-version = "0.27.0"
-dependencies = [
- "async-trait",
- "getrandom 0.4.3",
- "groundhog-bundle-identity",
- "groundhog-hogd-backend",
- "groundhog-json-rpc-api",
- "groundhog-json-rpc-server",
- "groundhog-json-rpc-types",
- "groundhog-signing",
- "groundhog-trace",
- "groundhog-tx-validation",
- "groundhog-x23-transport",
- "groundhog-xdr",
- "groundhog_db_gateway",
- "groundhog_indexer",
- "groundhog_scheduler",
- "groundhog_scp",
- "groundhog_view",
- "hex",
- "jsonrpsee",
- "libc",
- "nix",
- "rpc_driver",
- "serde",
- "serde_json",
- "serial_test",
- "sha2",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "xdr-common",
- "xdrs",
- "zeroize",
-]
-
-[[package]]
-name = "groundhog-open-rpc"
-version = "0.27.0"
-dependencies = [
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "groundhog-open-rpc-macros"
-version = "0.27.0"
-dependencies = [
- "groundhog-open-rpc",
- "jsonrpsee",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "groundhog-open-rpc-spec"
-version = "0.27.0"
-dependencies = [
- "groundhog-json-rpc-api",
- "groundhog-open-rpc",
- "pretty_assertions",
- "schemars",
- "semver",
- "serde_json",
-]
-
-[[package]]
-name = "groundhog-rv32-artifact"
-version = "0.27.0"
-dependencies = [
- "sha2",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "groundhog-rv32-lower"
-version = "0.27.0"
-dependencies = [
- "clap",
- "groundhog-build-info",
- "groundhog-rv32-artifact",
- "groundhog-spec-tool",
- "same-file",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "groundhog-rv32-runtime"
-version = "0.49.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "4ad69b873e637d2b0a480b7b911e60b96050425980786c598f7f4fbcced5b64a"
-
-[[package]]
-name = "groundhog-signed-op-if"
-version = "0.1.52"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "7b31117cb13f4494c558176ff00fbf7468573643e7b3de4a12906e96ea41ece8"
-dependencies = [
- "sdk",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "groundhog-signing"
-version = "0.27.0"
-dependencies = [
- "ed25519-dalek",
- "groundhog-domain-separator",
- "groundhog-json-rpc-server",
- "groundhog-tx-validation",
- "groundhog-xdr",
- "hex",
- "sha2",
- "stellar-strkey",
- "thiserror 2.0.21",
- "xdr-common",
- "xdrs",
- "zeroize",
-]
-
-[[package]]
-name = "groundhog-sim"
-version = "0.27.0"
-dependencies = [
- "clap",
- "groundhog-build-info",
- "groundhog-contract-util",
- "groundhog-json-rpc-client",
- "groundhog-json-rpc-types",
- "groundhog-signing",
- "groundhog-xdr",
- "hdrhistogram",
- "hex",
- "jsonrpsee",
- "libc",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-spec"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "68cfa0d6187b827ef3fb30df48a8a3d8e744e6efb57e00f520b77becf1bb6124"
-dependencies = [
- "groundhog-xdr",
- "serde",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-spec-tool"
-version = "0.49.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "cfea0d30cb54536b2ab9de0665eebddb0bd21b626cb74748cdf0266959841541"
-dependencies = [
- "groundhog-access-control-if",
- "groundhog-contract-spec",
- "groundhog-contract-util",
- "groundhog-erc20-if",
- "groundhog-erc20-pausable-if",
- "groundhog-erc20-permit-if",
- "groundhog-signed-op-if",
- "sdk",
- "serde_json",
- "thiserror 2.0.21",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-syscall"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "769aaf4298f0fc3af80c89917caaf451a964776cef4e7026d2bc65cc08d3951f"
-
-[[package]]
-name = "groundhog-testkit"
-version = "0.27.0"
-dependencies = [
- "getrandom 0.4.3",
- "groundhog-contract-util",
- "groundhog-json-rpc-client",
- "groundhog-json-rpc-types",
- "groundhog-node-supervisor",
- "groundhog-signing",
- "groundhog-xdr",
- "hex",
- "jsonrpsee",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing-subscriber",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-toolchain"
-version = "0.27.0"
-dependencies = [
- "async-trait",
- "flate2",
- "fs2",
- "hex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "groundhog-trace"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "926ec299592836ec41dfbd196695935da9899a4e74ced17a98726dee044a43bf"
-dependencies = [
- "groundhog-xdr",
- "hogexec-internal",
- "schemars",
- "serde",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-tx-validation"
-version = "0.27.0"
-dependencies = [
- "groundhog-json-rpc-types",
- "groundhog-rv32-artifact",
- "groundhog-xdr",
- "hex",
- "serde_json",
- "thiserror 2.0.21",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-u256"
-version = "0.49.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "439ea895985fd27be5ca6a07d9e11f8eb576d7fc1303345f21419297119d14d1"
-dependencies = [
- "groundhog-contract-spec",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-x23-transport"
-version = "0.27.0"
-dependencies = [
- "async-trait",
- "rpc_driver",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "groundhog-xdr"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "872054b338e6513e66baf9ceb0208d81132ad12df808069ee5905fcd8b54f7d5"
-dependencies = [
- "groundhog-syscall",
- "groundhog-xdr-macros",
- "schemars",
- "serde",
- "thiserror 2.0.21",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-xdr-macros"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "82f70198366f8e253eb4b3a492c5350bbab6d1c577a4f9546def88ce4492c0ac"
-dependencies = [
- "darling",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "serde_yaml",
- "syn 3.0.6",
-]
-
-[[package]]
-name = "groundhog_coordinator"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "093b19fde83d9082c32feaae4f03720e5fac64bbd0accf79c3ac4396c0299f38"
-dependencies = [
- "async-trait",
- "groundhog-xdr",
- "groundhog_scp",
- "rpc_api",
- "schemars",
- "serde",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog_db_gateway"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "36f0b12098cfc548c7877d0576346a98d0e9acb8eb159a83e4b86ba13df58c77"
-dependencies = [
- "async-trait",
- "groundhog-xdr",
- "groundhog_scheduler",
- "groundhog_scp",
- "rpc_api",
- "schemars",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog_indexer"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "f42856ee13e993df1446b9a11be6beece2f9d17cdb90b19e36e493eee880ccdd"
-dependencies = [
- "async-trait",
- "groundhog-trace",
- "groundhog-xdr",
- "groundhog_scheduler",
- "groundhog_scp",
- "rpc_api",
- "schemars",
- "serde",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog_scheduler"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "570ee2eb6e4a34033e965853b28ad289d02d059c80aceac0c2d2561ba736c437"
-dependencies = [
- "async-trait",
- "groundhog-trace",
- "groundhog-xdr",
- "groundhog_coordinator",
- "groundhog_scp",
- "rpc_api",
- "schemars",
- "serde",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog_scp"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "5e6c73d634d16d6374195c3411f3a7edc5b7986c3dcbcf958b02277b07d14ad8"
-dependencies = [
- "async-trait",
- "groundhog-xdr",
- "rpc_api",
- "schemars",
- "serde",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog_view"
-version = "0.51.0"
-source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "bb6569c76a6b8bdceaea9630854cff77ad24900172472fd52fbe8f017b761a1d"
-dependencies = [
- "async-trait",
- "groundhog-xdr",
- "groundhog_scp",
- "rpc_api",
- "schemars",
- "xdr-common",
- "xdrs",
 ]
 
 [[package]]
@@ -2316,7 +1581,7 @@ version = "7.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f49d1053f4708f0af3cf9fc5bffc7e68a914a3c45becb231c80068c9c3f78bea"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "byteorder",
  "crossbeam-channel",
  "flate2",
@@ -2358,9 +1623,9 @@ dependencies = [
 
 [[package]]
 name = "hogexec-internal"
-version = "0.51.0"
+version = "0.54.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "1618b49b2524726a05261d214320e2623239f3b14bb6f5d1deb3e9d5506dc203"
+checksum = "038b25a179dfe30cb16d8ce9710f720ea08edde3396e146d585375fdc82491a1"
 dependencies = [
  "xdrs",
 ]
@@ -2476,6 +1741,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-timeout"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b90d566bffbce6a75bd8b09a05aa8c2cb1fabb6cb348f8840c9e4c90a0d83b0"
+dependencies = [
+ "hyper",
+ "hyper-util",
+ "pin-project-lite",
+ "tokio",
+ "tower-service",
+]
+
+[[package]]
 name = "hyper-tls"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2493,16 +1771,17 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
+checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "bytes",
  "futures-channel",
  "futures-util",
  "http 1.5.0",
  "http-body",
+ "httparse",
  "hyper",
  "ipnet",
  "libc",
@@ -2774,7 +2053,7 @@ version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2a320a3f1464e4094f780c4d48413acd786ce5627aaaecfac9e9c7431d13ae1"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "futures-util",
  "http 1.5.0",
  "jsonrpsee-core",
@@ -2824,7 +2103,7 @@ version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6962d2bd295f75e97dd328891e58fce166894b974c1f7ce2e7597f02eeceb791"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "http-body",
  "hyper",
  "hyper-rustls",
@@ -3052,6 +2331,15 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+]
+
+[[package]]
+name = "miniz_oxide"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
@@ -3190,6 +2478,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "object"
+version = "0.37.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3242,6 +2539,68 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "opentelemetry"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c1f1a6ac9c875a4941e4c7c085b61e8f4daa326de03b4701768c3491a6ad9ee"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "opentelemetry-otlp"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0756af24841e367128ef31c831999937b8b5c5197d47914590d8f4e2e88c2e1a"
+dependencies = [
+ "http 1.5.0",
+ "opentelemetry",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "prost",
+ "thiserror 2.0.21",
+ "tokio",
+ "tonic",
+ "tonic-types",
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d576f5dddc3299341bcd85a04be17b2564844c0c9563214f02d85f2524d1afae"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "prost",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "372a912db2974d1990207006fd0e3aa0ef3fd4ad3be43c65cfaadf2206866061"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry",
+ "percent-encoding",
+ "portable-atomic",
+ "rand 0.9.5",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -3420,6 +2779,38 @@ dependencies = [
  "memchr",
  "parking_lot",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "prost"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
+dependencies = [
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "prost-types"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
+dependencies = [
+ "prost",
 ]
 
 [[package]]
@@ -3627,7 +3018,7 @@ version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "encoding_rs",
  "futures-channel",
@@ -3741,6 +3132,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc-demangle"
+version = "0.1.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3765,7 +3162,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3823,7 +3220,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3907,20 +3304,20 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "sdk"
-version = "0.49.0"
+version = "0.51.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "13527600a2e5f4133a34906e6994a8a3e2d76472e48af41b90461135511e68ac"
+checksum = "5e29c859627bbb4455066168d1ca643ffeea5d9494683a7bd04544b5870109c8"
 dependencies = [
- "groundhog-contract-spec",
- "groundhog-event",
- "groundhog-exn",
- "groundhog-macros",
- "groundhog-rv32-runtime",
- "groundhog-u256",
- "groundhog-xdr",
  "heapless",
  "linkme",
  "thiserror 2.0.21",
+ "thruput-contract-spec",
+ "thruput-event",
+ "thruput-exn",
+ "thruput-macros",
+ "thruput-rv32-runtime",
+ "thruput-u256",
+ "thruput-xdr",
  "xdrs",
 ]
 
@@ -4198,7 +3595,7 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e859df029d160cb88608f5d7df7fb4753fd20fdfb4de5644f3d8b8440841721"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures",
  "http 1.5.0",
@@ -4348,7 +3745,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4401,33 +3798,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "thruput-access-control-if"
+version = "0.1.55"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "9a8ab06e995b27be3eb1dcbdc45930f5ba73604164c026ccf0cb97ab44b7bdc7"
+dependencies = [
+ "sdk",
+]
+
+[[package]]
+name = "thruput-bench"
+version = "0.29.1"
+dependencies = [
+ "clap",
+ "hdrhistogram",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "thruput-json-rpc-types",
+ "thruput-signing",
+ "thruput-xdr",
+ "tokio",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-build-info"
+version = "0.29.1"
+
+[[package]]
+name = "thruput-bundle-identity"
+version = "0.29.1"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thruput-build-info",
+]
+
+[[package]]
 name = "thruput-cli"
-version = "0.27.0"
+version = "0.29.1"
 dependencies = [
  "axum",
- "base64",
+ "base64 0.22.1",
  "clap",
  "clap_complete",
  "flate2",
  "fs2",
  "getrandom 0.4.3",
- "groundhog-build-info",
- "groundhog-bundle-identity",
- "groundhog-cli-macros",
- "groundhog-client",
- "groundhog-contract-spec",
- "groundhog-contract-util",
- "groundhog-erc20-if",
- "groundhog-erc20-permit-if",
- "groundhog-json-rpc-client",
- "groundhog-json-rpc-types",
- "groundhog-node-supervisor",
- "groundhog-rv32-artifact",
- "groundhog-rv32-lower",
- "groundhog-signing",
- "groundhog-spec-tool",
- "groundhog-toolchain",
- "groundhog-xdr",
  "hex",
  "http-body-util",
  "jsonrpsee",
@@ -4446,6 +3871,23 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.21",
+ "thruput-build-info",
+ "thruput-bundle-identity",
+ "thruput-cli-macros",
+ "thruput-client",
+ "thruput-contract-spec",
+ "thruput-contract-util",
+ "thruput-erc20-if",
+ "thruput-erc20-permit-if",
+ "thruput-json-rpc-client",
+ "thruput-json-rpc-types",
+ "thruput-node-supervisor",
+ "thruput-rv32-artifact",
+ "thruput-rv32-lower",
+ "thruput-signing",
+ "thruput-spec-tool",
+ "thruput-toolchain",
+ "thruput-xdr",
  "tokio",
  "toml",
  "toml_edit",
@@ -4460,6 +3902,786 @@ dependencies = [
  "xdrs",
  "zeroize",
  "zstd",
+]
+
+[[package]]
+name = "thruput-cli-macros"
+version = "0.29.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "thruput-client"
+version = "0.29.1"
+dependencies = [
+ "hex",
+ "jsonrpsee",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "thruput-contract-spec",
+ "thruput-contract-util",
+ "thruput-json-rpc-client",
+ "thruput-json-rpc-types",
+ "thruput-signing",
+ "thruput-u256",
+ "thruput-xdr",
+ "tokio",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-contract-spec"
+version = "0.51.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "8fa737a8a7ddd931ded78a640f97218719dd7e9410cdb3f196b8996ceef44939"
+dependencies = [
+ "heapless",
+ "thruput-spec",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-contract-util"
+version = "0.51.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "d7b93f36dfde8cb9565bb12d704b5e15d5a227b808e9c6c3d13a579ebeab1eb2"
+dependencies = [
+ "sha2",
+ "syn 3.0.6",
+ "thruput-xdr",
+]
+
+[[package]]
+name = "thruput-coordinator"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "4fda3dfa39f2c1091eb0979d38a6e75223aa7ac85dd61026e112596b57b4ae53"
+dependencies = [
+ "async-trait",
+ "rpc_api",
+ "schemars",
+ "serde",
+ "thruput-scp",
+ "thruput-xdr",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-db-gateway"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "fef0139bd3d118a045c610307b76c803860ba44d759dca2d40f4d7e3d53cec36"
+dependencies = [
+ "async-trait",
+ "rpc_api",
+ "schemars",
+ "thruput-scheduler",
+ "thruput-scp",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-domain-separator"
+version = "0.51.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "fef2b1c43b1c8d38d6a06d8169df2a8b6f9ab6e8c63f4b372594727edc53a9c7"
+dependencies = [
+ "sha2",
+ "thruput-contract-spec",
+ "thruput-xdr",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-e2e-tests"
+version = "0.0.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "hex",
+ "jsonrpsee",
+ "serde_json",
+ "thruput-json-rpc-client",
+ "thruput-json-rpc-types",
+ "thruput-signing",
+ "thruput-xdr",
+ "tokio",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-erc20-if"
+version = "0.1.55"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "b9dd623e4ec313bc6f74c0b7d6fa60019fcef8be32b17aeea785b86781df4c55"
+dependencies = [
+ "sdk",
+ "thruput-xdr",
+]
+
+[[package]]
+name = "thruput-erc20-pausable-if"
+version = "0.1.55"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "73ba5391fb2ce1e83afcffe5299fe26391ba5dafb5f2b6f35609987c607c4598"
+dependencies = [
+ "sdk",
+]
+
+[[package]]
+name = "thruput-erc20-permit-if"
+version = "0.1.55"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "c6efd60876dad1561fafc04be02a3298d2b88bf42e965ff1f76da54edff1767a"
+dependencies = [
+ "sdk",
+ "thruput-erc20-if",
+]
+
+[[package]]
+name = "thruput-event"
+version = "0.51.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "a1e0f8dcfebcf29c8612de1513d9a66e5efa1a6099ea92ee5daa645f91be822c"
+dependencies = [
+ "thruput-xdr",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-exn"
+version = "0.51.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "888895e645664c810f5bb0ecf91ca62b1219d4599d44d416f8b7a18590c8d5dd"
+dependencies = [
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-faucet"
+version = "0.29.1"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-secretsmanager",
+ "aws-smithy-http-client",
+ "aws-smithy-types",
+ "axum",
+ "clap",
+ "groundhog-heap-profiling",
+ "hex",
+ "http 1.5.0",
+ "jsonrpsee",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "thiserror 2.0.21",
+ "thruput-build-info",
+ "thruput-json-rpc-client",
+ "thruput-json-rpc-types",
+ "thruput-signing",
+ "thruput-xdr",
+ "tikv-jemallocator",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "xdrs",
+ "zeroize",
+]
+
+[[package]]
+name = "thruput-firehose"
+version = "0.29.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "clap",
+ "fs2",
+ "futures-util",
+ "hex",
+ "jsonrpsee",
+ "prometheus",
+ "rpc_driver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "thruput-indexer",
+ "thruput-json-rpc-types",
+ "thruput-scheduler",
+ "thruput-signing",
+ "thruput-x23-transport",
+ "thruput-xdr",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-hogd-backend"
+version = "0.29.1"
+dependencies = [
+ "serde_json",
+ "thruput-db-gateway",
+ "thruput-indexer",
+ "thruput-json-rpc-server",
+ "thruput-json-rpc-types",
+ "thruput-scheduler",
+ "thruput-trace",
+ "thruput-view",
+ "thruput-xdr",
+ "tokio",
+ "tracing",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-indexer"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "d2d7f61bcd732af25780a5556a6f8a33a839673873e462597f825f8e08233730"
+dependencies = [
+ "async-trait",
+ "rpc_api",
+ "schemars",
+ "serde",
+ "thruput-scheduler",
+ "thruput-scp",
+ "thruput-trace",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-json-rpc-api"
+version = "0.29.1"
+dependencies = [
+ "jsonrpsee",
+ "thruput-json-rpc-types",
+ "thruput-open-rpc",
+ "thruput-open-rpc-macros",
+]
+
+[[package]]
+name = "thruput-json-rpc-client"
+version = "0.29.1"
+dependencies = [
+ "async-trait",
+ "jsonrpsee",
+ "serde_json",
+ "thiserror 2.0.21",
+ "thruput-json-rpc-api",
+ "thruput-json-rpc-server",
+ "thruput-json-rpc-types",
+ "thruput-xdr",
+ "tokio",
+ "xdr-common",
+]
+
+[[package]]
+name = "thruput-json-rpc-gateway"
+version = "0.29.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "clap",
+ "groundhog-heap-profiling",
+ "hex",
+ "jsonrpsee",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "prometheus",
+ "reqwest",
+ "rpc_driver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "thruput-build-info",
+ "thruput-bundle-identity",
+ "thruput-coordinator",
+ "thruput-db-gateway",
+ "thruput-hogd-backend",
+ "thruput-indexer",
+ "thruput-json-rpc-api",
+ "thruput-json-rpc-server",
+ "thruput-json-rpc-types",
+ "thruput-scheduler",
+ "thruput-scp",
+ "thruput-trace",
+ "thruput-view",
+ "thruput-x23-transport",
+ "thruput-xdr",
+ "tikv-jemallocator",
+ "time",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "xdr-common",
+]
+
+[[package]]
+name = "thruput-json-rpc-server"
+version = "0.29.1"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "hex",
+ "jsonrpsee",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "thruput-build-info",
+ "thruput-bundle-identity",
+ "thruput-json-rpc-api",
+ "thruput-json-rpc-types",
+ "thruput-tx-validation",
+ "thruput-xdr",
+ "tokio",
+ "tracing",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-json-rpc-types"
+version = "0.29.1"
+dependencies = [
+ "bytes",
+ "hex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "thruput-indexer",
+ "thruput-scheduler",
+ "thruput-trace",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-macros"
+version = "0.51.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "590a017b53d9d87374e12508b5ebb70744c3f751356fd5dafb2b6dd9012f7f8e"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "sha2",
+ "syn 3.0.6",
+ "thruput-contract-util",
+ "thruput-xdr",
+]
+
+[[package]]
+name = "thruput-node-supervisor"
+version = "0.29.1"
+dependencies = [
+ "async-trait",
+ "getrandom 0.4.3",
+ "hex",
+ "jsonrpsee",
+ "libc",
+ "nix",
+ "rpc_driver",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "thruput-bundle-identity",
+ "thruput-db-gateway",
+ "thruput-hogd-backend",
+ "thruput-indexer",
+ "thruput-json-rpc-api",
+ "thruput-json-rpc-server",
+ "thruput-json-rpc-types",
+ "thruput-scheduler",
+ "thruput-scp",
+ "thruput-signing",
+ "thruput-trace",
+ "thruput-tx-validation",
+ "thruput-view",
+ "thruput-x23-transport",
+ "thruput-xdr",
+ "tokio",
+ "tracing",
+ "xdr-common",
+ "xdrs",
+ "zeroize",
+]
+
+[[package]]
+name = "thruput-open-rpc"
+version = "0.29.1"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "thruput-open-rpc-macros"
+version = "0.29.1"
+dependencies = [
+ "jsonrpsee",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "thruput-open-rpc",
+]
+
+[[package]]
+name = "thruput-open-rpc-spec"
+version = "0.29.1"
+dependencies = [
+ "pretty_assertions",
+ "schemars",
+ "semver",
+ "serde_json",
+ "thruput-json-rpc-api",
+ "thruput-open-rpc",
+]
+
+[[package]]
+name = "thruput-rv32-artifact"
+version = "0.29.1"
+dependencies = [
+ "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "thruput-rv32-lower"
+version = "0.29.1"
+dependencies = [
+ "clap",
+ "same-file",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "thruput-build-info",
+ "thruput-rv32-artifact",
+ "thruput-spec-tool",
+]
+
+[[package]]
+name = "thruput-rv32-runtime"
+version = "0.51.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "6ec56c612d546c68eca08fbf9e998061b0781092ad68044fceaa8e10f6a8ed62"
+
+[[package]]
+name = "thruput-scheduler"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "e3179b8c0b24b674c8de426d386c1f69b5a4cd9733bc415793d77cb324069e60"
+dependencies = [
+ "async-trait",
+ "rpc_api",
+ "schemars",
+ "serde",
+ "thruput-coordinator",
+ "thruput-scp",
+ "thruput-trace",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-scp"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "023034b16f107f367cb369eb6c386268f97acf48577e535c2efd31b88114af4b"
+dependencies = [
+ "async-trait",
+ "rpc_api",
+ "schemars",
+ "serde",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-signed-op-if"
+version = "0.1.55"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "0a92a19e6634ca4a5345e53556b347ce4993420ca393e88b7f2b92128d8f3062"
+dependencies = [
+ "sdk",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "thruput-signing"
+version = "0.29.1"
+dependencies = [
+ "ed25519-dalek",
+ "hex",
+ "sha2",
+ "stellar-strkey",
+ "thiserror 2.0.21",
+ "thruput-domain-separator",
+ "thruput-json-rpc-server",
+ "thruput-tx-validation",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+ "zeroize",
+]
+
+[[package]]
+name = "thruput-sim"
+version = "0.29.1"
+dependencies = [
+ "clap",
+ "hdrhistogram",
+ "hex",
+ "jsonrpsee",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "thruput-build-info",
+ "thruput-contract-util",
+ "thruput-json-rpc-client",
+ "thruput-json-rpc-types",
+ "thruput-signing",
+ "thruput-xdr",
+ "tokio",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-spec"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "9e937d2e7c7ab7dede1fbfc22562477b9d792169ae0f56765a24d154f16fcccf"
+dependencies = [
+ "serde",
+ "thruput-xdr",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-spec-tool"
+version = "0.51.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "2b376e3bfb12df37da019cef10711349961fa9b91c87854b00046874505be75a"
+dependencies = [
+ "sdk",
+ "serde_json",
+ "thiserror 2.0.21",
+ "thruput-access-control-if",
+ "thruput-contract-spec",
+ "thruput-contract-util",
+ "thruput-erc20-if",
+ "thruput-erc20-pausable-if",
+ "thruput-erc20-permit-if",
+ "thruput-signed-op-if",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-syscall"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "dcf76d420945fbb2d001a1a7ff5df8e2e1e1db3dedda87e0d8cd7163a0ec7309"
+
+[[package]]
+name = "thruput-testkit"
+version = "0.29.1"
+dependencies = [
+ "getrandom 0.4.3",
+ "hex",
+ "jsonrpsee",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "thruput-client",
+ "thruput-contract-util",
+ "thruput-json-rpc-client",
+ "thruput-json-rpc-types",
+ "thruput-node-supervisor",
+ "thruput-signing",
+ "thruput-xdr",
+ "tokio",
+ "tracing-subscriber",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-toolchain"
+version = "0.29.1"
+dependencies = [
+ "async-trait",
+ "flate2",
+ "fs2",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "thruput-trace"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "13bf190c39c219b245739140c422f5a302d6f93dccc4b91fa102e19a9cf5e673"
+dependencies = [
+ "hogexec-internal",
+ "schemars",
+ "serde",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-tx-validation"
+version = "0.29.1"
+dependencies = [
+ "hex",
+ "serde_json",
+ "thiserror 2.0.21",
+ "thruput-json-rpc-types",
+ "thruput-rv32-artifact",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-u256"
+version = "0.51.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "047bb7e084ed4d160d94054bd52072f41e0bf0d8549aaba583589f80086f6fc8"
+dependencies = [
+ "thruput-contract-spec",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-view"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "389147c896c9d189a37f15751d8ef634944acd0cbdfe6495f3140a1ea124dce3"
+dependencies = [
+ "async-trait",
+ "rpc_api",
+ "schemars",
+ "thruput-scp",
+ "thruput-xdr",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-x23-transport"
+version = "0.29.1"
+dependencies = [
+ "async-trait",
+ "rpc_driver",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "thruput-xdr"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "d0456ea3a43ad5b1008b65093c05d4422326aa1e18f655363497bc6e140509bf"
+dependencies = [
+ "schemars",
+ "serde",
+ "thiserror 2.0.21",
+ "thruput-syscall",
+ "thruput-xdr-macros",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "thruput-xdr-macros"
+version = "0.54.0"
+source = "sparse+https://crates.thruput.network/api/v1/crates/"
+checksum = "7f7ee4b275f8416292a95579a4a7dd52b35475fb374a9f43d82375c90037c43f"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "syn 3.0.6",
+]
+
+[[package]]
+name = "tikv-jemalloc-sys"
+version = "0.7.1+5.3.1-0-g81034ce1f1373e37dc865038e1bc8eeecf559ce8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a2825c78386b4ae0314074867860ba9577875de945f05992c38815cbec327f0"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
+name = "tikv-jemallocator"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "249f09e49ab1609436f34c776e84231bead18d6a955f119f939bdc1d847561bd"
+dependencies = [
+ "libc",
+ "tikv-jemalloc-sys",
 ]
 
 [[package]]
@@ -4638,6 +4860,56 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
+name = "tonic"
+version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac2a5518c70fa84342385732db33fb3f44bc4cc748936eb5833d2df34d6445ef"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "http 1.5.0",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-timeout",
+ "hyper-util",
+ "percent-encoding",
+ "pin-project",
+ "rustls-native-certs",
+ "sync_wrapper",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "tonic-prost"
+version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50849f68853be452acf590cde0b146665b8d507b3b8af17261df47e02c209ea0"
+dependencies = [
+ "bytes",
+ "prost",
+ "tonic",
+]
+
+[[package]]
+name = "tonic-types"
+version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73ab1b02061f83d519bba3caa167f88f261ef05720ab8ebc954ade70de3348e8"
+dependencies = [
+ "prost",
+ "prost-types",
+ "tonic",
+]
+
+[[package]]
 name = "tower"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4645,9 +4917,12 @@ checksum = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
 dependencies = [
  "futures-core",
  "futures-util",
+ "indexmap",
  "pin-project-lite",
+ "slab",
  "sync_wrapper",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -4735,6 +5010,22 @@ dependencies = [
  "log",
  "once_cell",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-opentelemetry"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a904802a1b902f43638b677ff2a650847e3b4404101b6c586d648e8c1e3e8fe"
+dependencies = [
+ "js-sys",
+ "opentelemetry",
+ "smallvec",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
+ "web-time",
 ]
 
 [[package]]
@@ -5000,6 +5291,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "webpki-root-certs"
 version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5051,7 +5352,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5109,6 +5410,15 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+dependencies = [
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.59.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]

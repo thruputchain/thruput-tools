@@ -3,16 +3,16 @@
 //! [`SimRpcClient`] is the seam the executor, provisioner and contract phases
 //! share: the live client pool implements it for real runs, and unit tests
 //! implement it with doubles. Receipt waiting is not reimplemented here — it
-//! delegates to the one poll loop in `groundhog-json-rpc-client` through
+//! delegates to the one poll loop in `thruput-json-rpc-client` through
 //! [`ReceiptSource`].
 
 use std::future::Future;
 use std::time::Duration;
 
-use groundhog_json_rpc_client::{
+use thruput_json_rpc_client::{
     GroundhogApiClient, ReceiptPollConfig, ReceiptPollError, ReceiptSource,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     ContractAddress,
     block::ChainTip,
     events::{EventPage, EventQuery},

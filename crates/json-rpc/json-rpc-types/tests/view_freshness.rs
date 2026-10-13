@@ -1,5 +1,5 @@
-use groundhog_json_rpc_types::view::{ViewBatchRequest, ViewRequest};
 use serde_json::json;
+use thruput_json_rpc_types::view::{ViewBatchRequest, ViewRequest};
 
 fn call() -> serde_json::Value {
     json!({

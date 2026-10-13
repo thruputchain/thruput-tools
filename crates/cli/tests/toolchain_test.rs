@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use groundhog_toolchain::Catalog;
+use thruput_toolchain::Catalog;
 
 fn default_version() -> String {
     Catalog::embedded()
@@ -232,7 +232,7 @@ fn stale_selection_can_be_inspected_replaced_and_cleaned() {
     let report: serde_json::Value = serde_json::from_slice(&list.stdout).expect("bug: JSON");
     assert_eq!(report["data"]["selectedVersion"], "0.1.13");
     assert_eq!(report["data"]["toolchains"][0]["active"], false);
-    let target = groundhog_toolchain::HostTarget::current().expect("bug: target");
+    let target = thruput_toolchain::HostTarget::current().expect("bug: target");
     let retired = cache
         .join("thruput/toolchain/hog-devnode/0.1.13")
         .join(target.triple());
@@ -248,7 +248,7 @@ fn stale_selection_can_be_inspected_replaced_and_cleaned() {
         String::from_utf8_lossy(&clean.stderr)
     );
     assert!(!retired.exists());
-    let catalog = groundhog_toolchain::Catalog::embedded().expect("bug: catalog");
+    let catalog = thruput_toolchain::Catalog::embedded().expect("bug: catalog");
     let repair = thruput(&config, &cache)
         .args(["--json", "toolchain", "use", catalog.default_version()])
         .output()
@@ -262,7 +262,7 @@ fn stale_selection_can_be_inspected_replaced_and_cleaned() {
 
 #[test]
 fn which_reports_the_executable_and_offline_reuse_needs_no_source() {
-    use groundhog_toolchain::{Catalog, HostTarget};
+    use thruput_toolchain::{Catalog, HostTarget};
     let root = tempfile::tempdir().expect("bug: tempdir");
     let config = root.path().join("config");
     let cache = root.path().join("cache");

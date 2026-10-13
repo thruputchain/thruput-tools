@@ -20,7 +20,7 @@ impl NonceNamespace {
     /// trip the chain's replay protection.
     pub fn for_run(seed: &str, run: u32) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(b"groundhog-testkit nonce namespace v1");
+        hasher.update(b"thruput-testkit nonce namespace v1");
         hasher.update(seed.as_bytes());
         hasher.update(run.to_be_bytes());
         let digest = hasher.finalize();

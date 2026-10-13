@@ -10,8 +10,8 @@
 //! `tracing::warn!` at supervisor startup, not into the wire error.
 
 use async_trait::async_trait;
-use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError, ViewPlane};
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError, ViewPlane};
+use thruput_json_rpc_types::{
     ContractAddress,
     address_auth::AddressAuthDataResponse,
     events::{EventPage, EventQuery},

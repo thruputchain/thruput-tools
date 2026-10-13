@@ -64,12 +64,12 @@ pub mod wallet;
 pub use error::CliError;
 pub use print::Print;
 
-const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
+const BUILD_VERSION: thruput_build_info::BuildVersion = thruput_build_info::build_version!();
 
 /// Discover the validated release identity for the `thruput` client binary.
-pub fn bundle_identity() -> groundhog_bundle_identity::BundleIdentity {
-    groundhog_bundle_identity::BundleIdentity::discover(
-        groundhog_bundle_identity::BundleSubject::client("thruput", "groundhog-rpc", "cli"),
+pub fn bundle_identity() -> thruput_bundle_identity::BundleIdentity {
+    thruput_bundle_identity::BundleIdentity::discover(
+        thruput_bundle_identity::BundleSubject::client("thruput", "groundhog-rpc", "cli"),
         BUILD_VERSION,
     )
 }

@@ -153,7 +153,7 @@ const APP: &[File] = &[
     ("web/.gitignore", "/generated/\n"),
     (
         ".npmrc",
-        "@groundhogchain:registry=https://npm.pkg.github.com\n",
+        "@thruputchain:registry=https://npm.pkg.github.com\n",
     ),
 ];
 

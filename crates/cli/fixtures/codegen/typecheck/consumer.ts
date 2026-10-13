@@ -2,9 +2,9 @@
 // compile while one of its types resolves to the wrong declaration; these fail
 // to type-check when it does.
 
-import type { ContractMethodEffect, SignedToken } from "@groundhogchain/client/contract";
+import type { ContractMethodEffect, SignedToken } from "@thruputchain/client/contract";
 import { ExampleContract } from "../typed_contract.js";
-import type { ContractAddress } from "@groundhogchain/protocol";
+import type { ContractAddress } from "@thruputchain/protocol";
 import type { ERC20 } from "../erc20.js";
 import {
   $default,

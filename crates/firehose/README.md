@@ -1,29 +1,32 @@
-# hog-firehose (experimental)
+# Firehose store and serve (experimental)
 
-A standalone committed-block archive and WebSocket subscription service. One
-serial `EventIndexer1` connection and one outstanding pull serve every subscriber.
+Two independent processes share an immutable archive directory. The sole writer,
+`hog-firehose-store`, uses one `EventIndexer1` connection and one outstanding pull
+regardless of subscriber count. `hog-firehose-serve` owns WebSocket subscribers.
 The gateway remains a separate process with its existing surface. Experimental wire
 types and generated jsonrpsee client/server traits live in this unpublished crate.
 
 ```sh
-cargo build -p groundhog-firehose
-hog-firehose discover localhost:9001 localhost:9002 localhost:9003
-hog-firehose tail --event-endpoint localhost:9002 --store ./archive \
-  --tip-endpoint localhost:9004 --listen 127.0.0.1:9550 --ws-listen 127.0.0.1:9551
-hog-firehose verify --store ./archive
+cargo build -p thruput-firehose
+hog-firehose-store discover localhost:9001 localhost:9002 localhost:9003
+hog-firehose-store tail --event-endpoint localhost:9002 --store ./archive \
+  --tip-endpoint localhost:9004 --listen 127.0.0.1:9550
+hog-firehose-serve --store ./archive --listen 127.0.0.1:9552 \
+  --ws-listen 127.0.0.1:9551 --poll-interval-ms 200 --tip-stale-seconds 60
+hog-firehose-store verify --store ./archive
 ```
 
 See [the subscription protocol and backpressure policy](subscriptions.md) for
 subscribe/ack/resume, bounded queues, limits and metrics, and
 [Brief 09 measurements](subscription-measurement-2026-09-18.md) for fanout evidence.
-Both listeners default to loopback. Non-loopback binding requires
+Serve listeners default to loopback. Non-loopback binding requires
 `--allow-remote` and emits an unauthenticated-service startup warning.
 It also defaults to one subscription per connection and logs that choice;
 `--max-subscriptions-per-connection` explicitly overrides the limit. Local use
 without `--allow-remote` retains the global subscriber cap as its per-connection
 default. Pass `--allow-remote` for public proxy deployments even on loopback.
 
-`run` is the same service without block summaries. `tail` emits height, emitted
+Store `run` ingests without block summaries. `tail` emits height, emitted
 event count, transaction count, XDR payload bytes, and elapsed time since the
 previous newly stored block. Its first interval starts when ingestion begins.
 `--json` produces JSON lines for tail and a single discovery report; JSON tail also includes the
@@ -33,6 +36,38 @@ CLI flags shown above; `RUST_LOG` controls tracing. The required event address
 is never inferred. Both DNS hostnames and numeric socket addresses are accepted.
 `--protocol` can override the compiled, exact-width protocol token; it cannot
 make incompatible XDR schemas compatible.
+
+## Directory interface and failure isolation
+
+Store exclusively holds `LOCK`. Serve never locks or writes the directory and never
+opens a `Store`. It discovers the maximum fixed-width height filename at startup
+and verifies only that record, then polls the next height every 200 ms.
+If initially empty, it rescans until records appear and starts publication at the
+minimum height. Existing history at startup is served from disk without republication.
+Each new record is decoded and verified once before publication to the existing
+bounded fanout. Atomic publication means readers see a complete record or no file.
+There is no IPC or dependency on writer reachability.
+
+Stopping store leaves subscribers connected with their cursors intact; restarting
+store resumes publication through the directory. Restarting serve does not interrupt
+ingestion. Tail read or verification failures do not advance its tip.
+
+Serve exposes health and metrics on `127.0.0.1:9552`, separately from store's
+`127.0.0.1:9550`. Health uses the latest record's modification time, including at
+restart. Above `--tip-stale-seconds` (default 60), `/health` returns 503 and
+`firehose_healthy` is zero. `firehose_tip_age_seconds` reports age; it is NaN before
+any record. An empty archive is healthy only within the same startup grace threshold.
+Store health continues to describe its upstream connection.
+
+Serve's `--request-window` defaults to 42,428 blocks, about 24 hours at the measured
+cadence. New height subscriptions below `max(0, tip - window)` are rejected with
+`below_window` even if the archive still holds their records. Already accepted
+subscriptions may finish catch-up under the existing deadlines as the window moves.
+`firehose_request_window_blocks` reports available archive depth capped by the policy
+window, in blocks rather than elapsed seconds. Scrapes read a cached measurement;
+async filesystem probes refresh it at startup and after each tailer poll. It can lag
+by the poll interval (default 200 ms) plus polling and probe time, with no hard bound
+if archive I/O stalls. Probe failures report NaN until a successful refresh.
 
 ## Discovery and protocol safety
 
@@ -79,6 +114,12 @@ request to the 0.36.0 **request-only `CaughtUp` cursor state**, which parks unti
 publication. This state is never persisted. After a block the client asks with
 `Initialized` again. There is no polling timer or deadline on the parked pull.
 
+A new archive starts only after `CaughtUp` supplies its origin. A block received
+before that point is refused and store exits without writing it. This makes
+tip-only bootstrap independent of upstream retention policy. An outbox awaiting
+initialization can return `NotReady`, which retains the existing retry behavior.
+Archives with an adopted origin continue ingesting normally.
+
 All outcomes have distinct logs and counter labels:
 
 | Outcome | Action |
@@ -103,7 +144,55 @@ stops ingestion. SIGKILL may leave one unpublished temporary record; recovery
 ignores it. A published block is already the cursor, so replay cannot create an
 extra height. An identical serialized repeat is a no-op. Conflicting content,
 height gaps, parent-hash mismatches, and discontinuous epoch origins are errors.
-No rollback, rewrite, pruning, or repair mode exists.
+No rollback, block rewrite, or repair mode exists.
+
+## Retention and verified restart
+
+Store prunes once per minute, including while disconnected or a pull is parked.
+Defaults are `--retain-duration 604800` (seconds, seven days),
+`--retain-bytes 48000000000` (48 GB allocated), and `--retain-min-blocks 1000`.
+Either age or allocation can bind; the minimum overrides both budgets and always
+preserves at least one block.
+Age uses record modification time. Allocated bytes include filesystem block
+rounding, so small idle records consume their actual disk allocation rather than
+logical length. The budget includes the origin and floor, but excludes directory
+metadata and the shutdown watermark; leave volume headroom for those and for
+bursts between scans.
+
+Pruning publishes `floor.xdr`, an XDR `IndexerInitializedProgress` for the first
+retained block's predecessor, including that block's epoch origin. Metadata uses
+the same atomic publication path into a staging name, then atomic rename and
+directory fsync. Only after that durable floor is published are older records
+unlinked. Restart seeds from the floor and removes leftover older records, so
+interruption before or during deletion is safe. The tip progress and upstream
+cursor are unchanged. The verification report includes `floorHeight` as the base.
+
+Clean SIGINT/SIGTERM shutdown writes `verified.xdr` containing the verified tip
+progress, using the same durable metadata publication. Opening consumes this
+watermark and fsyncs its removal before ingestion can begin. SIGKILL, a crash,
+or an ingestion error therefore leaves no reusable watermark and the next open
+fully verifies. A kill during final checkpoint publication can leave a valid
+watermark only for the already verified, durable tip. Pruning runs while no durable
+watermark is present and retains the tip; the subsequent shutdown checkpoint
+therefore always refers to retained records above the current floor.
+
+Warm recovery still reads and decodes retained blocks, validating filenames and
+chain/epoch continuity, but skips commitment re-hashing at or below the watermark.
+**Content corruption below the watermark can go undetected at startup.**
+`hog-firehose-store verify` always performs a full audit. A periodic background
+scrubber is a named follow-up; it is not implemented here. Watermark consumption
+means a second open without another clean shutdown performs full verification.
+
+A local Apple-silicon debug-build measurement on 2026-09-30 used 10,000 chained
+100-transaction fixture records (284,000,068 logical bytes) and warm filesystem
+caches: full restart took **25.352 s**, watermark restart **6.999 s** (3.62×).
+This isolates avoided hashing, not cold gp3 I/O; warm recovery still reads every
+record. Reproduce with:
+
+```sh
+cargo test -p thruput-firehose --test retention measure_restart_watermark \
+  -- --ignored --nocapture
+```
 
 ## Storage choice and audit
 
@@ -123,12 +212,12 @@ filesystem supporting hard links, directory fsync and advisory file locks.
 This is simpler than a database or segment journal for this experimental slice:
 one atomic record contains both data and cursor, with no separate index to
 repair. The tradeoff is one inode and filesystem allocation unit per block,
-plus an O(N) directory scan and full verification at startup. The measurements
+plus an O(N) directory scan and record decoding at startup. The measurements
 below quantify that cost. A segment format is the next storage optimisation if
 file count/allocation or recovery duration becomes material. There is no claim
 that this layout has been qualified for millions of files.
 
-Recovery verifies every consensus hash and recomputes both `events_hash` and
+Full recovery verifies every consensus hash and recomputes both `events_hash` and
 `txs_hash` using hogd's prefix Patricia-trie encoding, including transaction/event
 pairing, nondeterministic proposal data, and duplicate-key rejection. Hashing the
 whole serialized batch would be wrong. Live-node fixtures cover both one and
@@ -147,9 +236,9 @@ without a second content-addressed file layout or deduplication layer.
 
 ## Observability
 
-`/health` returns 200 for a working ingester, including when parked, and 503
+Store `/health` returns 200 for a working ingester, including when parked, and 503
 before its first successful response or while retrying backend failures.
-An unexpected WebSocket server stop shuts down the process with an error.
+An unexpected WebSocket server stop shuts down serve with an error.
 `/metrics` uses a private Prometheus registry:
 
 | Metric | Meaning |
@@ -159,6 +248,8 @@ An unexpected WebSocket server stop shuts down the process with an error.
 | `firehose_events_per_block` | Emitted-event histogram |
 | `firehose_current_height` | Durable contiguous height, or -1 before an origin |
 | `firehose_tip_lag_blocks` | Sampled scheduler tip minus archive height |
+| `firehose_tip_age_seconds` | Serve tip age; NaN before its first record |
+| `firehose_healthy` | Process health, including stale-tip degradation on serve |
 | `firehose_pull_seconds` | Pull duration histogram, including parking |
 | `firehose_parked_seconds_total` | Gauge of accumulated parked seconds, including the current pull |
 | `firehose_store_bytes` | Logical durable record bytes, including recovered records |
@@ -171,7 +262,7 @@ scheduler client negotiates its intro and samples the tip every 250 ms; it never
 adds an event-service connection. Without this source, or during sampler errors,
 lag is **NaN**, not a misleading zero. The sampled gauge can miss short spikes
 and reflects observations from two independently moving services. Allocation
-metrics exclude directory metadata and the lock/temporary file.
+metrics exclude directory metadata, the shutdown watermark and lock/temporary files.
 
 ## Reproducible local measurements
 
@@ -181,7 +272,7 @@ latencies, growth estimates, restart evidence, and design differences.
 The examples are **local-node test drivers**, not production coordinators:
 
 ```sh
-cargo build -p groundhog-firehose --examples
+cargo build -p thruput-firehose --examples
 # Mirrors node-supervisor's proposal/commit and compatibility hash sequence:
 target/debug/examples/drive_blocks <scheduler-coord> <archive> 30 250
 # Same native wallet self-call shape as the workspace benchmark; unique nonce start:
@@ -190,7 +281,7 @@ target/debug/examples/drive_blocks <scheduler-coord> <archive> 5 250
 ```
 
 For local schema-4 nodes, the example owns account zero derived from
-`groundhog-firehose:traffic-fixture-v1`. Supply that fixture's public allocation
+`thruput-firehose:traffic-fixture-v1`. Supply that fixture's public allocation
 before starting the node; the manifest cannot supply a signer. Hosted schema-3
 manifests retain the separate bootstrap adapter when the seed argument is omitted.
 

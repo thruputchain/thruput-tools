@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
-use groundhog_sim::compare::COMPARE_DIFF_SCHEMA_VERSION;
+use thruput_json_rpc_types::hex::sha256_prefixed_hex;
+use thruput_sim::compare::COMPARE_DIFF_SCHEMA_VERSION;
 
 #[test]
 #[ignore = "requires GROUNDHOG_SIM_RPC_URL and GROUNDHOG_SIM_RUNTIME_MANIFEST"]

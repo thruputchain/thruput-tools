@@ -1,12 +1,12 @@
 //! Map hogd's execution result and root-frame output onto receipt fields.
 
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     BlockHeight,
     hex::HexBytes,
     receipt::{DETERMINISTIC_ERROR_KIND_FAULT, ExecStatus, TransactionReceipt},
     transaction::TxHash,
 };
-use groundhog_xdr::{
+use thruput_xdr::{
     event::TxEventLog,
     exec_result::ExecResult,
     transaction::{InvocationFrameOutput, TransactionHash},

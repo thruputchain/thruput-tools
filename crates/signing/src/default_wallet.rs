@@ -5,9 +5,9 @@
 //! this deployment ABI; these helpers do not discover runtime capabilities.
 //! Legacy deployed wallets have their own transaction format.
 
-use groundhog_xdr::contract::{Contract, ContractEntrypointID};
-use groundhog_xdr::transaction::Transaction;
-use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+use thruput_xdr::contract::{Contract, ContractEntrypointID};
+use thruput_xdr::transaction::Transaction;
+use thruput_xdr::types::{ContractAddress, SHA256Hash};
 use xdr_common::VecM;
 
 use crate::{
@@ -126,13 +126,16 @@ pub fn build_default_wallet_deploy_transaction(
     }))
 }
 
+const DEFAULT_WALLET_RETURN_DECODE_LIMIT: usize = 1024;
+
 /// Decode a successful native `execute` result for a single child call.
 /// Pass return data only after checking the root receipt's success status.
-/// The protocol's root return-buffer limit includes the collection framing.
+/// Accepts at most 1 KiB, including collection framing. This is a local decoding
+/// limit; the chain's return-buffer limit is configured independently.
 pub fn decode_default_wallet_call_return(data: &[u8]) -> Result<Vec<u8>, SigningError> {
-    if data.len() > groundhog_xdr::transaction::kMaxReturnBufferLen as usize {
+    if data.len() > DEFAULT_WALLET_RETURN_DECODE_LIMIT {
         return Err(SigningError::XdrDecode(
-            "native wallet return exceeds protocol buffer limit".into(),
+            "native wallet return exceeds decoder buffer limit".into(),
         ));
     }
     let mut returns: Vec<Vec<u8>> =

@@ -9,9 +9,9 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use groundhog_json_rpc_api::GroundhogApiClient;
-use groundhog_json_rpc_types::receipt::TransactionReceipt;
-use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_json_rpc_api::GroundhogApiClient;
+use thruput_json_rpc_types::receipt::TransactionReceipt;
+use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
 
 /// Default number of receipt lookups [`poll_receipt`] makes before giving up.
 //

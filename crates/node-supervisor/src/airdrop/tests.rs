@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     BlockHeight,
     airdrop::ClientNonce,
     block::ChainTip,
@@ -77,7 +77,7 @@ impl AirdropBackend for TestBackend {
         self.contexts.lock().unwrap().push(context);
         Ok(ChainTip {
             height: BlockHeight::from(7),
-            block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x77; 32])),
+            block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x77; 32])),
         })
     }
 
@@ -128,14 +128,14 @@ impl AirdropBackend for TestBackend {
 fn native_builder_binds_signatures_to_network_hash() {
     let build = |network_byte| {
         NativeAirdropBuilder {
-            network_hash: groundhog_xdr::types::NetworkHash::from(
-                groundhog_xdr::types::SHA256Hash::from([network_byte; 32]),
+            network_hash: thruput_xdr::types::NetworkHash::from(
+                thruput_xdr::types::SHA256Hash::from([network_byte; 32]),
             ),
             signer: Arc::new(LocalSigner::from_secret_key([0x33; 32])),
             next_nonce: AtomicU64::new(7),
         }
         .build(
-            ContractAddress::from(groundhog_xdr::types::ContractAddress::from([0x44; 32])),
+            ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x44; 32])),
             1_000,
             100_000_000,
         )
@@ -151,7 +151,7 @@ fn native_builder_binds_signatures_to_network_hash() {
 
 #[tokio::test]
 async fn registered_http_small_array_waits_without_raising_execution_limit() {
-    use groundhog_json_rpc_server::batch::{ConcurrentBatchService, RpcBatchConcurrency};
+    use thruput_json_rpc_server::batch::{ConcurrentBatchService, RpcBatchConcurrency};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     for concurrency in [1, RpcBatchConcurrency::default().get()] {
@@ -253,7 +253,7 @@ async fn admission_bounds_same_key_waiters_and_recovers_after_cancellation() {
     let error = rpc.request_airdrop(test_request(2, 2)).await.unwrap_err();
     assert_eq!(
         error.code(),
-        groundhog_json_rpc_types::error::codes::OVERLOADED
+        thruput_json_rpc_types::error::codes::OVERLOADED
     );
     assert_eq!(rpc.attempts.lock().unwrap().len(), 1);
     assert!(backend.submissions.lock().unwrap().is_empty());
@@ -366,7 +366,7 @@ fn local_context_rejects_wrong_faucet_public_key() {
     let config = NodeSupervisorConfig::default();
     let mut manifest = runtime_manifest(&config);
     manifest.bootstrap_accounts[0].public_key =
-        Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x99; 32]));
+        Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x99; 32]));
 
     let error = LocalAirdropContext::from_validated_runtime(
         &manifest,
@@ -608,9 +608,9 @@ async fn recent_failure_retry_resubmits_exact_signed_bytes() {
         TestBackend::new(vec![Ok(()), Ok(())]).with_status_results(vec![Ok(
             TransactionStatus::RecentFailure {
                 attempt_height: BlockHeight::from(8),
-                cause: groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                cause: thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
                     conflict: ConflictDiagnostic {
-                        address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x44; 32])),
+                        address: Hex0x(thruput_xdr::types::ContractAddress::from([0x44; 32])),
                         key: HexBytes(vec![0x01]),
                         code: ConflictCode::BoundsExceeded,
                     },
@@ -850,7 +850,7 @@ fn durable_rpc(dir: &std::path::Path, fresh: bool, backend: Arc<TestBackend>) ->
     let mut rpc = LocalAirdropRpc::with_parts(
         backend,
         Arc::new(NativeAirdropBuilder {
-            network_hash: groundhog_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
+            network_hash: thruput_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
             signer,
             next_nonce: AtomicU64::new(42),
         }),
@@ -1125,7 +1125,7 @@ async fn expired_retained_funding_without_outcome_never_creates_another_transfer
         let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
         let request = funding_request("42");
         let signed = NativeAirdropBuilder {
-            network_hash: groundhog_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
+            network_hash: thruput_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
             signer: fixture_signer(),
             next_nonce: AtomicU64::new(7),
         }
@@ -1139,7 +1139,7 @@ async fn expired_retained_funding_without_outcome_never_creates_another_transfer
                     &request,
                     RetainedFundingTransaction {
                         tx_hash: signed.tx_hash,
-                        signed_transaction: groundhog_json_rpc_types::hex::HexBytes(signed.bytes),
+                        signed_transaction: thruput_json_rpc_types::hex::HexBytes(signed.bytes),
                     },
                 )
                 .unwrap();
@@ -1152,7 +1152,7 @@ async fn expired_retained_funding_without_outcome_never_creates_another_transfer
         let object: jsonrpsee::types::ErrorObjectOwned = error.into();
         assert_eq!(
             object.code(),
-            groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
+            thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
         );
         let evidence: LocalFundingErrorData =
             serde_json::from_str(object.data().unwrap().get()).unwrap();
@@ -1368,13 +1368,13 @@ fn test_rpc_with_trigger(
 
 fn test_request(recipient: u8, nonce: u8) -> AirdropRequest {
     AirdropRequest {
-        recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([recipient; 32])),
+        recipient: Hex0x(thruput_xdr::types::ContractAddress::from([recipient; 32])),
         client_nonce: ClientNonce::new(vec![nonce]).expect("bug: one-byte nonce should validate"),
     }
 }
 
 fn test_tx_hash() -> TxHash {
-    TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0xaa; 32])))
+    TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0xaa; 32])))
 }
 
 fn runtime_manifest(_config: &NodeSupervisorConfig) -> RuntimeManifest {

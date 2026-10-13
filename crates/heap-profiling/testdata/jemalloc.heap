@@ -1,0 +1,53 @@
+heap_v2/524288
+  t*: 1: 1057519 [0: 0]
+  t0: 1: 1057519 [0: 0]
+@ 0x100e5f674 0x100e56da4 0x100e11944 0x100e10730 0x18f8d84e4
+  t*: 1: 1057519 [0: 0]
+  t0: 1: 1057519 [0: 0]
+
+MAPPED_LIBRARIES:
+0000000100e10000-0000000100ed0000: /private/tmp/capture-heap-prof
+000000018fbb3000-000000018fc43ae8: /usr/lib/libc++.1.dylib
+000000018fc44000-000000018fc5e760: /usr/lib/libc++abi.dylib
+000000019fb01000-000000019fb02ce4: /usr/lib/libSystem.B.dylib
+000000019fafb000-000000019fb0009c: /usr/lib/system/libcache.dylib
+000000019fab6000-000000019fac33a8: /usr/lib/system/libcommonCrypto.dylib
+000000019fae1000-000000019fae4988: /usr/lib/system/libcompiler_rt.dylib
+000000019fad6000-000000019fae0c20: /usr/lib/system/libcopyfile.dylib
+000000018f9e6000-000000018fa945f8: /usr/lib/system/libcorecrypto.dylib
+000000018fae6000-000000018fb2d240: /usr/lib/system/libdispatch.dylib
+000000018f883000-000000018f8b7d59: /usr/lib/system/libdyld.dylib
+000000019faf1000-000000019faf1f28: /usr/lib/system/libkeymgr.dylib
+000000019fa99000-000000019fa9c528: /usr/lib/system/libmacho.dylib
+000000019ed2c000-000000019ed2f1fc: /usr/lib/system/libquarantine.dylib
+000000019faee000-000000019faf0bf8: /usr/lib/system/libremovefile.dylib
+000000019645c000-0000000196473fe0: /usr/lib/system/libsystem_asl.dylib
+000000018f96c000-000000018f96f229: /usr/lib/system/libsystem_blocks.dylib
+000000018fb31000-000000018fbb21e8: /usr/lib/system/libsystem_c.dylib
+000000019fae5000-000000019fae978c: /usr/lib/system/libsystem_collections.dylib
+000000019d6cc000-000000019d6d05d8: /usr/lib/system/libsystem_configuration.dylib
+000000019c2ba000-000000019c2f2374: /usr/lib/system/libsystem_containermanager.dylib
+000000019f4cb000-000000019f4d1d04: /usr/lib/system/libsystem_coreservices.dylib
+0000000193c83000-0000000193c8ce60: /usr/lib/system/libsystem_darwin.dylib
+00000002953ec000-00000002953efa4c: /usr/lib/system/libsystem_darwindirectory.dylib
+000000019faf2000-000000019fafae40: /usr/lib/system/libsystem_dnssd.dylib
+00000002953f0000-00000002953fa39c: /usr/lib/system/libsystem_eligibility.dylib
+000000018fb2e000-000000018fb30ffc: /usr/lib/system/libsystem_featureflags.dylib
+000000018fcb3000-000000018fce26ec: /usr/lib/system/libsystem_info.dylib
+000000019fa5a000-000000019fa97a78: /usr/lib/system/libsystem_m.dylib
+000000018fa95000-000000018fae5258: /usr/lib/system/libsystem_malloc.dylib
+00000001963bf000-00000001963d9f7c: /usr/lib/system/libsystem_networkextension.dylib
+00000001940ee000-00000001941001b7: /usr/lib/system/libsystem_notify.dylib
+000000019d6d1000-000000019d6d79a0: /usr/lib/system/libsystem_sandbox.dylib
+00000002953fb000-000000029540288c: /usr/lib/system/libsystem_sanitizers.dylib
+000000019faea000-000000019faed4d0: /usr/lib/system/libsystem_secinit.dylib
+000000018fc5f000-000000018fc9c2f8: /usr/lib/system/libsystem_kernel.dylib
+000000018fcaa000-000000018fcb2964: /usr/lib/system/libsystem_platform.dylib
+000000018fc9d000-000000018fca9b3c: /usr/lib/system/libsystem_pthread.dylib
+0000000198015000-000000019801d388: /usr/lib/system/libsystem_symptoms.dylib
+000000018f9c5000-000000018f9e5a00: /usr/lib/system/libsystem_trace.dylib
+0000000295403000-0000000295403bc0: /usr/lib/system/libsystem_trial.dylib
+000000019fac4000-000000019facdca4: /usr/lib/system/libunwind.dylib
+000000018f970000-000000018f9c4560: /usr/lib/system/libxpc.dylib
+000000018f830000-000000018f882b4c: /usr/lib/libobjc.A.dylib
+00000002937d9000-00000002937e034a: /usr/lib/libRosetta.dylib

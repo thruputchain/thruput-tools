@@ -458,7 +458,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     let raw_spec = encode_fragments(&counter_fragments("Counter"));
     fs::write(
         &elf_fixture,
-        support::minimal_rv32_elf_with_section(groundhog_spec_tool::RAW_SECTION_NAME, &raw_spec),
+        support::minimal_rv32_elf_with_section(thruput_spec_tool::RAW_SECTION_NAME, &raw_spec),
     )
     .unwrap();
     let metadata_json = format!(
@@ -522,7 +522,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
     assert_eq!(
         metadata["artifact_format_fingerprint"],
-        format!("{:#018x}", groundhog_rv32_lower::FORMAT_FINGERPRINT)
+        format!("{:#018x}", thruput_rv32_lower::FORMAT_FINGERPRINT)
     );
     let spec_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&processed_spec_json).unwrap()).unwrap();
@@ -670,7 +670,7 @@ fn write_demo_contract_rv32(project_root: &Path, raw_spec: &[u8]) -> PathBuf {
     let elf_fixture = project_root.join("fixture.elf");
     fs::write(
         &elf_fixture,
-        support::minimal_rv32_elf_with_section(groundhog_spec_tool::RAW_SECTION_NAME, raw_spec),
+        support::minimal_rv32_elf_with_section(thruput_spec_tool::RAW_SECTION_NAME, raw_spec),
     )
     .unwrap();
     let metadata_json = format!(
@@ -1345,10 +1345,10 @@ fn build_rv32_refuses_a_missing_contract_toml() {
 }
 
 /// Raw spec fragments for an anchored interface with one `get` method.
-fn counter_fragments(interface_name: &str) -> Vec<groundhog_spec_tool::SpecFragment> {
+fn counter_fragments(interface_name: &str) -> Vec<thruput_spec_tool::SpecFragment> {
     vec![
-        groundhog_spec_tool::SpecFragment::SpecInterface {
-            interface_fragment: groundhog_spec_tool::SpecInterfaceFragment {
+        thruput_spec_tool::SpecFragment::SpecInterface {
+            interface_fragment: thruput_spec_tool::SpecInterfaceFragment {
                 interface_name: spec_string(interface_name),
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
@@ -1358,22 +1358,22 @@ fn counter_fragments(interface_name: &str) -> Vec<groundhog_spec_tool::SpecFragm
         },
         // Spec shaking keeps only anchored interfaces; a real build emits
         // this anchor from the contract impl site.
-        groundhog_spec_tool::SpecFragment::InterfaceAnchor {
-            interface_anchor: groundhog_contract_spec::SpecInterfaceAnchor {
+        thruput_spec_tool::SpecFragment::InterfaceAnchor {
+            interface_anchor: thruput_contract_spec::SpecInterfaceAnchor {
                 interface_name: spec_string(interface_name),
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
             },
         },
-        groundhog_spec_tool::SpecFragment::SpecMethod {
-            method_fragment: groundhog_spec_tool::SpecMethodFragment {
+        thruput_spec_tool::SpecFragment::SpecMethod {
+            method_fragment: thruput_spec_tool::SpecMethodFragment {
                 interface_name: spec_string(interface_name),
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
-                method: groundhog_spec_tool::ContractSpecMethod {
+                method: thruput_spec_tool::ContractSpecMethod {
                     name: spec_string("get"),
                     args: vec![].try_into().unwrap(),
-                    return_type: groundhog_spec_tool::ContractType::U64,
+                    return_type: thruput_spec_tool::ContractType::U64,
                     effect: None,
                 },
             },
@@ -1381,14 +1381,14 @@ fn counter_fragments(interface_name: &str) -> Vec<groundhog_spec_tool::SpecFragm
     ]
 }
 
-fn spec_string(value: &str) -> groundhog_spec_tool::ContractSpecString {
+fn spec_string(value: &str) -> thruput_spec_tool::ContractSpecString {
     value.try_into().expect("bug: test spec string should fit")
 }
 
 /// The crate that declares this interface: a bare `#[contract]` block
 /// records its crate, so the module path and declared name are both empty.
-fn declarer() -> groundhog_contract_spec::ContractSpecId {
-    groundhog_contract_spec::ContractSpecId {
+fn declarer() -> thruput_contract_spec::ContractSpecId {
+    thruput_contract_spec::ContractSpecId {
         crate_name: spec_string("counter"),
         major: spec_string("0.1"),
         module_path: spec_string(""),
@@ -1396,7 +1396,7 @@ fn declarer() -> groundhog_contract_spec::ContractSpecId {
     }
 }
 
-fn encode_fragments(fragments: &[groundhog_spec_tool::SpecFragment]) -> Vec<u8> {
+fn encode_fragments(fragments: &[thruput_spec_tool::SpecFragment]) -> Vec<u8> {
     let mut bytes = Vec::new();
     for fragment in fragments {
         bytes.extend(xdrs::txs::encode(fragment).expect("bug: test spec fragment should encode"));
@@ -1774,11 +1774,11 @@ fn finalize_rv32_spec_err(elf_bytes: &[u8]) -> String {
 
 #[test]
 fn rv32_raw_spec_section_newer_than_this_build_reports_skew() {
-    let supported = groundhog_spec_tool::RAW_SPEC_FORMAT;
+    let supported = thruput_spec_tool::RAW_SPEC_FORMAT;
     let message = finalize_rv32_spec_err(&rv32_elf_with_raw_spec_format(supported + 1));
 
     assert!(
-        message.contains("newer Groundhog SDK"),
+        message.contains("newer Thruput SDK"),
         "expected a version-skew diagnosis, got: {message}"
     );
     assert!(
@@ -1789,11 +1789,11 @@ fn rv32_raw_spec_section_newer_than_this_build_reports_skew() {
 
 #[test]
 fn rv32_raw_spec_section_older_than_this_build_reports_skew() {
-    let supported = groundhog_spec_tool::RAW_SPEC_FORMAT;
+    let supported = thruput_spec_tool::RAW_SPEC_FORMAT;
     let message = finalize_rv32_spec_err(&rv32_elf_with_raw_spec_format(supported - 1));
 
     assert!(
-        message.contains("older Groundhog SDK"),
+        message.contains("older Thruput SDK"),
         "expected a version-skew diagnosis, got: {message}"
     );
     assert!(
@@ -1805,31 +1805,37 @@ fn rv32_raw_spec_section_older_than_this_build_reports_skew() {
 #[test]
 #[serial]
 fn rv32_build_refuses_a_newer_contract_spec_format_before_compiling() {
-    let message =
-        rv32_build_with_declared_raw_spec_format(groundhog_spec_tool::RAW_SPEC_FORMAT + 1);
-
-    assert!(
-        message.contains("newer Groundhog SDK"),
-        "expected a version-skew diagnosis, got: {message}"
-    );
+    for package in ["thruput-contract-spec", "groundhog-contract-spec"] {
+        let message = rv32_build_with_declared_raw_spec_format(
+            package,
+            thruput_spec_tool::RAW_SPEC_FORMAT + 1,
+        );
+        assert!(
+            message.contains("newer Thruput SDK"),
+            "expected a version-skew diagnosis for {package}, got: {message}"
+        );
+    }
 }
 
 #[test]
 #[serial]
 fn rv32_build_refuses_an_older_contract_spec_format_before_compiling() {
-    let message =
-        rv32_build_with_declared_raw_spec_format(groundhog_spec_tool::RAW_SPEC_FORMAT - 1);
-
-    assert!(
-        message.contains("older Groundhog SDK"),
-        "expected a version-skew diagnosis, got: {message}"
-    );
+    for package in ["thruput-contract-spec", "groundhog-contract-spec"] {
+        let message = rv32_build_with_declared_raw_spec_format(
+            package,
+            thruput_spec_tool::RAW_SPEC_FORMAT - 1,
+        );
+        assert!(
+            message.contains("older Thruput SDK"),
+            "expected a version-skew diagnosis for {package}, got: {message}"
+        );
+    }
 }
 
-/// Run an rv32 build whose resolved `groundhog-contract-spec` declares
+/// Run an rv32 build whose resolved contract-spec package declares
 /// `declared`, asserting it refuses before cargo is asked to compile
 /// anything. Returns the error message for the caller to inspect.
-fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
+fn rv32_build_with_declared_raw_spec_format(package: &str, declared: u32) -> String {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
@@ -1855,12 +1861,12 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
         project_root.join("Cargo.toml").display()
     );
     // Shaped like a real contract graph: the member reaches
-    // `groundhog-contract-spec` through `sdk`, not directly.
+    // the contract-spec package through `sdk`, not directly.
     let dep_graph_metadata = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[
             {{"id":"member","name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","metadata":null}},
             {{"id":"sdk","name":"sdk","version":"0.1.0","manifest_path":"{}","metadata":null}},
-            {{"id":"spec","name":"groundhog-contract-spec","version":"0.1.0","manifest_path":"{}","metadata":{{"groundhog":{{"raw_spec_format":{declared}}}}}}}
+            {{"id":"spec","name":"{package}","version":"0.1.0","manifest_path":"{}","metadata":{{"groundhog":{{"raw_spec_format":{declared}}}}}}}
         ],"resolve":{{"nodes":[
             {{"id":"member","dependencies":["sdk"]}},
             {{"id":"sdk","dependencies":["spec"]}},
@@ -1911,7 +1917,7 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     let message = error.to_string();
     assert!(
         message.contains(&declared.to_string())
-            && message.contains(&groundhog_spec_tool::RAW_SPEC_FORMAT.to_string()),
+            && message.contains(&thruput_spec_tool::RAW_SPEC_FORMAT.to_string()),
         "expected both formats named, got: {message}"
     );
     // Nothing was handed to cargo beyond the metadata queries: the point of
@@ -2001,7 +2007,7 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
     // is not evidence of a version mismatch.
     let message = error.to_string();
     assert!(
-        !message.contains("Groundhog SDK"),
+        !message.contains("Thruput SDK"),
         "an unavailable dep graph must not be reported as version skew: {message}"
     );
     assert!(

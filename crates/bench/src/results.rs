@@ -227,7 +227,7 @@ pub(super) fn print_human_result(result: &BenchResult) {
     let requests = &result.requests;
     let rates = &result.rates;
 
-    println!("\n=== Groundhog RPC Benchmark Results ===");
+    println!("\n=== Thruput RPC Benchmark Results ===");
     println!("Method:      {}", config.method);
     println!("Outcome:     {}", result.outcome);
     if let Some(target) = config.target_requests_per_second {
@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn producer_metadata_preserves_unknown_git_provenance() {
         let value = serde_json::to_value(ProducerMetadata {
-            name: "groundhog-bench",
+            name: "thruput-bench",
             version: "0.9.2",
             build_profile: "release",
             git_commit: None,
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "name": "groundhog-bench",
+                "name": "thruput-bench",
                 "version": "0.9.2",
                 "buildProfile": "release",
                 "gitCommit": null,

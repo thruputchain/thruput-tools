@@ -1,6 +1,6 @@
 //! Error types for signing and transaction construction.
 
-/// Errors returned by `groundhog-signing`.
+/// Errors returned by `thruput-signing`.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SigningError {

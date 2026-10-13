@@ -199,7 +199,7 @@ fn generate_companion(
 }
 
 fn resolve_open_rpc_path() -> syn::Result<TokenStream2> {
-    match crate_name("groundhog-open-rpc") {
+    match crate_name("thruput-open-rpc") {
         Ok(FoundCrate::Itself) => Ok(quote!(crate)),
         Ok(FoundCrate::Name(name)) => {
             let ident = format_ident!("{name}");
@@ -207,7 +207,7 @@ fn resolve_open_rpc_path() -> syn::Result<TokenStream2> {
         }
         Err(err) => Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            format!("failed to resolve `groundhog-open-rpc` dependency: {err}"),
+            format!("failed to resolve `thruput-open-rpc` dependency: {err}"),
         )),
     }
 }

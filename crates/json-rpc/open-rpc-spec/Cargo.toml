@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-open-rpc-spec"
+name = "thruput-open-rpc-spec"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,18 +10,18 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Groundhog JSON-RPC OpenRPC spec generator binary"
+description = "Thruput JSON-RPC OpenRPC spec generator binary"
 
 [[bin]]
-name = "groundhog-open-rpc-spec"
+name = "thruput-open-rpc-spec"
 path = "src/main.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
-groundhog-open-rpc = { workspace = true }
-groundhog-json-rpc-api = { workspace = true }
+thruput-open-rpc = { workspace = true }
+thruput-json-rpc-api = { workspace = true }
 schemars = { workspace = true }
 serde_json = { workspace = true }
 

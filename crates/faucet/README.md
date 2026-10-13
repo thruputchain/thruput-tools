@@ -1,6 +1,6 @@
 # Groundhog Faucet
 
-`groundhog-faucet` serves the hosted Devnet network descriptor and airdrops.
+`thruput-faucet` serves the hosted Devnet network descriptor and airdrops.
 The signing key is loaded once at startup and never belongs in TOML config, process arguments, or logs.
 
 ## Run Locally
@@ -10,22 +10,47 @@ source values with values from your local or hosted Devnet setup:
 
 ```sh
 cp crates/faucet/faucet.example.toml crates/faucet/faucet.toml
-cargo run -p groundhog-faucet -- --config crates/faucet/faucet.toml
+cargo run -p thruput-faucet -- --config crates/faucet/faucet.toml
 ```
 
 Override the listen address when needed:
 
 ```sh
-cargo run -p groundhog-faucet -- --config crates/faucet/faucet.toml --listen 127.0.0.1:8081
+cargo run -p thruput-faucet -- --config crates/faucet/faucet.toml --listen 127.0.0.1:8081
 ```
 
 Logs use `RUST_LOG` and default to `info`:
 
 ```sh
-RUST_LOG=debug cargo run -p groundhog-faucet -- --config crates/faucet/faucet.toml
+RUST_LOG=debug cargo run -p thruput-faucet -- --config crates/faucet/faucet.toml
 ```
 
 ## Config
+
+Heap profiling is opt-in on a separate private listener:
+
+- Set `GROUNDHOG_HEAP_PROFILING=1` and pass `--pprof-listen 127.0.0.1:9647`.
+  Use a private address. Without the listen option no profile listener is opened;
+  without the environment switch the path returns 404.
+- A non-loopback `--pprof-listen` address (including `0.0.0.0`/`::` or a hostname
+  resolving elsewhere) fails startup unless `--pprof-allow-remote` or
+  `GROUNDHOG_PPROF_ALLOW_REMOTE=1` is set. Allowed remote profiles log a warning.
+- The heap route answers only GET/HEAD, and only when the `Host` header is
+  `localhost` or a loopback IP (with the remote opt-in, any IP literal). DNS-name
+  Hosts and cross-origin `Origin` headers get 403 to block DNS rebinding, so remote
+  scrapes must address the listener by IP.
+- `GET /debug/pprof/heap` returns an uncompressed pprof protobuf with
+  `Content-Type: application/octet-stream`.
+- Dump and conversion run on a blocking worker; a concurrent dump request returns HTTP 429.
+- Dumps require a writable temporary directory. Private dump files use mode 0600
+  and are removed after each request.
+- Build on Linux with `--features heap-profiling` to use jemalloc profiling with
+  a 512 KiB average allocation sampling interval. Linux release archives are
+  built this way, with profiling inactive until `GROUNDHOG_HEAP_PROFILING=1`.
+  Default builds keep the system allocator and fail startup if
+  `GROUNDHOG_HEAP_PROFILING=1`.
+- Profiles are symbolized in process with function names, plus file and line when
+  debuginfo is present. Mappings carry GNU build IDs.
 
 Start from `faucet.example.toml`. The config includes:
 

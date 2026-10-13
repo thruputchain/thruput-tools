@@ -1,10 +1,10 @@
-use groundhog_sim::manifest::ChaosEventKind;
-use groundhog_sim::manifest::SimulationManifest;
-use groundhog_sim::manifest::WorkloadKind;
+use thruput_sim::manifest::ChaosEventKind;
+use thruput_sim::manifest::SimulationManifest;
+use thruput_sim::manifest::WorkloadKind;
 
 use serde_json::json;
 
-use groundhog_sim::scheduler::*;
+use thruput_sim::scheduler::*;
 
 fn manifest() -> SimulationManifest {
     serde_json::from_value(json!({

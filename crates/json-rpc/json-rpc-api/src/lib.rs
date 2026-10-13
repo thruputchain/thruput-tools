@@ -3,13 +3,13 @@
 //! Both the production gateway and local node implement
 //! `GroundhogApiServer`. The client crate uses `GroundhogApiClient`.
 
-pub use groundhog_json_rpc_types as types;
+pub use thruput_json_rpc_types as types;
 
-use groundhog_open_rpc_macros::open_rpc;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
+use thruput_open_rpc_macros::open_rpc;
 
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress,
     address_auth::AddressAuthDataResponse,
     airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse},

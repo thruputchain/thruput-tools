@@ -1,6 +1,6 @@
-use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
+use thruput_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 
-use groundhog_signing::{
+use thruput_signing::{
     WalletCreateProofV2, wallet_create_proof_message, wallet_create_proof_message_v2,
 };
 

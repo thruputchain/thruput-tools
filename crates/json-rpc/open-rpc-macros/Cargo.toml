@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-open-rpc-macros"
+name = "thruput-open-rpc-macros"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -25,5 +25,5 @@ proc-macro2 = { workspace = true }
 proc-macro-crate = { workspace = true }
 
 [dev-dependencies]
-gh_open_rpc = { package = "groundhog-open-rpc", path = "../open-rpc" }
+gh_open_rpc = { package = "thruput-open-rpc", path = "../open-rpc" }
 jsonrpsee = { workspace = true }

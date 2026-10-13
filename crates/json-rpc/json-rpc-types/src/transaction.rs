@@ -157,9 +157,9 @@ impl std::fmt::Display for TransactionFailureCause {
     }
 }
 
-impl From<&groundhog_trace::TxFailureCause> for TransactionFailureCause {
-    fn from(cause: &groundhog_trace::TxFailureCause) -> Self {
-        use groundhog_trace::TxFailureCause as Xdr;
+impl From<&thruput_trace::TxFailureCause> for TransactionFailureCause {
+    fn from(cause: &thruput_trace::TxFailureCause) -> Self {
+        use thruput_trace::TxFailureCause as Xdr;
         match cause {
             Xdr::TxFailureDbConflict { conflict } => Self::DbConflict {
                 conflict: conflict.into(),
@@ -196,9 +196,9 @@ pub enum ContractRejectCode {
     Other,
 }
 
-impl From<groundhog_trace::ContractRejectCode> for ContractRejectCode {
-    fn from(code: groundhog_trace::ContractRejectCode) -> Self {
-        use groundhog_trace::ContractRejectCode as Xdr;
+impl From<thruput_trace::ContractRejectCode> for ContractRejectCode {
+    fn from(code: thruput_trace::ContractRejectCode) -> Self {
+        use thruput_trace::ContractRejectCode as Xdr;
         match code {
             Xdr::ContractRejectTooMany => Self::TooMany,
             Xdr::ContractRejectBlobTooLarge => Self::BlobTooLarge,
@@ -284,9 +284,9 @@ pub enum ConflictCode {
     Other,
 }
 
-impl From<groundhog_trace::DbConflictCode> for ConflictCode {
-    fn from(code: groundhog_trace::DbConflictCode) -> Self {
-        use groundhog_trace::DbConflictCode as Xdr;
+impl From<thruput_trace::DbConflictCode> for ConflictCode {
+    fn from(code: thruput_trace::DbConflictCode) -> Self {
+        use thruput_trace::DbConflictCode as Xdr;
         match code {
             Xdr::ExclusiveLockDenied => Self::ExclusiveLock,
             Xdr::TypeMismatch => Self::TypeMismatch,
@@ -302,8 +302,8 @@ impl From<groundhog_trace::DbConflictCode> for ConflictCode {
     }
 }
 
-impl From<&groundhog_trace::DbConflictDiagnostic> for ConflictDiagnostic {
-    fn from(diagnostic: &groundhog_trace::DbConflictDiagnostic) -> Self {
+impl From<&thruput_trace::DbConflictDiagnostic> for ConflictDiagnostic {
+    fn from(diagnostic: &thruput_trace::DbConflictDiagnostic) -> Self {
         let key_bytes = xdrs::txs::encode(&diagnostic.addrkey.key)
             .expect("bug: generated StorageKey should encode");
         Self {
@@ -314,8 +314,8 @@ impl From<&groundhog_trace::DbConflictDiagnostic> for ConflictDiagnostic {
     }
 }
 
-impl From<&groundhog_trace::TxFailureDiagnostic> for TransactionStatus {
-    fn from(diagnostic: &groundhog_trace::TxFailureDiagnostic) -> Self {
+impl From<&thruput_trace::TxFailureDiagnostic> for TransactionStatus {
+    fn from(diagnostic: &thruput_trace::TxFailureDiagnostic) -> Self {
         Self::RecentFailure {
             attempt_height: diagnostic.attempt_height.clone(),
             cause: (&diagnostic.cause).into(),
@@ -386,7 +386,7 @@ pub struct TransactionRefPage {
     pub oldest_block: BlockHeight,
 }
 
-impl From<AddressTransactionQuery> for groundhog_indexer::indexer::AddressTransactionQuery {
+impl From<AddressTransactionQuery> for thruput_indexer::indexer::AddressTransactionQuery {
     fn from(value: AddressTransactionQuery) -> Self {
         Self {
             address: value.address.0,
@@ -398,10 +398,10 @@ impl From<AddressTransactionQuery> for groundhog_indexer::indexer::AddressTransa
     }
 }
 
-impl From<groundhog_indexer::indexer::TransactionRef> for TransactionRef {
-    fn from(value: groundhog_indexer::indexer::TransactionRef) -> Self {
+impl From<thruput_indexer::indexer::TransactionRef> for TransactionRef {
+    fn from(value: thruput_indexer::indexer::TransactionRef) -> Self {
         Self {
-            tx_hash: TxHash(crate::hex::Hex0x(groundhog_xdr::types::SHA256Hash::from(
+            tx_hash: TxHash(crate::hex::Hex0x(thruput_xdr::types::SHA256Hash::from(
                 value.tx_hash.into_inner(),
             ))),
             height: value.height,
@@ -409,8 +409,8 @@ impl From<groundhog_indexer::indexer::TransactionRef> for TransactionRef {
     }
 }
 
-impl From<groundhog_indexer::indexer::TransactionRefPage> for TransactionRefPage {
-    fn from(value: groundhog_indexer::indexer::TransactionRefPage) -> Self {
+impl From<thruput_indexer::indexer::TransactionRefPage> for TransactionRefPage {
+    fn from(value: thruput_indexer::indexer::TransactionRefPage) -> Self {
         Self {
             refs: value.refs.0.into_iter().map(Into::into).collect(),
             cursor: value.cursor.into(),

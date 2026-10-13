@@ -1,4 +1,4 @@
-use groundhog_signing::strkey::*;
+use thruput_signing::strkey::*;
 
 fn corrupt_checksum(value: &mut String) {
     let replacement = if value.ends_with('A') { "B" } else { "A" };

@@ -1,12 +1,12 @@
-use groundhog_json_rpc_client::GroundhogApiClient;
-use groundhog_json_rpc_types::hex::prefixed_hex;
-use groundhog_json_rpc_types::network_descriptor::{
+use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_types::hex::prefixed_hex;
+use thruput_json_rpc_types::network_descriptor::{
     AirdropDescriptor, NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION,
     NetworkDescriptor,
 };
-use groundhog_json_rpc_types::network_info::NetworkInfo;
-use groundhog_signing::WALLET_DEPLOY_ENTRYPOINT;
-use groundhog_xdr::contract::ContractEntrypointID;
+use thruput_json_rpc_types::network_info::NetworkInfo;
+use thruput_signing::WALLET_DEPLOY_ENTRYPOINT;
+use thruput_xdr::contract::ContractEntrypointID;
 
 use crate::CliError;
 use crate::config::ResolvedProfile;
@@ -28,7 +28,7 @@ pub(crate) struct WalletEntrypoints {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WalletSigningContext {
     pub(crate) entrypoints: WalletEntrypoints,
-    pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
+    pub(crate) network_hash: thruput_xdr::types::NetworkHash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +41,7 @@ pub(crate) struct RemoteAirdropDescriptor {
 
 pub(crate) fn resolve_native_signing_context(
     profile: &ResolvedProfile,
-    configured: Option<&groundhog_xdr::types::NetworkHash>,
+    configured: Option<&thruput_xdr::types::NetworkHash>,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<WalletSigningContext, CliError> {
     let rpc_url = profile.rpc_endpoint()?;
@@ -58,8 +58,8 @@ pub(crate) fn resolve_native_signing_context(
     Ok(WalletSigningContext {
         network_hash: validated_signing_network_hash(configured, &network_info)?,
         entrypoints: WalletEntrypoints {
-            deploy: groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
-            do_action: groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
+            deploy: thruput_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
+            do_action: thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
             source: "native_default_wallet",
         },
     })
@@ -68,7 +68,7 @@ pub(crate) fn resolve_native_signing_context(
 pub(crate) fn resolve_wallet_signing_context(
     profile: &ResolvedProfile,
     _key_name: &str,
-    configured_network_hash: Option<groundhog_xdr::types::NetworkHash>,
+    configured_network_hash: Option<thruput_xdr::types::NetworkHash>,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<WalletSigningContext, CliError> {
     let Some(faucet_url) = profile.faucet_url.as_deref() else {
@@ -236,9 +236,9 @@ fn validate_network_info(
 }
 
 fn validated_signing_network_hash(
-    configured: Option<&groundhog_xdr::types::NetworkHash>,
+    configured: Option<&thruput_xdr::types::NetworkHash>,
     network_info: &NetworkInfo,
-) -> Result<groundhog_xdr::types::NetworkHash, CliError> {
+) -> Result<thruput_xdr::types::NetworkHash, CliError> {
     if let Some(configured) = configured {
         matches_expected(
             "networkHash",
@@ -246,7 +246,7 @@ fn validated_signing_network_hash(
             &prefixed_hex(network_info.network_hash.0.as_ref()),
         )?;
     }
-    Ok(groundhog_xdr::types::NetworkHash::from(
+    Ok(thruput_xdr::types::NetworkHash::from(
         network_info.network_hash.0,
     ))
 }
@@ -384,8 +384,8 @@ mod tests {
     #[test]
     fn hosted_descriptor_rejects_rpc_network_hash_mismatch() {
         let descriptor = descriptor();
-        let network_info = NetworkInfo::new(groundhog_json_rpc_types::NetworkHash::from(
-            groundhog_xdr::types::SHA256Hash::from([0x99; 32]),
+        let network_info = NetworkInfo::new(thruput_json_rpc_types::NetworkHash::from(
+            thruput_xdr::types::SHA256Hash::from([0x99; 32]),
         ));
 
         let error = validate_network_info(&descriptor, &network_info)
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn hosted_signing_returns_the_validated_rpc_network_hash() {
         let descriptor = descriptor();
-        let configured = groundhog_xdr::types::NetworkHash::from(descriptor.network_hash.0);
+        let configured = thruput_xdr::types::NetworkHash::from(descriptor.network_hash.0);
         let network_info = NetworkInfo::new(descriptor.network_hash);
 
         let network_hash = validated_signing_network_hash(Some(&configured), &network_info)
@@ -416,9 +416,8 @@ mod tests {
     #[test]
     fn hosted_signing_rejects_configured_network_hash_mismatch() {
         let descriptor = descriptor();
-        let configured = groundhog_xdr::types::NetworkHash::from(
-            groundhog_xdr::types::SHA256Hash::from([0x99; 32]),
-        );
+        let configured =
+            thruput_xdr::types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from([0x99; 32]));
         let network_info = NetworkInfo::new(descriptor.network_hash);
 
         let error = validated_signing_network_hash(Some(&configured), &network_info)

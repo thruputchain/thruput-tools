@@ -4,18 +4,33 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    time::{Duration, SystemTime},
 };
 
-use groundhog_indexer::{
+use thruput_indexer::{
     EventIndexerPulledBlock, IndexerInitializedProgress, IndexerOutboxOrigin, IndexerProgress,
 };
 
 use crate::{Error, block_height, decode, encode, invalid, verify::verify};
 
+/// Decimal height width shared by record writers and directory discovery.
+pub(crate) const RECORD_HEIGHT_WIDTH: usize = 20;
+
 /// The directory is the height index, so the writer and every archive reader
 /// must agree on this name.
 pub(crate) fn record_path(directory: &Path, height: i64) -> PathBuf {
-    directory.join(format!("{height:020}.xdr"))
+    directory.join(format!("{height:0RECORD_HEIGHT_WIDTH$}.xdr"))
+}
+
+/// Bounds applied by the periodic archive pruner.
+#[derive(Clone, Copy, Debug)]
+pub struct Retention {
+    /// Maximum record age, measured from filesystem modification time.
+    pub duration: Duration,
+    /// Maximum allocated bytes, including filesystem block rounding.
+    pub bytes: u64,
+    /// Minimum number of blocks preserved regardless of either budget.
+    pub min_blocks: u64,
 }
 
 /// An exclusively locked, verified local archive.
@@ -24,8 +39,10 @@ pub struct Store {
     directory: PathBuf,
     _lock: File,
     progress: Option<IndexerInitializedProgress>,
-    hub: Option<crate::subscription::Hub>,
-    /// Total bytes in durable block and origin records (excludes filesystem allocation).
+    floor: Option<i64>,
+    /// Number of blocks fully verified during this open.
+    pub verified_blocks: u64,
+    /// Total bytes in durable block, origin and floor records (excludes filesystem allocation).
     pub bytes: u64,
     /// Allocated record bytes, including filesystem block rounding on Unix.
     pub allocated_bytes: u64,
@@ -34,8 +51,18 @@ pub struct Store {
 }
 
 impl Store {
-    /// Verify all records and reconstruct progress before accepting new blocks.
+    /// Reconstruct progress, trusting a consumed clean-shutdown watermark when present.
     pub fn open(directory: &Path) -> Result<Self, Error> {
+        Self::recover(directory, true)
+    }
+
+    /// Fully verify retained records even when a clean-shutdown watermark exists.
+    pub fn open_verified(directory: &Path) -> Result<Self, Error> {
+        Self::recover(directory, false)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn recover(directory: &Path, trust_watermark: bool) -> Result<Self, Error> {
         fs::create_dir_all(directory)?;
         let lock = OpenOptions::new()
             .create(true)
@@ -45,19 +72,48 @@ impl Store {
             .open(directory.join("LOCK"))?;
         fs2::FileExt::try_lock_exclusive(&lock)?;
         let mut store = Self {
-            hub: None,
             directory: directory.to_owned(),
             _lock: lock,
             progress: None,
+            floor: None,
+            verified_blocks: 0,
             bytes: 0,
             allocated_bytes: 0,
             blocks: 0,
         };
+        let watermark_path = directory.join("verified.xdr");
+        let watermark: Option<IndexerInitializedProgress> = if watermark_path.exists() {
+            let progress = decode(&fs::read(&watermark_path)?)?;
+            // Invalidate before accepting writes: a killed run must fully verify next time.
+            fs::remove_file(&watermark_path)?;
+            File::open(directory)?.sync_all()?;
+            trust_watermark.then_some(progress)
+        } else {
+            None
+        };
+        let floor_path = directory.join("floor.xdr");
+        if floor_path.exists() {
+            let bytes = fs::read(&floor_path)?;
+            let progress: IndexerInitializedProgress = decode(&bytes)?;
+            store.bytes += bytes.len() as u64;
+            store.allocated_bytes += allocated_bytes(&floor_path)?;
+            if *progress.contiguous_height < 0 || *progress.origin.first_height < 0 {
+                return Err(invalid("invalid archive floor"));
+            }
+            store.floor = Some(
+                (*progress.contiguous_height)
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("archive floor overflow"))?,
+            );
+            store.progress = Some(progress);
+        }
         let origin_path = directory.join("origin.xdr");
         if origin_path.exists() {
             let bytes = fs::read(&origin_path)?;
             let origin = decode(&bytes)?;
-            store.adopt_memory(origin)?;
+            if store.progress.is_none() {
+                store.adopt_memory(origin)?;
+            }
             store.bytes += bytes.len() as u64;
             store.allocated_bytes += allocated_bytes(&origin_path)?;
         }
@@ -68,7 +124,10 @@ impl Store {
                 .file_name()
                 .and_then(|s| s.to_str())
                 .ok_or_else(|| invalid("non-UTF8 archive filename"))?;
-            if matches!(name, "LOCK" | "pending" | "origin.xdr") {
+            if matches!(
+                name,
+                "LOCK" | "pending" | "origin.xdr" | "floor.xdr" | "metadata.xdr"
+            ) {
                 continue;
             }
             if path.extension().is_none_or(|ext| ext != "xdr") {
@@ -77,20 +136,146 @@ impl Store {
             paths.push(path);
         }
         paths.sort();
+        let mut watermark_seen = false;
         for path in paths {
+            if store
+                .floor
+                .is_some_and(|floor| path < record_path(directory, floor))
+            {
+                fs::remove_file(path)?;
+                continue;
+            }
             let bytes = fs::read(&path)?;
             let pulled: EventIndexerPulledBlock = decode(&bytes)?;
             if path != record_path(directory, block_height(&pulled)) {
                 return Err(invalid("height filename mismatch"));
             }
-            verify(&pulled)?;
+            if watermark
+                .as_ref()
+                .is_none_or(|p| block_height(&pulled) > *p.contiguous_height)
+            {
+                verify(&pulled)?;
+                store.verified_blocks += 1;
+            }
             store.check_next(&pulled)?;
             store.advance(&pulled);
+            if watermark
+                .as_ref()
+                .is_some_and(|p| *p.contiguous_height == store.height())
+            {
+                if store.progress.as_ref() != watermark.as_ref() {
+                    return Err(invalid("watermark progress mismatch"));
+                }
+                watermark_seen = true;
+            }
             store.bytes += bytes.len() as u64;
             store.allocated_bytes += allocated_bytes(&path)?;
             store.blocks += 1;
         }
+        if watermark.is_some() && !watermark_seen {
+            return Err(invalid("watermark does not match retained records"));
+        }
+        File::open(directory)?.sync_all()?;
         Ok(store)
+    }
+
+    /// First retained height, if pruning has established a durable floor.
+    pub fn floor_height(&self) -> Option<i64> {
+        self.floor
+    }
+
+    fn publish_metadata(&self, name: &str, bytes: &[u8]) -> Result<(), Error> {
+        let staging = self.directory.join("metadata.xdr");
+        if staging.exists() {
+            fs::remove_file(&staging)?;
+        }
+        self.publish(&staging, bytes)?;
+        fs::rename(staging, self.directory.join(name))?;
+        File::open(&self.directory)?.sync_all()?;
+        Ok(())
+    }
+
+    /// Publish verified tip progress only after ingestion has stopped cleanly.
+    pub fn clean_shutdown(mut self) -> Result<(), Error> {
+        if self.blocks > 0 {
+            // CaughtUp can adopt an epoch with no new block. Checkpoint only the
+            // progress encoded by the tip record, which recovery reconstructs.
+            let tip = decode(&fs::read(record_path(&self.directory, self.height()))?)?;
+            self.advance(&tip);
+            if let Some(progress) = &self.progress {
+                self.publish_metadata("verified.xdr", &encode(progress)?)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Publish a floor before unlinking older records, without changing the upstream cursor.
+    pub fn prune(&mut self, retention: Retention) -> Result<(), Error> {
+        let mut records = Vec::new();
+        for entry in fs::read_dir(&self.directory)? {
+            let path = entry?.path();
+            if path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.len() == 20 && s.bytes().all(|b| b.is_ascii_digit()))
+            {
+                records.push(path);
+            }
+        }
+        records.sort();
+        let max_remove = records
+            .len()
+            .saturating_sub(usize::try_from(retention.min_blocks.max(1)).unwrap_or(usize::MAX));
+        let mut remaining = self.allocated_bytes;
+        let mut remove = 0;
+        for path in records.iter().take(max_remove) {
+            let age = SystemTime::now()
+                .duration_since(fs::metadata(path)?.modified()?)
+                .unwrap_or_default();
+            if remaining <= retention.bytes && age <= retention.duration {
+                break;
+            }
+            remaining = remaining.saturating_sub(allocated_bytes(path)?);
+            remove += 1;
+        }
+        if remove == 0 {
+            return Ok(());
+        }
+        let first: EventIndexerPulledBlock = decode(&fs::read(&records[remove])?)?;
+        let height = block_height(&first);
+        let floor = IndexerInitializedProgress {
+            origin: first.origin.clone(),
+            contiguous_height: (height - 1).into(),
+            last_consensus_hash: first.block.payload.consensus_value.prev_hash.clone(),
+        };
+        let floor_path = self.directory.join("floor.xdr");
+        let (old_bytes, old_allocated) = if floor_path.exists() {
+            (
+                fs::metadata(&floor_path)?.len(),
+                allocated_bytes(&floor_path)?,
+            )
+        } else {
+            (0, 0)
+        };
+        self.publish_metadata("floor.xdr", &encode(&floor)?)?;
+        self.bytes = self.bytes - old_bytes + fs::metadata(&floor_path)?.len();
+        self.allocated_bytes = self.allocated_bytes - old_allocated + allocated_bytes(&floor_path)?;
+        self.floor = Some(height);
+        for path in records.iter().take(remove) {
+            let bytes = fs::metadata(path)?.len();
+            let allocated = allocated_bytes(path)?;
+            fs::remove_file(path)?;
+            self.bytes -= bytes;
+            self.allocated_bytes -= allocated;
+            self.blocks -= 1;
+        }
+        File::open(&self.directory)?.sync_all()?;
+        // The first floor adds an allocation unit. Account for its actual
+        // allocation before deciding whether the byte budget is satisfied.
+        if self.allocated_bytes > retention.bytes && self.blocks > retention.min_blocks.max(1) {
+            self.prune(retention)?;
+        }
+        Ok(())
     }
 
     /// Cursor encoded in durable records; parked state is connection-local.
@@ -105,11 +290,6 @@ impl Store {
     /// Highest contiguous height, or -1 before adopting an origin.
     pub fn height(&self) -> i64 {
         self.progress.as_ref().map_or(-1, |p| *p.contiguous_height)
-    }
-
-    /// Attach read-side fanout; publication remains after the archive is durable.
-    pub fn subscribe_with(&mut self, hub: crate::subscription::Hub) {
-        self.hub = Some(hub);
     }
 
     fn publish(&self, path: &Path, bytes: &[u8]) -> Result<(), Error> {
@@ -234,9 +414,6 @@ impl Store {
         self.bytes += bytes.len() as u64;
         self.allocated_bytes += allocated_bytes(&path)?;
         self.blocks += 1;
-        if let Some(hub) = &self.hub {
-            hub.publish(pulled, bytes);
-        }
         Ok(true)
     }
 }

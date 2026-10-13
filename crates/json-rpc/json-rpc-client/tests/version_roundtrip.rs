@@ -1,10 +1,11 @@
-use groundhog_json_rpc_api::GroundhogApiServer;
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-use groundhog_json_rpc_server::{
+use jsonrpsee::server::Server;
+use thruput_json_rpc_api::GroundhogApiServer;
+use thruput_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use thruput_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
     RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress,
     address_auth::AddressAuthDataResponse,
     block::BlockInfo,
@@ -14,7 +15,6 @@ use groundhog_json_rpc_types::{
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
 };
-use jsonrpsee::server::Server;
 
 #[derive(Clone, Copy)]
 struct VersionOnlyBackend;
@@ -134,8 +134,8 @@ async fn version_roundtrips_with_camel_case_json_shape() {
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
         VersionOnlyBackend,
-        NetworkInfo::new(groundhog_json_rpc_types::NetworkHash::from(
-            groundhog_xdr::types::SHA256Hash::from([0x07; 32]),
+        NetworkInfo::new(thruput_json_rpc_types::NetworkHash::from(
+            thruput_xdr::types::SHA256Hash::from([0x07; 32]),
         )),
         RpcServerConfig::default(),
         BuildInfo::for_tests(),
@@ -160,7 +160,7 @@ async fn version_roundtrips_with_camel_case_json_shape() {
 
     assert_eq!(
         version.wire_format,
-        groundhog_json_rpc_api::WIRE_FORMAT_VERSION
+        thruput_json_rpc_api::WIRE_FORMAT_VERSION
     );
     assert_eq!(version.implementation, "test");
     assert_eq!(version.platform_version, None);
@@ -172,7 +172,7 @@ async fn version_roundtrips_with_camel_case_json_shape() {
     let json = serde_json::to_value(&version).expect("bug: version info should serialize");
     assert_eq!(
         json["wireFormat"],
-        groundhog_json_rpc_api::WIRE_FORMAT_VERSION
+        thruput_json_rpc_api::WIRE_FORMAT_VERSION
     );
     assert_eq!(json["implementation"], "test");
     assert_eq!(json["platformVersion"], serde_json::Value::Null);

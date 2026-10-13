@@ -1,14 +1,14 @@
 //! Transaction and signed-transaction builders.
 
 use crate::{PublicKeyId, Signer, SigningError};
-use groundhog_domain_separator::transaction_signature_preimage;
-use groundhog_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
-use groundhog_xdr::contract::{ContractDeploymentHashPreimage, ContractEntrypointID};
-use groundhog_xdr::transaction::{
+use sha2::{Digest, Sha256};
+use thruput_domain_separator::transaction_signature_preimage;
+use thruput_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
+use thruput_xdr::contract::{ContractDeploymentHashPreimage, ContractEntrypointID};
+use thruput_xdr::transaction::{
     DecoratedSignature, Invocation, SignedTransaction, Transaction, Uniquifier,
 };
-use groundhog_xdr::types::{BlockHeight, ContractAddress, NetworkHash, SHA256Hash};
-use sha2::{Digest, Sha256};
+use thruput_xdr::types::{BlockHeight, ContractAddress, NetworkHash, SHA256Hash};
 use xdr_common::{BytesM, VecM};
 
 /// Frozen legacy wallet `deploy` entrypoint for RPC-only profiles without
@@ -87,7 +87,7 @@ pub struct BuildDeployTransaction {
     /// Transaction nonce.
     pub nonce: u64,
     /// Contracts to deploy inline with the transaction.
-    pub contracts_to_deploy: VecM<groundhog_xdr::contract::Contract>,
+    pub contracts_to_deploy: VecM<thruput_xdr::contract::Contract>,
     /// Auth claim attached to the transaction.
     pub auth_claim: AuthClaim,
 }
@@ -209,7 +209,7 @@ pub fn wallet_create_proof_message(
     genesis_hash: SHA256Hash,
     faucet_wallet_address: ContractAddress,
     wallet_contract_hash: SHA256Hash,
-    owner_public_key: groundhog_xdr::types::Ed25519PublicKey,
+    owner_public_key: thruput_xdr::types::Ed25519PublicKey,
     deploy_nonce: SHA256Hash,
 ) -> Result<Vec<u8>, SigningError> {
     const DOMAIN: &str = "groundhog-faucet-create-wallet-v1";
@@ -232,7 +232,7 @@ pub struct WalletCreateProofV2<'a> {
     pub genesis_hash: SHA256Hash,
     pub faucet_wallet_address: ContractAddress,
     pub wallet_contract_hash: SHA256Hash,
-    pub owner_public_key: groundhog_xdr::types::Ed25519PublicKey,
+    pub owner_public_key: thruput_xdr::types::Ed25519PublicKey,
     pub deploy_nonce: SHA256Hash,
     pub wallet_address: ContractAddress,
     pub client_nonce: &'a [u8],
@@ -263,7 +263,7 @@ pub fn wallet_create_proof_message_v2(
 /// `network_hash` identifies the network the transaction is for. It is part of
 /// what gets signed, so a transaction signed for one chain is rejected by
 /// another — see
-/// [`groundhog_domain_separator::transaction_signature_preimage`].
+/// [`thruput_domain_separator::transaction_signature_preimage`].
 pub fn sign_transaction(
     tx: Transaction,
     signer: &impl Signer,

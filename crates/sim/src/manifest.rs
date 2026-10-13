@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use serde::{Deserialize, Serialize};
+use thruput_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
 use crate::target::TargetProviderSpec;
 
@@ -279,7 +279,7 @@ impl SymbolicEntrypointSpec {
         validate_symbolic_entrypoint_field("interface", &self.interface)?;
         validate_symbolic_entrypoint_field("version", &self.version)?;
         validate_symbolic_entrypoint_field("method", &self.method)?;
-        if groundhog_contract_util::semver::try_major_version_from_string(&self.version).is_none() {
+        if thruput_contract_util::semver::try_major_version_from_string(&self.version).is_none() {
             return Err(EntrypointSpecError::InvalidVersion {
                 version: self.version.clone(),
             });

@@ -5,7 +5,7 @@
 //! for submission and chain tip, `IndexerBlockExplorer` for receipts, status,
 //! and events, `DbGateway` for latest-state reads, and `ViewGateway` for
 //! simulated calls. Everything in the seam between those wire types and the
-//! `groundhog-json-rpc-types` payloads is identical work, so it lives here
+//! `thruput-json-rpc-types` payloads is identical work, so it lives here
 //! once instead of in each binary.
 //!
 //! This crate is the decoding and mapping half of a backend adapter. It owns
@@ -18,10 +18,10 @@
 //! composes several backend reads into an answer, the [`status`] probe,
 //! takes the reads from the caller and owns only their order and precedence.
 //!
-//! `groundhog-x23-transport` remains the layer below: it builds the
+//! `thruput-x23-transport` remains the layer below: it builds the
 //! connection pools these adapters are driven with.
 //!
-//! [`RpcServerError`]: groundhog_json_rpc_server::RpcServerError
+//! [`RpcServerError`]: thruput_json_rpc_server::RpcServerError
 //!
 //! # Service labels
 //!

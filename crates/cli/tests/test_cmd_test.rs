@@ -309,7 +309,7 @@ fn test_json_lists_a_build_warning() {
     fs::write(
         &elf_fixture,
         support::minimal_rv32_elf_with_section(
-            groundhog_spec_tool::RAW_SECTION_NAME,
+            thruput_spec_tool::RAW_SECTION_NAME,
             &support::contract_spec_raw_for_interface("__gh_Counter"),
         ),
     )
@@ -323,11 +323,13 @@ fn test_json_lists_a_build_warning() {
     let fake_bin = tmp.path().join("bin");
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
+    // Real Cargo metadata uses canonical paths, including macOS's /private/var alias.
+    let project_root = tmp.path().canonicalize().unwrap();
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
-        tmp.path().display(),
-        tmp.path().join("target").display(),
-        tmp.path().join("Cargo.toml").display()
+        project_root.display(),
+        project_root.join("target").display(),
+        project_root.join("Cargo.toml").display()
     );
     fs::write(
         &cargo,

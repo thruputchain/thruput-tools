@@ -1,4 +1,4 @@
-# groundhog-testkit
+# thruput-testkit
 
 Run concurrent contract tests against an existing RPC or a harness-owned local
 node. Each agent receives a deterministic native account derived from the
@@ -7,9 +7,9 @@ these accounts (100 HOG by default). On existing networks, accounts start empty
 and funding is explicit.
 
 ```rust,no_run
-use groundhog_testkit::{Agent, DeployOptions, LocalNetworkConfig, NetworkConfig, Scenario};
+use thruput_testkit::{Agent, DeployOptions, LocalNetworkConfig, NetworkConfig, Scenario};
 
-# async fn example() -> groundhog_testkit::Result<()> {
+# async fn example() -> thruput_testkit::Result<()> {
 let mut config = LocalNetworkConfig::default();
 config.hog_devnode_binary = Some("/path/to/supporting/hog-devnode".into());
 config.contract_artifact_directories.push("/path/to/built_contracts".into());

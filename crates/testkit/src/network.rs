@@ -6,22 +6,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use groundhog_node_supervisor::{BlockDriverConfig, LogLevel, ManualBlockProducer, ProducedBlock};
+use thruput_node_supervisor::{BlockDriverConfig, LogLevel, ManualBlockProducer, ProducedBlock};
 
-use groundhog_json_rpc_client::{
+use thruput_json_rpc_client::{
     GroundhogApiClient, HttpClient, HttpClientBuilder, ReceiptPollConfig, ReceiptPollError,
     ReceiptSource, poll_receipt,
 };
-use groundhog_json_rpc_types::block::ChainTip;
-use groundhog_json_rpc_types::events::{EventPage, EventQuery};
-use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
-use groundhog_json_rpc_types::receipt::TransactionReceipt;
-use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
-use groundhog_json_rpc_types::state::StorageItemRead;
-use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
-use groundhog_json_rpc_types::view::{ViewRequest, ViewResponse};
-use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::ContractAddress;
+use thruput_json_rpc_types::block::ChainTip;
+use thruput_json_rpc_types::events::{EventPage, EventQuery};
+use thruput_json_rpc_types::hex::{Hex0x, HexBytes};
+use thruput_json_rpc_types::receipt::TransactionReceipt;
+use thruput_json_rpc_types::runtime_manifest::RuntimeManifest;
+use thruput_json_rpc_types::state::StorageItemRead;
+use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_json_rpc_types::view::{ViewRequest, ViewResponse};
+use thruput_xdr::contract::ContractEntrypointID;
+use thruput_xdr::types::ContractAddress;
 
 use crate::error::{Result, TestkitError};
 
@@ -81,18 +81,18 @@ impl SubmittedTransaction {
 
 #[derive(Debug)]
 struct LocalFundingAttempt {
-    request: groundhog_json_rpc_types::airdrop::FundAccountRequest,
-    admitted: Option<groundhog_json_rpc_types::airdrop::FundAccountResponse>,
-    evidence: Option<groundhog_json_rpc_types::airdrop::LocalFundingErrorData>,
+    request: thruput_json_rpc_types::airdrop::FundAccountRequest,
+    admitted: Option<thruput_json_rpc_types::airdrop::FundAccountResponse>,
+    evidence: Option<thruput_json_rpc_types::airdrop::LocalFundingErrorData>,
 }
 
 impl LocalFundingAttempt {
     fn retain_error_evidence(&mut self, error: &jsonrpsee::core::client::Error) -> Result<()> {
         if let jsonrpsee::core::client::Error::Call(call) = error
-            && call.code() == groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
+            && call.code() == thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
             && let Some(data) = call.data()
         {
-            let evidence: groundhog_json_rpc_types::airdrop::LocalFundingErrorData =
+            let evidence: thruput_json_rpc_types::airdrop::LocalFundingErrorData =
                 serde_json::from_str(data.get()).map_err(TestkitError::signing)?;
             validate_funding_evidence(&evidence)?;
             if self
@@ -134,8 +134,9 @@ impl fmt::Debug for Network {
 }
 
 impl Network {
-    /// Connect to a live target and retain its explicit bootstrap faucet adapter.
-    pub(crate) fn connect(
+    /// Connect to a live target, require it to serve the manifest's network, and
+    /// retain its explicit bootstrap faucet adapter.
+    pub(crate) async fn connect(
         rpc_url: &str,
         manifest: &RuntimeManifest,
         manual_block_producer: Option<ManualBlockProducer>,
@@ -143,6 +144,17 @@ impl Network {
         let client = HttpClientBuilder::default()
             .build(rpc_url)
             .map_err(|e| TestkitError::rpc("connect", e))?;
+        thruput_client::validate_network(&client, &manifest.network_hash.to_network_hash())
+            .await
+            .map_err(|error| match error {
+                thruput_client::NetworkError::Rpc(error) => TestkitError::rpc("networkInfo", error),
+                mismatch @ thruput_client::NetworkError::Mismatch { .. } => {
+                    TestkitError::Manifest {
+                        field: "networkHash",
+                        detail: format!("{mismatch} at {rpc_url}"),
+                    }
+                }
+            })?;
         Ok(Self {
             inner: Arc::new(NetworkInner {
                 rpc_url: Some(rpc_url.to_owned()),
@@ -318,7 +330,7 @@ impl Network {
             .map_err(|e| TestkitError::rpc("getStorageAt", e))
     }
 
-    /// Simulate a contract call through `groundhog_view`.
+    /// Simulate a contract call through `thruput_view`.
     ///
     /// `caller` sets the simulated `msg.sender`; pass an agent's own address to
     /// read state keyed by that caller.
@@ -361,7 +373,7 @@ impl Network {
         if let Some(faucet) = self.inner.local_faucet {
             return self.submit_local_fund(recipient, amount, faucet).await;
         }
-        let calldata = groundhog_signing::native_hog_transfer_calldata(&recipient, amount)
+        let calldata = thruput_signing::native_hog_transfer_calldata(&recipient, amount)
             .map_err(TestkitError::signing)?;
         let faucet = self.inner.faucet.lock().await;
         let faucet = faucet.as_ref().ok_or(TestkitError::MissingFaucet)?;
@@ -373,8 +385,8 @@ impl Network {
         })?;
         let (tx_hash, tx_hex) = crate::account::prepare_call(
             faucet,
-            groundhog_signing::NATIVE_HOG_ADDRESS,
-            groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            thruput_signing::NATIVE_HOG_ADDRESS,
+            thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
             &calldata,
             u64::from_le_bytes(nonce),
         )?;
@@ -391,8 +403,8 @@ impl Network {
         amount: u128,
         faucet: ContractAddress,
     ) -> Result<SubmittedTransaction> {
-        use groundhog_json_rpc_client::LocalFundingApiClient;
-        use groundhog_json_rpc_types::airdrop::{ClientNonce, FundAccountRequest};
+        use thruput_json_rpc_client::LocalFundingApiClient;
+        use thruput_json_rpc_types::airdrop::{ClientNonce, FundAccountRequest};
         if amount == 0 {
             return Err(TestkitError::signing("funding amount must be positive"));
         }
@@ -440,7 +452,7 @@ impl Network {
                     return Err(match &attempt.evidence {
                         Some(evidence) => TestkitError::Submission {
                             tx_hash: evidence.tx_hash,
-                            signed_transaction: groundhog_json_rpc_types::hex::prefixed_hex(
+                            signed_transaction: thruput_json_rpc_types::hex::prefixed_hex(
                                 &evidence.signed_transaction.0,
                             ),
                             detail: error.to_string(),
@@ -450,10 +462,9 @@ impl Network {
                 }
             }
         };
-        let signed: groundhog_xdr::transaction::SignedTransaction =
+        let signed: thruput_xdr::transaction::SignedTransaction =
             xdrs::txs::decode(&response.signed_transaction.0).map_err(TestkitError::signing)?;
-        let hash =
-            groundhog_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?;
+        let hash = thruput_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?;
         if response.recipient != request.recipient
             || response.raw_amount != request.raw_amount
             || response.tx_hash.0.0 != hash
@@ -462,7 +473,7 @@ impl Network {
                 "local funding response does not match retained request and signed hash",
             ));
         }
-        let evidence = groundhog_json_rpc_types::airdrop::LocalFundingErrorData::new(
+        let evidence = thruput_json_rpc_types::airdrop::LocalFundingErrorData::new(
             response.tx_hash,
             response.signed_transaction.clone(),
         );
@@ -482,11 +493,11 @@ impl Network {
         Ok(SubmittedTransaction::new(
             self.clone(),
             response.tx_hash,
-            groundhog_json_rpc_types::hex::prefixed_hex(&response.signed_transaction.0),
+            thruput_json_rpc_types::hex::prefixed_hex(&response.signed_transaction.0),
         ))
     }
 
-    fn require_client(&self, operation: &'static str) -> Result<&HttpClient> {
+    pub(crate) fn require_client(&self, operation: &'static str) -> Result<&HttpClient> {
         self.inner
             .client
             .as_ref()
@@ -495,11 +506,11 @@ impl Network {
 }
 
 fn validate_funding_evidence(
-    evidence: &groundhog_json_rpc_types::airdrop::LocalFundingErrorData,
+    evidence: &thruput_json_rpc_types::airdrop::LocalFundingErrorData,
 ) -> Result<()> {
-    let signed: groundhog_xdr::transaction::SignedTransaction =
+    let signed: thruput_xdr::transaction::SignedTransaction =
         xdrs::txs::decode(&evidence.signed_transaction.0).map_err(TestkitError::signing)?;
-    let hash = groundhog_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?;
+    let hash = thruput_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?;
     if evidence.tx_hash.0.0 != hash {
         return Err(TestkitError::signing(
             "local funding evidence hash does not match signed bytes",
@@ -509,7 +520,7 @@ fn validate_funding_evidence(
 }
 
 fn local_faucet(manifest: &RuntimeManifest) -> Result<Option<ContractAddress>> {
-    use groundhog_json_rpc_types::runtime_manifest::{
+    use thruput_json_rpc_types::runtime_manifest::{
         BOOTSTRAP_ACCOUNT_ROLE_FAUCET, HOGD_DEV_RUNTIME_MANIFEST_KIND,
     };
     if manifest.kind != HOGD_DEV_RUNTIME_MANIFEST_KIND {
@@ -521,8 +532,7 @@ fn local_faucet(manifest: &RuntimeManifest) -> Result<Option<ContractAddress>> {
         .filter(|a| a.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET);
     let faucet = faucets.next().ok_or(TestkitError::MissingFaucet)?;
     if faucets.next().is_some()
-        || groundhog_signing::PubkeyAccount::from_public_key_bytes(*faucet.public_key.0, 0)
-            .address()
+        || thruput_signing::PubkeyAccount::from_public_key_bytes(*faucet.public_key.0, 0).address()
             != faucet.wallet_address.0
     {
         return Err(TestkitError::Manifest {
@@ -564,8 +574,8 @@ fn classify_pending_status(status: &TransactionStatus) -> PendingStatusClassific
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::transaction::TransactionStatus;
-    use groundhog_node_supervisor::BlockDriverMode;
+    use thruput_json_rpc_types::transaction::TransactionStatus;
+    use thruput_node_supervisor::BlockDriverMode;
 
     use super::{
         LocalNetworkConfig, Network, PendingStatusClassification, classify_pending_status,
@@ -603,11 +613,11 @@ mod tests {
         assert_eq!(
             classify_pending_status(&TransactionStatus::RecentFailure {
                 attempt_height: 1.into(),
-                cause: groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
-                    conflict: groundhog_json_rpc_types::transaction::ConflictDiagnostic {
-                        address: groundhog_json_rpc_types::hex::Hex0x([0; 32].into()),
-                        key: groundhog_json_rpc_types::hex::HexBytes(Vec::new()),
-                        code: groundhog_json_rpc_types::transaction::ConflictCode::Other,
+                cause: thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                    conflict: thruput_json_rpc_types::transaction::ConflictDiagnostic {
+                        address: thruput_json_rpc_types::hex::Hex0x([0; 32].into()),
+                        key: thruput_json_rpc_types::hex::HexBytes(Vec::new()),
+                        code: thruput_json_rpc_types::transaction::ConflictCode::Other,
                     }
                 },
             }),
@@ -738,7 +748,7 @@ impl Default for LocalNetworkConfig {
             rpc_port: 0,
             hogd_protocol: None,
             log_level: None,
-            initial_account_tokens: groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS,
+            initial_account_tokens: thruput_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS,
             startup_timeout: Duration::from_secs(10),
             block_driver: BlockDriverConfig::default(),
         }

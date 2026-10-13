@@ -49,7 +49,7 @@ Leave the gateway running too. In a third terminal:
 
 ```sh
 RUNTIME_MANIFEST=$(jq -er '.data.runtime_manifest.path' /tmp/groundhog-node.json)
-groundhog-bench --url http://127.0.0.1:9546 \
+thruput-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" --account-seed benchmark-fixtures-v1 \
   --method sendRawTransaction --accounts 3 --rate 3 --duration 2 --force
 ```

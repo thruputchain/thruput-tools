@@ -1,13 +1,13 @@
 use std::path::Path;
 
-use groundhog_json_rpc_client::GroundhogApiClient;
-use groundhog_json_rpc_types::ContractAddress;
-use groundhog_json_rpc_types::events::{
+use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_types::ContractAddress;
+use thruput_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
     EventTopicFilter, IterationOrder, MAX_TOPIC_VALUES_PER_POSITION, PaginationCursor, TopicList,
 };
-use groundhog_json_rpc_types::hex::Topic;
-use groundhog_xdr::event::{kMaxEventLength, kMaxTopics};
+use thruput_json_rpc_types::hex::Topic;
+use thruput_xdr::event::{kMaxEventLength, kMaxTopics};
 use xdr_common::VecM;
 
 use crate::account_resolution::resolve_address_target;

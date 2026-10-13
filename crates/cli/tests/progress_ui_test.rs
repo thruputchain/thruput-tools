@@ -56,7 +56,7 @@ impl Fixture {
         fs::write(
             root.join("fixture.elf"),
             support::minimal_rv32_elf_with_section(
-                groundhog_spec_tool::RAW_SECTION_NAME,
+                thruput_spec_tool::RAW_SECTION_NAME,
                 &support::minimal_contract_spec_raw(),
             ),
         )
@@ -478,15 +478,26 @@ fn verbose_build_preserves_both_streams_scrollback_and_artifacts() {
     assert_eq!(pty.progress_rows, 0, "verbose output bypasses animation");
     let history = pty.history();
     assert!(history.contains("PREEXISTING-SHELL-LINE"));
+    // Cargo stdout reaches the PTY directly, while stderr is relayed in chunks.
+    // A stdout record may appear inside a split stderr record without losing bytes.
+    let mut stderr = String::from_utf8_lossy(&pty.raw).into_owned();
     for index in 0..300 {
-        for stream in ["stdout", "stderr"] {
-            let record = format!("{stream}-record-{index:04}");
-            assert_eq!(
-                history.matches(&record).count(),
-                1,
-                "{record} missing or duplicated"
-            );
-        }
+        let record = format!("stdout-record-{index:04}");
+        assert_eq!(
+            history.matches(&record).count(),
+            1,
+            "{record} missing or duplicated"
+        );
+        stderr = stderr.replace(&record, "");
+    }
+    let stderr = stderr.replace(['\r', '\n'], "");
+    for index in 0..300 {
+        let record = format!("stderr-record-{index:04}");
+        assert_eq!(
+            stderr.matches(&record).count(),
+            1,
+            "{record} missing or duplicated"
+        );
     }
     assert!(history.contains("Build complete"));
     assert!(history.contains("Artifact size"));

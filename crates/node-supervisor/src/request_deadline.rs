@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
+use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
 
 pub(crate) async fn within_request_deadline<T>(
     context: RpcRequestContext,

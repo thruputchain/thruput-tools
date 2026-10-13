@@ -1,9 +1,9 @@
 //! `groundhog_chainTip`, `groundhog_getBlockByNumber`, and
 //! `groundhog_pendingTransactionCount` handlers.
 
-use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError, TipReading};
-use groundhog_json_rpc_types::BlockHeight;
-use groundhog_json_rpc_types::block::BlockInfo;
+use thruput_json_rpc_server::{RpcRequestContext, RpcServerError, TipReading};
+use thruput_json_rpc_types::BlockHeight;
+use thruput_json_rpc_types::block::BlockInfo;
 
 use crate::context::GatewayContext;
 

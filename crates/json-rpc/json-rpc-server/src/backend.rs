@@ -65,7 +65,9 @@
 //!   the wire protocol.
 
 use async_trait::async_trait;
-use groundhog_json_rpc_types::{
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress,
     address_auth::AddressAuthDataResponse,
     block::{BlockInfo, ChainTip},
@@ -75,10 +77,8 @@ use groundhog_json_rpc_types::{
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     view::{ViewRequest, ViewResponse},
 };
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-use groundhog_xdr::network_config::NetworkConfig;
+use thruput_xdr::network_config::NetworkConfig;
 
 use crate::error::RpcServerError;
 
@@ -190,7 +190,7 @@ pub struct TipReading {
     ///
     /// Shared from the moment the backend builds it, so caching the reading
     /// and answering `chainConfig` from it both cost a refcount.
-    pub execution: Option<Arc<groundhog_json_rpc_types::network_config::ExecutionConfig>>,
+    pub execution: Option<Arc<thruput_json_rpc_types::network_config::ExecutionConfig>>,
 }
 
 impl TipReading {
@@ -207,7 +207,7 @@ impl TipReading {
     #[must_use]
     pub fn with_execution(
         mut self,
-        execution: impl Into<Arc<groundhog_json_rpc_types::network_config::ExecutionConfig>>,
+        execution: impl Into<Arc<thruput_json_rpc_types::network_config::ExecutionConfig>>,
     ) -> Self {
         self.execution = Some(execution.into());
         self
@@ -315,10 +315,10 @@ pub trait ViewPlane: Send + Sync + 'static {
     async fn view_batch(
         &self,
         _context: RpcRequestContext,
-        _request: groundhog_json_rpc_types::view::ViewBatchRequest,
+        _request: thruput_json_rpc_types::view::ViewBatchRequest,
         _gas_limit: u64,
         _limits: crate::ViewBatchConfig,
-    ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+    ) -> Result<thruput_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
         Err(RpcServerError::NotImplemented("viewBatch".into()))
     }
 

@@ -273,8 +273,8 @@ where
 mod tests {
     use std::net::SocketAddr;
 
-    use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
     use serde_json::json;
+    use thruput_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 
     use crate::hex::Hex0x;
 

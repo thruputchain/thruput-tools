@@ -7,11 +7,11 @@ use std::path::{Component, Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use groundhog_build_info::BuildVersion;
 use schemars::JsonSchema;
 use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
+use thruput_build_info::BuildVersion;
 
 use crate::result::CommandResult;
 use crate::{CliError, Print};
@@ -26,8 +26,8 @@ const CHUNK_SIZE: usize = 1024 * 1024;
 const COMPRESSION_LEVEL: i32 = 3;
 const DATA_DIR_METADATA: &str = "hog-devnode-data.json";
 const PRIVATE_STATE_FILES: [&str; 2] = [
-    groundhog_node_supervisor::LOCAL_FAUCET_KEY_FILE,
-    groundhog_node_supervisor::LOCAL_FUNDING_ATTEMPTS_FILE,
+    thruput_node_supervisor::LOCAL_FAUCET_KEY_FILE,
+    thruput_node_supervisor::LOCAL_FUNDING_ATTEMPTS_FILE,
 ];
 const LOCK_FILE: &str = ".hog-devnode.lock";
 const NODE_PID_FILE: &str = "hog-devnode.pid";
@@ -42,8 +42,8 @@ pub struct ChainDumpReport {
     pub schema_version: u32,
     pub archive_path: PathBuf,
     pub data_dir: PathBuf,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<usize>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<usize>")]
     pub file_count: usize,
     pub uncompressed_bytes: String,
     pub archive_bytes: String,
@@ -57,8 +57,8 @@ pub struct ChainRestoreReport {
     pub schema_version: u32,
     pub archive_path: PathBuf,
     pub data_dir: PathBuf,
-    #[serde(with = "groundhog_json_rpc_types::decimal")]
-    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<usize>")]
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<usize>")]
     pub file_count: usize,
     pub uncompressed_bytes: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,7 +134,7 @@ pub fn dump(
     let total_bytes = write_archive(
         temp.as_file_mut(),
         &files,
-        groundhog_build_info::build_version!(),
+        thruput_build_info::build_version!(),
     )?;
     temp.as_file().sync_all()?;
 

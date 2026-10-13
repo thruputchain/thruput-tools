@@ -7,10 +7,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use groundhog_hogd_backend::scheduler as shared_scheduler;
-use groundhog_hogd_backend::submit::{self as shared_submit, SubmitBatch};
-use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
-use groundhog_scheduler::{
+use thruput_hogd_backend::scheduler as shared_scheduler;
+use thruput_hogd_backend::submit::{self as shared_submit, SubmitBatch};
+use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
+use thruput_scheduler::{
     SchedGatewaySubmitOutcomeBatch, sched_gateway::SchedGateway_SchedGateway1_Client,
 };
 use tokio::{
@@ -22,7 +22,7 @@ use crate::{
     block_driver::BlockDriverTrigger, request_deadline::within_request_deadline,
     service::SCHEDULER_GATEWAY,
 };
-use groundhog_x23_transport::HOGD_LARGE_MESSAGE_SIZE;
+use thruput_x23_transport::HOGD_LARGE_MESSAGE_SIZE;
 
 const MAX_BATCH_SIZE: usize = 1_000;
 const INGRESS_QUEUE_DEPTH: usize = 10_000;

@@ -119,8 +119,8 @@ macro_rules! protocol_integer {
     };
 }
 
-protocol_integer!(groundhog_xdr::types::BlockHeight, i64, "DecimalBlockHeight");
-protocol_integer!(groundhog_xdr::types::TimePoint, u64, "DecimalTimePoint");
+protocol_integer!(thruput_xdr::types::BlockHeight, i64, "DecimalBlockHeight");
+protocol_integer!(thruput_xdr::types::TimePoint, u64, "DecimalTimePoint");
 
 impl<T: DecimalInteger> fmt::Display for Decimal<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -1,9 +1,9 @@
-use groundhog_xdr::types::SHA256Hash;
 use serde_json::json;
+use thruput_xdr::types::SHA256Hash;
 
-use groundhog_json_rpc_types::NetworkHash;
+use thruput_json_rpc_types::NetworkHash;
 
-use groundhog_json_rpc_types::network_info::NetworkInfo;
+use thruput_json_rpc_types::network_info::NetworkInfo;
 
 #[test]
 fn network_info_round_trips_with_camel_case_fields() {

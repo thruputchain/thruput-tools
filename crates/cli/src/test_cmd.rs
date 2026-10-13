@@ -55,7 +55,7 @@ pub struct IntegrationTestOptions {
     pub hog_devnode_version: Option<String>,
     /// Genesis network parameter overrides for the ephemeral node (mirrors
     /// `thruput node --network-config`). A parameter given twice is rejected.
-    pub network_config_overrides: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
+    pub network_config_overrides: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
     /// Forbid managed network acquisition for the ephemeral node.
     pub offline: bool,
     /// Show local-node supervisor and forwarded hog-devnode diagnostics while
@@ -293,9 +293,9 @@ fn run_integration_with_dev_node(
     let fixture = IntegrationFixture::new()?;
     let default_key = "integration";
     let bootstrap_accounts = vec![
-        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-            groundhog_json_rpc_types::hex::Hex0x(fixture.signer.verifying_key_bytes().into()),
-            groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS.to_string(),
+        thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+            thruput_json_rpc_types::hex::Hex0x(fixture.signer.verifying_key_bytes().into()),
+            thruput_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS.to_string(),
         ),
     ];
     let node_options = crate::node::LocalNodeOptions {
@@ -455,7 +455,7 @@ fn local_node_shutdown_warning(context: &'static str, error: &CliError) -> crate
 
 struct IntegrationFixture {
     config: tempfile::TempDir,
-    signer: groundhog_signing::LocalSigner,
+    signer: thruput_signing::LocalSigner,
 }
 
 impl IntegrationFixture {
@@ -464,7 +464,7 @@ impl IntegrationFixture {
         let mut secret = zeroize::Zeroizing::new([0; 32]);
         getrandom::fill(secret.as_mut())
             .map_err(|error| CliError::Io(std::io::Error::other(error.to_string())))?;
-        let signer = groundhog_signing::LocalSigner::from_secret_key(*secret);
+        let signer = thruput_signing::LocalSigner::from_secret_key(*secret);
         crate::keys::write_fixture_key(
             &config.path().join("thruput/keys"),
             "integration",

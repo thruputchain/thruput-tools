@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
-use groundhog_json_rpc_types::network_config::ExecutionConfig;
-use groundhog_tx_validation::NetworkConfigParams;
+use thruput_json_rpc_types::network_config::ExecutionConfig;
+use thruput_tx_validation::NetworkConfigParams;
 
 use crate::backend::{ChainPlane, RpcRequestContext, TipReading};
 use crate::config::RpcServerConfig;
@@ -299,9 +299,9 @@ pub(crate) fn spawn_tip_refresh<C: ChainPlane>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use groundhog_json_rpc_types::block::ChainTip;
-    use groundhog_json_rpc_types::hex::Hex0x;
-    use groundhog_xdr::network_config::{NetworkConfig, NetworkConfigV0};
+    use thruput_json_rpc_types::block::ChainTip;
+    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_xdr::network_config::{NetworkConfig, NetworkConfigV0};
     use xdr_common::VecM;
 
     /// A reading whose network config states no parameters.
@@ -309,7 +309,7 @@ mod tests {
         TipReading::new(
             ChainTip {
                 height: height.into(),
-                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
+                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0u8; 32])),
             },
             NetworkConfig::_0 {
                 v0: NetworkConfigV0 {

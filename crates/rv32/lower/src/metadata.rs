@@ -5,8 +5,8 @@
 
 use std::collections::BTreeMap;
 
-use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, sha256_hex};
 use serde_json::Value;
+use thruput_rv32_artifact::{FORMAT_FINGERPRINT, sha256_hex};
 
 use crate::lower::Lowered;
 

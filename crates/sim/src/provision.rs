@@ -8,18 +8,18 @@ use crate::{
     rpc::{ReceiptWaitFailure, SimReceiptSource, SimRpcClient, receipt_poll_config},
     runtime::{SimAccount, derive_provisioned_account_signer},
 };
-use groundhog_json_rpc_client::poll_receipt;
-use groundhog_json_rpc_types::{
+use std::collections::HashSet;
+use std::time::Duration;
+use thruput_json_rpc_client::poll_receipt;
+use thruput_json_rpc_types::{
     receipt::{ExecStatus, TransactionReceipt},
     runtime_manifest::RuntimeManifest,
     transaction::TxHash,
 };
-use groundhog_signing::{
+use thruput_signing::{
     DEFAULT_TX_GAS_LIMIT, PubkeyAccount, SignTransactionParams, sign_and_encode_transaction_hex,
 };
-use groundhog_xdr::types::ContractAddress;
-use std::collections::HashSet;
-use std::time::Duration;
+use thruput_xdr::types::ContractAddress;
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 const PROVISION_RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct ActorProvisionInputs<'a> {
@@ -244,11 +244,11 @@ where
         ProvisionTxError::without_hash(format!("failed to encode airdrop calldata: {error}"))
     })?;
     let account = PubkeyAccount::from_public_key_bytes(sponsor.signer.verifying_key_bytes(), 0);
-    let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
-        groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+    let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
+        thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
             account: &account,
-            target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
-            target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            target_address: thruput_signing::NATIVE_HOG_ADDRESS,
+            target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
             target_calldata: &calldata,
             gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
             target_gas_limit: DEFAULT_TX_GAS_LIMIT,
@@ -259,8 +259,8 @@ where
     .map_err(|error| {
         ProvisionTxError::without_hash(format!("failed to build airdrop transaction: {error}"))
     })?;
-    let tx_hash = TxHash(groundhog_json_rpc_types::hex::Hex0x(
-        groundhog_signing::transaction_hash(&tx)
+    let tx_hash = TxHash(thruput_json_rpc_types::hex::Hex0x(
+        thruput_signing::transaction_hash(&tx)
             .map_err(|error| ProvisionTxError::without_hash(error.to_string()))?,
     ));
     let tx_hex = sign_and_encode_transaction_hex(
@@ -342,7 +342,7 @@ where
 }
 
 fn parse_hog_amount(input: &str) -> Result<u128, SimError> {
-    groundhog_signing::parse_hog_amount(input).map_err(|error| {
+    thruput_signing::parse_hog_amount(input).map_err(|error| {
         SimError::Executor(format!(
             "invalid actor provisioning airdropHog amount `{}`: {error}",
             input.trim()
@@ -371,7 +371,7 @@ mod tests {
     use super::*;
     #[derive(Clone, Default)]
     struct RecordingClient(
-        std::sync::Arc<std::sync::Mutex<Vec<groundhog_xdr::transaction::SignedTransaction>>>,
+        std::sync::Arc<std::sync::Mutex<Vec<thruput_xdr::transaction::SignedTransaction>>>,
         SubmissionOutcome,
     );
     #[derive(Clone, Copy, Default)]
@@ -385,19 +385,19 @@ mod tests {
     impl SimRpcClient for RecordingClient {
         async fn chain_tip(
             &self,
-        ) -> Result<groundhog_json_rpc_types::block::ChainTip, crate::rpc::SimRpcError> {
-            Ok(groundhog_json_rpc_types::block::ChainTip {
+        ) -> Result<thruput_json_rpc_types::block::ChainTip, crate::rpc::SimRpcError> {
+            Ok(thruput_json_rpc_types::block::ChainTip {
                 height: 42.into(),
-                block_hash: groundhog_json_rpc_types::hex::Hex0x([0; 32].into()),
+                block_hash: thruput_json_rpc_types::hex::Hex0x([0; 32].into()),
             })
         }
         async fn send_raw_transaction(
             &self,
             tx_hex: String,
         ) -> Result<TxHash, crate::rpc::SimRpcError> {
-            let signed: groundhog_xdr::transaction::SignedTransaction =
+            let signed: thruput_xdr::transaction::SignedTransaction =
                 xdrs::txs::decode(&hex::decode(tx_hex.trim_start_matches("0x")).unwrap()).unwrap();
-            let hash = groundhog_signing::transaction_hash(&signed.tx).unwrap();
+            let hash = thruput_signing::transaction_hash(&signed.tx).unwrap();
             self.0.lock().unwrap().push(signed);
             match self.1 {
                 SubmissionOutcome::TransportError => Err(crate::rpc::SimRpcError::Rpc {
@@ -405,9 +405,9 @@ mod tests {
                     source: jsonrpsee::core::client::Error::RequestTimeout,
                 }),
                 SubmissionOutcome::WrongSubmitHash => Ok(TxHash(
-                    groundhog_json_rpc_types::hex::Hex0x([0xaa; 32].into()),
+                    thruput_json_rpc_types::hex::Hex0x([0xaa; 32].into()),
                 )),
-                _ => Ok(TxHash(groundhog_json_rpc_types::hex::Hex0x(hash))),
+                _ => Ok(TxHash(thruput_json_rpc_types::hex::Hex0x(hash))),
             }
         }
         async fn transaction_receipt(
@@ -415,7 +415,7 @@ mod tests {
             tx_hash: TxHash,
         ) -> Result<Option<TransactionReceipt>, crate::rpc::SimRpcError> {
             let tx_hash = if matches!(self.1, SubmissionOutcome::WrongReceiptHash) {
-                TxHash(groundhog_json_rpc_types::hex::Hex0x([0xaa; 32].into()))
+                TxHash(thruput_json_rpc_types::hex::Hex0x([0xaa; 32].into()))
             } else {
                 tx_hash
             };
@@ -431,7 +431,7 @@ mod tests {
         }
     }
     fn actor(index: u32) -> ActorState {
-        let signer = groundhog_signing::derive_default_dev_account_signer(index as usize);
+        let signer = thruput_signing::derive_default_dev_account_signer(index as usize);
         let wallet_address =
             PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address();
         ActorState::new(
@@ -440,7 +440,7 @@ mod tests {
                 index,
                 signer,
                 wallet_address,
-                network_hash: groundhog_xdr::types::NetworkHash::new([0; 32].into()),
+                network_hash: thruput_xdr::types::NetworkHash::new([0; 32].into()),
             },
             crate::nonce::NonceNamespace::new(1).unwrap(),
         )
@@ -460,8 +460,8 @@ mod tests {
                     .unwrap_err();
             let submitted = client.0.lock().unwrap();
             assert_eq!(submitted.len(), 1);
-            let local_hash = TxHash(groundhog_json_rpc_types::hex::Hex0x(
-                groundhog_signing::transaction_hash(&submitted[0].tx).unwrap(),
+            let local_hash = TxHash(thruput_json_rpc_types::hex::Hex0x(
+                thruput_signing::transaction_hash(&submitted[0].tx).unwrap(),
             ));
             assert_eq!(error.tx_hash, Some(local_hash));
             assert_eq!(sponsor.next_nonce_sequence, 1);
@@ -471,7 +471,7 @@ mod tests {
     async fn provisioning_derives_native_accounts_and_only_submits_explicit_funding() {
         type Call = (
             ContractAddress,
-            groundhog_xdr::contract::ContractEntrypointID,
+            thruput_xdr::contract::ContractEntrypointID,
             u64,
             Vec<u8>,
         );
@@ -523,15 +523,12 @@ mod tests {
                 assert_eq!(signed.tx.invocation.invoked_address, sponsor.wallet_address);
                 assert_eq!(
                     signed.tx.invocation.entrypoint,
-                    groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+                    thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
                 );
                 let calls: Vec<Call> = xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
                 assert_eq!(calls.len(), 1);
-                assert_eq!(calls[0].0, groundhog_signing::NATIVE_HOG_ADDRESS);
-                assert_eq!(
-                    calls[0].1,
-                    groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT
-                );
+                assert_eq!(calls[0].0, thruput_signing::NATIVE_HOG_ADDRESS);
+                assert_eq!(calls[0].1, thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT);
                 let (recipient, amount): (ContractAddress, u128) =
                     xdrs::cxs::decode(&calls[0].3).unwrap();
                 assert_eq!(recipient, actors[index + 1].wallet_address);

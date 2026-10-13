@@ -11,9 +11,9 @@ launch it:
 
 ```sh
 cargo build -p thruput-cli --locked
-cargo run -p groundhog-sim --bin hogsim -- catalog
-cargo run -p groundhog-sim --bin hogsim -- validate examples/sim/local-chain-tip-smoke.json
-cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-chain-tip-smoke.json \
+cargo run -p thruput-sim --bin hogsim -- catalog
+cargo run -p thruput-sim --bin hogsim -- validate examples/sim/local-chain-tip-smoke.json
+cargo run -p thruput-sim --bin hogsim -- run examples/sim/local-chain-tip-smoke.json \
   --thruput-binary target/debug/thruput \
   --hog-devnode-binary /absolute/path/to/hog-devnode --port 0
 ```
@@ -26,7 +26,7 @@ be part of the normal quickstart.
 ## Choose a scenario
 
 ```sh
-cargo run -p groundhog-sim --bin hogsim -- catalog --tag contract
+cargo run -p thruput-sim --bin hogsim -- catalog --tag contract
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-local.sh
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-scenarios.sh
 ```
@@ -49,7 +49,7 @@ Start a node separately as described in the
 
 ```sh
 RUNTIME_MANIFEST=$(jq -er '.data.runtime_manifest.path' /tmp/groundhog-node.json)
-cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.json \
+cargo run -p thruput-sim --bin hogsim -- run examples/sim/local-wallet-soak.json \
   --rpc-url http://127.0.0.1:9545 --runtime-manifest "$RUNTIME_MANIFEST" --json
 ```
 
@@ -103,8 +103,8 @@ Runs record ownership in `target-ownership.json`. To inspect or remove orphaned
 local targets when no simulations are active:
 
 ```sh
-cargo run -p groundhog-sim --bin hogsim -- sweep hogsim-runs --dry-run
-cargo run -p groundhog-sim --bin hogsim -- sweep hogsim-runs
+cargo run -p thruput-sim --bin hogsim -- sweep hogsim-runs --dry-run
+cargo run -p thruput-sim --bin hogsim -- sweep hogsim-runs
 ```
 
 The sweeper checks live process identity before signalling the recorded group.
@@ -132,7 +132,7 @@ execution. Missing or unsupported resource measurements are not zero values.
 The [result types](../../crates/sim/src/result.rs) define exact fields.
 
 ```sh
-cargo run -p groundhog-sim --bin hogsim -- compare /path/to/run-a /path/to/run-b --json
+cargo run -p thruput-sim --bin hogsim -- compare /path/to/run-a /path/to/run-b --json
 ```
 
 Comparison reads saved artifacts and reports B minus A. It separates exact file

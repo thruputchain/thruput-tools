@@ -1,5 +1,5 @@
-use groundhog_json_rpc_types::version::VersionInfo;
 use serde_json::json;
+use thruput_json_rpc_types::version::VersionInfo;
 
 #[test]
 fn version_info_serializes_component_and_release_identity_separately() {

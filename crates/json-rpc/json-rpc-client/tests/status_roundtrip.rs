@@ -1,13 +1,18 @@
-use groundhog_json_rpc_api::GroundhogApiServer;
-use groundhog_json_rpc_client::{
+use jsonrpsee::server::Server;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+use thruput_json_rpc_api::GroundhogApiServer;
+use thruput_json_rpc_client::{
     GroundhogApiClient, HttpClientBuilder, PollTransactionReceiptError,
     poll_transaction_receipt_with_config,
 };
-use groundhog_json_rpc_server::{
+use thruput_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
     RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
 };
-use groundhog_json_rpc_types::{
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
     address_auth::AddressAuthDataResponse,
     block::BlockInfo,
@@ -21,18 +26,13 @@ use groundhog_json_rpc_types::{
         TransactionStatus, TxHash,
     },
 };
-use jsonrpsee::server::Server;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
 
 const ATTEMPT_HEIGHT: i64 = 42;
 const CONFLICT_ADDRESS: [u8; 32] = [0x0D; 32];
 const CONFLICT_KEY: &[u8] = &[0, 0, 0, 1];
 
 fn test_network_info() -> NetworkInfo {
-    NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
+    NetworkInfo::new(NetworkHash::from(thruput_xdr::types::SHA256Hash::from(
         [0x07; 32],
     )))
 }
@@ -62,11 +62,9 @@ impl RecentFailureBackend {
 fn canned_recent_failure() -> TransactionStatus {
     TransactionStatus::RecentFailure {
         attempt_height: BlockHeight::from(ATTEMPT_HEIGHT),
-        cause: groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+        cause: thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
             conflict: ConflictDiagnostic {
-                address: Hex0x(groundhog_xdr::types::ContractAddress::from(
-                    CONFLICT_ADDRESS,
-                )),
+                address: Hex0x(thruput_xdr::types::ContractAddress::from(CONFLICT_ADDRESS)),
                 key: HexBytes(CONFLICT_KEY.to_vec()),
                 code: ConflictCode::ExclusiveLock,
             },
@@ -121,7 +119,7 @@ impl ReadPlane for RecentFailureBackend {
             return Ok(Some(TransactionReceipt {
                 tx_hash,
                 height: BlockHeight::from(ATTEMPT_HEIGHT + 1),
-                status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
+                status: thruput_json_rpc_types::receipt::ExecStatus::Ok,
                 events: Vec::new(),
                 return_data: None,
                 abort_data: None,
@@ -199,7 +197,7 @@ async fn receipt_polling_surfaces_recent_failure_status() {
         BuildInfo::for_tests(),
     );
     let handle = server.start(rpc.into_rpc());
-    let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x33; 32])));
+    let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x33; 32])));
 
     let error = poll_transaction_receipt_with_config(
         &format!("http://{addr}"),
@@ -217,7 +215,7 @@ async fn receipt_polling_surfaces_recent_failure_status() {
                 TransactionStatus::RecentFailure {
                     attempt_height,
                     cause:
-                        groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                        thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
                             conflict,
                         },
                 },
@@ -249,7 +247,7 @@ async fn receipt_polling_prefers_a_later_receipt_to_recent_failure() {
         BuildInfo::for_tests(),
     );
     let handle = server.start(rpc.into_rpc());
-    let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x44; 32])));
+    let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
 
     let receipt = poll_transaction_receipt_with_config(
         &format!("http://{addr}"),
@@ -290,7 +288,7 @@ async fn recent_failure_status_roundtrips_through_client() {
     let client = HttpClientBuilder::default()
         .build(format!("http://{addr}"))
         .expect("bug: test client should build");
-    let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x22; 32])));
+    let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x22; 32])));
     let status = client
         .get_transaction_status(tx_hash)
         .await
@@ -300,12 +298,12 @@ async fn recent_failure_status_roundtrips_through_client() {
         TransactionStatus::RecentFailure {
             attempt_height,
             cause:
-                groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict { conflict },
+                thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict { conflict },
         } => {
             assert_eq!(*attempt_height, ATTEMPT_HEIGHT);
             assert_eq!(
                 conflict.address.0,
-                groundhog_xdr::types::ContractAddress::from(CONFLICT_ADDRESS)
+                thruput_xdr::types::ContractAddress::from(CONFLICT_ADDRESS)
             );
             assert_eq!(conflict.key.0, CONFLICT_KEY);
             assert_eq!(conflict.code, ConflictCode::ExclusiveLock);

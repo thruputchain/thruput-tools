@@ -16,15 +16,16 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
-use groundhog_db_gateway::AddressAndKeyBatch;
-use groundhog_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
-use groundhog_hogd_backend::db_gateway as shared_db_gateway;
-use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::{
+use thruput_db_gateway::AddressAndKeyBatch;
+use thruput_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
+use thruput_hogd_backend::db_gateway as shared_db_gateway;
+use thruput_json_rpc_server::RpcRequestContext;
+use thruput_json_rpc_types::{
     BlockHeight, ContractAddress, address_auth::AddressAuthDataResponse, state::StorageItemRead,
 };
-use groundhog_xdr::types::{AddressAndKey, StorageKey};
+use thruput_xdr::types::{AddressAndKey, StorageKey};
 use tokio::sync::{RwLock, oneshot};
+use tracing::Instrument;
 use xdr_common::VecM;
 
 use crate::adaptive_batch::{
@@ -34,7 +35,7 @@ use crate::config::{AdaptiveBatchConfig, HealthBackend};
 use crate::context::DbGatewayClient;
 use crate::handlers::DB_GATEWAY;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
-use groundhog_json_rpc_server::RpcServerError;
+use thruput_json_rpc_server::RpcServerError;
 
 /// Backend for batched storage reads.  In production this wraps the
 /// `DbGateway1` client; tests substitute a mock.
@@ -89,7 +90,12 @@ impl StorageReadSink for DbGatewaySink {
         if timeout.is_zero() {
             return Err(RpcServerError::BackendTimeout);
         }
-        let outer_result = tokio::time::timeout(timeout, client.dbgateway_get_items(&batch)).await;
+        let outer_result = tokio::time::timeout(timeout, client.dbgateway_get_items(&batch))
+            .instrument(crate::telemetry::backend_span(
+                "db_gateway",
+                "dbgateway_get_items",
+            ))
+            .await;
         self.metrics.observe_backend_request(
             HealthBackend::DbGateway,
             "dbgateway_get_items",
@@ -361,18 +367,18 @@ impl StorageReadBatcher {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::state::StorageItemInfo;
-    use groundhog_scheduler::RPCError;
+    use thruput_json_rpc_types::state::StorageItemInfo;
+    use thruput_scheduler::RPCError;
 
     use super::*;
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use groundhog_json_rpc_types::hex::Hex0x;
-    use groundhog_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
-    use groundhog_xdr::storage_item::WireStorageItem;
-    use groundhog_xdr::types::{Ed25519PublicKey, PublicKey};
+    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
+    use thruput_xdr::storage_item::WireStorageItem;
+    use thruput_xdr::types::{Ed25519PublicKey, PublicKey};
     use xdr_common::BytesM;
 
     /// Scripted mock sink.  Each `fetch()` call records the batch size
@@ -443,7 +449,7 @@ mod tests {
     }
 
     fn address_zero() -> ContractAddress {
-        Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
+        Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32]))
     }
 
     fn config_for_tests(
@@ -470,7 +476,7 @@ mod tests {
 
     fn payload_at_height(height: i64, items: Vec<DbGatewayItemResult>) -> DbGatewayPayload {
         DbGatewayPayload {
-            block_height: groundhog_xdr::types::BlockHeight::from(height),
+            block_height: thruput_xdr::types::BlockHeight::from(height),
             items: VecM(items),
         }
     }
@@ -665,7 +671,7 @@ mod tests {
             vec![
                 DbGatewayItemResult::kRPCNone {
                     item: WireStorageItem::kItemTypeNonnegativeInt {
-                        nnint: groundhog_xdr::types::int128_xdr {
+                        nnint: thruput_xdr::types::int128_xdr {
                             highbits: 0,
                             lowbits: 500,
                         },
@@ -676,7 +682,7 @@ mod tests {
                         auth_data: AddressAuthData {
                             public_keys,
                             required_weight: 3,
-                            last_written_height: groundhog_xdr::types::BlockHeight::from(2),
+                            last_written_height: thruput_xdr::types::BlockHeight::from(2),
                         },
                     },
                 },

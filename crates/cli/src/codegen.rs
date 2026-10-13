@@ -3,13 +3,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use groundhog_contract_spec::{
+use thruput_contract_spec::{
     ContractEnumDef, ContractEventDef, ContractExceptionType, ContractField, ContractSpec,
     ContractSpecId, ContractSpecInterface, ContractSpecMethod, ContractStructDef, ContractType,
     ContractTypeDef, ContractUnionCaseType, ContractUnionDef,
 };
-use groundhog_contract_util::semver::try_major_version_from_string;
-use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
+use thruput_contract_util::semver::try_major_version_from_string;
+use thruput_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
 use crate::CliError;
 
@@ -25,7 +25,7 @@ impl TsIdPath {
         self.namespaces.iter().chain(std::iter::once(&self.name))
     }
 
-    /// The fully qualified reference, e.g. `groundhog_erc20_if.v0_1.ERC20Error`.
+    /// The fully qualified reference, e.g. `thruput_erc20_if.v0_1.ERC20Error`.
     fn qualified(&self) -> String {
         self.segments()
             .map(String::as_str)
@@ -34,7 +34,7 @@ impl TsIdPath {
     }
 
     /// Its name in the `__gh_codegen` namespace: the segments joined by `$`,
-    /// e.g. `groundhog_erc20_if$v0_1$ERC20Error`. No spec name contains `$`, and
+    /// e.g. `thruput_erc20_if$v0_1$ERC20Error`. No spec name contains `$`, and
     /// an escaped segment starts with one, so distinct paths never share it.
     fn alias(&self) -> String {
         self.segments()
@@ -65,7 +65,7 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
             "spec type `{}` has `::` in its declared name, which a generated \
              binding cannot tell apart from a module of that path; drop it from \
              the `name = \"...\"` attribute",
-            groundhog_client::codec::spec_id_text(id)?
+            thruput_client::codec::spec_id_text(id)?
         )));
     }
     if [crate_name, major, module_path, declared]
@@ -75,7 +75,7 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
         return Err(CliError::TsBindingsFailed(format!(
             "{} has \"$\" in its name, which the generated TypeScript keeps for the names it \
              escapes. Rename it.",
-            groundhog_client::codec::spec_id_text(id)?
+            thruput_client::codec::spec_id_text(id)?
         )));
     }
 
@@ -99,7 +99,7 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
         return Err(CliError::TsBindingsFailed(format!(
             "{} would be \"{}\" in the generated TypeScript, where \"{segment}\" is not a \
              valid identifier. Rename it.",
-            groundhog_client::codec::spec_id_text(id)?,
+            thruput_client::codec::spec_id_text(id)?,
             path.qualified()
         )));
     }
@@ -202,10 +202,10 @@ fn declarations(spec: &ContractSpec) -> Result<Vec<Declaration<'_>>, CliError> {
 /// spec name can capture one. A binding that uses no name from a module still
 /// imports it: `noUnusedLocals` skips an unused import whose name starts with `_`.
 const RUNTIME_MODULES: &[(&str, &str)] = &[
-    ("__gh_protocol", "@groundhogchain/protocol"),
-    ("__gh_protocol_utils", "@groundhogchain/protocol/utils"),
-    ("__gh_contract_spec", "@groundhogchain/contract-spec"),
-    ("__gh_client_contract", "@groundhogchain/client/contract"),
+    ("__gh_protocol", "@thruputchain/protocol"),
+    ("__gh_protocol_utils", "@thruputchain/protocol/utils"),
+    ("__gh_contract_spec", "@thruputchain/contract-spec"),
+    ("__gh_client_contract", "@thruputchain/client/contract"),
 ];
 
 /// The names the generator declares for itself carry this prefix, which
@@ -236,7 +236,7 @@ fn type_def_id(def: &ContractTypeDef) -> Result<&ContractSpecId, CliError> {
 fn declaration_label(kind: &str, id: &ContractSpecId) -> Result<String, CliError> {
     Ok(format!(
         "{kind} {}",
-        groundhog_client::codec::spec_id_text(id)?
+        thruput_client::codec::spec_id_text(id)?
     ))
 }
 
@@ -1193,7 +1193,7 @@ fn render_interface_types(
 fn method_effect(
     method: &ContractSpecMethod,
 ) -> Result<Option<(&'static str, &'static str)>, CliError> {
-    use groundhog_contract_spec::ContractMethodEffect as Effect;
+    use thruput_contract_spec::ContractMethodEffect as Effect;
     match method.effect {
         None => Ok(None),
         Some(Effect::EffectPure) => Ok(Some(("pure", "EffectPure"))),
@@ -2133,7 +2133,7 @@ fn validate_contract_type(
             } else {
                 Err(CliError::TsBindingsFailed(format!(
                     "{location} references unresolved named type \"{}\"",
-                    groundhog_client::codec::spec_id_text(named)?
+                    thruput_client::codec::spec_id_text(named)?
                 )))
             }
         }
@@ -2276,7 +2276,7 @@ fn ts_property_key(name: &str) -> Result<String, CliError> {
 }
 
 /// Read a spec string as text for emission; accepts any UTF-8, unlike the codec's validator.
-fn spec_string_text(value: &groundhog_contract_spec::ContractSpecString) -> Result<&str, CliError> {
+fn spec_string_text(value: &thruput_contract_spec::ContractSpecString) -> Result<&str, CliError> {
     std::str::from_utf8(value.as_ref()).map_err(|error| {
         CliError::TsBindingsFailed(format!("contract spec contains invalid UTF-8: {error}"))
     })
@@ -2371,7 +2371,7 @@ fn to_camel_case(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use groundhog_contract_spec::{
+    use thruput_contract_spec::{
         ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractEventDef, ContractSpec,
         ContractSpecInterface, ContractSpecMethod, ContractSpecString, ContractStructDef,
         ContractUnionCase, ContractVectorType,
@@ -2456,7 +2456,7 @@ mod tests {
 
     #[test]
     fn maps_signed_token_types() {
-        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        use thruput_contract_spec::ContractSignedTokenPreimage;
         let opaque = ContractType::SignedToken {
             signed_token_preimage: ContractSignedTokenPreimage {
                 preimage_type: None,
@@ -2505,7 +2505,7 @@ mod tests {
 
     #[test]
     fn generates_signed_token_returns_from_the_client_runtime() {
-        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        use thruput_contract_spec::ContractSignedTokenPreimage;
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
                 name: spec_string("authorize"),
@@ -2545,7 +2545,7 @@ mod tests {
 
     #[test]
     fn rejects_signed_tokens_in_event_payloads() {
-        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        use thruput_contract_spec::ContractSignedTokenPreimage;
         let token = ContractType::SignedToken {
             signed_token_preimage: ContractSignedTokenPreimage {
                 preimage_type: None,
@@ -2641,7 +2641,7 @@ mod tests {
 
     #[test]
     fn reaches_the_runtime_signed_token_past_a_type_of_that_name() {
-        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        use thruput_contract_spec::ContractSignedTokenPreimage;
         let mut spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
                 name: spec_string("authorize"),
@@ -4024,7 +4024,7 @@ export type Result =
 
     #[test]
     fn effects_are_documented_and_preserved_without_changing_entrypoints() {
-        use groundhog_contract_spec::ContractMethodEffect as Effect;
+        use thruput_contract_spec::ContractMethodEffect as Effect;
         let mut spec = counter_spec();
         let baseline = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
         let entrypoints = |output: &str| {
@@ -4071,10 +4071,10 @@ export type Result =
     #[test]
     fn every_binding_imports_every_runtime_module_whole() {
         let imports = "\n\
-            import * as __gh_protocol from \"@groundhogchain/protocol\";\n\
-            import * as __gh_protocol_utils from \"@groundhogchain/protocol/utils\";\n\
-            import * as __gh_contract_spec from \"@groundhogchain/contract-spec\";\n\
-            import * as __gh_client_contract from \"@groundhogchain/client/contract\";\n";
+            import * as __gh_protocol from \"@thruputchain/protocol\";\n\
+            import * as __gh_protocol_utils from \"@thruputchain/protocol/utils\";\n\
+            import * as __gh_contract_spec from \"@thruputchain/contract-spec\";\n\
+            import * as __gh_client_contract from \"@thruputchain/client/contract\";\n";
         // Methods, events, and neither: the last uses no protocol module at all.
         let bare = counter_spec_with_interface_name("Counter", vec![], false);
         for spec in [counter_spec(), spec_with_events(), bare] {
@@ -4814,7 +4814,7 @@ export type Result =
         reason = "the snapshot fixture keeps its complete ABI shape visible in one place"
     )]
     fn typed_contract_spec() -> ContractSpec {
-        use groundhog_contract_spec::ContractMethodEffect as Effect;
+        use thruput_contract_spec::ContractMethodEffect as Effect;
 
         let request_id = ContractType::Array {
             array: ContractArrayType {
@@ -4959,7 +4959,7 @@ export type Result =
     )]
     fn shadowed_names_spec() -> ContractSpec {
         let signed_token = ContractType::SignedToken {
-            signed_token_preimage: groundhog_contract_spec::ContractSignedTokenPreimage {
+            signed_token_preimage: thruput_contract_spec::ContractSignedTokenPreimage {
                 preimage_type: None,
             },
         };

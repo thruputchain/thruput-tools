@@ -1,14 +1,14 @@
-use groundhog_json_rpc_types::hex::Hex0x;
-use groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT;
-use groundhog_json_rpc_types::receipt::ExecStatus;
-use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_xdr::event::{TxEmittedEvent, TxEventLog};
-use groundhog_xdr::exec_result::ExecResult;
-use groundhog_xdr::transaction::InvocationFrameOutput;
+use thruput_json_rpc_types::hex::Hex0x;
+use thruput_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT;
+use thruput_json_rpc_types::receipt::ExecStatus;
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_xdr::event::{TxEmittedEvent, TxEventLog};
+use thruput_xdr::exec_result::ExecResult;
+use thruput_xdr::transaction::InvocationFrameOutput;
 
 use xdr_common::{BytesM, VecM};
 
-use groundhog_hogd_backend::receipt::*;
+use thruput_hogd_backend::receipt::*;
 
 #[test]
 fn deterministic_exec_result_maps_to_the_shared_fault_kind() {

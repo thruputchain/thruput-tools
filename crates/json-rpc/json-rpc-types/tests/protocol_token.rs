@@ -1,5 +1,5 @@
-use groundhog_json_rpc_types::protocol_token::*;
-use groundhog_xdr::PROTOCOL_VERSION;
+use thruput_json_rpc_types::protocol_token::*;
+use thruput_xdr::PROTOCOL_VERSION;
 
 #[test]
 fn this_builds_token_round_trips() {

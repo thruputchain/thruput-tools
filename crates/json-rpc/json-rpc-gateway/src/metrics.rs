@@ -11,8 +11,8 @@ use prometheus::{
     Registry, TextEncoder,
 };
 
-use groundhog_build_info::BuildVersion;
-use groundhog_json_rpc_api::WIRE_FORMAT_VERSION;
+use thruput_build_info::BuildVersion;
+use thruput_json_rpc_api::WIRE_FORMAT_VERSION;
 
 use crate::{
     config::HealthBackend,

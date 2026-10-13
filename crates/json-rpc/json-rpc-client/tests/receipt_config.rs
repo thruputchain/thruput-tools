@@ -1,5 +1,5 @@
-use groundhog_json_rpc_client::receipt::ReceiptPollConfig;
 use std::time::Duration;
+use thruput_json_rpc_client::receipt::ReceiptPollConfig;
 
 #[test]
 fn budget_config_caps_attempts_at_the_spans_it_covers() {

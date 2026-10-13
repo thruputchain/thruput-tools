@@ -16,10 +16,10 @@ use std::{
     time::Duration,
 };
 
-use groundhog_testkit::rpc_types::receipt::ExecStatus;
-use groundhog_testkit::rpc_types::view::RootInvocationOutput;
-use groundhog_testkit::xdr::types::ContractAddress;
-use groundhog_testkit::{
+use thruput_testkit::rpc_types::receipt::ExecStatus;
+use thruput_testkit::rpc_types::view::RootInvocationOutput;
+use thruput_testkit::xdr::types::ContractAddress;
+use thruput_testkit::{
     Agent, AgentContext, BlockDriverConfig, DeployOptions, LocalNetworkConfig, NetworkConfig,
     Result, Scenario, TestkitError, WalletInitCall, entrypoint_id,
 };
@@ -50,14 +50,14 @@ async fn read_counter(
         .await?;
     match response.output {
         RootInvocationOutput::Return { return_data } => {
-            Ok(groundhog_testkit::xdrs::cxs::decode::<u64>(&return_data.0)
+            Ok(thruput_testkit::xdrs::cxs::decode::<u64>(&return_data.0)
                 .expect("get() return decodes as a u64"))
         }
         other => panic!("get() did not return a value: {other:?}"),
     }
 }
 
-async fn bump_counter(ctx: &mut AgentContext, contract: ContractAddress) -> Result<()> {
+async fn bump_counter(ctx: &AgentContext, contract: ContractAddress) -> Result<()> {
     let receipt = ctx
         .call(contract, entrypoint_id(INTERFACE, VERSION, "bump"), &[])
         .await?;
@@ -101,7 +101,7 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
     let alice_barrier = Arc::clone(&barrier);
     let alice_height = Arc::clone(&call_height);
     let alice_address = addresses[0];
-    let alice = Agent::new("alice", move |mut ctx| async move {
+    let alice = Agent::new("alice", move |ctx| async move {
         let call = ctx
             .submit_call(
                 alice_address,
@@ -124,7 +124,7 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
     let bob_barrier = Arc::clone(&barrier);
     let bob_height = Arc::clone(&call_height);
     let bob_address = addresses[1];
-    let bob = Agent::new("bob", move |mut ctx| async move {
+    let bob = Agent::new("bob", move |ctx| async move {
         let call = ctx
             .submit_call(bob_address, entrypoint_id(INTERFACE, VERSION, "bump"), &[])
             .await?;
@@ -157,7 +157,7 @@ async fn caller_counter_deploy_call_read() {
     };
 
     let mut config = LocalNetworkConfig::default();
-    // config.log_level = Some(groundhog_testkit::LogLevel::Trace);
+    // config.log_level = Some(thruput_testkit::LogLevel::Trace);
     if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
@@ -213,10 +213,10 @@ async fn caller_counter_deploy_call_read() {
             // Write/read round-trip on the first instance as this agent's wallet.
             let caller = ctx.address();
 
-            bump_counter(&mut ctx, instance1.address).await?;
+            bump_counter(&ctx, instance1.address).await?;
             let after_first = read_counter(&ctx, instance1.address, caller).await?;
 
-            bump_counter(&mut ctx, instance1.address).await?;
+            bump_counter(&ctx, instance1.address).await?;
             let after_second = read_counter(&ctx, instance1.address, caller).await?;
 
             assert!(after_first >= 1, "counter is at least 1 after one bump");
@@ -245,7 +245,7 @@ async fn multiple_runs_are_possible() {
     };
 
     let mut config = LocalNetworkConfig::default();
-    // config.log_level = Some(groundhog_testkit::LogLevel::Trace);
+    // config.log_level = Some(thruput_testkit::LogLevel::Trace);
     if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
@@ -272,7 +272,7 @@ async fn multiple_runs_are_possible() {
                 .deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
                 .await?;
 
-            bump_counter(&mut ctx, caller_counter.address).await?;
+            bump_counter(&ctx, caller_counter.address).await?;
 
             Ok(())
         })]

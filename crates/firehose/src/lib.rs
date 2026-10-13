@@ -4,6 +4,7 @@ pub mod client;
 pub mod metrics;
 pub mod store;
 pub mod subscription;
+pub mod tailer;
 pub mod types;
 mod verify;
 
@@ -27,18 +28,18 @@ pub enum Error {
     Rpc(#[from] rpc_driver::RpcError),
     /// Connection setup failed.
     #[error(transparent)]
-    Connect(#[from] groundhog_x23_transport::ConnectError),
+    Connect(#[from] thruput_x23_transport::ConnectError),
     /// Every resolved address failed during connection setup.
     #[error("{}", format_connection_failures(.endpoint, .attempts))]
     AllAddressesFailed {
         endpoint: String,
-        attempts: Vec<groundhog_x23_transport::ConnectError>,
+        attempts: Vec<thruput_x23_transport::ConnectError>,
     },
 }
 
 fn format_connection_failures(
     endpoint: &str,
-    attempts: &[groundhog_x23_transport::ConnectError],
+    attempts: &[thruput_x23_transport::ConnectError],
 ) -> String {
     let details = attempts
         .iter()
@@ -64,7 +65,7 @@ fn invalid(message: &str) -> Error {
 }
 
 /// The height every module keys records by, six levels inside the pulled record.
-fn block_height(pulled: &groundhog_indexer::EventIndexerPulledBlock) -> i64 {
+fn block_height(pulled: &thruput_indexer::EventIndexerPulledBlock) -> i64 {
     *pulled
         .block
         .payload

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use groundhog_json_rpc_types::error::*;
+use thruput_json_rpc_types::error::*;
 
 #[test]
 fn documented_error_codes_are_unique_and_lookupable() {
