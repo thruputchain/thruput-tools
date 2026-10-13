@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import {
-  createGroundhogClient,
+  createThruputClient,
   hashFromHex,
   localnet,
-} from "@groundhogchain/client";
+} from "@thruputchain/client";
 
 export async function readDeployment() {
   let config;
@@ -40,7 +40,7 @@ export async function readDeployment() {
 export async function checkDeployment(config) {
   let receipt;
   try {
-    const client = await createGroundhogClient({
+    const client = await createThruputClient({
       cluster: localnet({ rpcUrl: config.rpcUrl }),
     });
     receipt = await client.getTransactionReceipt(hashFromHex(config.txHash));

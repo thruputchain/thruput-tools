@@ -22,7 +22,7 @@ jobs:
   dependency-policy:
     permissions:
       contents: read
-    uses: groundhogchain/actions/.github/workflows/rust-dependency-policy.yml@v1
+    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@6693fac8133585728ad3a4ca14e3441073b6def8
     with:
       registry-name: thruput
     secrets:
@@ -32,7 +32,11 @@ jobs:
   workflow-lint:
     permissions:
       contents: read
-    uses: groundhogchain/actions/.github/workflows/workflow-lint.yml@v1
+    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@f1b1a2cb8c69bab5f24f5f9976d50b6a9ab548fc
+    with:
+      lint-app-id: ${{ vars.PROTOCOL_SYNCHRONIZER_APP_ID }}
+    secrets:
+      lint-app-private-key: ${{ secrets.PROTOCOL_SYNCHRONIZER_SECRET_KEY }}
 
   clippy:
     needs: dependency-policy # Check deps before building anything
@@ -269,7 +273,7 @@ jobs:
         with:
           node-version: '22'
           registry-url: https://npm.pkg.github.com
-          scope: '@groundhogchain'
+          scope: '@thruputchain'
       - name: Build CLI and install selected runtime
         run: |
           cargo build --locked -p thruput-cli

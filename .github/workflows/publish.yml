@@ -43,28 +43,10 @@ jobs:
     runs-on: namespace-profile-hogd-linux-2604
 
     steps:
-      - name: Setup SSH Agent
-        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
-        with:
-          ssh-private-key: |
-            ${{ secrets.ACTIONS_KEY }}
-
       - name: Checkout
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
         with:
           persist-credentials: true
-
-      - name: Configure git to use SSH
-        run: |
-          git config --global url."git@github.com:".insteadOf "https://github.com/"
-
-      - name: Checkout actions repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          repository: groundhogchain/actions
-          persist-credentials: false
-          path: actions
-          ref: 16e3402eca906d0771f171ee95fcba8a0be8b0aa # configurable dry-run registry
 
       - name: Configure Namespace Cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
@@ -91,19 +73,19 @@ jobs:
           scripts/smoke-managed-toolchain.sh
 
       - name: dry run
-        uses: ./actions/cargo-publish-dry-run
+        uses: thruputchain/actions/cargo-publish-dry-run@6693fac8133585728ad3a4ca14e3441073b6def8
         with:
           registry-name: thruput
           packages: ${{ env.PUBLISH_PACKAGES }}
 
       - name: tag commit with version
         id: publish-tag
-        uses: ./actions/cargo-version-tag
+        uses: thruputchain/actions/cargo-version-tag@6693fac8133585728ad3a4ca14e3441073b6def8
         with:
           packages: ${{ env.PUBLISH_PACKAGES }}
 
       - name: publish
-        uses: ./actions/cargo-publish
+        uses: thruputchain/actions/cargo-publish@6693fac8133585728ad3a4ca14e3441073b6def8
         with:
           packages: ${{ env.PUBLISH_PACKAGES }}
           git-tag: ${{ steps.publish-tag.outputs.tag }}
