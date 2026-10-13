@@ -118,7 +118,6 @@ jobs:
             # Tag doesn't exist on remote, push it
             git push origin "$TAG"
           fi
-          git remote set-url origin "git@github.com:${REPO}.git"
 
       - name: trigger binary release
         env:
