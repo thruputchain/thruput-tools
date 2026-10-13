@@ -22,7 +22,7 @@ jobs:
   dependency-policy:
     permissions:
       contents: read
-    uses: groundhogchain/actions/.github/workflows/rust-dependency-policy.yml@v1
+    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@6693fac8133585728ad3a4ca14e3441073b6def8
     with:
       registry-name: thruput
     secrets:
@@ -32,7 +32,11 @@ jobs:
   workflow-lint:
     permissions:
       contents: read
-    uses: groundhogchain/actions/.github/workflows/workflow-lint.yml@v1
+    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@f1b1a2cb8c69bab5f24f5f9976d50b6a9ab548fc
+    with:
+      lint-app-id: ${{ vars.PROTOCOL_SYNCHRONIZER_APP_ID }}
+    secrets:
+      lint-app-private-key: ${{ secrets.PROTOCOL_SYNCHRONIZER_SECRET_KEY }}
 
   clippy:
     needs: dependency-policy # Check deps before building anything
@@ -280,7 +284,7 @@ jobs:
           npx --prefix scripts/scaffold-app playwright install --with-deps chromium
       - name: Test generated counter app
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.THRUPUT_PACKAGES_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm test --prefix scripts/scaffold-app
 
   # Codegen tests assert on generated text. This job runs the real CLI over the
