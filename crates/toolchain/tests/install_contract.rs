@@ -561,7 +561,7 @@ fn fixture_catalog() -> serde_json::Value {
         "schemaVersion": 1,
         "defaultVersion": "0.1.13",
         "versions": {"0.1.13": {
-            "source": {"ref": "v0.1.13", "repository": "groundhogchain/hogd"},
+            "source": {"ref": "v0.1.13", "repository": "thruputchain/hogd"},
             "targets": targets,
         }},
     })
