@@ -130,3 +130,45 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/dispatches" \
             -d "{\"ref\":\"$TAG\"}"
+
+  # Scaffolds pin thruput-json-rpc-client to the CLI version, so CI can only
+  # build them against the checkout. Check that a fresh scaffold resolves and
+  # builds from the registry alone now that this version is published.
+  registry-smoke:
+    needs: publish
+    name: Registry smoke, ${{ matrix.template }} template (new + cargo build + cargo test)
+    runs-on: namespace-profile-hogd-linux-2604
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        template: [counter, minimal]
+    steps:
+      - name: Checkout
+        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
+
+      - name: Configure Namespace Cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        with:
+          cache: rust
+
+      - name: Build thruput CLI
+        run: cargo build --locked -p thruput-cli
+
+      - name: Scaffold project (thruput new)
+        working-directory: ${{ runner.temp }}
+        env:
+          TEMPLATE: ${{ matrix.template }}
+        run: |
+          if [ "$TEMPLATE" = minimal ]; then
+            "$GITHUB_WORKSPACE/target/debug/thruput" new my-minimal
+          else
+            "$GITHUB_WORKSPACE/target/debug/thruput" new "my-$TEMPLATE" --template "$TEMPLATE"
+          fi
+
+      - name: Host build and tests (cargo build + cargo test)
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
+        run: |
+          cargo build
+          cargo test
