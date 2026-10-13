@@ -78,6 +78,17 @@ fn provider(
     ))
 }
 
+/// The trace-specific endpoint wins over the generic one, as in the OTLP
+/// exporter spec; an empty value counts as unset.
+fn collector_endpoint(
+    traces: Option<std::ffi::OsString>,
+    generic: Option<std::ffi::OsString>,
+) -> Option<std::ffi::OsString> {
+    traces
+        .filter(|value| !value.is_empty())
+        .or(generic.filter(|value| !value.is_empty()))
+}
+
 fn resource(default_service: &'static str) -> Resource {
     // The default resource builder includes the SDK's environment detectors.
     let resource = Resource::builder()
@@ -185,7 +196,10 @@ pub fn init(
 ) -> Option<SdkTracerProvider> {
     let result = provider(
         default_service,
-        std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT"),
+        collector_endpoint(
+            std::env::var_os("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
+            std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT"),
+        ),
     );
     let (provider, error) = match result {
         Ok(provider) => (provider, None),
@@ -435,6 +449,29 @@ mod tests {
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
+    }
+
+    #[test]
+    fn trace_endpoint_takes_precedence() {
+        let os = |value: &str| Some(std::ffi::OsString::from(value));
+        assert_eq!(
+            collector_endpoint(os("http://traces:4317"), os("http://generic:4317")),
+            os("http://traces:4317")
+        );
+        assert_eq!(
+            collector_endpoint(os("http://traces:4317"), None),
+            os("http://traces:4317")
+        );
+        assert_eq!(
+            collector_endpoint(None, os("http://generic:4317")),
+            os("http://generic:4317")
+        );
+        assert_eq!(
+            collector_endpoint(os(""), os("http://generic:4317")),
+            os("http://generic:4317")
+        );
+        assert_eq!(collector_endpoint(None, os("")), None);
+        assert_eq!(collector_endpoint(None, None), None);
     }
 
     fn assert_disabled_tracing() {
@@ -767,6 +804,7 @@ mod tests {
             ])
             .env("GROUNDHOG_TEST_NO_ENDPOINT", "1")
             .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .env_remove("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
             .env_remove("OTEL_SDK_DISABLED")
             .output()
             .unwrap();
