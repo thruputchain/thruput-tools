@@ -278,8 +278,8 @@ target/debug/examples/drive_blocks <scheduler-coord> <archive> 30 250
 # Same native wallet self-call shape as the workspace benchmark; unique nonce start:
 target/debug/examples/submit_traffic <runtime-manifest.json> 100 100000 traffic-fixture-v1
 target/debug/examples/drive_blocks <scheduler-coord> <archive> 5 250
-# Archive from origin (the tailer is tip-only) and write each record as hex:
-target/debug/examples/capture_origin <event-indexer> <archive> <out-dir>
+# Archive from origin (the tailer is tip-only) up to a height, writing each record as hex:
+target/debug/examples/capture_origin <event-indexer> <archive> <out-dir> <target-height>
 ```
 
 For local schema-4 nodes, the example owns account zero derived from

@@ -33,9 +33,10 @@ start `hog-devnode --bootstrap-manifest` with a schema-4 manifest that
 allocates the public key of `thruput-firehose:fixture` account zero. The node
 commits height 1 at startup, before any tailer can attach, and
 `hog-firehose-store tail` only bootstraps at the tip, so archive from origin
-with `examples/capture_origin.rs` instead. Run `examples/drive_blocks.rs` until
-height 31, submit 100 calls with `examples/submit_traffic.rs`, seed `fixture`
-and nonce start 100000, drive one more block and capture again. Wrap the
+with `examples/capture_origin.rs` and target height 1 instead. Run
+`examples/drive_blocks.rs` until height 31, submit 100 calls with
+`examples/submit_traffic.rs`, seed `fixture` and nonce start 100000, drive one
+more block and capture again with target height 32. Wrap the
 height-1 and height-32 hex at 60 columns without altering its bytes. Confirm
 the transaction counts and both roots before replacing fixtures.
 

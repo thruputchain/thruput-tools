@@ -3,7 +3,7 @@
 //! rejects a node that committed its bootstrap block before the tailer started,
 //! so fixtures of historical heights come from this driver instead. It appends
 //! through the same verifying store, using procedure 10 only.
-use std::{path::Path, time::Duration};
+use std::path::Path;
 use thruput_firehose::{
     client::{self, Client, Outcome},
     store::Store,
@@ -18,27 +18,28 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let endpoint = args
         .get(1)
-        .ok_or("usage: capture_origin EVENT_INDEXER ARCHIVE OUT_DIR")?;
+        .ok_or("usage: capture_origin EVENT_INDEXER ARCHIVE OUT_DIR TARGET_HEIGHT")?;
     let archive = Path::new(args.get(2).ok_or("missing archive")?);
     let out = Path::new(args.get(3).ok_or("missing output directory")?);
+    let target: i64 = args.get(4).ok_or("missing target height")?.parse()?;
     std::fs::create_dir_all(archive)?;
     std::fs::create_dir_all(out)?;
     let mut store = Store::open(archive)?;
     let client = Client::connect(endpoint).await?;
-    loop {
-        // An initialized cursor parks at the tip; stop rather than wait.
-        let pull = client.pull(PROTOCOL_VERSION, store.cursor(false));
-        let Ok(result) = tokio::time::timeout(Duration::from_secs(3), pull).await else {
-            break;
-        };
-        let result = result?;
+    // Stop only on the requested height: a caught-up node parks the next pull
+    // until a block commits, so a slow node cannot end the capture early.
+    let mut parked = false;
+    while store.height() < target {
+        let result = client.pull(PROTOCOL_VERSION, store.cursor(parked)).await?;
         let outcome = client::outcome(&result);
         let EventIndexerPullResult::EventIndexerPullBlock { pulled_block } = result else {
             if !matches!(outcome, Outcome::CaughtUp) {
                 return Err(format!("pull outcome {}", outcome.label()).into());
             }
-            break;
+            parked = true;
+            continue;
         };
+        parked = false;
         store.append(&pulled_block)?;
         let payload = &pulled_block.block.payload;
         let events: usize = payload.event_logs.iter().map(|log| log.events.len()).sum();
@@ -52,6 +53,5 @@ async fn main() -> Result<()> {
             serde_json::json!({"height": height, "transactions": payload.tx_bodies.len(), "events": events})
         );
     }
-    println!("{}", serde_json::json!({"caughtUpHeight": store.height()}));
     Ok(())
 }
