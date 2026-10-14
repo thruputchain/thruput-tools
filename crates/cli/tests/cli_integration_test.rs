@@ -2018,9 +2018,9 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "node");
     assert_eq!(payload["data"]["chain"], "ab".repeat(32));
-    assert_eq!(payload["data"]["schemaVersion"], 4);
-    assert_eq!(payload["data"]["chain_state"], "fresh");
-    assert_eq!(payload["data"]["data_dir"], data_dir.display().to_string());
+    assert_eq!(payload["data"]["schemaVersion"], 5);
+    assert_eq!(payload["data"]["chainState"], "fresh");
+    assert_eq!(payload["data"]["dataDir"], data_dir.display().to_string());
     assert_eq!(payload["data"]["backend"]["kind"], "hogd_dev");
     assert_eq!(payload["data"]["backend"]["stability"], "supported");
     assert!(payload["data"]["backend"].get("limitations").is_none());
@@ -2028,30 +2028,30 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     assert_eq!(payload["data"]["backend"]["planes"]["chain"], "db_gateway");
     assert_eq!(payload["data"]["backend"]["planes"]["read"], "indexer");
     assert_eq!(payload["data"]["backend"]["planes"]["view"], "stub");
-    assert_eq!(payload["data"]["local_runtime_state"]["ok"], true);
+    assert_eq!(payload["data"]["localRuntimeState"]["ok"], true);
     assert!(
-        payload["data"]["local_runtime_state"]["path"]
+        payload["data"]["localRuntimeState"]["path"]
             .as_str()
             .expect("bug: local_runtime_state path should be a string")
             .ends_with("thruput/config.toml")
     );
-    let scheduler = payload["data"]["backend"]["endpoints"]["scheduler_coord"]
+    let scheduler = payload["data"]["backend"]["endpoints"]["schedulerCoord"]
         .as_str()
         .expect("bug: SchedulerCoord endpoint should be a string");
     assert!(
         scheduler.starts_with("127.0.0.1:"),
         "SchedulerCoord endpoint should be loopback, got {scheduler}",
     );
-    let rpc_url = payload["data"]["rpc_url"]
+    let rpc_url = payload["data"]["rpcUrl"]
         .as_str()
         .expect("bug: rpc_url string")
         .to_string();
     assert!(rpc_url.starts_with("http://127.0.0.1:"));
-    let rpc_listen_address = payload["data"]["rpc_listen_address"]
+    let rpc_listen_address = payload["data"]["rpcListenAddress"]
         .as_str()
         .expect("bug: rpc_listen_address string");
     assert!(rpc_listen_address.starts_with("0.0.0.0:"));
-    let manifest_path = payload["data"]["runtime_manifest"]["path"]
+    let manifest_path = payload["data"]["runtimeManifest"]["path"]
         .as_str()
         .expect("bug: runtime manifest path should be a string");
     assert_split_bootstrap_accounts(std::path::Path::new(manifest_path), "250000001");
@@ -3709,7 +3709,7 @@ fn status_dumb_terminal_keeps_plain_report_and_exit_code() {
     assert!(!plain.stderr.contains(&0x1b));
     assert!(String::from_utf8_lossy(&plain.stderr).contains("Cargo: installed"));
     let payload: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(payload["data"]["schemaVersion"], 4);
+    assert_eq!(payload["data"]["schemaVersion"], 5);
 }
 
 #[cfg(unix)]
@@ -4702,7 +4702,7 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "test");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(stdout["data"]["schemaVersion"], 7);
+    assert_eq!(stdout["data"]["schemaVersion"], 8);
     assert_eq!(stdout["data"]["mode"], "rv32");
     assert_eq!(stdout["data"]["package"], "demo-contract");
     assert_rv32_test_artifact(&stdout["data"]);
@@ -5961,8 +5961,8 @@ fn wallet_ls_json_outputs_saved_wallets() {
     assert_eq!(
         stdout["data"]["wallets"],
         serde_json::json!([
-            { "name": "alice", "address": alice, "owner_public_key": alice_owner, "is_default": true },
-            { "name": "bob", "address": bob, "owner_public_key": bob_owner, "is_default": false },
+            { "name": "alice", "address": alice, "ownerPublicKey": alice_owner, "isDefault": true },
+            { "name": "bob", "address": bob, "ownerPublicKey": bob_owner, "isDefault": false },
         ])
     );
 
@@ -9103,7 +9103,7 @@ fn view_json_returns_raw_output() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "view");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["contract"], address);
     assert_eq!(stdout["data"]["entrypointId"], entrypoint);
@@ -10086,8 +10086,8 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "call");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(thruput_cli::call::CALL_JSON_SCHEMA_VERSION, 2);
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(thruput_cli::call::CALL_JSON_SCHEMA_VERSION, 3);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     for old_key in ["dry_run", "rpc_url", "entrypoint_id", "signed_tx"] {
         assert!(stdout["data"].get(old_key).is_none(), "found {old_key}");
     }
@@ -10762,7 +10762,7 @@ fn call_live_json_decodes_library_abort() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_reverted");
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert!(stdout["data"].get("abort_exception").is_none());
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["data"]["abortData"], abort_hex);
@@ -11079,7 +11079,7 @@ fn keys_json_flow_works() {
     assert_eq!(generated["command"], "keys.generate");
     assert!(generated["warnings"].as_array().unwrap().is_empty());
     assert_eq!(generated["data"]["key"]["name"], "alice");
-    assert_eq!(generated["data"]["key"]["is_default"], true);
+    assert_eq!(generated["data"]["key"]["isDefault"], true);
 
     let listed = thruput()
         .arg("--json")
@@ -11104,7 +11104,7 @@ fn keys_json_flow_works() {
     assert!(used.status.success());
     let used_json: serde_json::Value = serde_json::from_slice(&used.stdout).unwrap();
     assert_eq!(used_json["command"], "keys.use");
-    assert_eq!(used_json["data"]["key"]["is_default"], true);
+    assert_eq!(used_json["data"]["key"]["isDefault"], true);
 
     let removed = thruput()
         .arg("--json")
@@ -11118,7 +11118,7 @@ fn keys_json_flow_works() {
     assert!(removed.status.success());
     let removed_json: serde_json::Value = serde_json::from_slice(&removed.stdout).unwrap();
     assert_eq!(removed_json["command"], "keys.rm");
-    assert_eq!(removed_json["data"]["cleared_default"], true);
+    assert_eq!(removed_json["data"]["clearedDefault"], true);
 }
 
 #[test]
@@ -11163,7 +11163,7 @@ fn keys_export_outputs_client_compatible_private_key() {
     let signer = thruput_signing::LocalSigner::from_secret_key(private_key_bytes);
     assert_eq!(
         format!("0x{}", hex::encode(signer.verifying_key_bytes())),
-        generated["data"]["key"]["public_key"]
+        generated["data"]["key"]["publicKey"]
     );
 
     let quiet = thruput()
@@ -11272,7 +11272,7 @@ fn mldsa65_keys_store_a_scheme_tagged_seed_and_derive_the_account() {
         format!("0x{}", hex::encode(account.address().as_ref()))
     );
     assert_eq!(
-        key["public_key_hash"],
+        key["publicKeyHash"],
         format!("0x{}", hex::encode(account.public_key_hash().as_ref()))
     );
 
@@ -15976,7 +15976,7 @@ fn generate_key_public_key(config_home: &std::path::Path, name: &str) -> String 
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    stdout["data"]["key"]["public_key"]
+    stdout["data"]["key"]["publicKey"]
         .as_str()
         .expect("generated key should include public key")
         .to_owned()

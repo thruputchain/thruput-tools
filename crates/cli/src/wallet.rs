@@ -51,6 +51,7 @@ pub struct WalletCreateReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SavedWallet {
     name: String,
     address: String,

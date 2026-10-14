@@ -703,12 +703,12 @@ if ! wait_for_node_json "$WORK/node.json"; then
 fi
 NODE_JSON="$(head -n 1 "$WORK/node.json")"
 NODE_DESCENDANTS="$(collect_descendants "$NODE_PID" || true)"
-RPC_URL="$(json_field data.rpc_url "$NODE_JSON")"
+RPC_URL="$(json_field data.rpcUrl "$NODE_JSON")"
 READ_PLANE="$(json_field data.backend.planes.read "$NODE_JSON")"
 VIEW_PLANE="$(json_field data.backend.planes.view "$NODE_JSON")"
-RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
-CHAIN_STATE="$(json_field data.chain_state "$NODE_JSON")"
-REPORTED_DATA_DIR="$(json_field data.data_dir "$NODE_JSON")"
+RUNTIME_MANIFEST="$(json_field data.runtimeManifest.path "$NODE_JSON")"
+CHAIN_STATE="$(json_field data.chainState "$NODE_JSON")"
+REPORTED_DATA_DIR="$(json_field data.dataDir "$NODE_JSON")"
 log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
 [[ "$REPORTED_DATA_DIR" == "$NODE_DATA_DIR" ]] \
     || die "node data_dir was $REPORTED_DATA_DIR, expected $NODE_DATA_DIR"
@@ -1235,10 +1235,10 @@ if ! wait_for_node_json "$WORK/node.json"; then
 fi
 NODE_JSON="$(head -n 1 "$WORK/node.json")"
 NODE_DESCENDANTS="$(collect_descendants "$NODE_PID" || true)"
-RPC_URL="$(json_field data.rpc_url "$NODE_JSON")"
-RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
-CHAIN_STATE="$(json_field data.chain_state "$NODE_JSON")"
-REPORTED_DATA_DIR="$(json_field data.data_dir "$NODE_JSON")"
+RPC_URL="$(json_field data.rpcUrl "$NODE_JSON")"
+RUNTIME_MANIFEST="$(json_field data.runtimeManifest.path "$NODE_JSON")"
+CHAIN_STATE="$(json_field data.chainState "$NODE_JSON")"
+REPORTED_DATA_DIR="$(json_field data.dataDir "$NODE_JSON")"
 [[ "$REPORTED_DATA_DIR" == "$NODE_DATA_DIR" ]] \
     || die "restarted node data_dir was $REPORTED_DATA_DIR, expected $NODE_DATA_DIR"
 [[ "$CHAIN_STATE" == "recovered" ]] \

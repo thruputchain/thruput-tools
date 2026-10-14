@@ -91,6 +91,7 @@ pub struct SavedWalletBinding {
 
 /// Active project profile resolved from `thruput.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ResolvedProfile {
     pub name: String,
     pub network: Option<Network>,

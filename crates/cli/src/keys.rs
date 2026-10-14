@@ -59,6 +59,7 @@ impl Drop for KeyFile {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct KeyInfo {
     name: String,
     is_default: bool,
@@ -163,7 +164,7 @@ pub fn generate(
         cmd,
         json!({
             "key": info,
-            "fund_requested": fund,
+            "fundRequested": fund,
             "funded": false,
         }),
     ))?;
@@ -465,7 +466,7 @@ pub fn remove(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
         cmd,
         json!({
             "name": name,
-            "cleared_default": cleared_default,
+            "clearedDefault": cleared_default,
         }),
     ))?;
     Ok(())

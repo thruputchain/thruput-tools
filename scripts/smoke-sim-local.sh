@@ -233,8 +233,8 @@ if ! wait_for_node_json "$NODE_STDOUT"; then
     die "thruput node did not emit startup JSON"
 fi
 
-RPC_URL="$(json_field_from_file data.rpc_url "$NODE_STDOUT")"
-RUNTIME_MANIFEST="$(json_field_from_file data.runtime_manifest.path "$NODE_STDOUT")"
+RPC_URL="$(json_field_from_file data.rpcUrl "$NODE_STDOUT")"
+RUNTIME_MANIFEST="$(json_field_from_file data.runtimeManifest.path "$NODE_STDOUT")"
 
 log "running existing-provider smoke against $RPC_URL"
 GROUNDHOG_SIM_RPC_URL="$RPC_URL" \
