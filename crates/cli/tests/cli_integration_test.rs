@@ -1911,6 +1911,64 @@ fn config_use_warns_when_environment_profile_remains_active() {
 
 #[cfg(unix)]
 #[test]
+fn node_keeps_an_mldsa65_default_key_selected_and_explains_funding() {
+    let config_home = TempDir::new().unwrap();
+    let data_root = TempDir::new().unwrap();
+    for args in [
+        &["--json", "keys", "generate", "pq", "--scheme", "mldsa65"][..],
+        &["keys", "use", "pq"][..],
+    ] {
+        let output = thruput()
+            .args(args)
+            .env("XDG_CONFIG_HOME", config_home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let child = thruput()
+        .args(["--json", "node", "--port", "0", "--hog-devnode-binary"])
+        .arg(fake_hogd_dev_binary())
+        .arg("--data-dir")
+        .arg(data_root.path().join("node-data"))
+        .env("THRUPUT_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("bug: thruput node should spawn");
+    let mut child = ChildGuard::new(child);
+    let stdout = child
+        .child_mut()
+        .stdout
+        .take()
+        .expect("bug: stdout should be piped");
+    let line = read_line_with_timeout(stdout, CLI_ACTION_TIMEOUT)
+        .expect("bug: startup JSON should be readable");
+    let payload: serde_json::Value =
+        serde_json::from_str(&line).expect("bug: startup line should be JSON");
+
+    // ML-DSA keys get no genesis allocation, but the key is still the selected
+    // one: report its account and the airdrop that funds it, not "no key".
+    assert_eq!(payload["ok"], true, "{payload}");
+    assert_eq!(payload["data"]["selectedKey"], "pq");
+    assert_eq!(payload["data"]["setupHint"], serde_json::Value::Null);
+    let wallet = &payload["data"]["selectedWallet"];
+    assert_eq!(wallet["name"], "pq");
+    assert_eq!(wallet["hasInitialAllocation"], false);
+    assert!(
+        wallet["fundingHint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("thruput airdrop")),
+        "{wallet}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 #[expect(
     clippy::too_many_lines,
     reason = "one CLI lifecycle verifies bind, bootstrap, RPC identity and shutdown"

@@ -59,8 +59,9 @@ pub fn run_with_options(
 }
 
 /// Select a stored key's public nonce-zero account for a fresh local chain.
-/// No key is generated. With no selected default, or a default key that is not
-/// Ed25519, the node starts with only its faucet.
+/// No key is generated. With no selected default the node starts with only its
+/// faucet. A default key that is not Ed25519 stays selected but gets no
+/// allocation, so startup reports its account and how to fund it.
 pub fn stored_key_allocation(
     key: Option<&str>,
     raw_amount: u64,
@@ -87,7 +88,7 @@ pub fn stored_key_allocation(
     // Genesis allocations name their recipient by Ed25519 key; other keys
     // start unfunded and are funded through the faucet.
     let Some(public_key) = crate::keys::ed25519_public_key_bytes(&public_key) else {
-        return Ok((None, Vec::new()));
+        return Ok((Some(key), Vec::new()));
     };
     Ok((
         Some(key),
