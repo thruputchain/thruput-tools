@@ -686,7 +686,7 @@ python3 - "$WORK" "$CUSTOM_ACCOUNT_RAW" <<'ALLOCATIONS'
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 allocations = [
-    {"publicKey":json.loads((root / f"{name}.json").read_text())["data"]["key"]["public_key"],
+    {"publicKey":json.loads((root / f"{name}.json").read_text())["data"]["key"]["publicKey"],
      "initialStorageTokens":sys.argv[2]}
     for name in ("smoke-sender", "smoke-recipient", "smoke-third")
 ]

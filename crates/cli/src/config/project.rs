@@ -127,7 +127,7 @@ mod wallet_json {
     use std::collections::BTreeMap;
 
     #[derive(Serialize, Deserialize, JsonSchema)]
-    #[serde(remote = "SavedWalletBinding")]
+    #[serde(remote = "SavedWalletBinding", rename_all = "camelCase")]
     #[schemars(rename = "JsonWalletBinding")]
     pub(super) struct Wallet {
         address: String,
@@ -936,8 +936,8 @@ mod tests {
     fn resolved_wallet_json_preserves_wide_nonces_without_changing_toml() {
         let wire = serde_json::json!({
             "name": "test", "contracts": {}, "wallets": {
-                "native": {"address": "address", "owner_public_key": "owner",
-                    "kind": "native", "account_nonce": "9007199254740993"}
+                "native": {"address": "address", "ownerPublicKey": "owner",
+                    "kind": "native", "accountNonce": "9007199254740993"}
             }
         });
         let profile: super::ResolvedProfile = serde_json::from_value(wire.clone()).unwrap();
@@ -952,7 +952,7 @@ mod tests {
         assert_eq!(output["wallets"], wire["wallets"]);
 
         let mut invalid = wire;
-        invalid["wallets"]["native"]["account_nonce"] = serde_json::json!(42);
+        invalid["wallets"]["native"]["accountNonce"] = serde_json::json!(42);
         assert!(serde_json::from_value::<super::ResolvedProfile>(invalid).is_err());
     }
 
