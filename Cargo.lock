@@ -4056,6 +4056,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "thruput-encoding"
+version = "0.29.2"
+dependencies = [
+ "bs58",
+ "serde_json",
+ "stellar-strkey",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "thruput-erc20-if"
 version = "0.1.56"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/encoding",
     "crates/heap-profiling",
     "crates/build-info",
     "crates/client",
@@ -138,6 +139,7 @@ serde_json = "1"
 url = "2"
 bytes = "1"
 hex = "0.4"
+bs58 = "0.5.1"
 base64 = "0.22"
 semver = "1"
 libc = "0.2"
