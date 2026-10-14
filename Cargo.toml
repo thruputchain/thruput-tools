@@ -72,6 +72,7 @@ thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.29.2"
 thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.29.2", registry = "thruput" }
 groundhog-heap-profiling = { path = "crates/heap-profiling", version = "=0.29.2" }
 thruput-signing = { path = "crates/signing", version = "=0.29.2", registry = "thruput" }
+thruput-encoding = { path = "crates/encoding", version = "=0.29.2", registry = "thruput" }
 thruput-tx-validation = { path = "crates/tx-validation", version = "=0.29.2", registry = "thruput" }
 thruput-node-supervisor = { path = "crates/node-supervisor", version = "=0.29.2", registry = "thruput" }
 thruput-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.29.2", registry = "thruput" }

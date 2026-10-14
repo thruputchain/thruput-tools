@@ -20,6 +20,7 @@ exclude = [
 workspace = true
 
 [dependencies]
+thruput-encoding = { workspace = true }
 thruput-trace = { workspace = true }
 thruput-xdr = { workspace = true }
 thruput-indexer = { workspace = true }

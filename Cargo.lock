@@ -4330,6 +4330,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.21",
+ "thruput-encoding",
  "thruput-indexer",
  "thruput-scheduler",
  "thruput-trace",

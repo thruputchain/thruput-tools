@@ -4,14 +4,16 @@
     {
       "name": "empty",
       "bytes": [],
-      "base58": ""
+      "base58": "",
+      "hex": "0x"
     },
     {
       "name": "zero",
       "bytes": [
         0
       ],
-      "base58": "1"
+      "base58": "1",
+      "hex": "0x00"
     },
     {
       "name": "leading-zeros",
@@ -21,7 +23,8 @@
         1,
         255
       ],
-      "base58": "119p"
+      "base58": "119p",
+      "hex": "0x000001ff"
     },
     {
       "name": "hello-world",
@@ -38,7 +41,8 @@
         108,
         100
       ],
-      "base58": "JxF12TrwUP45BMd"
+      "base58": "JxF12TrwUP45BMd",
+      "hex": "0x48656c6c6f20576f726c64"
     },
     {
       "name": "zero-32",
@@ -77,6 +81,7 @@
         0
       ],
       "base58": "11111111111111111111111111111111",
+      "hex": "0x0000000000000000000000000000000000000000000000000000000000000000",
       "strkey": {
         "publicKey": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
         "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
@@ -120,6 +125,7 @@
         1
       ],
       "base58": "11111111111111111111111111111112",
+      "hex": "0x0000000000000000000000000000000000000000000000000000000000000001",
       "strkey": {
         "publicKey": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC6PV",
         "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
@@ -163,6 +169,7 @@
         31
       ],
       "base58": "1thX6LZfHDZZKUs92febYZhYRcXddmzfzF2NvTkPNE",
+      "hex": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "strkey": {
         "publicKey": "GAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB7JZX",
         "contract": "CAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB6N4O",
@@ -206,6 +213,7 @@
         255
       ],
       "base58": "JEKNVnkbo3jma5nREBBJCDoXFVeKkD56V3xKrvRmWxFG",
+      "hex": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "strkey": {
         "publicKey": "GD7777777777777777777777777777777777777777777777777773DB",
         "contract": "CD7777777777777777777777777777777777777777777777777767GY",
@@ -249,6 +257,7 @@
         154
       ],
       "base58": "5F7UqtVg2BigjDcKvAi299BKTGNsKUD4pAMbdJRL3NXT",
+      "hex": "0x3f0c34bf93ad0d9971d04ccc90f705511c838aad9734a4a2fb0d7a03fc7fe89a",
       "strkey": {
         "publicKey": "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ",
         "contract": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
@@ -323,7 +332,8 @@
         62,
         63
       ],
-      "base58": "1GMkH3brNXiNNs1tiFZHu4yZSRrzJwxi5wB9bHFtMinfCXNnR1adh8Vo8NTheK4evneedH4qmvjeqcBBNAefgS"
+      "base58": "1GMkH3brNXiNNs1tiFZHu4yZSRrzJwxi5wB9bHFtMinfCXNnR1adh8Vo8NTheK4evneedH4qmvjeqcBBNAefgS",
+      "hex": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
     },
     {
       "name": "opaque-256",
@@ -585,7 +595,8 @@
         254,
         255
       ],
-      "base58": "1cWB5HCBdLjAuqGGReWE3R3CguuwSjw6RHn39s2yuDRTS5NsBgNiFpWgAnEx6VQi8csexkgYw3mdYrMHr8x9i7aEwP8kZ7vccXWqKDvGv3u1GxFKPuAkn8JCPPGDMf3vMMnbzm6Nh9zh1gcNsMvH3ZNLmP5fSG6DGbbi2tuwMWPthr4boWwCxf7ewSgNQeacyozhKDDQQ1qL5fQFUW52QKUZDZ5fw3KXNQJMcNTcaB723LchjeKun7MuGW5qyCBZYzA1KjofN1gYBV3NqyhQJ3Ns746GNuf9N2pQPmHz4xpnSrrfCvy6TVVz5d4PdrjeshsWQwpZsZGzvbdAdN8MKV5QsBDY"
+      "base58": "1cWB5HCBdLjAuqGGReWE3R3CguuwSjw6RHn39s2yuDRTS5NsBgNiFpWgAnEx6VQi8csexkgYw3mdYrMHr8x9i7aEwP8kZ7vccXWqKDvGv3u1GxFKPuAkn8JCPPGDMf3vMMnbzm6Nh9zh1gcNsMvH3ZNLmP5fSG6DGbbi2tuwMWPthr4boWwCxf7ewSgNQeacyozhKDDQQ1qL5fQFUW52QKUZDZ5fw3KXNQJMcNTcaB723LchjeKun7MuGW5qyCBZYzA1KjofN1gYBV3NqyhQJ3Ns746GNuf9N2pQPmHz4xpnSrrfCvy6TVVz5d4PdrjeshsWQwpZsZGzvbdAdN8MKV5QsBDY",
+      "hex": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
     }
   ],
   "invalidBase58": [

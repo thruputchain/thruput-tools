@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn shared_protocol_vectors() {
-    // Vendored verbatim from thruput-protocol commit 7336530.
+    // Vendored verbatim from thruput-protocol commit e9e5e64.
     let vectors: serde_json::Value =
         serde_json::from_str(include_str!("../fixtures/text-encoding.json")).unwrap();
     for vector in vectors["valid"].as_array().unwrap() {

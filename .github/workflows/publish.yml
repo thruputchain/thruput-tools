@@ -12,6 +12,7 @@ env:
   PUBLISH_PACKAGES: >-
     thruput-build-info
     thruput-bundle-identity
+    thruput-encoding
     thruput-json-rpc-types
     thruput-open-rpc
     thruput-open-rpc-macros

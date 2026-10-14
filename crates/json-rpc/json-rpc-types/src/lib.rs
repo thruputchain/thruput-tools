@@ -1,6 +1,7 @@
 pub mod address_auth;
 pub mod airdrop;
 pub mod balance;
+pub mod base58;
 pub mod block;
 pub mod bootstrap_manifest;
 pub mod decimal;
