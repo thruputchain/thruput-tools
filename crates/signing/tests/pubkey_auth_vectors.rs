@@ -17,6 +17,7 @@ use thruput_signing::{
     encode_signed_transaction_xdr, encode_transaction_xdr, native_hog_transfer_calldata,
     sign_transaction, transaction_hash, verify_mldsa65,
 };
+use thruput_xdr::auth_claim::AuthClaim;
 use thruput_xdr::transaction::SignedTransaction;
 use thruput_xdr::types::{ContractAddress, NetworkHash, PublicKey, SHA256Hash, Signature};
 
@@ -94,8 +95,16 @@ struct Resigning {
 #[derive(Deserialize)]
 struct Negative {
     name: String,
+    network_hash: String,
     signed_transaction_xdr: String,
     transaction_hash: String,
+    expected: Expected,
+}
+
+#[derive(Deserialize)]
+struct Expected {
+    result: String,
+    error_code: u32,
 }
 
 fn vectors() -> Vectors {
@@ -287,6 +296,100 @@ fn rejected_envelopes_still_decode_and_hash_the_inner_transaction() {
         assert_eq!(
             hex::encode(transaction_hash(&signed.tx).unwrap().as_ref()),
             vector.transaction_hash,
+            "{}",
+            vector.name
+        );
+    }
+}
+
+/// hogd's `AuthVerifyErrorCode`s, with 0 for an accepted transaction.
+const AUTH_OK: u32 = 0;
+const AUTH_MALFORMED: u32 = 1;
+const SIGNATURE_VERIFICATION_FAILED: u32 = 2;
+
+/// hogd's `kPubkeySignature` checks, built from this crate's key hashing, the
+/// shared address derivation and the same ML-DSA-65 / strict Ed25519
+/// verifiers the CLI depends on. The vectors give hogd's code for every
+/// rejection, so a verifier that accepts or rejects differently fails here.
+fn verify_pubkey_auth(signed: &SignedTransaction, network_hash: &str) -> u32 {
+    let AuthClaim::kPubkeySignature { pubkey_preimage } = &signed.tx.auth_claim else {
+        return if signed.pubkey_claim_key.is_none() {
+            AUTH_OK
+        } else {
+            AUTH_MALFORMED
+        };
+    };
+    let Some(key) = &signed.pubkey_claim_key else {
+        return AUTH_MALFORMED;
+    };
+    let [decorated] = signed.signatures.0.as_slice() else {
+        return AUTH_MALFORMED;
+    };
+    if thruput_signing::public_key_hash(key) != pubkey_preimage.pubkey_hash
+        || thruput_domain_separator::sha2::pubkey_account_address(pubkey_preimage)
+            != signed.tx.invocation.invoked_address
+        || decorated.public_key_id != 0
+    {
+        return AUTH_MALFORMED;
+    }
+    let network = NetworkHash::new(SHA256Hash::new(bytes(network_hash)));
+    let message =
+        thruput_domain_separator::transaction_signature_preimage(&network, &signed.tx).unwrap();
+    let verified = match (key, &decorated.signature) {
+        (PublicKey::Ed25519 { ed25519: key }, Signature::Ed25519 { ed25519: signature }) => {
+            ed25519_dalek::VerifyingKey::from_bytes(key).is_ok_and(|key| {
+                key.verify_strict(&message, &ed25519_dalek::Signature::from_bytes(signature))
+                    .is_ok()
+            })
+        }
+        (PublicKey::MlDsa65 { mldsa65: key }, Signature::MlDsa65 { mldsa65: signature }) => {
+            verify_mldsa65(key, &message, signature)
+        }
+        // The signature's scheme differs from the key's.
+        _ => return AUTH_MALFORMED,
+    };
+    if verified {
+        AUTH_OK
+    } else {
+        SIGNATURE_VERIFICATION_FAILED
+    }
+}
+
+#[test]
+fn verification_matches_hogd_on_every_vector() {
+    let vectors = vectors();
+    let decode =
+        |xdr: &str| -> SignedTransaction { xdrs::txs::decode(&hex::decode(xdr).unwrap()).unwrap() };
+    for vector in &vectors.signing {
+        let signed = decode(&vector.signed_transaction_xdr);
+        assert_eq!(
+            verify_pubkey_auth(&signed, &vector.network_hash),
+            AUTH_OK,
+            "{}",
+            vector.name
+        );
+    }
+    for vector in &vectors.resigning {
+        let base = vectors
+            .signing
+            .iter()
+            .find(|signing| signing.name == vector.of)
+            .expect("bug: re-signing names an existing vector");
+        let signed = decode(&vector.signed_transaction_xdr);
+        assert_eq!(
+            verify_pubkey_auth(&signed, &base.network_hash),
+            AUTH_OK,
+            "{}",
+            vector.name
+        );
+    }
+    assert!(!vectors.negative.is_empty());
+    for vector in &vectors.negative {
+        assert_eq!(vector.expected.result, "reject", "{}", vector.name);
+        let signed = decode(&vector.signed_transaction_xdr);
+        assert_eq!(
+            verify_pubkey_auth(&signed, &vector.network_hash),
+            vector.expected.error_code,
             "{}",
             vector.name
         );
