@@ -597,20 +597,27 @@ fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, C
     let Some(key) = started.selected_key.as_deref() else {
         return Ok(None);
     };
-    let (name, address) = match crate::config::resolve_profile(&std::env::current_dir()?, None) {
-        Ok(mut profile) => {
-            profile.default_key = Some(key.to_owned());
-            crate::account_resolution::resolve_address_target_or_default_wallet(&profile, None)?
+    let public_key = crate::keys::load_local_public_key(key)?
+        .ok_or_else(|| CliError::KeyNotFound(key.to_owned()))?;
+    let default_account = |public_key| {
+        (
+            key.to_owned(),
+            thruput_signing::PubkeyAccount::new(public_key, 0).address(),
+        )
+    };
+    // Saved wallets bind Ed25519 owners only, so a profile's default wallet
+    // never belongs to another scheme's key: report that key's own account.
+    let (name, address) = if crate::keys::ed25519_public_key_bytes(&public_key).is_none() {
+        default_account(public_key)
+    } else {
+        match crate::config::resolve_profile(&std::env::current_dir()?, None) {
+            Ok(mut profile) => {
+                profile.default_key = Some(key.to_owned());
+                crate::account_resolution::resolve_address_target_or_default_wallet(&profile, None)?
+            }
+            Err(CliError::NoActiveProfile) => default_account(public_key),
+            Err(error) => return Err(error),
         }
-        Err(CliError::NoActiveProfile) => {
-            let public_key = crate::keys::load_local_public_key(key)?
-                .ok_or_else(|| CliError::KeyNotFound(key.to_owned()))?;
-            (
-                key.to_owned(),
-                thruput_signing::PubkeyAccount::new(public_key, 0).address(),
-            )
-        }
-        Err(error) => return Err(error),
     };
     let has_initial_allocation = started
         .readiness()

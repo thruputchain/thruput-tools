@@ -1030,6 +1030,9 @@ can also use the active local node endpoint and runtime artifacts written by
 names and map keys taken from your own data (key, profile and contract names)
 keep their spelling. On-disk files (`thruput.toml`, the global `config.toml`
 and key files) keep their `snake_case` keys.
+`keys generate`, `keys ls`, `keys use`, `keys rm` and `wallet ls` carry
+`data.schemaVersion` 1 for this shape; earlier releases emitted them
+unversioned with `snake_case` fields.
 
 `--profile` selects runtime configuration on commands such as `build`, `test`,
 `deploy`, `call`, `storage`, and `status`. On `config set` and `config unset`,

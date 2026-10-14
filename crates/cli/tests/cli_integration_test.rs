@@ -1912,59 +1912,78 @@ fn config_use_warns_when_environment_profile_remains_active() {
 #[cfg(unix)]
 #[test]
 fn node_keeps_an_mldsa65_default_key_selected_and_explains_funding() {
-    let config_home = TempDir::new().unwrap();
-    let data_root = TempDir::new().unwrap();
-    for args in [
-        &["--json", "keys", "generate", "pq", "--scheme", "mldsa65"][..],
-        &["keys", "use", "pq"][..],
-    ] {
-        let output = thruput()
-            .args(args)
-            .env("XDG_CONFIG_HOME", config_home.path())
-            .output()
+    // Run once without a project and once in a project whose profile selects
+    // an Ed25519 saved wallet, which can never belong to the ML-DSA key.
+    for with_saved_wallet in [false, true] {
+        let config_home = TempDir::new().unwrap();
+        let data_root = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        for args in [
+            &["--json", "keys", "generate", "pq", "--scheme", "mldsa65"][..],
+            &["keys", "use", "pq"][..],
+        ] {
+            let output = thruput()
+                .args(args)
+                .env("XDG_CONFIG_HOME", config_home.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        if with_saved_wallet {
+            let owner = generate_key_public_key(config_home.path(), "alice");
+            std::fs::write(
+                project.path().join("thruput.toml"),
+                format!(
+                    "default_profile = \"local\"\n[profile.local]\ndefault_wallet = \"owned\"\n\
+                     [profile.local.wallets.owned]\naddress = \"0x{}\"\nowner_public_key = \"{owner}\"\n",
+                    "ab".repeat(32)
+                ),
+            )
             .unwrap();
+        }
+        let child = thruput()
+            .args(["--json", "node", "--port", "0", "--hog-devnode-binary"])
+            .arg(fake_hogd_dev_binary())
+            .arg("--data-dir")
+            .arg(data_root.path().join("node-data"))
+            .current_dir(project.path())
+            .env("THRUPUT_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
+            .env("XDG_CONFIG_HOME", config_home.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("bug: thruput node should spawn");
+        let mut child = ChildGuard::new(child);
+        let stdout = child
+            .child_mut()
+            .stdout
+            .take()
+            .expect("bug: stdout should be piped");
+        let line = read_line_with_timeout(stdout, CLI_ACTION_TIMEOUT)
+            .expect("bug: startup JSON should be readable");
+        let payload: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: startup line should be JSON");
+
+        // ML-DSA keys get no genesis allocation, but the key is still the
+        // selected one: report its account and the airdrop that funds it.
+        assert_eq!(payload["ok"], true, "{payload}");
+        assert_eq!(payload["data"]["selectedKey"], "pq");
+        assert_eq!(payload["data"]["setupHint"], serde_json::Value::Null);
+        assert!(payload["data"].get("walletHint").is_none(), "{payload}");
+        let wallet = &payload["data"]["selectedWallet"];
+        assert_eq!(wallet["name"], "pq", "{payload}");
+        assert_eq!(wallet["hasInitialAllocation"], false);
         assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
+            wallet["fundingHint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("thruput airdrop")),
+            "{wallet}"
         );
     }
-    let child = thruput()
-        .args(["--json", "node", "--port", "0", "--hog-devnode-binary"])
-        .arg(fake_hogd_dev_binary())
-        .arg("--data-dir")
-        .arg(data_root.path().join("node-data"))
-        .env("THRUPUT_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
-        .env("XDG_CONFIG_HOME", config_home.path())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("bug: thruput node should spawn");
-    let mut child = ChildGuard::new(child);
-    let stdout = child
-        .child_mut()
-        .stdout
-        .take()
-        .expect("bug: stdout should be piped");
-    let line = read_line_with_timeout(stdout, CLI_ACTION_TIMEOUT)
-        .expect("bug: startup JSON should be readable");
-    let payload: serde_json::Value =
-        serde_json::from_str(&line).expect("bug: startup line should be JSON");
-
-    // ML-DSA keys get no genesis allocation, but the key is still the selected
-    // one: report its account and the airdrop that funds it, not "no key".
-    assert_eq!(payload["ok"], true, "{payload}");
-    assert_eq!(payload["data"]["selectedKey"], "pq");
-    assert_eq!(payload["data"]["setupHint"], serde_json::Value::Null);
-    let wallet = &payload["data"]["selectedWallet"];
-    assert_eq!(wallet["name"], "pq");
-    assert_eq!(wallet["hasInitialAllocation"], false);
-    assert!(
-        wallet["fundingHint"]
-            .as_str()
-            .is_some_and(|hint| hint.contains("thruput airdrop")),
-        "{wallet}"
-    );
 }
 
 #[cfg(unix)]
@@ -5958,6 +5977,7 @@ fn wallet_ls_json_outputs_saved_wallets() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "wallet.ls");
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
     assert_eq!(
         stdout["data"]["wallets"],
         serde_json::json!([
@@ -15976,6 +15996,7 @@ fn generate_key_public_key(config_home: &std::path::Path, name: &str) -> String 
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
     stdout["data"]["key"]["publicKey"]
         .as_str()
         .expect("generated key should include public key")
