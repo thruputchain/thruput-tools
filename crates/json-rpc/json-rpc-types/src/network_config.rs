@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thruput_xdr::network_config::{ConfigParam, NetworkConfig};
@@ -11,8 +13,11 @@ pub struct ChainConfig {
     #[serde(flatten)]
     pub stated: NetworkConfigParams,
     /// Absent when the backend cannot supply authoritative execution rules.
+    // Shared, not owned: a server answering from a reading it already holds
+    // must not copy the storage schedule on every request. Kept off the doc
+    // comment so this note stays out of the published schema description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution: Option<ExecutionConfig>,
+    pub execution: Option<Arc<ExecutionConfig>>,
 }
 
 impl From<NetworkConfigParams> for ChainConfig {
@@ -24,7 +29,10 @@ impl From<NetworkConfigParams> for ChainConfig {
     }
 }
 
-/// Rules fetched during this request, without stale-cache fallback.
+/// Rules read with the committed tip named in `observedTip`, which may be a
+/// recent reading this endpoint already held rather than one taken during this
+/// request. Never a lapsed reading: without one recent enough the request
+/// reads the backend, and a failure surfaces rather than an old price.
 /// Apply to execution following `observedTip`; later inclusion can use newer rules.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -99,10 +107,13 @@ impl ExecutionConfig {
 
 impl ChainConfig {
     /// Attach the authoritative reading without changing stated-field meanings.
-    pub fn with_execution(stated: NetworkConfigParams, execution: ExecutionConfig) -> Self {
+    pub fn with_execution(
+        stated: NetworkConfigParams,
+        execution: impl Into<Arc<ExecutionConfig>>,
+    ) -> Self {
         Self {
             stated,
-            execution: Some(execution),
+            execution: Some(execution.into()),
         }
     }
 }

@@ -97,9 +97,12 @@ pub trait GroundhogApi {
 
     /// Stated execution parameters, plus an authoritative `execution` reading when
     /// supported. Top-level omissions mean unspecified. `execution` pairs resolved
-    /// limits and storage prices with the committed tip observed during this request;
-    /// it is never served from a stale cache. Stated fields come from the same fresh
-    /// DB reading. Unavailable or unreadable readings fail with `BackendUnavailable`.
+    /// limits and storage prices with the committed tip it names in `observedTip`,
+    /// which may be a recent reading this endpoint already held rather than one
+    /// taken during this request; it is never a lapsed reading, and without one
+    /// recent enough the request reads the backend. Stated fields come from that
+    /// same reading. Unavailable or unreadable readings fail with
+    /// `BackendUnavailable`.
     #[method(name = "chainConfig")]
     async fn chain_config(&self) -> RpcResult<ChainConfig>;
 
