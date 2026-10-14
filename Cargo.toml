@@ -83,28 +83,28 @@ thruput-cli-macros = { path = "crates/cli-macros", version = "=0.29.2", registry
 # These crates define or encode the protocol schema. Keep them exact and update
 # them as one qualified release family so published binaries cannot float to an
 # incompatible patch release.
-thruput-xdr = { version = "=0.54.1", registry = "thruput", features = ["serde", "xdrs", "schema"] }
-thruput-indexer = { version = "=0.54.1", registry = "thruput", features = ["serde"] }
-thruput-scheduler = { version = "=0.54.1", registry = "thruput" }
-thruput-db-gateway = { version = "=0.54.1", registry = "thruput" }
-thruput-view = { version = "=0.54.1", registry = "thruput" }
-thruput-scp = { version = "=0.54.1", registry = "thruput" }
-thruput-coordinator = { version = "=0.54.1", registry = "thruput" }
-thruput-trace = { version = "=0.54.1", registry = "thruput" }
+thruput-xdr = { version = "=0.55.0", registry = "thruput", features = ["serde", "xdrs", "schema"] }
+thruput-indexer = { version = "=0.55.0", registry = "thruput", features = ["serde"] }
+thruput-scheduler = { version = "=0.55.0", registry = "thruput" }
+thruput-db-gateway = { version = "=0.55.0", registry = "thruput" }
+thruput-view = { version = "=0.55.0", registry = "thruput" }
+thruput-scp = { version = "=0.55.0", registry = "thruput" }
+thruput-coordinator = { version = "=0.55.0", registry = "thruput" }
+thruput-trace = { version = "=0.55.0", registry = "thruput" }
 # The XDR codec is the exception: caret, so an xdrs patch release reaches this
 # workspace without a release here.  Cargo still resolves one 0.10.x per graph.
 xdrs = { version = "0.10.4", registry = "thruput", features = ["alloc"] }
 xdr-common = { version = "0.10.3", registry = "thruput" }
 rpc_driver = { version = "=0.13.1", registry = "thruput" }
 # from the sdk crate:
-thruput-spec-tool = { version = "=0.51.1", registry = "thruput" }
-thruput-contract-util = { version = "=0.51.1", registry = "thruput" }
-thruput-domain-separator = { version = "=0.51.1", registry = "thruput" }
-thruput-contract-spec = { version = "=0.51.1", registry = "thruput" }
-thruput-u256 = { version = "=0.51.1", registry = "thruput" }
-thruput-erc20-if = { version = "=0.1.56", registry = "thruput" }
-thruput-erc20-permit-if = { version = "=0.1.56", registry = "thruput" }
-sdk = { version = "=0.51.1", registry = "thruput" }
+thruput-spec-tool = { version = "=0.51.3", registry = "thruput" }
+thruput-contract-util = { version = "=0.51.3", registry = "thruput" }
+thruput-domain-separator = { version = "=0.51.3", registry = "thruput" }
+thruput-contract-spec = { version = "=0.51.3", registry = "thruput" }
+thruput-u256 = { version = "=0.51.3", registry = "thruput" }
+thruput-erc20-if = { version = "=0.1.58", registry = "thruput" }
+thruput-erc20-permit-if = { version = "=0.1.58", registry = "thruput" }
+thruput-sdk = { version = "=0.51.3", registry = "thruput" }
 
 # --- Async ---
 async-trait = "0.1"
@@ -219,11 +219,3 @@ missing-panics-doc = "allow"
 [profile.release]
 overflow-checks = true
 debug = "line-tables-only"
-
-# TEMPORARY: regenerated bindings for thruput-protocol#219 (ML-DSA-65 pubkey
-# accounts). Replace with the published release family and remove, together
-# with the matching `allow-git` entry in deny.toml. thruput-syscall rides along
-# because the git thruput-xdr depends on it by path.
-[patch.thruput]
-thruput-xdr = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "geoph/mldsa-auth" }
-thruput-syscall = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "geoph/mldsa-auth" }

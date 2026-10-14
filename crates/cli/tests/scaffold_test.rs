@@ -110,7 +110,7 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
             "rust-toolchain.toml",
             "without overwriting unrelated settings",
             "region 'CODE' already defined",
-            "sdk::declare_mock_contract!()",
+            "thruput_sdk::declare_mock_contract!()",
             "Keep contract logic in `implementation.rs`",
             "`extern crate` identifier",
         ],
@@ -131,18 +131,18 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
 fn assert_counter_manifest(cargo: &str) {
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"thruput\""));
-    assert!(!cargo.contains("sdk/spec"));
+    assert!(!cargo.contains("thruput-sdk/spec"));
     // The version pins live once, in the `scaffold` constants; here we assert
     // they were substituted (no placeholder survives below) and land on the
     // right dependencies.
-    // `sdk` is declared once per target: plain on the guest, with `std` on
+    // `thruput-sdk` is declared once per target: plain on the guest, with `std` on
     // the host so `cargo build` / `cargo check` work without `dev`.
     assert!(cargo.contains(&format!(
-        r#"sdk = {{ version = "={}", registry = "thruput" }}"#,
+        r#"thruput-sdk = {{ version = "={}", registry = "thruput" }}"#,
         thruput_cli::scaffold::SCAFFOLD_SDK_VERSION
     )));
     assert!(cargo.contains(&format!(
-        r#"sdk = {{ version = "={}", registry = "thruput", features = ["std"] }}"#,
+        r#"thruput-sdk = {{ version = "={}", registry = "thruput", features = ["std"] }}"#,
         thruput_cli::scaffold::SCAFFOLD_SDK_VERSION
     )));
     assert!(cargo.contains(r#"[target.'cfg(target_arch = "riscv32")'.dependencies]"#));
@@ -423,7 +423,7 @@ const RESERVED_NAME_CASES: &[(&str, &str)] = &[
     ("box", "keyword"),
     ("yield", "keyword"),
     // The scaffold's own dependencies: a duplicate extern name.
-    ("sdk", "dependency"),
+    ("thruput-sdk", "dependency"),
     ("tokio", "dependency"),
     ("thruput-json-rpc-client", "dependency"),
     // Cargo build directories: the RV32 bin target name would collide with a

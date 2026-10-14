@@ -7642,7 +7642,7 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
 #[test]
 fn transfer_live_decodes_standard_exception_abort() {
     let abort_data = xdrs::cxs::encode(&(
-        <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+        <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR,
         thruput_erc20_if::ERC20Error::TooLarge,
     ))
     .expect("bug: ERC20 exception should encode");
@@ -10709,7 +10709,7 @@ fn call_live_json_decodes_library_abort() {
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["data"]["abortData"], abort_hex);
     assert_eq!(stdout["data"]["abortException"], "LibraryExn");
-    assert_eq!(stdout["data"]["abortExceptionCrate"], "sdk");
+    assert_eq!(stdout["data"]["abortExceptionCrate"], "thruput-sdk");
     assert_eq!(stdout["data"]["abortExceptionVersion"], "1");
     assert_eq!(
         stdout["data"]["abortValue"],
@@ -10727,7 +10727,7 @@ fn call_live_json_decodes_erc20_permit_abort() {
     // No local metadata declares the exception, so it resolves through the
     // same standard-exception registry an ERC20 abort does.
     let abort_data = xdrs::cxs::encode(&(
-        <thruput_erc20_permit_if::ERC20PermitError as sdk::exn::Exn>::SELECTOR,
+        <thruput_erc20_permit_if::ERC20PermitError as thruput_sdk::exn::Exn>::SELECTOR,
         thruput_erc20_permit_if::ERC20PermitError::ExceedsGrant,
     ))
     .expect("bug: ERC20 permit exception should encode");
@@ -10810,7 +10810,7 @@ fn call_live_human_prints_decoded_abort() {
     // return data.
     assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
     assert!(
-        stderr.contains("abort type: LibraryExn (sdk, v1)"),
+        stderr.contains("abort type: LibraryExn (thruput-sdk, v1)"),
         "stderr: {stderr}"
     );
     assert!(
@@ -16131,7 +16131,7 @@ fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
 
 fn sample_insufficient_funding_deploy_receipt(height: i64) -> serde_json::Value {
     let abort_data = xdrs::cxs::encode(&(
-        <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+        <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR,
         thruput_erc20_if::ERC20Error::TooLarge,
     ))
     .expect("bug: ERC20 exception should encode");

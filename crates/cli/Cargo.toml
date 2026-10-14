@@ -54,7 +54,7 @@ thruput-rv32-artifact = { workspace = true }
 thruput-rv32-lower = { workspace = true }
 thruput-contract-spec = { workspace = true }
 thruput-erc20-if = { workspace = true }
-sdk = { workspace = true }
+thruput-sdk = { workspace = true }
 thruput-contract-util = { workspace = true }
 thruput-spec-tool = { workspace = true }
 thruput-json-rpc-client = { workspace = true }

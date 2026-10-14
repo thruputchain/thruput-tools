@@ -143,7 +143,7 @@ submitting a call; use `--gas-limit` to set a different budget.
 
 ## Using cargo directly
 
-Scaffolded projects build for the host with plain `cargo`: the `sdk`
+Scaffolded projects build for the host with plain `cargo`: the `thruput-sdk`
 dependency is declared with `std` for non-rv32 targets, and the self
 dev-dependency turns on `dev` (the native mock executor) for test builds:
 
@@ -156,7 +156,7 @@ dev-dependency turns on `dev` (the native mock executor) for test builds:
 | `thruput test --integration` | Start hog-devnode, deploy RV32, and run `tests/integration.rs` |
 
 `dev` is deliberately not a default feature: a crate depending on the
-contract would otherwise drag `sdk/dev` (and `std`) into its guest build
+contract would otherwise drag `thruput-sdk/dev` (and `std`) into its guest build
 through feature unification. The `.cargo/contract.toml` overlay supplies
 `build-std`;
 `panic=immediate-abort` lives in `.cargo/config.toml` alongside the rest of

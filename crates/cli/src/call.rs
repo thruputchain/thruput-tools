@@ -1390,12 +1390,14 @@ mod tests {
     #[test]
     fn encodes_and_decodes_local_native_256_values() {
         for (ty, value) in [
-            ("U256", sdk::U256::MAX.to_string()),
-            ("sdk::U256", sdk::U256::MAX.to_string()),
-            ("groundhog_sdk::U256", sdk::U256::MAX.to_string()),
-            ("I256", sdk::I256::MIN.to_string()),
-            ("sdk::I256", sdk::I256::MIN.to_string()),
-            ("groundhog_sdk::I256", sdk::I256::MIN.to_string()),
+            ("U256", thruput_sdk::U256::MAX.to_string()),
+            ("thruput_sdk::U256", thruput_sdk::U256::MAX.to_string()),
+            ("sdk::U256", thruput_sdk::U256::MAX.to_string()),
+            ("groundhog_sdk::U256", thruput_sdk::U256::MAX.to_string()),
+            ("I256", thruput_sdk::I256::MIN.to_string()),
+            ("thruput_sdk::I256", thruput_sdk::I256::MIN.to_string()),
+            ("sdk::I256", thruput_sdk::I256::MIN.to_string()),
+            ("groundhog_sdk::I256", thruput_sdk::I256::MIN.to_string()),
         ] {
             let metadata = ContractMetadata {
                 interface_name: "Counter".into(),
@@ -1604,8 +1606,8 @@ mod tests {
             json!(i128_value)
         );
 
-        let u256_value = sdk::U256::MAX.to_string();
-        let i256_value = sdk::I256::MIN.to_string();
+        let u256_value = thruput_sdk::U256::MAX.to_string();
+        let i256_value = thruput_sdk::I256::MIN.to_string();
         let metadata = sample_single_arg_spec_metadata(ContractType::Tuple {
             tuple: vec![ContractType::U256, ContractType::I256]
                 .try_into()
@@ -1618,8 +1620,8 @@ mod tests {
         assert_eq!(
             decode_spec_arguments(&metadata, &bytes),
             vec![json!([
-                sdk::U256::MAX.to_string(),
-                sdk::I256::MIN.to_string()
+                thruput_sdk::U256::MAX.to_string(),
+                thruput_sdk::I256::MIN.to_string()
             ])]
         );
     }

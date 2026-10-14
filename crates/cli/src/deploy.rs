@@ -1353,7 +1353,7 @@ mod tests {
     #[test]
     fn native_hog_overdraft_is_actionable_deploy_failure() {
         let abort_data = xdrs::cxs::encode(&(
-            <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+            <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR,
             thruput_erc20_if::ERC20Error::TooLarge,
         ))
         .expect("bug: ERC20 exception should encode");

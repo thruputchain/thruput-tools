@@ -1,15 +1,16 @@
 //! Pubkey-account helpers.
 
-use sha2::{Digest, Sha256};
+/// Hashes a public key, scheme included:
+/// `SHA256(cxs(DomainSeparator("PublicKey")) || cxs(PublicKey))`.
+///
+/// Pubkey-account preimages and `kPubkeySignature` claims name keys by this
+/// hash, and a signed transaction's `pubkey_claim_key` must hash to it.
+pub use thruput_domain_separator::sha2::public_key_hash;
 use thruput_xdr::auth_claim::{AuthClaim, PubkeyAccountPreimage};
-use thruput_xdr::preimage::DomainSeparator;
-use thruput_xdr::types::{ContractAddress, ExtensionPoint, PublicKey, PublicKeyHash};
-use xdr_common::BytesM;
+use thruput_xdr::types::{ContractAddress, PublicKey, PublicKeyHash};
 
 /// Default nonce used for the first pubkey-account derived from a key.
 pub const DEFAULT_PUBKEY_ACCOUNT_NONCE: u64 = 0;
-
-const PUBLIC_KEY_DOMAIN: &[u8] = b"PublicKey";
 
 /// A pubkey-backed account with the nonce used in address derivation.
 ///
@@ -68,22 +69,4 @@ impl PubkeyAccount {
     pub fn address(&self) -> ContractAddress {
         thruput_domain_separator::sha2::pubkey_account_address(&self.preimage())
     }
-}
-
-/// Hashes a public key, scheme included:
-/// `SHA256(cxs(DomainSeparator("PublicKey")) || cxs(PublicKey))`.
-///
-/// Pubkey-account preimages and `kPubkeySignature` claims name keys by this
-/// hash, and a signed transaction's `pubkey_claim_key` must hash to it.
-pub fn public_key_hash(public_key: &PublicKey) -> PublicKeyHash {
-    let separator = DomainSeparator {
-        ext: ExtensionPoint::_0,
-        domain_separator: BytesM(PUBLIC_KEY_DOMAIN.to_vec()),
-    };
-    let mut hasher = Sha256::new();
-    hasher.update(
-        xdrs::cxs::encode(&separator).expect("bug: a 9-byte domain separator always encodes"),
-    );
-    hasher.update(xdrs::cxs::encode(public_key).expect("bug: fixed-size public keys encode"));
-    PublicKeyHash::new(hasher.finalize().into())
 }

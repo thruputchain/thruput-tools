@@ -423,8 +423,8 @@ mod tests {
     use crate::token_json::{TokenTransferDecodeStatus, TokenTransferKind};
 
     fn event(from: [u8; 32], to: [u8; 32], amount: i128) -> IdentifiedEvent {
-        let from_address = sdk::ContractAddress::from(from);
-        let to_address = sdk::ContractAddress::from(to);
+        let from_address = thruput_sdk::ContractAddress::from(from);
+        let to_address = thruput_sdk::ContractAddress::from(to);
         let transfer = TransferEvent::new(&from_address, &to_address, amount);
         IdentifiedEvent {
             tx_hash: serde_json::from_value(serde_json::Value::String(format!(
@@ -460,7 +460,7 @@ mod tests {
     }
 
     fn supply_event(mint: bool, participant: [u8; 32], amount: i128) -> IdentifiedEvent {
-        let address = sdk::ContractAddress::from(participant);
+        let address = thruput_sdk::ContractAddress::from(participant);
         let mut record = event(participant, participant, amount);
         let (signature, data) = if mint {
             (
