@@ -59,7 +59,8 @@ pub fn run_with_options(
 }
 
 /// Select a stored key's public nonce-zero account for a fresh local chain.
-/// No key is generated. With no selected default, the node starts with only its faucet.
+/// No key is generated. With no selected default, or a default key that is not
+/// Ed25519, the node starts with only its faucet.
 pub fn stored_key_allocation(
     key: Option<&str>,
     raw_amount: u64,
@@ -83,6 +84,11 @@ pub fn stored_key_allocation(
     };
     let public_key = crate::keys::load_local_public_key(&key)?
         .ok_or_else(|| CliError::KeyNotFound(key.clone()))?;
+    // Genesis allocations name their recipient by Ed25519 key; other keys
+    // start unfunded and are funded through the faucet.
+    let Some(public_key) = crate::keys::ed25519_public_key_bytes(&public_key) else {
+        return Ok((None, Vec::new()));
+    };
     Ok((
         Some(key),
         vec![
@@ -600,7 +606,7 @@ fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, C
                 .ok_or_else(|| CliError::KeyNotFound(key.to_owned()))?;
             (
                 key.to_owned(),
-                thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address(),
+                thruput_signing::PubkeyAccount::new(public_key, 0).address(),
             )
         }
         Err(error) => return Err(error),

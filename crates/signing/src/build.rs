@@ -8,7 +8,7 @@ use thruput_xdr::contract::{ContractDeploymentHashPreimage, ContractEntrypointID
 use thruput_xdr::transaction::{
     DecoratedSignature, Invocation, SignedTransaction, Transaction, Uniquifier,
 };
-use thruput_xdr::types::{BlockHeight, ContractAddress, NetworkHash, SHA256Hash};
+use thruput_xdr::types::{BlockHeight, ContractAddress, NetworkHash, PublicKey, SHA256Hash};
 use xdr_common::{BytesM, VecM};
 
 /// Frozen legacy wallet `deploy` entrypoint for RPC-only profiles without
@@ -264,12 +264,17 @@ pub fn wallet_create_proof_message_v2(
 /// what gets signed, so a transaction signed for one chain is rejected by
 /// another — see
 /// [`thruput_domain_separator::transaction_signature_preimage`].
+///
+/// For a `kPubkeySignature` claim the signer's public key is attached as
+/// `pubkey_claim_key`; a signer whose key does not hash to the claimed key
+/// is rejected with [`SigningError::SignerMismatch`].
 pub fn sign_transaction(
     tx: Transaction,
     signer: &impl Signer,
     params: SignTransactionParams,
     network_hash: &NetworkHash,
 ) -> Result<SignedTransaction, SigningError> {
+    let pubkey_claim_key = pubkey_claim_key(&tx, signer)?;
     let preimage = transaction_signature_preimage(network_hash, &tx)
         .map_err(|error| SigningError::XdrEncode(error.to_string()))?;
     let signature = signer.sign(&preimage)?;
@@ -281,7 +286,27 @@ pub fn sign_transaction(
     Ok(SignedTransaction {
         tx,
         signatures: VecM(vec![decorated_signature]),
+        pubkey_claim_key,
     })
+}
+
+/// Returns the key a signed transaction must carry for its auth claim.
+///
+/// A `kPubkeySignature` claim names its key by hash, so the envelope carries
+/// the signer's full key, which must hash to the claimed one. Other claims
+/// carry no key.
+fn pubkey_claim_key(
+    tx: &Transaction,
+    signer: &impl Signer,
+) -> Result<Option<PublicKey>, SigningError> {
+    let AuthClaim::kPubkeySignature { pubkey_preimage } = &tx.auth_claim else {
+        return Ok(None);
+    };
+    let public_key = signer.public_key();
+    if crate::public_key_hash(&public_key) != pubkey_preimage.pubkey_hash {
+        return Err(SigningError::SignerMismatch);
+    }
+    Ok(Some(public_key))
 }
 
 /// Sign a transaction and return its 0x-prefixed signed-transaction XDR bytes.

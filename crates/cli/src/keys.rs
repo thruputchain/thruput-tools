@@ -11,18 +11,42 @@ use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use thruput_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 use thruput_signing::strkey;
-use thruput_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount};
+use thruput_signing::{
+    DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SEED_LEN,
+    MlDsa65Signer, PubkeyAccount, SchemeSigner, Signer as _,
+};
+use thruput_xdr::types::{Ed25519PublicKey, MlDsa65PublicKey, PublicKey};
 use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_KEY_NAME: &str = "default";
 const DEFAULT_KEY_ID: u32 = 0;
 const MAX_SEED_INPUT_BYTES: usize = 128;
 
+const ED25519_SCHEME: &str = "ed25519";
+const MLDSA65_SCHEME: &str = "mldsa65";
+
+/// Signature scheme of a stored key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum KeyScheme {
+    /// Ed25519; the key file stores the 64-byte keypair.
+    #[default]
+    Ed25519,
+    /// ML-DSA-65 (FIPS 204); the key file stores the 32-byte key-generation seed.
+    #[value(name = "mldsa65")]
+    MlDsa65,
+}
+
+/// On-disk key file. `scheme` selects which secret field is present: Ed25519
+/// files hold `keypair_hex`, ML-DSA-65 files hold the FIPS 204 `seed_hex`,
+/// never an expanded key. Files are written with mode 0600.
 #[derive(Serialize, Deserialize)]
 struct KeyFile {
     version: u32,
     scheme: String,
-    keypair_hex: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    keypair_hex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    seed_hex: Option<String>,
     #[serde(default)]
     public_key_hex: Option<String>,
 }
@@ -30,6 +54,7 @@ struct KeyFile {
 impl Drop for KeyFile {
     fn drop(&mut self) {
         self.keypair_hex.zeroize();
+        self.seed_hex.zeroize();
     }
 }
 
@@ -38,10 +63,43 @@ struct KeyInfo {
     name: String,
     is_default: bool,
     key_id: u32,
+    scheme: &'static str,
     public_key: String,
-    public_key_strkey: String,
+    /// G `StrKey`; Ed25519 only, as no `StrKey` format exists for ML-DSA keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_key_strkey: Option<String>,
+    /// Hash naming the key in its account's address and auth claim.
+    public_key_hash: String,
     address: String,
     path: PathBuf,
+}
+
+impl KeyInfo {
+    fn new(name: &str, is_default: bool, public_key: &PublicKey, path: PathBuf) -> Self {
+        let account = PubkeyAccount::new(public_key.clone(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
+        let (scheme, public_key_bytes) = public_key_scheme_and_bytes(public_key);
+        let public_key_strkey =
+            ed25519_public_key_bytes(public_key).map(|bytes| strkey::format_public_key(&bytes));
+        Self {
+            name: name.to_owned(),
+            is_default,
+            key_id: DEFAULT_KEY_ID,
+            scheme,
+            public_key: prefixed_hex(public_key_bytes),
+            public_key_strkey,
+            public_key_hash: prefixed_hex(account.public_key_hash().as_ref()),
+            address: prefixed_hex(account.address().as_ref()),
+            path,
+        }
+    }
+
+    /// Short public identity for human output: the G `StrKey` for Ed25519, or
+    /// the scheme and key hash for keys without a `StrKey` format.
+    fn public_key_label(&self) -> String {
+        self.public_key_strkey
+            .clone()
+            .unwrap_or_else(|| format!("{} key hash {}", self.scheme, self.public_key_hash))
+    }
 }
 
 /// Public summary of a stored signing key.
@@ -53,9 +111,10 @@ pub struct KeySummary {
     pub is_default: bool,
 }
 
-/// Generate a new signing keypair.
+/// Generate a new signing key of the given scheme.
 pub fn generate(
     name: &Option<String>,
+    scheme: KeyScheme,
     fund: bool,
     cmd: &'static str,
     print: &Print,
@@ -71,10 +130,13 @@ pub fn generate(
     if !print.has_human_ui() {
         print.status(format_args!("Generating key `{name}`"));
     }
-    let mut secret = [0u8; 32];
-    getrandom::fill(&mut secret).map_err(|e| CliError::Other(e.to_string()))?;
-    let signing_key = LocalSigner::from_secret_key(secret);
-    secret.zeroize();
+    let mut secret = Zeroizing::new([0u8; 32]);
+    getrandom::fill(secret.as_mut()).map_err(|e| CliError::Other(e.to_string()))?;
+    let signing_key = match scheme {
+        KeyScheme::Ed25519 => SchemeSigner::from(LocalSigner::from_secret_key(*secret)),
+        KeyScheme::MlDsa65 => SchemeSigner::from(MlDsa65Signer::from_seed(&secret)),
+    };
+    drop(secret);
     let mut info = write_key(name, &signing_key)?;
 
     let default_key = crate::config::load_default_key()?;
@@ -87,8 +149,8 @@ pub fn generate(
     info.is_default = became_default;
 
     print.group(crate::print::Outcome::Success, "Key generated", |print| {
-        print.success(format_args!("Generated key `{name}`"));
-        print.detail("public key", &info.public_key_strkey);
+        print.success(format_args!("Generated {} key `{name}`", info.scheme));
+        print.detail("public key", info.public_key_label());
         print.detail("account address", &info.address);
         if fund {
             print.note("Faucet funding is not implemented yet; generated key only");
@@ -131,8 +193,12 @@ pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
         return Err(CliError::InvalidSecretSeed);
     }
     let seed = strkey::parse_secret_seed(input.trim()).map_err(|_| CliError::InvalidSecretSeed)?;
-    let signer = LocalSigner::from_secret_key(*seed);
+    let signer = SchemeSigner::from(LocalSigner::from_secret_key(*seed));
     let info = write_key(name, &signer)?;
+    let public_key_strkey = info
+        .public_key_strkey
+        .clone()
+        .expect("bug: imported keys are Ed25519 and have a G StrKey");
     let (is_default, warnings) = import_default_selection(name);
     if print.has_human_ui() {
         print.outcome_findings(
@@ -144,7 +210,7 @@ pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
             "Key imported",
             &[
                 ("Name".into(), name.into()),
-                ("Public key".into(), info.public_key_strkey.clone()),
+                ("Public key".into(), public_key_strkey.clone()),
                 ("Account address".into(), info.address.clone()),
                 (
                     "Default".into(),
@@ -166,7 +232,7 @@ pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
             }
         }
         print.success(format_args!("Imported key `{name}`"));
-        print.detail("public key", &info.public_key_strkey);
+        print.detail("public key", &public_key_strkey);
         print.detail("account address", &info.address);
     }
     let report = KeysImportReport {
@@ -176,7 +242,7 @@ pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
             is_default,
             key_id: info.key_id,
             public_key: info.public_key,
-            public_key_strkey: info.public_key_strkey,
+            public_key_strkey,
             address: info.address,
             path: info.path,
         },
@@ -231,7 +297,7 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
                     key.name.clone()
                 },
                 key.address.clone(),
-                key.public_key_strkey.clone(),
+                key.public_key_label(),
             ]
         })
         .collect();
@@ -244,7 +310,9 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
             let marker = if key.is_default { "*" } else { " " };
             format!(
                 "{marker} {} public-key={} account-address={}",
-                key.name, key.public_key_strkey, key.address
+                key.name,
+                key.public_key_label(),
+                key.address
             )
         }),
     )
@@ -265,11 +333,8 @@ pub enum KeyExportFormat {
     Strkey,
 }
 
-fn seed_strkey(keypair: &[u8; 64]) -> String {
-    let seed = Zeroizing::new(
-        <[u8; 32]>::try_from(&keypair[..32]).expect("bug: validated keypair contains a seed"),
-    );
-    let mut encoded = strkey::format_secret_seed(&seed);
+fn seed_strkey(seed: &[u8; 32]) -> String {
+    let mut encoded = strkey::format_secret_seed(seed);
     std::mem::take(&mut *encoded)
 }
 
@@ -296,23 +361,34 @@ pub fn export_with_format(
     }
 
     // Do not load secret key material until export has been authorized.
-    validate_key_name(name)?;
-    let keypair_bytes = load_stored_keypair_bytes(name).map_err(|error| match error {
-        CliError::Io(source) if source.kind() == std::io::ErrorKind::NotFound => {
-            CliError::KeyNotFound(name.into())
+    let signer = load_local_signer(name)?;
+    let (scheme, seed) = match &signer {
+        SchemeSigner::Ed25519(signer) => {
+            let keypair = Zeroizing::new(signer.to_keypair_bytes());
+            let mut seed = Zeroizing::new([0; 32]);
+            seed.copy_from_slice(&keypair[..32]);
+            (ED25519_SCHEME, seed)
         }
-        error => error,
-    })?;
-    LocalSigner::from_keypair_bytes(*keypair_bytes).map_err(|error| signing_error(&error))?;
+        SchemeSigner::MlDsa65(signer) => (MLDSA65_SCHEME, signer.to_seed()),
+        _ => unreachable!("bug: key files only hold supported schemes"),
+    };
+    let private_key = match format {
+        KeyExportFormat::Hex => prefixed_hex(seed.as_ref()),
+        KeyExportFormat::Strkey if scheme == ED25519_SCHEME => seed_strkey(&seed),
+        KeyExportFormat::Strkey => {
+            return Err(CliError::KeySchemeUnsupported {
+                key_name: name.to_owned(),
+                scheme: scheme.to_owned(),
+                operation: "S StrKey export".to_owned(),
+            });
+        }
+    };
     let report = KeysExportReport {
         schema_version: KEYS_EXPORT_JSON_SCHEMA_VERSION,
         key: ExportedKey {
             name: name.to_string(),
-            scheme: "ed25519".into(),
-            private_key: match format {
-                KeyExportFormat::Hex => prefixed_hex(&keypair_bytes[..32]),
-                KeyExportFormat::Strkey => seed_strkey(&keypair_bytes),
-            },
+            scheme: scheme.into(),
+            private_key,
         },
     };
 
@@ -415,7 +491,7 @@ fn validate_stored_key_name(name: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError> {
+fn write_key(name: &str, signing_key: &SchemeSigner) -> Result<KeyInfo, CliError> {
     // Validate configuration before committing a key; never reread it after the write.
     let default_key = crate::config::load_default_key()?;
     let path = key_path(name)?;
@@ -423,20 +499,13 @@ fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError>
         fs::create_dir_all(parent)?;
     }
 
-    let keypair_bytes = zeroize::Zeroizing::new(signing_key.to_keypair_bytes());
-    let public_bytes = signing_key.verifying_key_bytes();
-    let keyfile = KeyFile {
-        version: 1,
-        scheme: "ed25519".into(),
-        keypair_hex: hex::encode(keypair_bytes.as_ref()),
-        public_key_hex: Some(hex::encode(public_bytes)),
-    };
-
+    let keyfile = keyfile_for(signing_key);
     let contents = Zeroizing::new(
         serde_json::to_vec_pretty(&keyfile).map_err(|e| CliError::Other(e.to_string()))?,
     );
 
     let parent = path.parent().expect("bug: key path has a parent directory");
+    // Temporary files are created with mode 0600 and keep it when persisted.
     let mut staged = tempfile::NamedTempFile::new_in(parent)?;
     staged.write_all(&contents)?;
     staged.write_all(b"\n")?;
@@ -448,40 +517,56 @@ fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError>
             CliError::Io(error.error)
         }
     })?;
-    Ok(KeyInfo {
-        name: name.to_owned(),
-        is_default: default_key.as_deref() == Some(name),
-        key_id: DEFAULT_KEY_ID,
-        public_key: prefixed_hex(public_bytes),
-        public_key_strkey: strkey::format_public_key(&public_bytes),
-        address: prefixed_hex(derive_pubkey_account_address(public_bytes)),
+    Ok(KeyInfo::new(
+        name,
+        default_key.as_deref() == Some(name),
+        &signing_key.public_key(),
         path,
-    })
+    ))
+}
+
+/// Serialize a signer's secret in its scheme's stored form, with cached public metadata.
+fn keyfile_for(signing_key: &SchemeSigner) -> KeyFile {
+    match signing_key {
+        SchemeSigner::Ed25519(signer) => ed25519_keyfile(signer),
+        SchemeSigner::MlDsa65(signer) => KeyFile {
+            version: 2,
+            scheme: MLDSA65_SCHEME.into(),
+            keypair_hex: None,
+            seed_hex: Some(hex::encode(signer.to_seed().as_ref())),
+            public_key_hex: Some(hex::encode(signer.public_key_bytes())),
+        },
+        _ => unreachable!("bug: key files only hold supported schemes"),
+    }
+}
+
+fn ed25519_keyfile(signer: &LocalSigner) -> KeyFile {
+    let keypair_bytes = Zeroizing::new(signer.to_keypair_bytes());
+    KeyFile {
+        version: 1,
+        scheme: ED25519_SCHEME.into(),
+        keypair_hex: Some(hex::encode(keypair_bytes.as_ref())),
+        seed_hex: None,
+        public_key_hex: Some(hex::encode(signer.verifying_key_bytes())),
+    }
 }
 
 fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
     let path = key_path(name)?;
     let keyfile = read_keyfile(name)?;
-
     let public_key = keyfile_public_key(&keyfile)?;
-
-    let address = derive_pubkey_account_address(public_key);
     let default_key = crate::config::load_default_key()?;
-
-    Ok(KeyInfo {
-        name: name.to_string(),
-        is_default: default_key.as_deref() == Some(name),
-        key_id: DEFAULT_KEY_ID,
-        public_key: prefixed_hex(public_key),
-        public_key_strkey: strkey::format_public_key(&public_key),
-        address: prefixed_hex(address),
+    Ok(KeyInfo::new(
+        name,
+        default_key.as_deref() == Some(name),
+        &public_key,
         path,
-    })
+    ))
 }
 
-/// Load a named key's public metadata, returning `None` for an absent or invalid name.
-/// Legacy files without cached public metadata derive it from their stored keypair.
-pub(crate) fn load_local_public_key(name: &str) -> Result<Option<[u8; 32]>, CliError> {
+/// Load a named key's public key, returning `None` for an absent or invalid name.
+/// Legacy files without cached public metadata derive it from their stored secret.
+pub(crate) fn load_local_public_key(name: &str) -> Result<Option<PublicKey>, CliError> {
     if validate_key_name(name).is_err() {
         return Ok(None);
     }
@@ -495,52 +580,72 @@ pub(crate) fn load_local_public_key(name: &str) -> Result<Option<[u8; 32]>, CliE
     keyfile_public_key(&keyfile).map(Some)
 }
 
-fn keyfile_public_key(keyfile: &KeyFile) -> Result<[u8; 32], CliError> {
-    if keyfile.scheme != "ed25519" {
-        return Err(CliError::Other(format!(
-            "unsupported key scheme: {}",
-            keyfile.scheme
-        )));
-    }
-
-    if let Some(ref pk_hex) = keyfile.public_key_hex {
-        parse_stored_hex::<32>(pk_hex)
-    } else {
-        // Legacy key without public_key_hex — must load keypair.
-        let keypair_bytes = zeroize::Zeroizing::new(parse_stored_hex::<64>(&keyfile.keypair_hex)?);
-        let signing_key = LocalSigner::from_keypair_bytes(*keypair_bytes)
-            .map_err(|error| signing_error(&error))?;
-        Ok(signing_key.verifying_key_bytes())
+/// The stored scheme name and raw encoded bytes of a public key.
+pub(crate) fn public_key_scheme_and_bytes(public_key: &PublicKey) -> (&'static str, &[u8]) {
+    match public_key {
+        PublicKey::Ed25519 { ed25519 } => (ED25519_SCHEME, ed25519.as_ref()),
+        PublicKey::MlDsa65 { mldsa65 } => (MLDSA65_SCHEME, mldsa65.as_ref()),
+        _ => unreachable!("bug: key files only hold supported schemes"),
     }
 }
 
-/// Load a stored signing key as a [`LocalSigner`].
+/// The raw Ed25519 key bytes, or `None` for keys of other schemes.
 ///
-/// Private key material is zeroized from the temporary keypair buffer
-/// after construction. Used by deploy and call to sign transactions.
-pub fn load_local_signer(name: &str) -> Result<LocalSigner, CliError> {
+/// Saved wallet bindings and genesis allocations name owners by Ed25519 key.
+pub(crate) fn ed25519_public_key_bytes(public_key: &PublicKey) -> Option<[u8; 32]> {
+    match public_key {
+        PublicKey::Ed25519 { ed25519 } => Some(ed25519.into_inner()),
+        _ => None,
+    }
+}
+
+fn keyfile_public_key(keyfile: &KeyFile) -> Result<PublicKey, CliError> {
+    match (keyfile.scheme.as_str(), &keyfile.public_key_hex) {
+        (ED25519_SCHEME, Some(pk_hex)) => Ok(PublicKey::Ed25519 {
+            ed25519: Ed25519PublicKey::new(parse_stored_hex::<32>(pk_hex)?),
+        }),
+        (MLDSA65_SCHEME, Some(pk_hex)) => Ok(PublicKey::MlDsa65 {
+            mldsa65: MlDsa65PublicKey::new(parse_stored_hex::<MLDSA65_PUBLIC_KEY_LEN>(pk_hex)?),
+        }),
+        // Without cached public metadata the secret must be loaded.
+        _ => Ok(signer_from_keyfile(keyfile)?.public_key()),
+    }
+}
+
+/// Load a stored signing key of any supported scheme.
+///
+/// Private key material is zeroized from temporary buffers after
+/// construction. Used by deploy, call, and transfer to sign transactions.
+pub fn load_local_signer(name: &str) -> Result<SchemeSigner, CliError> {
     validate_key_name(name)?;
-    let keypair_bytes = load_stored_keypair_bytes(name).map_err(|error| match error {
+    let keyfile = read_keyfile(name).map_err(|error| match error {
         CliError::Io(source) if source.kind() == std::io::ErrorKind::NotFound => {
             CliError::KeyNotFound(name.into())
         }
         error => error,
     })?;
-    LocalSigner::from_keypair_bytes(*keypair_bytes).map_err(|error| signing_error(&error))
+    signer_from_keyfile(&keyfile)
 }
 
-fn load_stored_keypair_bytes(name: &str) -> Result<Zeroizing<[u8; 64]>, CliError> {
-    let keyfile = read_keyfile(name)?;
-    if keyfile.scheme != "ed25519" {
-        return Err(CliError::Other(format!(
-            "unsupported key scheme: {}",
-            keyfile.scheme
-        )));
-    }
-
-    Ok(Zeroizing::new(parse_stored_hex::<64>(
-        &keyfile.keypair_hex,
-    )?))
+fn signer_from_keyfile(keyfile: &KeyFile) -> Result<SchemeSigner, CliError> {
+    let missing = || CliError::Other("invalid stored key: missing secret".into());
+    let signer = match keyfile.scheme.as_str() {
+        ED25519_SCHEME => {
+            let keypair_hex = keyfile.keypair_hex.as_deref().ok_or_else(missing)?;
+            let keypair_bytes = Zeroizing::new(parse_stored_hex::<64>(keypair_hex)?);
+            SchemeSigner::from(
+                LocalSigner::from_keypair_bytes(*keypair_bytes)
+                    .map_err(|error| signing_error(&error))?,
+            )
+        }
+        MLDSA65_SCHEME => {
+            let seed_hex = keyfile.seed_hex.as_deref().ok_or_else(missing)?;
+            let seed = Zeroizing::new(parse_stored_hex::<MLDSA65_SEED_LEN>(seed_hex)?);
+            SchemeSigner::from(MlDsa65Signer::from_seed(&seed))
+        }
+        other => return Err(CliError::Other(format!("unsupported key scheme: {other}"))),
+    };
+    Ok(signer)
 }
 
 /// Write an isolated harness-owned key without changing user configuration.
@@ -551,13 +656,7 @@ pub(crate) fn write_fixture_key(
 ) -> Result<(), CliError> {
     validate_key_name(name)?;
     fs::create_dir_all(directory)?;
-    let keypair = Zeroizing::new(signer.to_keypair_bytes());
-    let key = KeyFile {
-        version: 1,
-        scheme: "ed25519".into(),
-        keypair_hex: hex::encode(keypair.as_ref()),
-        public_key_hex: Some(hex::encode(signer.verifying_key_bytes())),
-    };
+    let key = ed25519_keyfile(signer);
     let contents = Zeroizing::new(
         serde_json::to_vec(&key)
             .map_err(|error| CliError::LocalFundingAttempt(error.to_string()))?,
@@ -613,14 +712,6 @@ impl From<KeyInfo> for KeySummary {
 
 fn key_path(name: &str) -> Result<PathBuf, CliError> {
     Ok(crate::config::keys_dir()?.join(format!("{name}.json")))
-}
-
-fn derive_pubkey_account_address(public_key: [u8; 32]) -> [u8; 32] {
-    let address =
-        PubkeyAccount::from_public_key_bytes(public_key, DEFAULT_PUBKEY_ACCOUNT_NONCE).address();
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(address.as_ref());
-    bytes
 }
 
 fn parse_stored_hex<const N: usize>(input: &str) -> Result<[u8; N], CliError> {

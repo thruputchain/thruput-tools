@@ -40,4 +40,5 @@ pub type NetworkHash = Hex0x<thruput_xdr::types::SHA256Hash>;
 pub type StorageHash = Hex0x<thruput_xdr::types::SHA256Hash>;
 pub type DbHash = Hex0x<thruput_xdr::types::StorageLongHash>;
 pub type Ed25519PublicKey = Hex0x<thruput_xdr::types::Ed25519PublicKey>;
+pub type PublicKeyHash = Hex0x<thruput_xdr::types::PublicKeyHash>;
 pub type ValidatorID = Hex0x<thruput_xdr::validator::ValidatorID>;

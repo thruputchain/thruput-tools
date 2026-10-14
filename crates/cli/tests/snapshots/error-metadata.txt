@@ -197,6 +197,11 @@ KeyNotFound
   code: key_not_found
   hint text: list available keys with `thruput keys ls`
 
+KeySchemeUnsupported
+  code: key_scheme_unsupported
+  hint text: `thruput keys ls` shows each key's scheme; select a key whose scheme supports this
+  details: keyName, scheme, operation
+
 KeyNameEmpty
   code: key_name_empty
   hint text: key names may only contain letters, digits, hyphens, and underscores

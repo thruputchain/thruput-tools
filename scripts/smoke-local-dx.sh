@@ -206,7 +206,7 @@ def cxs_string(value):
 def child(preimage, value_bytes):
     return preimage + cxs_u32(len(value_bytes)) + value_bytes
 
-# sdk::storage roots contract state under the storage struct's domain, then
+# thruput_sdk::storage roots contract state under the storage struct's domain, then
 # assigns fields by u32 slot. Counter.value is the first field:
 #   Keypath::root().child("Counter").child(&0u32).generate_key()
 preimage = b""
@@ -388,17 +388,17 @@ import sys
 manifest = pathlib.Path(sys.argv[1])
 sdk_path = pathlib.Path(sys.argv[2]).resolve()
 protocol_path = pathlib.Path(sys.argv[3]).resolve()
-replacement = f'sdk = {{ path = {json.dumps(str(sdk_path))} }}'
+replacement = f'thruput-sdk = {{ path = {json.dumps(str(sdk_path))} }}'
 lines = []
 replaced = False
 for line in manifest.read_text(encoding="utf-8").splitlines():
-    if line.startswith("sdk = "):
+    if line.startswith("thruput-sdk = "):
         lines.append(replacement)
         replaced = True
     else:
         lines.append(line)
 if not replaced:
-    raise SystemExit("sdk dependency line not found")
+    raise SystemExit("thruput-sdk dependency line not found")
 patches = {
     "thruput-spec": "thruput-spec",
     "thruput-trace": "thruput-trace",

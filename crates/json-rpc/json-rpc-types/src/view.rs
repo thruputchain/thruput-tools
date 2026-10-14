@@ -23,8 +23,9 @@ pub enum ViewAuthClaim {
         required_weight: u32,
     },
     PubkeySignature {
-        /// Ed25519 public key (32 bytes). This is public information, not a signature.
-        public_key: crate::Ed25519PublicKey,
+        /// Hash naming the account's public key, scheme included:
+        /// `sha256(cxs(DomainSeparator("PublicKey")) || cxs(PublicKey))`.
+        pubkey_hash: crate::PublicKeyHash,
         #[serde(with = "crate::decimal")]
         #[schemars(with = "crate::decimal::Decimal<u64>")]
         nonce: u64,
@@ -44,11 +45,9 @@ impl From<ViewAuthClaim> for thruput_xdr::auth_claim::AuthClaim {
                     required_weight,
                 },
             },
-            ViewAuthClaim::PubkeySignature { public_key, nonce } => Self::kPubkeySignature {
+            ViewAuthClaim::PubkeySignature { pubkey_hash, nonce } => Self::kPubkeySignature {
                 pubkey_preimage: PubkeyAccountPreimage {
-                    pubkey: thruput_xdr::types::PublicKey::Ed25519 {
-                        ed25519: public_key.0,
-                    },
+                    pubkey_hash: pubkey_hash.0,
                     nonce,
                 },
             },

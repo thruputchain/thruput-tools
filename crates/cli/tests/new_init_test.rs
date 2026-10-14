@@ -58,7 +58,14 @@ fn init_configures_profiles_and_succeeds() {
     }
 
     // Pre-store a key so the wizard does not prompt for key generation.
-    thruput_cli::keys::generate(&Some("default".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(
+        &Some("default".into()),
+        thruput_cli::keys::KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    )
+    .unwrap();
 
     let result = thruput_cli::init::run(tmp.path(), &InitOptions::default(), "init", &quiet());
 
@@ -140,7 +147,14 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
 "#,
     )
     .unwrap();
-    thruput_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(
+        &Some("alice".into()),
+        thruput_cli::keys::KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    )
+    .unwrap();
 
     thruput_cli::init::run(tmp.path(), &InitOptions::default(), "init", &quiet()).unwrap();
 
@@ -194,7 +208,14 @@ fn init_preserves_ignored_legacy_executor_config() {
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(tmp.path().join("thruput/config.toml"), legacy).unwrap();
 
-    thruput_cli::keys::generate(&Some("default".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(
+        &Some("default".into()),
+        thruput_cli::keys::KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    )
+    .unwrap();
 
     thruput_cli::init::run(tmp.path(), &InitOptions::default(), "init", &quiet()).unwrap();
 
@@ -251,7 +272,14 @@ fn init_rejects_dangling_project_key_despite_global_default() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    thruput_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(
+        &Some("alice".into()),
+        thruput_cli::keys::KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    )
+    .unwrap();
 
     assert!(thruput_cli::init::run(&project, &InitOptions::default(), "init", &quiet()).is_err());
 

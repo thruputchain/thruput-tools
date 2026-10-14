@@ -206,7 +206,7 @@ pub struct DecodedAbort {
 
 impl DecodedAbort {
     /// Exception name annotated with its defining crate and major version,
-    /// e.g. `LibraryExn (sdk, v1)`; the bare name when the origin is unknown.
+    /// e.g. `LibraryExn (thruput-sdk, v1)`; the bare name when the origin is unknown.
     pub fn exception_label(&self) -> Option<String> {
         let name = self.exception.as_deref()?;
         match (self.exception_crate, self.exception_version) {
@@ -530,8 +530,8 @@ pub fn normalize_type_name(ty: &str) -> String {
     }
 
     match ty {
-        "sdk::U256" | "groundhog_sdk::U256" => "U256".into(),
-        "sdk::I256" | "groundhog_sdk::I256" => "I256".into(),
+        "thruput_sdk::U256" | "sdk::U256" | "groundhog_sdk::U256" => "U256".into(),
+        "thruput_sdk::I256" | "sdk::I256" | "groundhog_sdk::I256" => "I256".into(),
         _ => ty.to_owned(),
     }
 }

@@ -10,6 +10,9 @@ pub enum SigningError {
     /// The provided keypair bytes were invalid.
     #[error("invalid keypair bytes")]
     InvalidKeypair,
+    /// The signer could not produce a signature.
+    #[error("signing failed")]
+    SignatureFailed,
     /// Signer does not authorize the prepared native account.
     #[error("signer public key does not match the native account")]
     SignerMismatch,

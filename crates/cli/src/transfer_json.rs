@@ -5,9 +5,9 @@ use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::receipt::ExecStatus;
 use thruput_json_rpc_types::transaction::TransactionStatus;
 use thruput_json_rpc_types::transaction::TxHash;
-use thruput_json_rpc_types::{BlockHeight, ContractAddress, Ed25519PublicKey};
+use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 
-pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 3;
+pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 4;
 
 /// Stable JSON fields shared by every native HOG transfer outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -20,7 +20,10 @@ pub struct TransferReportCommon {
     pub submitted: bool,
     pub sender: ContractAddress,
     pub sender_wallet: Option<String>,
-    pub signer_public_key: Ed25519PublicKey,
+    /// Signature scheme of the signing key: `ed25519` or `mldsa65`.
+    pub signer_scheme: String,
+    /// Raw encoded public key of the signing key in its scheme.
+    pub signer_public_key: HexBytes,
     pub recipient_input: String,
     pub recipient: ContractAddress,
     pub token_address: ContractAddress,
@@ -88,7 +91,7 @@ pub struct TransferUnconfirmedReport {
 mod tests {
     use thruput_json_rpc_types::hex::{Hex0x, HexBytes};
     use thruput_json_rpc_types::transaction::TxHash;
-    use thruput_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
+    use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
     use super::{
         TRANSFER_JSON_SCHEMA_VERSION, TransferCommittedReport, TransferDryRunReport,
@@ -159,7 +162,8 @@ mod tests {
             submitted: true,
             sender: Hex0x(ContractAddress::from([0x11; 32])),
             sender_wallet: Some("alice".into()),
-            signer_public_key: Hex0x(Ed25519PublicKey::from([0x22; 32])),
+            signer_scheme: "ed25519".into(),
+            signer_public_key: HexBytes(vec![0x22; 32]),
             recipient_input: "alice".into(),
             recipient: Hex0x(ContractAddress::from([0x33; 32])),
             token_address: Hex0x(ContractAddress::from([0x44; 32])),
@@ -180,7 +184,8 @@ mod tests {
                 submitted: false,
                 sender: Hex0x(ContractAddress::from([0x11; 32])),
                 sender_wallet: Some("alice".into()),
-                signer_public_key: Hex0x(Ed25519PublicKey::from([0x22; 32])),
+                signer_scheme: "ed25519".into(),
+                signer_public_key: HexBytes(vec![0x22; 32]),
                 recipient_input: "alice".into(),
                 recipient: Hex0x(ContractAddress::from([0x33; 32])),
                 token_address: Hex0x(ContractAddress::from([0x44; 32])),

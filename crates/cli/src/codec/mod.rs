@@ -117,7 +117,7 @@ mod tests {
     use super::*;
     #[test]
     fn declared_exception_wins_over_ambient_selector_collision() {
-        let selector = <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR;
+        let selector = <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR;
         let metadata = CallMetadata::Spec(SpecMethodMetadata {
             interface_name: "Counter".into(),
             version: "0.1.0".into(),
@@ -171,14 +171,14 @@ mod tests {
             decoded.value,
             serde_json::json!({"case": "NonNegativeIntUnderflow"})
         );
-        assert_eq!(decoded.exception_crate, Some("sdk"));
+        assert_eq!(decoded.exception_crate, Some("thruput-sdk"));
         assert_eq!(decoded.exception_version, Some("1"));
     }
 
     #[test]
     fn decode_abort_decodes_erc20_error_without_metadata() {
         let bytes = xdrs::cxs::encode(&(
-            <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+            <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR,
             thruput_erc20_if::ERC20Error::TooLarge,
         ))
         .expect("bug: ERC20 exception should encode");
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn decode_abort_decodes_erc20_permit_error_without_metadata() {
         let bytes = xdrs::cxs::encode(&(
-            <thruput_erc20_permit_if::ERC20PermitError as sdk::exn::Exn>::SELECTOR,
+            <thruput_erc20_permit_if::ERC20PermitError as thruput_sdk::exn::Exn>::SELECTOR,
             thruput_erc20_permit_if::ERC20PermitError::NotSpender,
         ))
         .expect("bug: ERC20 permit exception should encode");
