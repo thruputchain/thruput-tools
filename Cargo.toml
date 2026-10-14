@@ -196,6 +196,8 @@ proc-macro-crate = "3"
 sha2 = "0.11"
 ed25519-compact = { version = "2.2", default-features = false, features = ["opt_size"] }
 ed25519-dalek = { version = "3", features = ["zeroize"] }
+# Pure ML-DSA (FIPS 204). Keys are expanded from the stored 32-byte seed.
+ml-dsa = { version = "0.1.1", default-features = false, features = ["zeroize"] }
 zeroize = "1"
 stellar-strkey = "=0.0.18"
 rpassword = "7.4"
@@ -217,3 +219,11 @@ missing-panics-doc = "allow"
 [profile.release]
 overflow-checks = true
 debug = "line-tables-only"
+
+# TEMPORARY: regenerated bindings for thruput-protocol#219 (ML-DSA-65 pubkey
+# accounts). Replace with the published release family and remove, together
+# with the matching `allow-git` entry in deny.toml. thruput-syscall rides along
+# because the git thruput-xdr depends on it by path.
+[patch.thruput]
+thruput-xdr = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "geoph/mldsa-auth" }
+thruput-syscall = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "geoph/mldsa-auth" }

@@ -78,6 +78,7 @@ tempfile = { workspace = true }
 signal-hook = { workspace = true }
 
 [dev-dependencies]
+thruput-domain-separator = { workspace = true }
 pretty_assertions = { workspace = true }
 thruput-erc20-permit-if = { workspace = true }
 serial_test = { workspace = true }

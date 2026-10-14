@@ -32,7 +32,7 @@ use thruput_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "11.2.0";
+pub const WIRE_FORMAT_VERSION: &str = "12.0.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -65,7 +65,9 @@ pub trait LocalFundingApi {
 #[rpc(client, server, namespace = "groundhog")]
 pub trait GroundhogApi {
     /// Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash.
-    /// Transactions whose `blockExpiryHeight` is at or below the current chain tip can
+    /// A `kPubkeySignature` claim names its key by hash, so the envelope must carry the
+    /// full key as `pubkey_claim_key`; it is rejected with `TxInvalid` when that key is
+    /// missing, or present for any other claim. Transactions whose `blockExpiryHeight` is at or below the current chain tip can
     /// never commit and are rejected with `TxRejected` when the tip is available.
     /// Transactions that break an executor pre-execution bound (too many attached
     /// contracts for the chain config, an oversized contract, an RV32 artifact declaring

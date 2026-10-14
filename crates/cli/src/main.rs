@@ -228,7 +228,7 @@ enum Command {
         command: ChainCommand,
     },
     /// Manage signing keys
-    #[command(long_about = "Ed25519 signing keys stored in \
+    #[command(long_about = "Ed25519 or ML-DSA-65 signing keys stored in \
                        ~/.config/thruput/keys/. Keys are \
                        global (not per-profile). Profiles can \
                        override the default key via default_key \
@@ -1173,6 +1173,9 @@ enum KeysCommand {
     Generate {
         /// Key name (default: "default")
         name: Option<String>,
+        /// Signature scheme of the new key
+        #[arg(long, value_enum, default_value_t = thruput_cli::keys::KeyScheme::Ed25519)]
+        scheme: thruput_cli::keys::KeyScheme,
         /// Fund from testnet faucet (not yet implemented)
         #[arg(long, hide = true)]
         fund: bool,
@@ -1187,7 +1190,7 @@ enum KeysCommand {
     Ls,
     /// Export a private key for client use
     #[command(
-        long_about = "Export a CLI-managed Ed25519 private key for use with a client signer.\n\nThe 32-byte private key is written to stdout as lowercase, 0x-prefixed hex by default; --format strkey exports an S StrKey. Treat it as a secret: do not expose it in logs, CI output, or committed files."
+        long_about = "Export a CLI-managed private key for use with a client signer.\n\nThe 32-byte private seed (Ed25519 seed or ML-DSA-65 FIPS 204 seed) is written to stdout as lowercase, 0x-prefixed hex by default; --format strkey exports an S StrKey for Ed25519 keys. Treat it as a secret: do not expose it in logs, CI output, or committed files."
     )]
     Export {
         /// Key name to export
@@ -1227,7 +1230,9 @@ impl KeysCommand {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let (cmd, print) = (ctx.cmd_name, &ctx.print);
         match self {
-            Self::Generate { name, fund } => thruput_cli::keys::generate(&name, fund, cmd, print),
+            Self::Generate { name, scheme, fund } => {
+                thruput_cli::keys::generate(&name, scheme, fund, cmd, print)
+            }
             Self::Import { name } => thruput_cli::keys::import(&name, cmd, print),
             Self::Ls => thruput_cli::keys::list(cmd, print),
             Self::Export {

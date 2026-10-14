@@ -52,3 +52,45 @@ impl crate::Signer for LocalSigner {
         })
     }
 }
+
+/// A local signer of any supported scheme, as loaded from a key file.
+#[derive(Debug)]
+#[non_exhaustive]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a 224-byte Ed25519 key is cheap; the ML-DSA variant is small because it boxes"
+)]
+pub enum SchemeSigner {
+    /// An Ed25519 key.
+    Ed25519(LocalSigner),
+    /// An ML-DSA-65 key expanded from its seed.
+    MlDsa65(crate::MlDsa65Signer),
+}
+
+impl From<LocalSigner> for SchemeSigner {
+    fn from(signer: LocalSigner) -> Self {
+        Self::Ed25519(signer)
+    }
+}
+
+impl From<crate::MlDsa65Signer> for SchemeSigner {
+    fn from(signer: crate::MlDsa65Signer) -> Self {
+        Self::MlDsa65(signer)
+    }
+}
+
+impl crate::Signer for SchemeSigner {
+    fn public_key(&self) -> thruput_xdr::types::PublicKey {
+        match self {
+            Self::Ed25519(signer) => signer.public_key(),
+            Self::MlDsa65(signer) => signer.public_key(),
+        }
+    }
+
+    fn sign(&self, message: &[u8]) -> Result<thruput_xdr::types::Signature, SigningError> {
+        match self {
+            Self::Ed25519(signer) => signer.sign(message),
+            Self::MlDsa65(signer) => signer.sign(message),
+        }
+    }
+}

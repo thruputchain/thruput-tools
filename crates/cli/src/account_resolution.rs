@@ -1,6 +1,7 @@
 use thruput_json_rpc_types::hex::prefixed_hex;
 use thruput_json_rpc_types::{NetworkHashHex, runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET};
-use thruput_signing::LocalSigner;
+use thruput_signing::SchemeSigner;
+use thruput_xdr::types::PublicKey;
 
 use crate::{
     CliError, codec,
@@ -39,7 +40,7 @@ pub(crate) struct ResolvedTransactionSender {
     pub(crate) native_account: Option<thruput_signing::PubkeyAccount>,
     pub(crate) key_name: String,
     pub(crate) wallet_name: Option<String>,
-    pub(crate) signer: LocalSigner,
+    pub(crate) signer: SchemeSigner,
     pub(crate) wallet_address: thruput_xdr::types::ContractAddress,
     /// Optional network pin, validated against hosted RPC before signing.
     /// Hosted profiles may discover the identity from matching descriptor and RPC data.
@@ -119,7 +120,7 @@ pub(crate) struct ResolvedSenderAccount {
     pub(crate) native_account: Option<thruput_signing::PubkeyAccount>,
     pub(crate) key_name: String,
     pub(crate) wallet_name: Option<String>,
-    pub(crate) signer: LocalSigner,
+    pub(crate) signer: SchemeSigner,
     pub(crate) wallet_address: thruput_xdr::types::ContractAddress,
 }
 
@@ -185,26 +186,24 @@ pub(crate) fn resolve_network_hash(
 fn resolve_wallet_selection(
     profile: &ResolvedProfile,
     key_name: &str,
-    signer: &LocalSigner,
+    signer: &impl thruput_signing::Signer,
     selected_wallet: Option<&str>,
 ) -> Result<(Option<String>, thruput_xdr::types::ContractAddress), CliError> {
+    let public_key = signer.public_key();
     if let Some(wallet_name) = selected_wallet {
-        return resolve_selected_wallet(
-            profile,
-            key_name,
-            signer.verifying_key_bytes(),
-            wallet_name,
-        )
-        .map(|address| (Some(wallet_name.to_owned()), address));
+        return resolve_selected_wallet(profile, key_name, &public_key, wallet_name)
+            .map(|address| (Some(wallet_name.to_owned()), address));
     }
-    resolve_saved_wallet_for_public_key(profile, key_name, signer.verifying_key_bytes())
+    resolve_saved_wallet_for_public_key(profile, key_name, &public_key)
 }
 
 /// Validate a selected binding against the supplied key identity without loading a signer.
+///
+/// Saved bindings name Ed25519 owners, so a key of another scheme owns none.
 pub(crate) fn resolve_selected_wallet(
     profile: &ResolvedProfile,
     key_name: &str,
-    public_key: [u8; 32],
+    public_key: &PublicKey,
     wallet_name: &str,
 ) -> Result<thruput_xdr::types::ContractAddress, CliError> {
     let wallet = profile
@@ -215,12 +214,16 @@ pub(crate) fn resolve_selected_wallet(
             profile: profile.name.clone(),
         })?;
     let validated = validate_saved_wallet_binding(wallet_name, wallet)?;
-    if validated.owner_public_key.as_slice() != public_key.as_slice() {
+    let local = crate::keys::ed25519_public_key_bytes(public_key);
+    if local.is_none_or(|local| validated.owner_public_key.as_slice() != local.as_slice()) {
         return Err(CliError::SavedWalletOwnerMismatch {
             wallet_name: wallet_name.to_owned(),
             key_name: key_name.to_owned(),
             configured: prefixed_hex(&validated.owner_public_key),
-            local: prefixed_hex(public_key),
+            local: local.map_or_else(
+                || prefixed_hex(thruput_signing::public_key_hash(public_key).as_ref()),
+                prefixed_hex,
+            ),
         });
     }
     Ok(validated.address)
@@ -269,20 +272,22 @@ fn native_account_for_binding(
     }
 }
 
-fn default_native_account(signer: &LocalSigner) -> thruput_signing::PubkeyAccount {
-    thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+fn default_native_account(signer: &impl thruput_signing::Signer) -> thruput_signing::PubkeyAccount {
+    thruput_signing::PubkeyAccount::new(signer.public_key(), 0)
 }
 
 fn resolve_saved_wallet_for_public_key(
     profile: &ResolvedProfile,
     key_name: &str,
-    expected_public_key: [u8; 32],
+    expected_public_key: &PublicKey,
 ) -> Result<(Option<String>, thruput_xdr::types::ContractAddress), CliError> {
+    let expected_owner = crate::keys::ed25519_public_key_bytes(expected_public_key);
     let mut matches = Vec::new();
     for (wallet_name, wallet) in &profile.wallets {
         match parse_owner_public_key(wallet_name, &wallet.owner_public_key) {
             Ok(owner_public_key)
-                if owner_public_key.as_slice() == expected_public_key.as_slice() =>
+                if expected_owner
+                    .is_some_and(|expected| owner_public_key.as_slice() == expected.as_slice()) =>
             {
                 matches.push((wallet_name, wallet));
             }
@@ -294,8 +299,7 @@ fn resolve_saved_wallet_for_public_key(
         if matches.is_empty() {
             return Ok((
                 None,
-                thruput_signing::PubkeyAccount::from_public_key_bytes(expected_public_key, 0)
-                    .address(),
+                thruput_signing::PubkeyAccount::new(expected_public_key.clone(), 0).address(),
             ));
         }
         return Err(CliError::SavedWalletAmbiguous {
@@ -360,7 +364,7 @@ fn resolve_address_target_with_keys(
         None
     };
     if allow_key_names && let Some(public_key) = crate::keys::load_local_public_key(target)? {
-        return resolve_saved_wallet_for_public_key(profile, target, public_key)
+        return resolve_saved_wallet_for_public_key(profile, target, &public_key)
             .map(|(_, address)| address);
     }
     if let Some(error) = literal_error {
@@ -390,7 +394,7 @@ pub(crate) fn resolve_address_target_or_default_wallet(
     let public_key = crate::keys::load_local_public_key(&key_name)?
         .ok_or_else(|| CliError::KeyNotFound(key_name.clone()))?;
     let (wallet_name, address) =
-        resolve_saved_wallet_for_public_key(profile, &key_name, public_key)?;
+        resolve_saved_wallet_for_public_key(profile, &key_name, &public_key)?;
     Ok((wallet_name.unwrap_or(key_name), address))
 }
 
@@ -496,6 +500,7 @@ mod tests {
     use crate::config::SavedWalletBinding;
 
     use super::*;
+    use thruput_signing::Signer as _;
 
     #[test]
     fn saved_strkey_wallet_selects_the_matching_signer_and_rejects_another() {
@@ -930,7 +935,7 @@ mod tests {
 
     #[test]
     fn native_bindings_require_a_matching_nonce_owner_and_address() {
-        let signer = LocalSigner::from_secret_key([42; 32]);
+        let signer = thruput_signing::LocalSigner::from_secret_key([42; 32]);
         let account =
             thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 17);
         let binding = SavedWalletBinding {
@@ -955,13 +960,9 @@ mod tests {
             None,
             BTreeMap::from([("alice".into(), invalid.clone())]),
         );
+        assert!(resolve_selected_wallet(&profile, "alice", &signer.public_key(), "alice").is_err());
         assert!(
-            resolve_selected_wallet(&profile, "alice", signer.verifying_key_bytes(), "alice")
-                .is_err()
-        );
-        assert!(
-            resolve_saved_wallet_for_public_key(&profile, "alice", signer.verifying_key_bytes())
-                .is_err()
+            resolve_saved_wallet_for_public_key(&profile, "alice", &signer.public_key()).is_err()
         );
         assert!(resolve_address_target(&profile, "alice").is_err());
         invalid.kind = crate::config::WalletKind::DevWallet;

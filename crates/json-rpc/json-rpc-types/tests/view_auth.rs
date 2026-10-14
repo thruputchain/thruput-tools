@@ -10,7 +10,7 @@ fn optional_claims_round_trip_on_single_and_batch_calls() {
     for claim in [
         json!({"kind":"sourceAddress","allowedKeys":0,"requiredWeight":0}),
         json!({"kind":"sourceAddress","allowedKeys":u32::MAX,"requiredWeight":u32::MAX}),
-        json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "ab".repeat(32)),"nonce":"18446744073709551615"}),
+        json!({"kind":"pubkeySignature","pubkeyHash":format!("0x{}", "ab".repeat(32)),"nonce":"18446744073709551615"}),
     ] {
         let mut input = call();
         input["authClaim"] = claim.clone();
@@ -46,10 +46,10 @@ fn malformed_claims_are_rejected_consistently() {
         json!({"kind":"sourceAddress","allowedKeys":4_294_967_296_u64,"requiredWeight":0}),
         json!({"kind":"sourceAddress","allowedKeys":0,"requiredWeight":"1"}),
         json!({"kind":"sourceAddress","allowedKeys":0,"requiredWeight":0,"signature":"0x"}),
-        json!({"kind":"pubkeySignature","publicKey":"0x01","nonce":"0"}),
-        json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "00".repeat(32)),"nonce":0}),
-        json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "00".repeat(32)),"nonce":"01"}),
-        json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "00".repeat(32)),"nonce":"18446744073709551616"}),
+        json!({"kind":"pubkeySignature","pubkeyHash":"0x01","nonce":"0"}),
+        json!({"kind":"pubkeySignature","pubkeyHash":format!("0x{}", "00".repeat(32)),"nonce":0}),
+        json!({"kind":"pubkeySignature","pubkeyHash":format!("0x{}", "00".repeat(32)),"nonce":"01"}),
+        json!({"kind":"pubkeySignature","pubkeyHash":format!("0x{}", "00".repeat(32)),"nonce":"18446744073709551616"}),
     ] {
         let mut input = call();
         input["authClaim"] = claim;
@@ -74,9 +74,17 @@ fn public_claims_use_existing_protocol_variants() {
     };
     assert_eq!(source_address_claim.allowed_keys, 5);
     assert_eq!(source_address_claim.required_weight, 3);
-    let claim: ViewAuthClaim = serde_json::from_value(json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "ab".repeat(32)),"nonce":"9007199254740993"})).unwrap();
+    let claim: ViewAuthClaim = serde_json::from_value(json!({"kind":"pubkeySignature","pubkeyHash":format!("0x{}", "ab".repeat(32)),"nonce":"9007199254740993"})).unwrap();
     let AuthClaim::kPubkeySignature { pubkey_preimage } = AuthClaim::from(claim) else {
         panic!("pubkey variant")
     };
     assert_eq!(pubkey_preimage.nonce, 9_007_199_254_740_993);
+    assert_eq!(pubkey_preimage.pubkey_hash.into_inner(), [0xab; 32]);
+}
+
+#[test]
+fn pubkey_claims_reject_the_retired_public_key_field() {
+    let claim =
+        json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "ab".repeat(32)),"nonce":"0"});
+    assert!(serde_json::from_value::<ViewAuthClaim>(claim).is_err());
 }

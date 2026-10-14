@@ -361,11 +361,12 @@ THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode thruput test --integration
 
 ### `thruput keys`
 
-Manage Ed25519 signing keys. Keys are stored in
-`~/.config/thruput/keys/` with restricted file permissions.
+Manage Ed25519 and ML-DSA-65 signing keys. Keys are stored in
+`~/.config/thruput/keys/` as owner-only (`0600`) JSON files.
 
 ```bash
-thruput keys generate [name]   # generate a new keypair
+thruput keys generate [name]                    # generate an Ed25519 key
+thruput keys generate [name] --scheme mldsa65   # generate an ML-DSA-65 key
 thruput keys ls                # list stored keys
 thruput keys export <name>     # print a 32-byte private key for client use
 thruput keys use <name>        # set the default signing key
@@ -375,9 +376,43 @@ thruput keys rm <name>         # remove a stored key (with confirmation)
 The first generated key automatically becomes the default. `dev-N` names are
 ordinary stored key names; they have no implicit account or private key.
 
-`keys export` prints the 32-byte private key as lowercase, `0x`-prefixed hex.
-With `--json`, read it from `data.key.privateKey`. Treat it as a secret. Do not
-expose it in logs or CI output, or commit it to a file.
+Each key file records its `scheme`. Ed25519 files hold the 64-byte keypair;
+ML-DSA-65 files hold only the 32-byte FIPS 204 key-generation seed, never the
+expanded key, plus the public key as cached metadata. Every key's account is
+its nonce-zero pubkey account, whose address is derived from the key's
+`publicKeyHash` (which covers the scheme). `keys generate --json` reports the
+scheme, raw public key, public key hash and address. G and S StrKeys exist only
+for Ed25519 keys, so ML-DSA-65 keys show their key hash instead.
+
+`keys export` prints the 32-byte private seed as lowercase, `0x`-prefixed hex.
+With `--json`, read it from `data.key.privateKey` and the scheme from
+`data.key.scheme`. `--format strkey` is Ed25519-only. Treat the seed as a
+secret. Do not expose it in logs or CI output, or commit it to a file.
+`keys import` accepts Ed25519 seeds only.
+
+#### ML-DSA-65 accounts
+
+ML-DSA-65 keys sign pure ML-DSA (empty context) over the same network-bound
+transaction preimage as Ed25519 keys. The transaction's auth claim names the
+key by hash and the signed envelope carries the full public key, which the
+CLI attaches automatically. The flow is the same as for an Ed25519 key, except
+that a fresh `thruput node` gives only an Ed25519 default key its initial
+allocation, and saved wallet bindings (`thruput wallet create`) need an Ed25519
+owner; ML-DSA-65 keys always use their default native account:
+
+```bash
+thruput keys generate pq --scheme mldsa65   # prints the account address
+thruput keys use pq
+thruput node                                # in another terminal
+thruput airdrop pq --amount 25              # fund through the local faucet
+thruput balance pq
+thruput transfer <recipient> 1.5            # DefaultWallet execute, signed with ML-DSA-65
+thruput tx show <tx-hash>                   # committed status and receipt
+thruput tx list pq                          # address history
+thruput call my-counter increment 1         # contract calls work the same way
+```
+
+This needs a `hog-devnode` whose protocol includes ML-DSA-65 pubkey accounts.
 
 ### `thruput wallet`
 

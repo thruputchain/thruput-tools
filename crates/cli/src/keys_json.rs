@@ -12,7 +12,7 @@ pub(crate) struct KeysExportReport {
     pub(crate) key: ExportedKey,
 }
 
-/// A stored Ed25519 key exported for use with a client signer.
+/// A stored key's private seed, exported for use with a client signer.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ExportedKey {

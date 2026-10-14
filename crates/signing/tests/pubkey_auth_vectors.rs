@@ -1,0 +1,293 @@
+//! Cross-language pubkey-auth vectors shared through thruput-protocol.
+//!
+//! `data/pubkey_auth.json` is a verbatim copy of
+//! `test_vectors/pubkey_auth.json` in thruput-protocol; refresh it from there
+//! rather than editing it. Every byte string must be reproduced exactly: a
+//! disagreement is a protocol bug in one implementation, so report it instead
+//! of updating the file.
+
+use serde::Deserialize;
+use thruput_signing::default_wallet::{
+    BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction,
+};
+use thruput_signing::{
+    LocalSigner, MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SIGNATURE_LEN, MlDsa65Signer, NATIVE_HOG_ADDRESS,
+    NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, SchemeSigner, SignTransactionParams, Signer,
+    encode_signed_transaction_xdr, encode_transaction_xdr, native_hog_transfer_calldata,
+    sign_transaction, transaction_hash, verify_mldsa65,
+};
+use thruput_xdr::transaction::SignedTransaction;
+use thruput_xdr::types::{ContractAddress, NetworkHash, PublicKey, SHA256Hash, Signature};
+
+#[derive(Deserialize)]
+struct Vectors {
+    keys: Vec<VectorKey>,
+    signing: Vec<Signing>,
+    resigning: Vec<Resigning>,
+    negative: Vec<Negative>,
+}
+
+#[derive(Deserialize)]
+struct VectorKey {
+    name: String,
+    scheme: String,
+    seed: String,
+    public_key: String,
+    public_key_hash: String,
+    accounts: Vec<Account>,
+}
+
+#[derive(Deserialize)]
+struct Account {
+    nonce: String,
+    address: String,
+}
+
+#[derive(Deserialize)]
+struct Signing {
+    name: String,
+    key: String,
+    network_hash: String,
+    transaction: VectorTransaction,
+    transaction_xdr: String,
+    transaction_hash: String,
+    signature: String,
+    signed_transaction_xdr: String,
+}
+
+#[derive(Deserialize)]
+struct VectorTransaction {
+    invoked_address: String,
+    gas_limit: String,
+    block_expiry_height: String,
+    uniquifier_nonce: String,
+    account_nonce: String,
+    wallet_calls: Vec<WalletCall>,
+}
+
+#[derive(Deserialize)]
+struct WalletCall {
+    target: String,
+    entrypoint: String,
+    gas_limit: String,
+    calldata: String,
+    #[serde(default)]
+    transfer: Option<Transfer>,
+}
+
+#[derive(Deserialize)]
+struct Transfer {
+    receiver: String,
+    amount: String,
+}
+
+#[derive(Deserialize)]
+struct Resigning {
+    name: String,
+    of: String,
+    signature: String,
+    signed_transaction_xdr: String,
+    transaction_hash: String,
+}
+
+#[derive(Deserialize)]
+struct Negative {
+    name: String,
+    signed_transaction_xdr: String,
+    transaction_hash: String,
+}
+
+fn vectors() -> Vectors {
+    serde_json::from_str(include_str!("data/pubkey_auth.json"))
+        .expect("bug: shared vectors should parse")
+}
+
+fn bytes<const N: usize>(text: &str) -> [u8; N] {
+    let mut out = [0; N];
+    hex::decode_to_slice(text, &mut out).expect("bug: vector hex should have the stated length");
+    out
+}
+
+fn signer(key: &VectorKey) -> SchemeSigner {
+    let seed = bytes::<32>(&key.seed);
+    match key.scheme.as_str() {
+        "Ed25519" => LocalSigner::from_secret_key(seed).into(),
+        "MlDsa65" => MlDsa65Signer::from_seed(&seed).into(),
+        other => panic!("bug: unknown vector scheme {other}"),
+    }
+}
+
+fn raw_public_key(public_key: &PublicKey) -> &[u8] {
+    match public_key {
+        PublicKey::Ed25519 { ed25519 } => ed25519.as_ref(),
+        PublicKey::MlDsa65 { mldsa65 } => mldsa65.as_ref(),
+        _ => panic!("bug: unexpected public key scheme"),
+    }
+}
+
+fn key<'a>(vectors: &'a Vectors, name: &str) -> &'a VectorKey {
+    vectors
+        .keys
+        .iter()
+        .find(|key| key.name == name)
+        .expect("bug: vector names an existing key")
+}
+
+#[test]
+fn keys_hashes_and_addresses_match() {
+    let vectors = vectors();
+    assert!(vectors.keys.iter().any(|key| key.scheme == "MlDsa65"));
+    for key in &vectors.keys {
+        let public_key = signer(key).public_key();
+        assert_eq!(
+            hex::encode(raw_public_key(&public_key)),
+            key.public_key,
+            "{}",
+            key.name
+        );
+        assert_eq!(
+            hex::encode(thruput_signing::public_key_hash(&public_key).as_ref()),
+            key.public_key_hash,
+            "{}",
+            key.name
+        );
+        for account in &key.accounts {
+            let nonce = account.nonce.parse().expect("bug: decimal nonce");
+            let address = PubkeyAccount::new(public_key.clone(), nonce).address();
+            assert_eq!(
+                hex::encode(address.as_ref()),
+                account.address,
+                "{} nonce {nonce}",
+                key.name
+            );
+        }
+    }
+}
+
+#[test]
+fn default_wallet_transactions_build_sign_and_encode_identically() {
+    let vectors = vectors();
+    for vector in &vectors.signing {
+        let key = key(&vectors, &vector.key);
+        let signer = signer(key);
+        let tx = &vector.transaction;
+        let account = PubkeyAccount::new(
+            signer.public_key(),
+            tx.account_nonce.parse().expect("bug: decimal nonce"),
+        );
+        assert_eq!(hex::encode(account.address().as_ref()), tx.invoked_address);
+        let [call] = tx.wallet_calls.as_slice() else {
+            panic!("bug: {} has one wallet call", vector.name);
+        };
+        let target_calldata = hex::decode(&call.calldata).expect("bug: calldata hex");
+        if let Some(transfer) = &call.transfer {
+            // Native transfers encode their calldata the way `thruput transfer` does.
+            assert_eq!(call.target, hex::encode(NATIVE_HOG_ADDRESS.as_ref()));
+            assert_eq!(
+                call.entrypoint,
+                hex::encode(NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref())
+            );
+            let receiver = ContractAddress::new(bytes(&transfer.receiver));
+            let amount = transfer.amount.parse().expect("bug: decimal amount");
+            assert_eq!(
+                native_hog_transfer_calldata(&receiver, amount).unwrap(),
+                target_calldata,
+                "{}",
+                vector.name
+            );
+        }
+        let unsigned = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
+            account: &account,
+            target_address: ContractAddress::new(bytes(&call.target)),
+            target_entrypoint: bytes::<8>(&call.entrypoint).into(),
+            target_calldata: &target_calldata,
+            target_gas_limit: call.gas_limit.parse().expect("bug: decimal gas"),
+            gas_limit: tx.gas_limit.parse().expect("bug: decimal gas"),
+            block_expiry_height: tx.block_expiry_height.parse().expect("bug: decimal height"),
+            nonce: tx.uniquifier_nonce.parse().expect("bug: decimal nonce"),
+        })
+        .unwrap();
+        assert_eq!(
+            hex::encode(encode_transaction_xdr(&unsigned).unwrap()),
+            vector.transaction_xdr,
+            "{}",
+            vector.name
+        );
+        assert_eq!(
+            hex::encode(transaction_hash(&unsigned).unwrap().as_ref()),
+            vector.transaction_hash,
+            "{}",
+            vector.name
+        );
+
+        let network_hash = NetworkHash::new(SHA256Hash::new(bytes(&vector.network_hash)));
+        let envelope = sign_transaction(
+            unsigned,
+            &signer,
+            SignTransactionParams::default(),
+            &network_hash,
+        )
+        .unwrap();
+        let signature = match &envelope.signatures.0[0].signature {
+            Signature::Ed25519 { ed25519 } => hex::encode(ed25519.as_ref()),
+            Signature::MlDsa65 { mldsa65 } => hex::encode(mldsa65.as_ref()),
+            _ => panic!("bug: unexpected signature scheme"),
+        };
+        assert_eq!(signature, vector.signature, "{}", vector.name);
+        assert_eq!(
+            hex::encode(encode_signed_transaction_xdr(&envelope).unwrap()),
+            vector.signed_transaction_xdr,
+            "{}",
+            vector.name
+        );
+    }
+}
+
+#[test]
+fn hedged_resignatures_verify_and_keep_the_transaction_hash() {
+    let vectors = vectors();
+    assert!(!vectors.resigning.is_empty());
+    for vector in &vectors.resigning {
+        let original = vectors
+            .signing
+            .iter()
+            .find(|signing| signing.name == vector.of)
+            .expect("bug: re-signing names an existing vector");
+        let public_key = signer(key(&vectors, &original.key)).public_key();
+        let PublicKey::MlDsa65 { mldsa65 } = &public_key else {
+            panic!("bug: {} re-signs with ML-DSA-65", vector.name);
+        };
+        let mut preimage = thruput_domain_separator::TRANSACTION.as_bytes().to_vec();
+        preimage.extend_from_slice(&hex::decode(&original.network_hash).unwrap());
+        preimage.extend_from_slice(&hex::decode(&original.transaction_xdr).unwrap());
+        let signature = bytes::<MLDSA65_SIGNATURE_LEN>(&vector.signature);
+        let public_key_bytes: &[u8; MLDSA65_PUBLIC_KEY_LEN] = mldsa65;
+        assert!(verify_mldsa65(public_key_bytes, &preimage, &signature));
+        assert_ne!(vector.signature, original.signature);
+
+        let signed: SignedTransaction =
+            xdrs::txs::decode(&hex::decode(&vector.signed_transaction_xdr).unwrap()).unwrap();
+        assert_eq!(signed.pubkey_claim_key.as_ref(), Some(&public_key));
+        assert_eq!(
+            hex::encode(transaction_hash(&signed.tx).unwrap().as_ref()),
+            vector.transaction_hash
+        );
+        assert_eq!(vector.transaction_hash, original.transaction_hash);
+    }
+}
+
+#[test]
+fn rejected_envelopes_still_decode_and_hash_the_inner_transaction() {
+    // Rejection is the node's job; the off-chain decoder must still read these.
+    for vector in &vectors().negative {
+        let signed: SignedTransaction =
+            xdrs::txs::decode(&hex::decode(&vector.signed_transaction_xdr).unwrap())
+                .unwrap_or_else(|error| panic!("{}: {error}", vector.name));
+        assert_eq!(
+            hex::encode(transaction_hash(&signed.tx).unwrap().as_ref()),
+            vector.transaction_hash,
+            "{}",
+            vector.name
+        );
+    }
+}

@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use tempfile::TempDir;
 use thruput_cli::Print;
+use thruput_cli::keys::KeyScheme;
 use thruput_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
 
 fn quiet() -> Print {
@@ -15,11 +16,25 @@ fn generate_use_and_remove_key_updates_default_selection() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    thruput_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(
+        &Some("alice".into()),
+        KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    )
+    .unwrap();
     let default_key = thruput_cli::config::load_default_key().unwrap();
     assert_eq!(default_key.as_deref(), Some("alice"));
 
-    thruput_cli::keys::generate(&Some("bob".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(
+        &Some("bob".into()),
+        KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    )
+    .unwrap();
     thruput_cli::keys::use_key("bob", "keys.use", &quiet()).unwrap();
 
     let default_key = thruput_cli::config::load_default_key().unwrap();
@@ -64,7 +79,14 @@ fn remove_nonexistent_key_fails() {
 fn key_entry_points_do_not_treat_quiet_or_json_as_authorization() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    thruput_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(
+        &Some("alice".into()),
+        KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    )
+    .unwrap();
 
     for print in [Print::quiet(), Print::new(false, true)] {
         let export = thruput_cli::keys::export("alice", false, "keys.export", &print).unwrap_err();
@@ -89,9 +111,22 @@ fn generate_duplicate_key_fails() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    thruput_cli::keys::generate(&Some("dup".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(
+        &Some("dup".into()),
+        KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    )
+    .unwrap();
 
-    let result = thruput_cli::keys::generate(&Some("dup".into()), false, "keys.generate", &quiet());
+    let result = thruput_cli::keys::generate(
+        &Some("dup".into()),
+        KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    );
     assert!(result.is_err());
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -126,7 +161,14 @@ fn generated_key_address_matches_shared_signing_crate() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    thruput_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    thruput_cli::keys::generate(
+        &Some("alice".into()),
+        KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &quiet(),
+    )
+    .unwrap();
 
     let key_path = thruput_cli::config::keys_dir().unwrap().join("alice.json");
     let keyfile: serde_json::Value =

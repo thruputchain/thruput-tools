@@ -7,7 +7,7 @@ use thruput_client::{CallRequest, PollOptions, SignedCall, UnsignedCall};
 use thruput_json_rpc_types::receipt::ExecStatus;
 use thruput_json_rpc_types::receipt::TransactionReceipt;
 use thruput_json_rpc_types::transaction::TxHash;
-use thruput_signing::LocalSigner;
+use thruput_signing::SchemeSigner;
 use thruput_xdr::contract::ContractEntrypointID;
 
 use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
@@ -73,7 +73,7 @@ struct CallPlan {
     resolved: ResolvedCall,
     calldata: Vec<u8>,
     transaction: UnsignedCall,
-    signer: LocalSigner,
+    signer: SchemeSigner,
 }
 
 /// Call a method on a deployed contract.

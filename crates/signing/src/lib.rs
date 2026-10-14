@@ -12,10 +12,11 @@ pub mod hash;
 pub mod hog;
 pub mod indices;
 pub mod local;
+pub mod mldsa;
 pub mod signer;
 pub mod strkey;
 
-pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
+pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount, public_key_hash};
 pub use build::{
     BuildCallTransaction, BuildDeployTransaction, BuildDevWalletDoActionTransaction,
     DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT, WalletCreateProofV2,
@@ -39,5 +40,8 @@ pub use error::SigningError;
 pub use hash::transaction_hash;
 pub use hog::{ParseHogAmountError, parse_hog_amount};
 pub use indices::{AuthClaimIndex, PublicKeyId};
-pub use local::LocalSigner;
+pub use local::{LocalSigner, SchemeSigner};
+pub use mldsa::{
+    MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SEED_LEN, MLDSA65_SIGNATURE_LEN, MlDsa65Signer, verify_mldsa65,
+};
 pub use signer::Signer;

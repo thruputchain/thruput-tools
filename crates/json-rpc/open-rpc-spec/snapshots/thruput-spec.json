@@ -1269,6 +1269,10 @@
         "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
       },
+      "Hex0x_PublicKeyHash": {
+        "pattern": "^0x[0-9a-f]{64}$",
+        "type": "string"
+      },
       "Hex0x_SHA256Hash": {
         "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
@@ -2178,14 +2182,14 @@
               "nonce": {
                 "$ref": "#/components/schemas/DecimalU64"
               },
-              "publicKey": {
-                "$ref": "#/components/schemas/Hex0x_Ed25519PublicKey",
-                "description": "Ed25519 public key (32 bytes). This is public information, not a signature."
+              "pubkeyHash": {
+                "$ref": "#/components/schemas/Hex0x_PublicKeyHash",
+                "description": "Hash naming the account's public key, scheme included:\n`sha256(cxs(DomainSeparator(\"PublicKey\")) || cxs(PublicKey))`."
               }
             },
             "required": [
               "kind",
-              "publicKey",
+              "pubkeyHash",
               "nonce"
             ],
             "type": "object"
@@ -2456,7 +2460,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "11.2.0"
+    "version": "12.0.0"
   },
   "methods": [
     {
@@ -2499,7 +2503,7 @@
           "$ref": "#/components/schemas/TxHash"
         }
       },
-      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash. Transactions whose `blockExpiryHeight` is at or below the current chain tip can never commit and are rejected with `TxRejected` when the tip is available. Transactions that break an executor pre-execution bound (too many attached contracts for the chain config, an oversized contract, an RV32 artifact declaring more guest memory or code than the chain admits, or a duplicate attachment) are rejected with `TxInvalid` carrying a `TxInvalidDetail` in the error `data`.",
+      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash. A `kPubkeySignature` claim names its key by hash, so the envelope must carry the full key as `pubkey_claim_key`; it is rejected with `TxInvalid` when that key is missing, or present for any other claim. Transactions whose `blockExpiryHeight` is at or below the current chain tip can never commit and are rejected with `TxRejected` when the tip is available. Transactions that break an executor pre-execution bound (too many attached contracts for the chain config, an oversized contract, an RV32 artifact declaring more guest memory or code than the chain admits, or a duplicate attachment) are rejected with `TxInvalid` carrying a `TxInvalidDetail` in the error `data`.",
       "tags": [
         {
           "name": "Core API"

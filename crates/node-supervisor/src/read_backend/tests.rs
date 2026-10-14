@@ -128,6 +128,7 @@ fn dummy_signed_transaction() -> SignedTransaction {
             },
         },
         signatures: VecM(vec![]),
+        pubkey_claim_key: None,
     }
 }
 
