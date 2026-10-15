@@ -22,7 +22,6 @@ Read the guide for the area you are changing:
 
 - [CLI reference](../crates/cli/README.md)
 - [Local node, gateway, and runtime manifests](gateway/runtime-manifest.md)
-- [Local base58 identifier smoke](base58-local-testing.md)
 - [Benchmark scenarios and comparisons](gateway/bench-scenarios.md)
 - [Transaction-status miss benchmark](gateway/lookup-bench.md)
 - [Gateway health and observability checks](gateway/observability-smoke-test.md)
