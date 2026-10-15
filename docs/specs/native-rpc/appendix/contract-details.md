@@ -1,87 +1,38 @@
 # Appendix: proposed RPC contract details
 
-This is the detailed target behind the [API proposal](../api-proposal.md).
-The [delivery plan](../delivery-plan.md) owns scope and dependencies;
-[evidence](review-evidence.md) records the source checks and finding dispositions.
-These are proposed semantics for team review, not shipped behaviour or team
-approval. Implementation and Linear changes remain on hold.
+This appendix defines the target shapes and edge cases behind the
+[API proposal and complete method map](../api-proposal.md). The
+[delivery plan](../delivery-plan.md) owns scope, dependencies and readiness.
+These are proposed semantics; implementation and Linear changes remain on hold.
+Rust types will generate the implementation schemas. The sketches below are
+design notation, and angle-bracket examples are not executable fixtures.
 
-The type sketches and placeholder examples describe the target contract. They
-are not a second implementation schema. Rust definitions will generate the
-OpenRPC and JSON Schema artifacts when implementation is authorized.
-
-## Proposal decisions
-
-The proposal keeps separate status/receipt methods, explicit height roles,
-nested execution with sibling events/gas, metering-only gas, start/cursor
-pagination and independent cause/admission/recovery evidence. The source review
-refined the following details; finding IDs link back to the evidence appendix.
+## Decision register
 
 | Decision | Selection |
 | --- | --- |
-| TT-1 strict params / ETH-5 | Parameterized calls require strict named objects. Noarg canonical {}, with omission/[] accepted and null normalized as omission by the transport. No unknown fields or nonempty noarg arrays. |
-| STL-1 identifier boundary | Canonical case-sensitive base58 RPC/provider identifiers; explicit typed human-input helpers convert C/G. S belongs only to secret import/export. Opaque bytes remain hex. |
-| TT-3 registration | Exact configured-plane map under discovery; full announced profile requires all 15 core methods. Partial developer endpoints remain valid. |
-| ETH-2 / TT-6 / DOC-1 | Receipt current labels return/abort/fault match simulation, with authoritative execution/root-output consistency checks. No fabricated fault kind or revert message. |
-| ETH-3 | localFundingUnresolved moves to -32031; retire -32003. Keep -32030 service stop. |
-| ETH-9 / SOL-6 / CR-9 | accountNonce in simulation; remove unproduced invalid status; KnownCommitment includes networkHash. |
-| ADM-1/2 / STAT-1 | Explicit scheduler outcome mapping, no hiding indexer failure with negative status, automatic exact-byte recovery only after runtime qualification and replay preconditions. |
-| HIST-1/2/3 / SOL-2/3 / PROTO-1 | Expanded fail-closed history minimum and regressed-W rejection. Typed protocol errors/query binding required final. Candidate cap/direct seek in slice 2; general time/byte budgets, cancellation and durable reset recovery follow. |
-| ETH-8 / CR-8 / STL-6 | Keep existing assertTransactionSuccess, waitForExecution and prepareTransaction helpers with precise native behavior. |
-| EVT-1 | Freeze token event/error signature identity at 0.1 and groundhog-erc20-if; run existing native/RV32 parity coverage. |
-| Follow-up receipt review | Require return/abort bytes; validate backend log identity/height; error observation contains only hash/height; preserve commitment in Rust and TS. |
-| Follow-up funding review | One SDK faucet_requestAirdrop call on hosted/local endpoints, then read-only waiting when pending has a hash; no automatic service repeats this major, including refusal/pending. Retain explicit resume, evidence and hints; add no funding-dispatch field. |
-| Follow-up transport review | Thin flat-DTO Rust clients, optional evidence-backed parameter details, generated per-code error unions, raw-preserving response readers and bounded metrics. |
-| Follow-up consumer review | Include chuckd/Go/final pins and all three proxies; remove unserved CLI detail probe. Exact reviewable PQ/encoding diffs required, branch publication optional. |
-| DEL-3/6 | Manual publication freeze while buildable slices land; controlled artifact/bootstrap order; one final set for fresh-devnet qualification. |
+| Method surface | Bare core names; optional faucet_/dev_ services; separate status and receipt. |
+| Parameters | Strict named objects. Noarg canonical {}; accept omission/[] and transport-normalized null. |
+| Encoding | Canonical case-sensitive base58 identifiers; typed C/G human-input conversion; opaque bytes remain hex. |
+| Execution | Nested receipt execution with sibling events/gas; required return/abort bytes; gas meters work. |
+| Heights | Distinct commitment, state, freshness-floor and failed-attempt fields. |
+| Discovery | Configured registration determines methods; all 15 core methods required for announcement. |
+| Errors | Separate cause, attempt admission and recovery; optional evidence-backed reasons; raw-preserving readers. |
+| Commitment | Validate log identity/height first; error observation contains only hash/height; Rust and TS retain commitment. |
+| History | Start/cursor exclusivity, query binding and fixed watermark; fail closed; candidate cap/direct seek in scope. |
+| Funding | One SDK faucet call, then read-only waiting for a pending hash. Durable recovery and richer outcomes follow. |
+| Release | One coordinated wire major and matching artifacts, fresh devnet, qualification, announcement. |
 
-The delivery plan owns assignment and release gates. Exact pins, shared-file owners, coordinated major, qualification owner/workload/thresholds remain outstanding facts. The current-source findings do not establish runtime readiness.
-
-## Method map
-
-Remove `groundhog_` from all core methods. Keep explicit `faucet_` and `dev_` groups for optional services. All request columns below describe `params`, and all response columns describe `result` inside the JSON-RPC envelope.
-
-The full-service application endpoint should support the 15 core methods below. A deliberately partial endpoint advertises only configured support; temporary backend failure does not remove methods from discovery. Local and hosted implementations must implement the same contract for methods they share.
-
-| Current suffix | Selected name | Parameters | Result | Disposition |
-| --- | --- | --- | --- | --- |
-| `version` | `getVersionInfo` | `{}` | `VersionInfo` | Core |
-| `networkInfo` | `getNetworkInfo` | `{}` | `{ networkHash }` | Core |
-| `chainTip` | `getChainTip` | `{}` | `{ blockHeight, blockHash }` | Core |
-| `chainConfig` | `getChainConfig` | `{}` | `ChainConfig` | Core |
-| `serverLimits` | `getServerLimits` | `{}` | `ServerLimits` | Core |
-| `sendRawTransaction` | `sendTransaction` | `{ signedTransaction }` | `{ transactionHash, admission: "accepted" }` | Core |
-| `getTransactionStatus` | `getTransactionStatus` | `{ transactionHash }` | `TransactionStatus` | Core |
-| `getTransactionReceipt` | `getTransactionReceipt` | `{ transactionHash }` | `TransactionReceipt` or `null` | Core |
-| `view` | `simulateInvocation` | `Invocation` plus optional `minStateBlockHeight` | `{ stateBlockHeight, output, events, gasUsed }` | Core on full-service endpoint |
-| `viewBatch` | `simulateInvocations` | `{ invocations, minStateBlockHeight? }` | `{ stateBlockHeight, results }` | Core on full-service endpoint |
-| `getStorageAt` | `getStorage` | `{ address, key }` | `{ stateBlockHeight, item }` | Core |
-| `getBalance` | `getBalance` | `{ address }` | `{ address, stateBlockHeight, rawBalance }` | Core |
-| `getAddressAuthData` | `getRegisteredAuth` | `{ address }` | `{ address, stateBlockHeight, configuration }` | Core |
-| `getEvents` | `getEvents` | `EventQuery` | `EventPage` | Core; correctness gates below |
-| `getTransactionsByAddress` | `getTransactionsByRootContract` | `RootContractQuery` | `TransactionRefPage` | Core; correctness gates below |
-| `requestAirdrop` | `faucet_requestAirdrop` | `{ recipient, clientNonce }` | `AirdropAttempt` | Optional hosted/local faucet |
-| `fundAccount` | `dev_fundAccount` | `{ recipient, rawAmount, clientNonce, faucet }` | `FundingSubmission` | Local only |
-| `pendingTransactionCount` | `dev_getPendingTransactionCount` | `{}` | `{ count }` | Local implementation only; omit hosted stub |
-| `getBlockByNumber` | No method in this release | None | None | Defer real `getBlock` until backend exists |
-
-The code also contains a legacy `groundhog_dev_getTransactionDetail` consumer and result types, but no server registration or handler was found in the reviewed tools/hogd source. Remove the unsupported call/deploy probe and its diagnostics; render the receipt instead. Preserve the event formatter used by `view`. Delete public detail DTOs and dependencies only after a reference/public-API audit. A future detail capability needs its own implementation and retention contract. Keep `firehose_*` outside this contract until the separate feed decision is made.
-
-Do not add `getTransaction`, `prepareTransaction`, `estimateFee`, public `getHealth`, an account nonce method, historical state selectors, or confirmation levels in this release. Each would need a distinct useful contract, not just a familiar name.
-
-### Naming tradeoffs
-
-- `sendTransaction` with `signedTransaction` is familiar and explicit about who signs. Retaining `sendRawTransaction` is defensible but adds little once the parameter states the boundary.
-- `getChainTip` describes the supplied height/hash. `getLatestBlock` sounds like a block body or richer header, which this method does not provide.
-- `simulateInvocation` accurately covers discarded writes and emitted events. `readContract` understates the behavior; `simulateTransaction` promises checks this operation does not perform.
-- `getTransactionsByRootContract` is long but accurate. `getContractTransactions` is shorter, yet can still imply nested calls. Neither is a wallet activity API. A wallet contract can be the root target too.
-- `getRegisteredAuth` states what is read. It does not promise account existence, recovery of a pubkey account's key, or general wallet policy introspection.
-- Keep `getBalance` for native HOG only. Token balances use contract calls. Its documentation and SDK types state the unit explicitly.
-- Select `dev_` for local funding and pool observation. Execution inspection can join only after implementation; the namespace alone is not a capability promise.
+Keep existing SDK assertTransactionSuccess, waitForExecution and prepareTransaction
+helpers. The latter assembles a transaction, not a footprint or gas estimate.
+The chosen names describe supplied data: getChainTip has no block body,
+simulateInvocation does not validate a complete signed envelope,
+getTransactionsByRootContract excludes nested/address activity, and
+getRegisteredAuth cannot recover a pubkey account's key.
 
 ## Shared JSON contract
 
-**Proposed request rules:** use JSON-RPC 2.0 with one named object for parameters. No `{request: ...}` or `{query: ...}` wrappers. Nested objects below carry real structure, such as an invocation's assumed authorization or pagination start.
+Use JSON-RPC 2.0 with one named params object. No request/query wrapper. Nested objects represent real structure, such as assumed authorization or pagination start.
 
 - Canonical no-argument call: `params: {}`. Accept omitted `params`, `[]` and noarg `null` normalized to omission. Reject nonempty objects/arrays. For parameterized methods require a named object; omitted/null/array params are invalid. This narrow noarg exception is deliberate: jsonrpsee 0.25.1 collapses absent and null before dispatch. Do not fork the transport or add a second envelope parser for this distinction.
 - Optional request fields are omitted. Reject explicit null unless a field specifically allows it. Reject unknown request properties at every boundary, including tagged-union variants.
@@ -91,8 +42,6 @@ Do not add `getTransaction`, `prepareTransaction`, `estimateFee`, public `getHea
 - `transactionHash` always means the canonical hash of the unsigned transaction body. It is neither a signature nor an identity for the exact signed envelope.
 - `blockHeight` identifies a committed block; `stateBlockHeight` identifies the committed snapshot read. `attemptBlockHeight` identifies a failed proposal attempt. Separate reads can return different heights.
 - A successful JSON-RPC transport response does not mean successful transaction execution. Execution outcomes belong in results; inability to answer belongs in errors.
-
-The type sketches below are design notation, not a second hand-maintained schema. Rust traits/types will generate the OpenRPC specification and JSON Schema. JSON examples use angle-bracket placeholders and illustrative bytes, not executable transaction fixtures.
 
 ```ts
 type U32 = number;
@@ -106,7 +55,7 @@ type Cursor = Hex;           // opaque, nonempty bytes when used to continue
 type Height = string;        // canonical nonnegative decimal, maximum 2^63 - 1
 ```
 
-The parameterized-method migration is real transport/proxy work. Strict request DTOs own omission/null/unknown-field validation. Use a shared raw-Params registration wrapper, typed ToRpcParams client and generated by-name descriptors plus whole-object x-params-schema from those same DTOs. Preserve backend traits; avoid duplicate schemas. The pinned `#[rpc(client)]` macro wraps each argument even when its DTO implements `ToRpcParams`. Replace that client path with thin `ClientT::request(method, requestDto)` adapters. The slice-1 spike chooses small generated or explicit adapters, not a mandatory macro-engine rewrite. Add standard `paramStructure: "by-name"` for parameterized methods alongside `x-params-schema`; document the separate noarg normalizations. Validate against the selected OpenRPC meta-schema. A feasibility spike must demonstrate gateway/local/client/OpenRPC parity before broad migration. The noarg exception does not permit positional arguments on other methods.
+Strict request DTOs own omission/null/unknown-field validation. Use shared raw-Params registration, thin `ClientT::request(method, requestDto)` adapters with `ToRpcParams`, and schemas generated from those DTOs. Pinned `#[rpc(client)]` wraps arguments, so it cannot be retained for flat-object calls. Preserve backend traits. Slice 1 chooses explicit or small generated adapters and proves gateway/local/client/schema parity. Parameterized methods declare `paramStructure: "by-name"` plus whole-object `x-params-schema`; document noarg normalizations separately and validate the selected OpenRPC meta-schema. See [OpenRPC](https://spec.open-rpc.org/) and the [existing generator](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/open-rpc-spec/src/lib.rs).
 
 Use distinct SDK semantic types/constructors for keys, public-key hashes and derived addresses. Never implicitly turn a G/public key into an account address. Valid32-byte text cannot always reveal a mistaken semantic type. The body hash excludes network identity; signatures bind it. Records use verified networkHash plus transactionHash and explicit reset invalidation, even if networkHash is reused.
 
@@ -122,33 +71,12 @@ All public heights remain canonical decimal strings bounded to nonnegative signe
 
 ### Submission
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "sendTransaction",
-  "params": { "signedTransaction": "0x<signed-XDR>" }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "transactionHash": "<base58-transaction-hash>",
-    "admission": "accepted"
-  }
-}
-```
-
-Return success only after authoritative admission. Accepted includes an already-pending duplicate; it does not assert a newly queued transaction, continued mempool presence, commitment, or successful execution. Do not add an `alreadyCommitted` outcome without evidence from the backend.
-
-The object adds a field compared with today's bare hash, but makes the success guarantee visible. `admission` avoids overloading the lifecycle field `status`.
-
-The SDK computes the body hash and retains the exact approved signed bytes before transmission. On an uncertain submission, reconcile that hash. Automatic exact-byte redispatch is disabled until the runtime recovery qualification below passes; later recovery must meet every listed precondition. A server may return no JSON at all after a disconnection, so this rule cannot depend on receiving structured error data.
-
-Do not automatically refresh expiry or nonce. The native replay key includes the root invoked address, nonce and expiry height. Changing expiry with the same nonce can create a second valid transaction. Rebuilding after an uncertain outcome needs application-level reconciliation and a new approval where applicable. Expiry passing prevents future inclusion of the old transaction; it does not prove that it never committed. [Replay protection source](https://github.com/thruputchain/thruput-protocol/blob/af043b5c1983c0c8b44683975a3c389369844e09/transaction.x#L108).
+`sendTransaction({ signedTransaction })` returns
+`{ transactionHash, admission: "accepted" }` only after authoritative admission,
+including an already-pending duplicate. This does not imply continued pool
+presence, commitment or execution success. The [API proposal](../api-proposal.md#submit-observe-commitment-inspect-execution)
+shows the envelopes. Client evidence and redispatch rules are defined under
+[SDK recovery](#sdk-recovery-policy).
 
 ### Status
 
@@ -178,7 +106,7 @@ type FailureCause =
 
 Keep the current typed `ConflictCode` and `ContractRejectCode` vocabulary. Preserve raw scheduler source/code. Do not reduce these diagnostics to a generic failure string. [Owning types](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-types/src/transaction.rs).
 
-Indexed commitment wins. If the indexer fails, scheduler commitment may still answer; pending may report provisional presence without proving no earlier commitment. If the indexer fails and the scheduler returns retry/dropped/recent diagnostic/miss, propagate the read failure. Never hide it as a negative lifecycle result. `unknown` requires successful retained-source misses. Advisory recentFailure is not final failure. Preserve raw scheduler diagnostics, and treat other/unfamiliar tags as unsupported.
+Indexed commitment wins. See [shared status precedence](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/x23/hogd-backend/src/status.rs#L39). If the indexer fails, scheduler commitment may still answer; pending may report provisional presence without proving no earlier commitment. If the indexer fails and the scheduler returns retry/dropped/recent diagnostic/miss, propagate the read failure. Never hide it as a negative lifecycle result. `unknown` requires successful retained-source misses. Advisory recentFailure is not final failure. Preserve raw scheduler diagnostics, and treat other/unfamiliar tags as unsupported.
 
 Commitment is final under Thruput consensus; no confirmation-depth polling is needed. Receipt null, retry, dropped, unknown and passed expiry do not prove historical nonexecution. Known client commitment cannot be downgraded. An authoritative indexedThrough/expiredUncommitted proof needs complete retained coverage and race semantics; defer it.
 
@@ -205,9 +133,9 @@ type ReceiptExecution =
   | { result: "other" };
 ```
 
-**Proposed:** preserve the proposed nested `execution`, with current `return`/`abort`/`fault` labels shared with invocation output. Return/abort bytes are required for the respective receipt and simulation variants; `"0x"` is empty. Fresh devnet needs no historical missing-buffer branch. Missing bytes fail backend/response validation. Keep events/gasUsed at receipt level and omit redundant success/lifecycle flags.
+Receipt execution uses return/abort/fault labels shared with simulation. Require returnData/abortData for their respective variants; `"0x"` is empty. Missing bytes fail validation. Events and gasUsed remain receipt-level fields.
 
-The transaction ExecResult and root frame are independent inputs. Validate their supported combinations before attaching a buffer; root return alone never establishes successful transaction execution. A commit-stage failure can follow root Return, so do not require every failed ExecResult to have Fault root output. Contradictions fail with backendDataInvalid/inconsistentResult. The current deterministic fault kind is manufactured as `fault` by the adapter, not a backend diagnostic; remove it. The existing revert message is never produced; remove it. Do not infer out-of-gas.
+Validate supported ExecResult/root-output combinations before attaching a buffer. Root Return alone cannot establish transaction success: commit can fail afterward, so failed ExecResult does not necessarily imply Fault root output. Contradictions return backendDataInvalid/inconsistentResult. Remove manufactured fault.kind and unproduced revert messages; do not infer out-of-gas. See the [root-output union](https://github.com/thruputchain/thruput-protocol/blob/af043b5c1983c0c8b44683975a3c389369844e09/transaction.x#L88-L102) and [commit path](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_exec/runtime/syscall_handler.cc#L537-L662).
 
 Malformed events fail the receipt lookup with backendDataInvalid, not a successful partial receipt. Preserve only independently trustworthy observation evidence in the error:
 
@@ -223,31 +151,55 @@ type BackendDataInvalidData = {
 };
 ```
 
-Before parsing events or checking ExecResult/root-output consistency, the shared hogd adapter must validate `log.tx_hash == tx_hash_to_wire(tx_hash)` and a nonnegative height within the wire Height range. If either check fails, return backendDataInvalid/inconsistentResult without observation. Only after both checks pass may a later event-parse or execution-consistency failure attach `{ transactionHash, blockHeight }`. It currently echoes the request hash, making a client-only equality check insufficient. A mismatch is backendDataInvalid/inconsistentResult with no commitment observation for that requested hash. Error observations contain only validated hash/height, never partial execution or gas. The SDK checks observation hash/network context and preserves independently known commitment; receipt decoding failure cannot authorize resubmission. Single/batch simulation fails the whole result on invalid events; no partial successful result.
+Validate `log.tx_hash == tx_hash_to_wire(tx_hash)` and a nonnegative height within the wire Height range before parsing events or checking execution consistency. Failure returns backendDataInvalid/inconsistentResult without observation. Only later parsing/consistency failures may attach the validated hash/height. The [current adapter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/x23/hogd-backend/src/receipt.rs#L29-L48) echoes the request hash, so client equality checks alone are insufficient. Clients validate observation identity/network context and retain known commitment. Invalid simulation events fail the whole single/batch result.
 
-`gasUsed` is the measured execution work, expressed in gas units. `gasLimit` is an execution budget. Neither field is denominated in HOG, represents a payment, or reports tokens burned. Do not derive a fee or debit by multiplying gas units by an invented gas price. The root gas budget still reserves scheduling capacity against free HOG; no burn does not mean no balance prerequisite. Funding only a called contract does not supply the root's capacity. Keep storage collateral and its native-token amounts separate. Preserve this distinction in the SDK onboarding example, without adding a fee-estimation RPC.
+Gas measures work, not HOG payments or burns. The root gas budget reserves scheduling capacity against its free HOG, so a funded root is still required. Storage collateral is separate. SDK onboarding must explain this distinction; there is no gas-price conversion or fee-estimation RPC.
 
 `null` means this successful lookup did not produce a committed receipt. It does not say pending, never submitted or definitively uncommitted. A `committed` status followed by a null receipt is valid. An indexer outage must not become null. A receipt includes execution results and events, not the transaction body, detached key or signatures.
 
 The last historical outcomes need careful reader support. The protocol retires `failedGasSponsorship` and excludes `nonDeterministicError` from valid proposals. Preserve existing decoding without presenting them as ordinary current committed results. Investigate unexpected emission; do not invent gas sponsorship workflows from the enum. [Execution protocol](https://github.com/thruputchain/thruput-protocol/blob/af043b5c1983c0c8b44683975a3c389369844e09/exec_result.x).
 
-### Why retain two reads
+### SDK receipt waiting
 
-A combined getTransaction would offer one read path, but needs explicit commitment, receipt-availability, backend-failure and payload-cost rules. It can also imply body retrieval that the current backend cannot supply. Separate status and receipt reads keep polling small; SDK composition handles the ordinary application flow.
+Separate status and receipt reads keep polling small. SDK composition supplies
+the ordinary flow:
 
-**Proposed SDK contract:** `waitForCommitment` returns `KnownCommitment = { networkHash, transactionHash, blockHeight }`; existing `waitForTransactionReceipt` returns every committed receipt, including failed execution. Keep existing `assertTransactionSuccess` and `waitForExecution`; the assertion throws with the full failed receipt, and waitForExecution composes receipt waiting and assertion; the known `other` variant and unfamiliar execution tags produce a typed unsupported outcome with raw data. Wait helpers only observe. They never sign or submit.
+- `waitForCommitment` returns `{ networkHash, transactionHash, blockHeight }`.
+- `waitForTransactionReceipt` returns any committed receipt, including failed
+  execution, and accepts optional knownCommitment in the same verified context.
+- `assertTransactionSuccess` throws with the full failed receipt;
+  `waitForExecution` composes waiting and assertion. Unknown outcomes produce a
+  typed unsupported result with raw data. Waits never sign or submit.
 
-Retain the existing 30-second default timeout and configurable 250 ms polling interval, with bounded jittered backoff for transient read failures. The caller can set its deadline and cancel. A timeout/error preserves the original hash, last observation and any known commitment; it distinguishes receipt unavailability after commitment. Never resubmit merely because a receipt has not appeared. Existing wallet call/deploy flows compose these primitives. Do not require a new send-and-wait API or SDK-wide workflow rewrite for GA. Fix the current suggestion that `dropped` requires modifying a transaction. Exact-byte recovery remains explicit and owned by the signing/submission flow.
+Retain the 30-second default timeout and configurable 250 ms polling interval,
+with bounded jittered backoff for transient read failures and caller cancellation.
+Validate supplied commitment hash/network; require its height. Once commitment
+is supplied or observed, later null/Unknown/Retry/Dropped cannot replace it.
+Retry/Dropped must not end receipt waiting early. Status lookup errors preserve
+commitment; receipt lookup failures and timeouts carry it in their errors. An
+older RecentFailure cannot win at timeout. Reset-generation invalidation is
+explicit; networkHash is not an instance identifier.
 
-`waitForTransactionReceipt` accepts optional `knownCommitment: { networkHash, transactionHash, blockHeight }` from `waitForCommitment` in the same verified network context. Validate its hash against the requested hash and its networkHash against the verified expected network. This is not a chain-instance identifier; invalidate reset-generation records explicitly. Once supplied or observed, commitment cannot be downgraded by later null/unknown/dropped status; interruption becomes receipt-unavailable with retained commitment. Require committed status to contain its height. No global transaction cache is required. Apply the same strongest-observation rule to the shared Rust `poll_receipt` path used by CLI, hosted faucet, simulator/testkit and embeddable clients. Cover Committed→Unknown, Committed→Retry/Dropped, Committed→lookup failure and RecentFailure→Committed→timeout. Once commitment is supplied or observed, later Retry/Dropped must not take the early `ReceiptPollError::Status` exit: continue waiting for the receipt within the caller budget. Unknown and status lookup errors must not overwrite the committed observation. Earlier RecentFailure cannot replace commitment at timeout. Preserve commitment in every error carrier, including a receipt lookup failure. Receipt-first versus status-first polling is a performance choice; after commitment, weaker status must not change recovery evidence.
+Apply these rules in TS and the [shared Rust waiter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-client/src/receipt.rs#L155-L248),
+including CLI, faucet, simulator/testkit and embeddable callers. Test
+Committed→Unknown, Committed→Retry/Dropped, Committed→lookup failure and
+RecentFailure→Committed→timeout. Poll ordering remains a performance choice;
+no global transaction cache is required.
 
-Compare the submission response hash with the locally computed body hash. Preserve the receipt decoder's existing request/hash equality check. A well-formed but different hash is an invalid response, not a successful submission/receipt observation; retain the original identity and signed bytes without granting automatic resubmission permission. A successful execution followed by an application return-decoding error also never authorizes repeating the business action. Apply this through generated contract decoders and wallet call/deploy outcomes: distinguish known failed execution, unsupported execution, malformed response and successful execution whose present return bytes cannot be decoded by the application ABI. Missing required bytes are invalid response data; ABI decode failure is not execution failure or permission to repeat the action.
+Compare submission responses with the locally computed body hash and receipts
+with the requested hash. A mismatch preserves the original identity and evidence
+and fails validation. Missing required return bytes are invalid response data;
+ABI decoding failure of present bytes is a separate application outcome. Neither
+permits repeating a business action.
 
-Rust and TS response readers must retain unknown tags and raw payloads as unsupported data; test extra nested fields on unknown variants. Rust `#[non_exhaustive]` alone does not change decoding. Serde internally tagged `other` accepts extra fields but discards tag/payload, so it does not meet the raw-preservation contract. Requests remain strict. Unknown backend XDR values are a separate boundary: preserve them only through an explicitly supported unknown result, otherwise backendDataInvalid/unsupportedValue. Never map them to success, absence or retry permission.
+Rust and TS readers preserve unknown tags and raw payloads as unsupported data.
+Test unknown variants containing nested fields. Rust non_exhaustive does not
+change decoding; internally tagged serde(other) accepts extra fields but discards
+tag/payload. Unknown backend XDR values need a supported projection or
+backendDataInvalid/unsupportedValue, never success, absence or retry permission.
+See [Serde variant attributes](https://serde.rs/variant-attrs.html).
 
-Wire decimal/base58 strings do not require string-only SDK values. Preserve existing byte-array and bigint ergonomics with validated codecs at the transport boundary.
-
-Tradeoff: callers writing raw JSON make two kinds of reads. SDK users get a simple workflow, while the wire avoids a new composite lifecycle state machine in this release.
+Keep byte-array and bigint SDK ergonomics with validated transport codecs.
 
 ## Invocation simulation
 
@@ -378,7 +330,7 @@ Do not add fake historical selectors, pending-state reads, or a cross-read consi
 
 ## Events and root contract history
 
-**Proposed:** separate initial and continuation forms, retain query predicates on every call, and make exhaustion explicit with `nextCursor: null`. This is the target contract; the backend correctness gates below remain implementation work.
+Initial and continuation requests are distinct. Repeat query predicates and use `nextCursor: null` for exhaustion.
 
 ```ts
 type HeightAnchor = { kind: "atHeight"; blockHeight: Height };
@@ -445,17 +397,17 @@ type TransactionRefPage = PageBounds & {
 }
 ```
 
-Continuation sends the same `filters`, the returned `cursor`, and optional `limit`; it omits `start`. The page size may change within the advertised bound; predicates and the historical walk may not. Bind cursors to the method family and decoded query values. Preserve ordered filter/address/topic arrays on continuation; JSON object property order and omitted-versus-empty wildcard topic positions do not change decoded identity. Canonical base58 is the only accepted identifier wire encoding. Do not require a new filter-normalization algorithm to accept reordered lists; changing their order can be rejected as queryMismatch. Exclude page size from the binding. Cursor direction and upper watermark remain backend-owned. The nullable `nextCursor`, initial/continuation exclusivity and validation rules below are proposed. Root-contract history substitutes the same `contract` predicate. Require exactly one of `start` or a nonempty cursor. Reject an explicit empty cursor to prevent accidental restart. Omitted limit uses the existing default of 50; reject zero and values above the advertised cap instead of retaining a magic zero-default convention.
+Continuation repeats filters (or the root-history contract), cursor and optional limit; it omits start. Require exactly one of start or a nonempty cursor. Default limit is 50; reject zero or values above the advertised cap. Page size may change. Bind the method and canonical decoded query, excluding page size. Preserve ordered filter/address/topic arrays; reordered lists may be rejected as queryMismatch. Object property order and equivalent wildcard forms do not change identity. Direction and upper watermark remain cursor-owned.
 
 Retain current topic semantics: OR across filters; contract membership AND topic conditions within each filter; OR within each topic position; AND across positions. An omitted topics object, omitted position or empty topic list is a wildcard. Normalize these equivalent forms before query binding; null is invalid. Each specified topic is exactly 32 bytes; there are at most three positions. Keep nonempty contract lists and the current filter/value bounds. Do not interpret an empty contract list as a full-chain scan.
 
 An explicit `atHeight` anchor is inclusive when available. `atBeginning` is valid only ascending; `atEnd` only descending. Reject the opposite combinations as InvalidParams, rather than preserving today's surprising empty-page behavior. These boundaries refer to the retained serving range. An ascending explicit anchor beyond the available tip exhausts immediately; descending starts at the available tip. An explicit height below retained history should report unavailable history instead of silently clamping or exhausting; this requires the backend outcome described below.
 
-The cursor fixes the walk's upper bound; it does not follow new blocks. The page's indexed bounds describe serving availability at response time, not a completed application checkpoint or the exact fixed cursor range. Keep paginating through empty event pages while `nextCursor` is non-null. The current backend reports oldest height zero; future pruning behavior must be qualified, not inferred from the field's presence.
+The cursor fixes the upper bound and does not follow new blocks. Page bounds describe serving availability, not completed checkpoints. Continue through empty pages while nextCursor is non-null. The current oldest height is zero; that does not establish future pruning support.
 
 An event's identity within a chain instance is `(transactionHash, sequenceNumber)`. For an ascending walk, the initial response's `latestIndexedBlockHeight` is the fixed upper watermark W encoded in that walk's continuation; preserve this existing backend relationship as an explicit contract. Retain W separately from later page bounds. Only after every page reaches `nextCursor: null` and all returned events have been processed may the application checkpoint through W. An empty completed range can checkpoint W too; an initial requested height above W does not advance a prior checkpoint. Restart the next walk inclusively at W and deduplicate the boundary. Persist application changes and its checkpoint together where needed. If any page fails or reports latestIndexedBlockHeight below W, do not mark the walk complete. The backend must reject continuation when current serving height is below cursor W as backendUnavailable, for both directions; it must not clamp W down and return false exhaustion. No cross-reset or pruning-proof durability is implied.
 
-Persist checkpoints only for completed application ranges, replay their boundary and deduplicate. Receipt, event and scheduler retention differ. Do not use one page's oldest height as a global retention guarantee. Do not use `latestIndexedBlockHeight` as the last processed block.
+Receipt, event and scheduler retention differ; page bounds are not a global retention guarantee.
 
 Root history returns references only to transactions whose root invocation targets `contract`. It excludes internal invocations and addresses merely touched, debited or credited. It is not full wallet history, a transfer index, or a transaction-body fetch. SDK helper names must preserve this distinction.
 
@@ -469,17 +421,17 @@ The full announced application profile requires both history methods. Partial de
 4. Reject regressed serving watermark below cursor W; do not clamp continuation. Test ascending/descending restored/replaced-indexer cases. SDK defensive walking must also refuse checkpoint advancement.
 5. Report outsideRetention only with authoritative retained-range evidence. Current strict fresh origin requires epoch0, first height1 and contiguous later epochs, so oldest0 is genesis-inclusive and not a proven hidden gap. Qualify the strict fresh origin; do not invent non-genesis support or reset identity.
 
-For continuation, the adapter supplies fixed valid legacy XDR order/anchor placeholders, such as Ascending/AtBeginning, when `start` is absent. The backend uses cursor-owned order/position/W and must ignore those placeholders for continuation/query binding. Test unchanged results with different valid placeholders. No binary layout change is required solely to omit `start`. Typed protocol errors/query binding remain final gates. Internal fail-closed patches can land first using existing failure carriers. Coordinate hogd#4454 (still skips missing rows) and#4458 (direct seek, not complete scan budgeting).
+When start is absent, supply fixed valid legacy XDR order/anchor placeholders, such as Ascending/AtBeginning. Continuation uses cursor-owned order/position/W and ignores placeholders for query binding. Test equivalent results with different valid placeholders; omitting start alone needs no binary layout change. Typed protocol errors/query binding are required for final integration; internal fail-closed repairs may land earlier.
 
 Add a positive configured examined-candidate cap per event page in slice 2. Resume exclusively after the last successfully validated visited position, including nonmatches, and emit a cursor only when candidates remain. Preserve query binding and W. Integrity/I/O errors fail the page rather than returning partial results or a checkpoint. Pair with #4458-equivalent direct seeking. Test both directions, interleaved contracts, overlapping filters, cap=1, selective/no-match initial and continuation pages, exact exhaustion and result-limit-before-candidate-limit. Empty nonterminal pages are a target shape; the current uncapped loop does not normally emit them.
 
-General time/byte budgets, cancellation and durable pruning/reset/repair remain follow-ups. The cap bounds candidates, not RocksDB latency, repeated whole-log decoding, initial fanout or post-timeout work. Before announcement, qualify dense/selective/no-match queries and downstream work after timeout/abandonment on a fixed representative dataset against preselected numerical thresholds. Unacceptable results block announcement unless product scope is explicitly changed.
+The candidate cap does not bound RocksDB latency, repeated whole-log decoding, initial fanout or post-timeout work. General time/byte budgets and cancellation follow; [release qualification](../delivery-plan.md#review-and-readiness) must still establish an acceptable resource envelope.
 
-SDK history walking freezes predicates and initial W, handles empty nonterminal pages, deduplicates `(transactionHash, sequenceNumber)` and emits completedThroughBlockHeight only after processing terminal completion with every serving bound at least W. Ascending order is `(blockHeight, decoded transactionHash bytes, sequenceNumber)`; descending reverses it. Root references use height/hash. It is not base58 lexical order or execution/causal order.
+Slice 5 owns SDK history walking: freeze predicates and initial W, handle empty nonterminal pages, deduplicate event identities and emit completedThroughBlockHeight only after processing terminal completion with every serving bound at least W. Ascending order is `(blockHeight, decoded transactionHash bytes, sequenceNumber)`; descending reverses it. Root references use height/hash. This is not causal or base58 lexical order.
 
-Incoming-native-transfer recipe: query the native-token contract, canonical Transfer signature topic0 and destination address bytes as 32-byte hex topic2. Reuse generated typed topic helpers and test address-to-topic conversion. Generated signature leaves two indexed value positions. Transfer events are not full balance history. Freeze token event/error signature identity at 0.1 and `groundhog-erc20-if` for this release; a package 0.2/1 bump changes it even with the label pinned. Run the existing native/RV32 parity test with exact candidate pins. Independent event-version controls can follow.
+Incoming-native-transfer recipe: query the native-token contract, canonical Transfer signature topic0 and destination address bytes as 32-byte hex topic2. Reuse generated typed topic helpers and test address-to-topic conversion. Generated signature leaves two indexed value positions. Transfer events are not full balance history. Freeze token event/error signature identity at 0.1 and `groundhog-erc20-if` for this release; a package 0.2/1 bump changes it even with the label pinned. Run the existing native/RV32 parity test with exact candidate pins. Independent event-version controls can follow. See [signature derivation](https://github.com/thruputchain/thruput-sdk-rs/blob/12337492533acfa45a475cabc5af88ffe456559d/crates/macros/src/derive_event.rs#L298-L313) and [native/RV32 parity coverage](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_exec/contract_tests/native_rv32_token_event_parity_test.cc#L371-L419).
 
-Source verification and exact file anchors: [reconciliation HIST/EVT/SOL dispositions](review-evidence.md).
+Sources: [indexer scan/cursor](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L2090-L2214), [cursor seeking](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L1861-L1885), [indexer protocol](https://github.com/thruputchain/thruput-protocol/blob/af043b5c1983c0c8b44683975a3c389369844e09/indexer.x#L229-L259), and [RocksDB iterator errors](https://github.com/facebook/rocksdb/wiki/Iterator).
 
 ## Discovery and configuration
 
@@ -519,21 +471,21 @@ Generate sorted, unique `supportedMethods` from actual configured registration, 
 | Hosted faucet REST adapter | faucet_requestAirdrop |
 | Local submit/indexer + validated signer/journal/funding config | dev_fundAccount and local faucet_requestAirdrop |
 
-Derive discovery after final module merging/removal and finalize it before serving. Pinned jsonrpsee 0.25.1 supports `remove_method`; no plane-trait split is required to work around its absence. An initialized-once immutable method list or register-only builder can implement late binding; the spike chooses the smallest fit. Configured outage is an error, not method removal; unconfigured plane is absent. Full announced profile requires scheduler/DB/indexer/view. Gateway startup must compare manifest protocol with linked codec protocol; the current override/intro-token mechanism does not establish compatibility.
+Finalize discovery after module merging/removal, before serving. Pinned jsonrpsee 0.25.1 supports remove_method; choose an immutable method list or register-only builder in the spike. Configured outage returns an error; unconfigured planes are absent. Full service requires scheduler/DB/indexer/view. Startup must compare manifest protocol with linked codecs; an intro-token override alone cannot prove compatibility.
 
 Keep `wireFormat` as the compatibility authority. Release/implementation fields remain diagnostic; validated bundle identity retains its existing producer-owned format and provenance. Do not blindly re-encode Git commit IDs or artifact identifiers as chain hashes. Omit unavailable diagnostic fields consistently, including commitHash.
 
 Keep `getVersionInfo` bootstrap stable across later wire majors. The native SDK has no old-name diagnostic fallback. A missing wireFormat, including a Stellar response to the same method name, is a typed incompatible/non-Thruput endpoint error. Add fixtures for Stellar transaction/base64 and ledger/filter requests yielding invalidParams; valid noarg {} remains valid.
 
-Cache discovery per client/transport instance, not globally by URL. New instances validate anew. Mutable custom transports expose explicit invalidation. Incompatible responses, required-method -32601 or network mismatch invalidate/revalidate; never automatically replay a mutation after refresh. No imaginary HTTP reconnect event is required. Prohibit mixed incompatible contracts behind one endpoint. Wire range and required methods are checked before actions; composed flows preflight before signing. Always compare caller/provider expected networkHash; never adopt a changed identity silently.
+Cache discovery per client/transport instance; validate new instances and expose invalidation for mutable transports. Revalidate incompatible responses, required-method -32601 and network mismatch. Do not replay mutations after refresh or mix incompatible contracts behind one endpoint. Check wire range, required methods and caller/provider expected network before action, including before signing composed flows.
 
-Counter, swap and token-launchpad app proxies are endpoints: expose getVersionInfo/getNetworkInfo, advertise the intersection of upstream and allowed methods, accept named objects, preserve bounded typed error data and return -32601 for filtered methods. HTTP authentication/rate limiting is separate. Static SDK capabilities are expectations, not runtime truth; unsupported optional methods fail locally. Dynamic capability typing can follow. Test all three proxies independently; preserve Counter's submission policy and the other proxies' read-only policy. Shared envelope/discovery/error helpers are optional, not a requirement to merge their handlers.
+App proxies expose getVersionInfo/getNetworkInfo, advertise upstream support intersected with policy, accept named objects, preserve bounded typed errors and return -32601 for filtered methods. HTTP authentication/rate limiting is separate. Static SDK capabilities express expectations; unavailable optional methods fail locally. Test [Counter](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/counter/server/http.ts), [swap](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/swap/server/http.ts) and [token-launchpad](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/token-launchpad/server/http.ts) independently, preserving their write policies. Shared helpers are optional.
 
-The planning target is `>=13.0.0 <14.0.0`, conditional on the coordinated major and demonstrated minor-version reader compatibility. If GH-507 already consumes that major with a different contract, choose the next coordinated major. Diagnostic implementation/release versions never select codecs. A new optional request field or enum variant is not automatically supported by an older server in the same major: gate it by observed wire minor or raise the SDK's minimum required minor. If the caller explicitly requests an unsupported feature, fail locally as unsupported; never silently drop that constraint. Test new-client/old-server and old-client/new-server directions, including strict unknown-field rejection; `supportedMethods` alone does not negotiate parameter support.
+New SDK versions target the native API only. New output variants are minor additions only after supported readers demonstrate safe raw/unsupported fallback; otherwise they require a major. The planning target is `>=13.0.0 <14.0.0`, conditional on the coordinated major and demonstrated minor-version reader compatibility. If GH-507 already consumes that major with a different contract, choose the next coordinated major. Diagnostic implementation/release versions never select codecs. A new optional request field or enum variant is not automatically supported by an older server in the same major: gate it by observed wire minor or raise the SDK's minimum required minor. If the caller explicitly requests an unsupported feature, fail locally as unsupported; never silently drop that constraint. Test new-client/old-server and old-client/new-server directions, including strict unknown-field rejection; `supportedMethods` alone does not negotiate parameter support.
 
 The public `networkHash` binds signing identity. It does not currently prove a particular reset/instance or provide a genesis descriptor. Do not add invented `genesisHash`, `chainInstanceId`, protocol version or native network label. A required verified instance identifier would be useful, but needs a runtime/bootstrap contract and explicit reset behavior.
 
-Tradeoff: five small information methods cost extra calls on first connection. They have different sources, cache rules and failure behavior. A metadata supermethod would conceal those differences and couple basic discovery to backend availability. An SDK can compose them while preserving each failure.
+The five information methods have distinct sources, cache rules and failures. SDK composition can reduce calling overhead without coupling discovery to backend availability.
 
 ### Chain rules and storage costs
 
@@ -609,11 +561,11 @@ Keep public health out of this release. Operator readiness and application metho
 
 ## Optional faucet and local methods
 
-**Proposed scope:** defer substantive funding implementation and its richer result/error schemas. This release includes optional method naming, strict named parameters, proposed field/encoding changes, generated schemas and consumer migration. Keep narrow corrections that prevent false admission/execution claims. The optional names in the map are selected.
+Keep existing optional funding results with native names, fields and encodings. Include truthful evidence/error corrections; defer durable recovery and richer outcomes.
 
 `faucet_requestAirdrop` takes `{ recipient, clientNonce }`; `dev_fundAccount` takes `{ recipient, rawAmount, clientNonce, faucet }`. `clientNonce` is 1..32 decoded bytes and must remain unchanged within the documented recovery scope. Local funding requires a positive canonical raw amount and the expected local faucet identity.
 
-Conservative release baseline, preserving today's result semantics with field migration:
+Result shapes:
 
 ```ts
 type AirdropAttempt =
@@ -631,11 +583,11 @@ type FundingSubmission = {
 };
 ```
 
-A pending hash identifies retained work, not admission. `succeeded` requires known successful committed execution; constrain its schema to `execution.result: "return"` and reject contradictory failed/unknown outcomes. Local funding returns submission/reconciliation evidence, including an already committed transaction whose execution failed; callers inspect the receipt before asserting successful payment. Preserve the exact retained signed bytes on existing success/error paths. Do not add the follow-up's committed/stopped or submitted/stopped variants now. The existing pending delay remains seconds in this conservative baseline; unifying result delay units can follow. Preserve existing producer error retry hints now: checked-convert retryAfterSeconds to retryAfterMs, retain service evidence and fail invalid/unrepresentable hints as backendDataInvalid. Do not discard a known policy minimum and fall back to an earlier retry. This is narrow adapter work for explicit caller retries and diagnostics, not permission for automatic hosted repeats or funding durability redesign.
+A pending hash identifies retained work, not admission. Succeeded requires a matching committed return receipt. Local funding returns submission/reconciliation evidence, including a committed failed transaction; inspect execution before asserting payment. Preserve retained signed bytes on success/error paths. Pending result delays remain seconds. Checked-convert producer error retryAfterSeconds to retryAfterMs, retaining service evidence; invalid or unrepresentable hints fail as backendDataInvalid. Never discard a policy minimum and retry earlier.
 
-Select one narrow optional-service error: `-32030`, `data.kind: "fundingAttemptStopped"`. Map known `airdrop_attempt_terminal` / `airdrop_transaction_failed` service codes, or an equivalent known local service stop, to it. It means the funding service stopped advancing this attempt. It does not establish admission, nonexecution or permission to replace. Carry bounded `serviceCode` and any existing transaction hash/execution evidence; do not manufacture missing evidence. Stop automatic funding resubmission; read-only reconciliation can continue. This small projection avoids representing a committed failure as admission rejection without requiring producer outcome enrichment.
+Map known airdrop_attempt_terminal/airdrop_transaction_failed, or an equivalent local stop, to -32030/fundingAttemptStopped. It means the service stopped advancing this attempt, not nonexecution or permission to replace. Preserve bounded serviceCode and available hash/receipt evidence. Read-only reconciliation can continue.
 
-Keep ordinary parameter, overload and backend errors in the common catalogue with available evidence. A service-policy refusal has no transaction admission field. Unknown service errors do not become known terminal stops; preserve their bounded cause under backendUnavailable. Use `-32031` for unresolved local funding with retained signed evidence. Existing outer wrappers must not erase a recognized stopped cause or turn it into automatic retry permission. The richer local state machine remains deferred. The concrete optional error data is:
+Parameter, overload and backend errors use the common catalogue. Policy refusals have no transaction admission field. Unknown service errors retain their bounded cause under backendUnavailable. Use -32031 for unresolved local funding with retained signed evidence. Outer wrappers must preserve a recognized stop and never convert it into retry permission.
 
 ```ts
 type FundingAttemptStoppedData = {
@@ -649,7 +601,7 @@ type FundingAttemptStoppedData = {
 
 No `admission` field or inferred stop-reason enum. Signed bytes require the matching hash. A receipt requires the matching hash and preserves its block/execution evidence. The current hosted error normally has no hash or receipt, so neither is required. Restrict this code to optional funding methods and include it in their generated schemas. An unresolved local wrapper may retain the stopped variant as a typed cause if prior dispatch remains unresolved; its decoder still stops automatic funding calls.
 
-Document the current hosted guarantee as same-store/retained-record only. Do not add stronger SDK automatic retry across unknown store continuity. Keep existing local request/evidence recovery through the migration, with the narrow stopped-cause rule above; this does not require fixing every pre-existing funding lifecycle issue. Deferred findings and candidate schemas are retained at the end of this note. Future breaking changes still need a wire-version decision.
+Hosted continuity is limited to the same store and retained record. Keep local journal recovery and the stopped-cause rule; stronger guarantees need a separate wire-version and durability decision. See [SDK funding recovery](#sdk-funding-recovery).
 
 ```ts
 // dev_getPendingTransactionCount({})
@@ -658,11 +610,11 @@ type PendingCount = { count: U64 };
 
 The local pending count is this runtime's pool observation. It is not a network-wide count or the next account nonce. The hosted gateway lacks its implementation and must not advertise it. Future hosted support needs a deliberately scoped method.
 
-Remove the current unsupported `groundhog_dev_getTransactionDetail` call/deploy probe, which runs beyond verbose mode, and use the fetched receipt. Preserve or move `dev_detail::format_event`, used by `view`; audit references, exported DTOs, tests and `thruput-trace` dependency before deleting unused types. A future `dev_getTransactionDetail` would take `{ transactionHash }`. Existing result types start with `{ receipt, gasConsumed, gasLimit?, storageDeltas, trace? }`, but those types do not establish a supported server contract. Current local registration has no method, and the CLI tolerates method-not-found. Deliver and qualify an implementation, define missing-versus-pruned behavior, then apply receipt field renames recursively and advertise the capability. This corrects the earlier plan's claim that it was served locally. [Local registration](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/node-supervisor/src/server.rs#L635), [developer types](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-types/src/dev.rs).
+Remove the unsupported groundhog_dev_getTransactionDetail call/deploy probe and render receipts. Preserve `dev_detail::format_event` used by view; audit exported types/tests and thruput-trace references before deleting them. A future detail endpoint needs implementation and retention semantics. See the [probe/formatter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/cli/src/dev_detail.rs) and [local registration](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/node-supervisor/src/server.rs#L635).
 
 ## Error shapes and recovery
 
-**Proposed:** separate error cause, submission admission evidence and SDK recovery. Use stable typed `data.kind` and operation-specific details in the standard JSON-RPC envelope, and keep bounded recovery policy in the SDK. Messages are human diagnostics, not values to parse. Standard dispatcher-generated errors may lack typed data. New application errors carry typed data; generated per-method schemas must describe it. The admission/recovery rules, code allocations and optional reason enums below form the proposed contract, including the narrow -32030 service-stop code. Implementation is not complete. Only narrow funding contract corrections are in scope; the broader funding mappings are deferred.
+Use the standard JSON-RPC envelope with stable typed data.kind and operation-specific evidence. Messages are diagnostic. Application errors have generated typed data; dispatcher/framework errors may not. Cause, admission and recovery remain separate.
 
 ```json
 {
@@ -726,11 +678,11 @@ Classify the current submission attempt from evidence at the failure site, indep
 
 These are attempt-level statements. None proves that an earlier submission with the same hash did not commit. The body hash excludes authentication bytes; one envelope's rejection cannot disprove another envelope's acceptance.
 
-Do not infer admission from the numeric code. `-32051` and `-32050` arise before and after dispatch. `-32053` includes transient scheduler refusal after dispatch: capacity, not-ready and stale-auth state. Retain overloaded as the family name but do not claim a narrower cause. InternalError maps to backendUnavailable with rejected admission, as protocol guarantees nonadmission; missing/failed root-account hog-age lookup and dependency failures are currently conflated, so do not invent insufficientFunds. Local expiry uses `-32001` before dispatch. Preserve the categories and fix the descriptions. Add typed context where directly known; return `unknown` elsewhere rather than building machinery just to claim more certainty.
+Codes do not establish admission: backend timeout/unavailable arise before and after dispatch. Overloaded also covers scheduler not-ready/stale-auth refusal. Missing root-account capacity and dependency failures are conflated today, so do not invent insufficientFunds. Emit finer context only from evidence.
 
-Explicit current scheduler mapping: Admitted→success; AuthenticationRejected→-32001/rejected; Retryable→-32053/rejected; InternalError→-32050/rejected. Wrong reply cardinality, unknown reply values and transport loss after possible dispatch remain unknown. None settles an earlier attempt.
+Scheduler mapping: Admitted→success; AuthenticationRejected→-32001/rejected; Retryable→-32053/rejected; InternalError→-32050/rejected. Wrong cardinality, unknown values and transport loss after possible dispatch remain unknown. Local expiry uses -32001/notAttempted. See [scheduler outcomes](https://github.com/thruputchain/thruput-protocol/blob/af043b5c1983c0c8b44683975a3c389369844e09/sched_gateway.x#L20-L39).
 
-Carry typed phase/evidence through gateway and local submit batching and outer deadlines. Cover queue expiry, cancellation before dequeue, timeout during precheck, sink handoff, lost replies and wrong-cardinality outcomes. `notAttempted` requires proof that no worker can later dispatch this attempt; entering the sink alone does not prove either dispatch or non-dispatch. After possible dispatch use unknown unless stronger evidence arrives. Only attach `transactionHash` when validly computed; a precheck timeout before hashing can omit it. Outer deadlines must preserve already obtained evidence. Dispatcher errors and lost HTTP responses can lack both admission and hash, so the client must retain its own evidence. Do not claim all current generic errors already carry this information.
+Preserve phase/evidence across gateway/local queues and outer deadlines. Test queue expiry, cancellation before dequeue, precheck timeout, sink handoff, lost replies and wrong cardinality. notAttempted requires proof no worker can later dispatch; sink entry alone proves neither outcome. After possible dispatch, use unknown unless stronger evidence arrives. Attach a hash only after valid computation; earlier timeouts and dispatcher/transport errors can lack it. Clients retain their own evidence. See [submitter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-gateway/src/submitter.rs).
 
 ### Typed details
 
@@ -758,7 +710,7 @@ An optional `retryAfterMs` is a canonical decimal u64 delay hint supplied only b
 
 ### Proposed common catalogue and optional reason enums
 
-**Proposed:** keep existing applicable categories, fix the demonstrated middleware collision and allocate two new error families. The following contains the selected common/transaction catalogue plus optional -32030 funding stop and relocated -32031 unresolved funding. The numbers are a native catalogue, not an EIP-1474 promise; removing the misleading -32003 overlap does not make generic Ethereum error decoders safe. Substantive optional funding outcome/mapping changes are deferred; narrow truthful-contract corrections remain in scope. These decisions do not mark implementation complete.
+These are native error allocations, not EIP-1474 compatibility. Optional funding uses the same catalogue with the narrow evidence rules above.
 
 | Code | `data.kind` | Selected role |
 | --- | --- | --- |
@@ -780,7 +732,7 @@ Retire `-32003` (old local funding unresolved) without reuse. Retire the applica
 
 #### Why freshness needs a new code
 
-The 14 October targeted review rechecked tools remote main at `d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99`. The matching lockfile pins jsonrpsee 0.25.1. Its `-32010` is oversized batch request and `-32011` is oversized batch response. The shared batch service actually emits the latter after dispatching members, so this is an active ambiguity, not just an overlapping constant. Move freshness to `-32012` and place unavailable history next to it at `-32013`.
+Pinned jsonrpsee 0.25.1 uses -32010 for oversized batch requests and -32011 for oversized batch responses. The latter can follow member dispatch, so freshness moves to -32012 and unavailable history to -32013 in the coordinated major.
 
 Keep framework size errors distinct: `-32007` oversized request, `-32008` oversized response, `-32010` oversized batch request and `-32011` oversized batch response. A response-size failure can occur after writes. A whole-batch error may have `id: null` and replace all member results; retain uncertainty for each potentially dispatched write. The SDK must not blindly replay the entire batch. These paths may supply string data rather than our typed object.
 
@@ -850,15 +802,13 @@ History bounds are optional and must come from authoritative observations for th
 
 Error decoders should tolerate additional fields and unknown reason values, preserving the raw error for diagnostics. A new reason must not make a known family undecodable. Unrecognized kind/admission, malformed typed data, or a code/kind mismatch cannot authorize automatic submission; preserve uncertainty and surface the error. An unknown refinement within a known transient read family can retain bounded read retry. Missing/non-object framework data is a supported input, not a decoder crash. The selected result-enum policy above applies separately to successful RPC results.
 
-Required work, not completed by agreeing to this schema:
-
-- Replace string-only shared errors with typed cause/detail and directly known admission evidence. Preserve evidence through outer deadlines, batching and both gateway/local adapters; use unknown when dispatch cannot be ruled out.
-- Produce reasons at validation and backend decoding sites. Keep messages diagnostic; do not classify errors by parsing them. Fix overload catalogue wording and the local expiry message that currently suggests re-signing without reconciling previous attempts.
-- Add backend/protocol cursor validation, query binding and unavailable-history outcomes. Fail malformed event pages instead of advancing past dropped events. Include candidate-bounded event scans with advancing cursors and direct seeking; general byte/time budgeting and cancellation remain deferred. Qualify the deployment envelope.
-- Generate all 12 application data kinds under 11 named numeric-code components from Rust. Components are already name-keyed; replace the numeric lookup's single-data-shape assumption with per-code unions, including invalidParams|invalidCursor for -32602 and operation-specific evidence. Do not list duplicate codes for one method or permit invalid cross-context combinations. Generate TS schemas/fixtures from the owner types. Test examples, unknown refinements, missing framework data, numeric collisions and gateway metrics classification. Qualify oversized individual and batch responses after writes, receipt lag and ambiguous submission recovery.
-- Keep narrow optional funding corrections in scope: preserve available service causes/signed evidence, avoid false admission/execution claims, and document current recovery limits. The deferred follow-up contains producer enrichment, lifecycle redesign and durability work; do not make that work a release prerequisite.
-
-Metrics labels must be bounded by the final registered method set plus an unknown bucket. Cover every method and selected error code, including freshness/history, funding, invalid backend data and individual/batch size errors. Keep framework/application origins distinct while old code collisions exist. Do not label with arbitrary request methods, messages or service payloads. Coordinate final label names with dashboards.
+Generate all 12 application data kinds under 11 named code components from Rust,
+using per-code unions such as invalidParams|invalidCursor and valid
+operation-specific evidence. Each method lists unique numeric error codes.
+Generate TS schemas/fixtures from owner types; test examples, unknown refinements,
+missing framework data and collisions. Match gateway metrics to the catalogue.
+[OpenRPC](https://spec.open-rpc.org/) defines the method/error structure;
+`x-data-schema` is our schema extension.
 
 ### SDK recovery policy
 
@@ -880,9 +830,17 @@ A generic `retryable` boolean cannot distinguish read retry, same-byte submissio
 | Receipt with failed execution | Return the committed receipt. A separate success assertion may throw; do not repeat the business action automatically. |
 | Invalid cursor, unavailable history or malformed backend data | Do not advance checkpoint or silently restart/skip. Require correction or explicit recovery. |
 
-**Runtime prerequisite for submission announcement, even with SDK automatic retries disabled:** hogd#4468 or equivalent fixes nominated-cache duplicate behavior; #4471 supplies stacked full-capacity coverage. Raw callers can manually repeat an envelope, so disabling SDK retries does not waive duplicate-admission correctness or full-capacity coverage. Qualify nomination between scheduling chunks, full queue, abandonment/reenqueue and postcommit replay before enabling automatic exact-byte redispatch. Until then only proven never-dispatched attempts with no earlier uncertainty can be retried automatically. A later rejected attempt never clears earlier uncertainty.
+Runtime duplicate correctness is mandatory in slice 2 even with SDK retries disabled. Automatic exact-byte redispatch additionally requires nomination-between-chunks, full-queue, abandonment/reenqueue and postcommit replay qualification. Until then, automatic repeats are limited to proven never-dispatched attempts with no earlier uncertainty. A later rejection never clears earlier uncertainty.
 
-After qualification, recovery requires identical approved bytes/hash, verified expected network, unchanged chain instance, unexpired validity, no known commitment, bounded attempts/backoff and continuing caller/provider permission. Receipt lag, failed reads or passed expiry do not satisfy a nonexecution precondition. Re-signing or modifying nonce/expiry is a new action requiring reconciliation/approval; a replacement/cancellation helper is deferred pending qualified loser semantics.
+After qualification, exact-byte recovery requires identical approved bytes/hash,
+verified expected network, unchanged chain instance, unexpired validity, no known
+commitment, bounded attempts/backoff and continuing caller/provider permission.
+Passing expiry prevents future inclusion but cannot disprove prior commitment.
+The [replay key](https://github.com/thruputchain/thruput-protocol/blob/af043b5c1983c0c8b44683975a3c389369844e09/transaction.x#L108)
+includes root address, nonce and expiry; changing expiry can create a second valid
+transaction. Re-signing or changing nonce/expiry requires reconciliation and fresh
+approval where applicable. Replacement helpers remain deferred. Handle chain
+reset explicitly; a missing record outside retention cannot prove nonexecution.
 
 ```ts
 type SubmissionEvidence = {
@@ -897,145 +855,59 @@ type KnownCommitment = {
 };
 ```
 
-Retain immutable SubmissionEvidence before dispatch; submission/observation errors, including cancellation after signing, carry it plus strongest known commitment and original cause when available. Add local onSigned persistence hook before send, matching provider composition. Low-level explicit same-byte submission is available under verified identity/replay preconditions; never replay a consumed provider approval or silently bypass provider/session revocation. Optional locally known root gasLimit may be retained for diagnostics, never fabricated from receipt data or treated as proof of out-of-gas.
+Retain immutable SubmissionEvidence before dispatch with a local onSigned persistence hook. Submission/observation errors, including cancellation after signing, carry it with strongest commitment and original cause. Explicit same-byte submission still obeys identity/replay preconditions; never reuse consumed wallet approval or bypass session revocation. Optional locally known gasLimit is diagnostic, not proof of out-of-gas.
 
-Retain exact signed bytes, body hash and expected network identity before the first send. A caller timeout/cancellation stops local waiting; it does not undo submission. A lost batch response leaves each dispatched submission independently uncertain. On retry, correlate batch members by JSON-RPC IDs, not response order. Retry only the appropriate members under their own policy.
+Cancellation stops waiting, not submission. A lost batch response leaves each dispatched write uncertain. Correlate members by JSON-RPC ID, not response order, and apply recovery policy separately.
 
-Passing expiry prevents future inclusion but does not prove the transaction never committed. Updating nonce, expiry or signed envelope is a new action, not transport recovery. Preserve known commitment even if a later endpoint returns unknown; handle chain reset as an explicit identity/recovery event. A missing record outside retention cannot establish nonexecution.
+### SDK funding recovery
 
-**Proposed narrow SDK guard:** preserve the existing single-call `requestAirdropAttempt`. The high-level SDK `requestAirdrop` helper makes one `faucet_requestAirdrop` call on both hosted and local-node endpoints. For this major, do not automatically repeat that mutating RPC, including policy refusals and pending polls. Preserve hints for explicit caller retries; HTTP 429, serviceCode and retryAfter do not prove nonexecution. Add no funding-dispatch field for the optional retry optimization, and keep transaction admission separate. If pending includes a transactionHash, continue with read-only status/receipt polling within the caller budget and assert execution success. This is required on local nodes too: asynchronous block driving can leave the first response pending with a hash. A direct succeeded result completes normally after validation. An RPC error or pending without a hash ends automatic funding progression with the typed cause or unresolved/interrupted outcome, retaining the original recipient, nonce, expected network, last response and any observed hash/commitment. It does not trigger another faucet call. Preserve these on timeout, cancellation and terminal errors too. Show explicit nonce creation/persistence before first dispatch in recovery examples. Do not create a fresh nonce inside an automatic retry.
+Keep requestAirdropAttempt as a single call. High-level requestAirdrop also calls
+faucet_requestAirdrop once on hosted and local endpoints:
 
-Automatic hosted repeats and any qualified-continuity policy remain follow-up work. An unchanged URL or earlier pending response is insufficient proof. This is an evidence/retry guard, not a new durability mechanism. Explicit local `dev_fundAccount` retry behavior stays scoped to its documented journal guarantees; it does not change the SDK single-call `faucet_requestAirdrop` composition. Keep the existing high-level success type: it may assemble `AirdropSucceeded` only from the retained pending response's recipient/amount/hash plus a matching committed receipt with `execution.result: "return"`. This is an SDK observation of success, not evidence that the service persisted its terminal state. A failed or unsupported receipt throws the corresponding typed outcome with the original request and full receipt. Missing evidence remains unresolved; do not invent it. Defer a new qualified-continuity configuration option with the stronger funding follow-up; the default conservative behavior needs no such option.
+- Succeeded completes after validation.
+- Pending with a hash starts read-only status/receipt waiting within the caller
+  budget, followed by the execution-success assertion.
+- An RPC error or pending without a hash stops automatic funding progression.
+  Preserve cause, recipient, nonce, expected network, last response and any
+  hash/commitment, including on timeout, cancellation and terminal failure.
 
-Expose explicit resume with the complete original recipient/network/nonce request and any evidence. Calling the nondurable hosted service again requires caller opt-in to its documented duplicate-test-funding risk; a later store miss cannot clear earlier uncertainty. Hosted faucet retries reuse the original recipient, network and nonce within a proven idempotency-retention scope. The current in-memory producer does not establish continuity across restart, independent replicas or terminal-record expiry; stronger hosted recovery is deferred, and the SDK must not imply that guarantee in this release. Local funding retries reuse the complete original request, including faucet identity and amount, and preserve retained signed evidence. Reconcile the original hash; do not generate a new funding nonce after an uncertain result.
+Persist the nonce before dispatch. Never automatically repeat the faucet call,
+including policy refusals or pending polls. HTTP 429, serviceCode and retry hints
+prove neither nonexecution nor durable continuity; they guide explicit retries.
+No funding-dispatch field or automatic continuity option is added this major.
 
-Implementation must preserve evidence through outer deadlines, gateway/local adapters and SDK errors. The typed schema and generated error mappings need tests for pre-dispatch failure, authoritative refusal, ambiguous dispatch, absent error data, lost responses and commitment followed by receipt unavailability. This is contract work, not a cosmetic addition of `kind` fields.
+A helper can construct AirdropSucceeded from the pending recipient/amount/hash
+and a matching committed return receipt. Failed/unsupported receipts throw typed
+outcomes carrying the request and receipt. This observes success; it does not
+prove the service persisted a terminal record. Missing evidence stays unresolved.
 
-## Final scope and delivery
+Explicit resume uses the original recipient/network/nonce and retained evidence.
+Calling the hosted service again requires caller opt-in to duplicate-test-funding
+risk when continuity is unproven. The current in-memory store cannot establish
+continuity across restart, independent replicas or terminal retention expiry.
+An unchanged URL or later store miss does not clear uncertainty.
 
-The [delivery plan](../delivery-plan.md#eight-review-slices) owns component scope, eight slices and start/landing/release dependencies. Minimum history integrity includes typed cursor/query errors, iterator/key/hydration failures, process-safe consistency errors and regressed watermark rejection, plus receipt/simulation event integrity. These are required for the selected full product. Candidate cap/direct seek are in slice 2. General time/byte budgets, cancellation, durable history/reset recovery and substantive funding redesign remain follow-ups with measured public qualification gates.
+Explicit dev_fundAccount retries remain scoped to the persistent journal and
+reuse the complete request, including faucet identity and amount. Preserve signed
+evidence and reconcile the original hash. This does not change the SDK single-call
+faucet composition or authorize a new nonce after uncertainty.
 
-New SDK versions target native API only. Keep response tolerance and strict parameterized requests. An output variant is minor only after supported readers demonstrate safe unsupported/raw fallback; otherwise major. Gate newly requested fields by minimum observed wire minor; never silently discard a requested constraint.
-
-Use a manual stable-publication freeze while buildable slices land. Current manual workflows do not auto-publish on merge. One coordinated next major is owned with GH-506/507; 13 remains a planning target, not an independent reservation. Artifact dependencies are protocol/bindings/runtime → any required controlled CLI bootstrap generator → SDK → final tools/templates → packaging and matched React/apps/wallet/docs. The hosted path also requires matching Go bindings and chuckd metadata/manifest codecs before final packaging and startup qualification. Local candidate overrides do not prove hosted publication overrides; current npm publication has no isolated next channel.
-
-Land slices, build the final set, deploy fresh devnet, qualify, announce. Reset/version Thruput stores and never auto-resubmit old evidence; preserve Stellar vault/keys. NetworkHash is not reset identity. No old endpoint, preparation window, dual-wire probes or rollback-state machinery is required. Native qualification gets a separate proposed evidence home linked to existing encoding/PQ work.
-
-The implementation hold must be lifted explicitly before work starts. Shared-file owners/diffs, coordinated major, exact pins, artifact/release owner and qualification workload/numerical thresholds remain explicit readiness items. Review approval is not runtime qualification.
+Sources: [hosted producer](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/faucet/src/airdrop.rs),
+[retry hints](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/faucet/src/error.rs),
+[store](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/faucet/src/lib.rs#L91),
+[retention](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/faucet/src/policy.rs#L389),
+[local pending path](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/node-supervisor/src/airdrop.rs#L528-L590),
+and [local journal](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/node-supervisor/src/funding_journal.rs#L30).
 
 ## Source baseline
 
-Tools `d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99`, TS SDK `8ce62f4579273db51108edaab69096ed23aad436` and protocol `af043b5c1983c0c8b44683975a3c389369844e09` were rechecked unchanged. Hogd advanced from `7ca6a9d1a4c9fd5ac61d0a66d7a3790aaf3ad067` to `15d536912ebe70dae5a9b4b471440b928a6f365c`; the compared changes leave cited indexer/view/receipt code unchanged and update the protocol pointer to af043b5. GH-507/GH-506 remain In Progress, GH-428 Backlog and GH-413 Todo. GH-507 comments report unpublished implementation and partial validation; that code was not independently inspected. These are selected target contracts; no implementation or runtime qualification was performed.
+Source review dated 15 October 2026: tools `d0a8cdc9`, hogd `15d53691`, protocol
+`af043b5c`, TS SDK `8ce62f45`, examples `c8ba8730`, chuckd `6db13472`, packaging
+`73566ec9` and ops `f03432c9`. Links above pin the relevant source. This was source
+inspection, not runtime qualification. Refresh in-flight PRs before implementation;
+reported unpublished GH-506/507 work was not independently inspected.
 
-- [Current API traits](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-api/src/lib.rs)
-- [Status precedence](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/x23/hogd-backend/src/status.rs#L39)
-- [Receipt projection](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-types/src/receipt.rs)
-- [GH-507 encoding implementation](https://linear.app/grndhg/issue/GH-507)
-- [GH-503 field classifications](https://linear.app/grndhg/issue/GH-503)
-
-## Deferred funding follow-up: findings and candidate contract
-
-**Deferred follow-up:** this section preserves findings and design candidates for a separate funding follow-up. None of its richer schemas, durability requirements or expanded qualification is a gate for the current RPC release. Reuse the proposed error catalogue where the semantics fit and put observable outcomes in results. Avoiding an extra service-error family depends on coordinated producer delivery in that follow-up; the gateway cannot recover missing facts from today's error messages.
-
-For the follow-up, consider `pending`, `committed` and `stopped` for `faucet_requestAirdrop`. This would replace the release baseline's `succeeded` result. A committed result includes `blockHeight` and `execution`, whether execution succeeded, failed or uses a preserved unknown variant. The SDK's convenience flow checks execution success explicitly. This avoids a second success/failure classification that could disagree with the receipt.
-
-```ts
-type AttemptStop =
-  | { reason: "transactionDropped";
-      observedStatus: Extract<TransactionStatus, { status: "dropped" }> }
-  | { reason: "admissionRejected";
-      cause: { kind: "transactionRejected"; admission: "rejected";
-               reason?: "authenticationRejected" } }
-  | { reason?: never }; // the service knows it stopped, but has no finer evidence
-
-type FutureAirdropAttempt = {
-  recipient: Address;
-  rawAmount: Amount; // original amount bound to this attempt
-} & (
-  | { attemptStatus: "pending"; transactionHash?: Hash; retryAfterMs?: U64 }
-  | { attemptStatus: "committed"; transactionHash: Hash;
-      blockHeight: Height; execution: ReceiptExecution }
-  | { attemptStatus: "stopped"; transactionHash?: Hash; stop: AttemptStop }
-);
-
-type FundingEvidence = {
-  recipient: Address;
-  rawAmount: Amount;
-  transactionHash: Hash;
-  signedTransaction: Hex;
-};
-type FutureFundingSubmission = FundingEvidence & (
-  | { attemptStatus: "submitted" }
-  | { attemptStatus: "stopped"; stop: AttemptStop }
-);
-```
-
-`stopped` means the funding service will not advance this logical attempt. It does not assert that its transaction never committed and does not authorize a replacement. Read-only reconciliation may continue. Require matching typed observations for specific stop reasons; omit the reason when only the service's terminal state is known. Known commitment wins over a later stopped observation. A current refusal must not erase previous uncertainty. The `admissionRejected` stop reason requires the identified transactionHash and describes one submission refusal, not the entire history of the logical request.
-
-A pending hash identifies retained signed work, not admission. Hosted code stores the hash before broadcasting and can return it while executing or uncertain. Commitment without an available execution receipt can remain pending while preserving the known commitment internally; it must never trigger resubmission. Use one delay unit, `retryAfterMs`, on pending results and retry hints, as an optional decimal u64.
-
-Keep `dev_fundAccount` as submission/reconciliation. `submitted` means authoritative admission or observed prior commitment, including committed failed execution; it promises neither current pool membership nor successful payment. Keep execution in `getTransactionReceipt`, with no inline receipt addition. The new stopped result represents processing observations such as Dropped (legacy Invalid has no selected native producer) without misusing the admission-rejection error. A direct proven submission rejection still uses `-32001`, with retained evidence and actual admission information. If previous dispatch remains unresolved, return `-32031` and preserve the latest refusal/observation rather than presenting it as the whole outcome.
-
-### Follow-up service-to-RPC mappings
-
-| Condition / current producer code | Mapping and client action |
-| --- | --- |
-| Invalid caller nonce/amount; wrong expected local faucet; same local identity with changed bound amount | `-32602` / `invalidParams`, existing field reasons and optional path. Wrong faucet is `invalidValue`; changed bound amount is `conflictingFields`. Stop automatic retries of the altered request; preserve the original request. A typed `detail` can identify the conflicting stored binding without exposing signing secrets. |
-| `airdrop_invalid_client_nonce` after the gateway already validated and forwarded the request | Distinguish a demonstrated caller error from a producer/adapter contract mismatch. Do not automatically blame the caller for a correctly forwarded value rejected by an incompatible producer. Fix validation/serialization compatibility and qualify both boundaries. |
-| Quota, recipient-pending limit, execution/attempt/journal capacity | `-32053` / `overloaded`. Preserve the provided delay and service code. Retry the same logical request within budget only when the retention/durability guarantee holds; do not choose a new nonce to bypass policy. No transaction `admission` is inferred. |
-| Existing in-progress attempt; `airdrop_already_pending` race | Return pending only after obtaining the bound attempt record. A bare legacy error cannot supply its amount/hash; use overload plus service evidence while correcting the producer. HTTP 202 alone does not prove a successful result. |
-| Failed committed receipt, currently folded into `airdrop_transaction_failed` | Faucet returns committed with the actual execution outcome. Local explicit funding returns submitted evidence; read receipt separately. Never `transactionRejected`. |
-| Typed Dropped observation (legacy code also accepts unproduced Invalid), folded into `airdrop_transaction_failed` | Return stopped with the matching typed observation after commitment precedence checks. Stop automatic submission, preserve previous uncertainty, and do not invent admission evidence. |
-| `airdrop_attempt_terminal` | Return the retained committed outcome if available; otherwise stopped with the actual terminal evidence. The producer must expose the original bound amount and retained hash/observation. A legacy terminal code cannot determine commitment. |
-| Hosted network descriptor mismatch / `airdrop_network_mismatch` | `-32050` / `backendUnavailable`, with bounded service evidence. The gateway supplied the network fields, so this is service configuration failure, not a dapp input or transaction rejection. Stop blind retries against that mismatched service. |
-| `airdrop_attempt_conflict` | This code means state changed/disappeared, not a caller payload conflict. Reconcile the attempt; if that cannot be done, `-32050` with service evidence. Do not restart it or change the client nonce. |
-| Policy-store unavailable / persistence or connection failure | `-32050`; true timeout `-32051`. Preserve typed cause and any known retained transaction identity. These broad families do not prove every cause is transient. |
-| `airdrop_submit_failed` | Enrich at producer: build/sign, send, observation failure, worker failure and timeout currently share this code. Use the evidenced family/phase; never infer admission or timeout from this string alone. Preserve an undifferentiated service failure under backendUnavailable until it can be classified. |
-| Invalid retained state, prepared amount mismatch, malformed response, wrong returned recipient or impossible outcome combination | `-32054` / `backendDataInvalid` with the applicable proposed reason when the backend/service violates its data contract. A local construction bug can instead be `-32603`. Neither proves that earlier work did not execute. |
-| Unknown well-formed service error | Preserve bounded service evidence; do not invent a transaction cause. Treat conservatively as backendUnavailable. An unsupported success shape that cannot be safely represented is backendDataInvalid. |
-
-Preserve a bounded `serviceCode` string for faucet-origin errors. It records the producer's exact structured code for diagnosis and qualified method-specific handling; clients must not parse `message` or guess from HTTP status. Known network mismatch and state-conflict codes override a generic transient retry default. New structured producer causes should drive behavior; retain unfamiliar service codes without authorizing replacement.
-
-This hint-preservation correction is also included in the narrow current release scope above. The producer already emits optional decimal `retryAfterSeconds` for quota, capacity and recipient-pending refusals. The gateway currently drops it. Validate and checked-convert seconds to milliseconds. If a supplied delay cannot be represented, fail the conversion as backendDataInvalid with retained service evidence; never discard it and fall back to an earlier retry. A client receiving a delay beyond its budget stops waiting. A missing hint uses bounded policy, not an invented server promise. Do not attach the transaction `admission` field to service-policy refusals. Only attach it where the producer supplies evidence about an identified transaction submission.
-
-### Follow-up local unresolved evidence
-
-Use `-32031` only when the local funding outcome remains unresolved and durable signed evidence is available. Keep the underlying typed cause/observation; signed bytes alone do not make every failure unresolved. For example:
-
-```json
-{
-  "code": -32031,
-  "message": "Local funding outcome unresolved",
-  "data": {
-    "kind": "localFundingUnresolved",
-    "transactionHash": "<base58-transaction-hash>",
-    "signedTransaction": "0x<original-signed-envelope>",
-    "cause": { "kind": "backendTimeout" }
-  }
-}
-```
-
-`cause` is a nonrecursive typed cause variant, not a second exception stack. Include latest transaction/admission observations separately when actually known, and scope them to the identified submission. A local deadline can occur while persistence still holds the journal lock; evidence is then unavailable in that response. Return the underlying error, retain uncertainty and recover by repeating the exact original request. Do not fabricate evidence or extend the deadline just to obtain it.
-
-Receipt/status observation errors must not discard a previously obtained submission cause. Retained expiry without an authoritative outcome stays unresolved; it is not permission to re-sign. SDK recovery must honor stopped/dropped observations even when earlier dispatch remains unresolved, so a generic unresolved wrapper cannot become unconditional retry.
-
-### Follow-up idempotency and delivery requirements
-
-The client nonce is an application idempotency key, distinct from the signed transaction's nonce. Local identity is `(recipient, clientNonce)` scoped by the journal's network and faucet identity; amount is immutable bound payload. Hosted identity includes networkId, genesisHash, recipient and clientNonce, with networkHash also checked against configuration. Reusing a nonce for a different recipient is a different request. Retry the full original request against the same verified service/network; do not rotate identity after an uncertain response.
-
-For a no-amount faucet request, replay should use the amount already bound to the stored attempt even if operator configuration changes. New attempts use the new amount. The current local adapter expands the request with the current amount before journal lookup and can therefore reject an otherwise identical replay after a configuration change. Correct this lookup order. Hosted preparation also needs correction: a retained attempt without prepared bytes currently calls prepare_airdrop(recipient) using current configuration and validates against that current amount, not the stored attempt amount. Prepare from the bound amount or explicitly stop if the service can no longer honor it; never silently change the transfer. Explicit `dev_fundAccount.rawAmount` remains immutable and mismatches are caller errors.
-
-**Material implementation gap:** default hosted production uses an in-memory policy store. Unresolved records survive expiry scans only while that store survives. Terminal records expire after the larger of recipient cooldown and 12 hours. A retry after record expiry, process restart or routing to an independent replica can create a new transaction with a different nonce/expiry. The current API exposes no reliable store-generation or retention boundary to let clients detect this. Reusing `clientNonce` alone does not establish safe recovery.
-
-Recommend gating the advertised hosted recovery contract on durable storage shared by replicas, atomic attempt ownership, persisted original signed bytes before first send, and retained terminal outcomes/deduplication records. Do not silently turn an old key into a new transfer after terminal-record compaction. Retain at least the binding, hash and terminal outcome for the service's declared network-instance lifetime; retain exact signed bytes for unresolved work. At capacity, reject new attempts while allowing existing attempts to reconcile. Reset/instance migration policy remains explicit, not inferred from networkHash or a gateway boot ID. Until that follow-up is delivered, state the narrower same-store/retained-record scope and do not enable automatic recovery across unknown continuity boundaries.
-
-The local persistent journal already retains request and signed bytes for chain lifetime, but does not persist commitment or terminal observations. Persist enough observations to keep known commitment authoritative across restart, or explicitly bound the server guarantee and require the SDK to retain it. Apply the same request identity across local facade methods so one method cannot accidentally create a second transfer for an existing attempt.
-
-Required for the follow-up guarantee, not for this release:
-
-- Extend faucet producer/policy records and REST payloads with typed attempt/receipt/status evidence. `airdrop_transaction_failed` and `airdrop_attempt_terminal` currently lose it; the gateway cannot reconstruct it from text.
-- Implement shared optional-method result/error projections and regenerate schemas/SDKs. Preserve unknown execution variants. Fix the local blanket unresolved wrapper and reconcile previous sends before making a fresh refusal terminal.
-- Carry service codes and retry hints through the gateway. Distinguish caller validation from gateway-authored network/configuration failures; retain hash before broadcast without claiming admission.
-- Qualify concurrent same-key requests, lost final responses, restart, independent replicas, terminal retention/compaction, changed configured amount, failed committed execution, receipt lag, direct refusal after earlier uncertainty, expiry, and capacity that still permits reconciliation.
-
-Source baseline: tools remote main rechecked at `d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99`. This was source review, not live/runtime qualification. [Hosted producer](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/faucet/src/airdrop.rs), [producer retry hints](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/faucet/src/error.rs), [default store](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/faucet/src/lib.rs#L91), [retention](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/faucet/src/policy.rs#L389), [local funding](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/node-supervisor/src/airdrop.rs#L334), [local journal](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/node-supervisor/src/funding_journal.rs#L30).
+Dependency mechanics were checked in installed jsonrpsee 0.25.1, serde 1.0.229
+and serde_json 1.0.151 sources. The OpenRPC reference is current 1.4.x;
+implementation must validate against its selected meta-schema, including any
+retained 1.2.6 version.

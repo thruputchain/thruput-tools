@@ -1,255 +1,191 @@
 # Proposal: native RPC delivery plan
 
 **Draft for team review, 15 October 2026.** Read the [API proposal](api-proposal.md)
-first. Implementation and Linear changes remain on hold. This document proposes
-scope and sequencing; it does not assign people or authorize releases.
+first. Implementation and Linear changes remain on hold until explicitly approved.
 
-We can replace devnet without preserving user state. The path is:
-**land the slices → assemble one final artifact set → deploy fresh devnet →
-qualify → announce**. Internal candidate builds can iterate. Compatibility across
-components must be established before announcement.
+The release path is **land the slices → assemble one artifact set → deploy fresh
+devnet → qualify → announce**. Internal candidates can iterate. There is no user
+state to migrate or legacy endpoint to maintain.
 
-## Scope: contract changes and implementation gaps
+## Scope and required fixes
 
-Most naming and field work reprojects existing behaviour, but several promises
-need real fixes. The split matters for estimates and parallel work.
+The announced endpoint includes all 15 core methods. Naming, encoding and field
+changes mostly reproject existing behaviour. These guarantees need real fixes:
 
-| Area | Contract and consumer migration | Behaviour that needs implementation or qualification |
+| Area | Required work | Slice |
 | --- | --- | --- |
-| Rust API, types and CLI | Bare names, height fields, nested execution, error numbers, config groups and call sites | Strict request DTOs shared by dispatch, client and generated schema; preserve evidence through errors |
-| Gateway and local node | Configured registration, discovery and manifest fields | Codec/protocol equality, status fallback, dispatch evidence, receipt identity and fail-closed event projection |
-| TS SDK, React and applications | Methods, params, codecs, pins, case-sensitive identifiers and proxies | Discovery gates, immutable submission/commitment evidence, conservative recovery and history walking |
-| hogd and protocol | Existing PQ/encoding integration and manifests | History integrity, candidate-bounded event scans, typed cursor/query failures and nominated-duplicate correctness |
-| chuckd | Hosted bootstrap metadata and runtime-manifest codecs, matching Go bindings | Preserve protocol/hash equality checks through the installed bootstrap-to-gateway path |
-| Packaging and ops | Native probes, metric tables and removed launcher flags | Artifact acquisition/launch/restart and a measured public resource envelope |
+| Wire contract | Strict request DTOs; matching dispatch, Rust client and generated schemas; typed errors and tolerant response readers | 1, 4 |
+| History | Typed cursor/query errors; fail iterator, key and hydration errors; process-safe consistency checks; reject regressed watermarks; candidate cap and direct seeking | 2 |
+| Submission | Runtime duplicate correctness; truthful admission/status; dispatch evidence through queues and deadlines | 2, 3 |
+| Receipt | Validate backend hash/height before parsing; require return/abort bytes; fail malformed events; preserve commitment through later failures | 3, 5, 6 |
+| Identity | Match manifest protocol to linked codecs; reset old Thruput stores/approvals while preserving Stellar keys and flows | 3, 7 |
+| Consumers | SDK/history workflows, Rust callers, faucet, chuckd, proxies, generated projects and operational tools | 4–8 |
 
-The full announced endpoint includes all 15 core methods. Partial developer
-endpoints remain useful, but omitting history would require an explicit product
-scope change and changes to CLI, explorer, smokes and the PQ demo. It is not an
-automatic escape from unfinished integrity work.
+The [contract appendix](appendix/contract-details.md) defines the acceptance
+rules. Omitting history from announcement would require an explicit product
+scope change and corresponding CLI, explorer, smoke and PQ-demo changes.
 
-### Required correctness work
-
-- **History:** typed invalid/unsupported/mismatched cursors; query binding;
-  iterator I/O/corruption and malformed keys; missing or invalid hydration;
-  out-of-range event positions; typed query errors instead of process-killing
-  consistency assertions; rejection of a serving watermark below cursor W.
-  Cover both event and root-contract history. Add a positive event candidate cap
-  and an advancing last-validated-candidate cursor, including nonmatches. Pair
-  this with direct seeking; test both directions, overlapping filters, empty
-  nonterminal pages and exact exhaustion. No partial success on integrity error.
-  Candidate count alone does not bound latency, bytes or cancellation tails.
-- **Receipt and simulation:** fail malformed events and contradictory execution
-  data. Require return/abort bytes for their respective receipt variants. Check
-  the backend log hash and height before event/execution parsing; an invalid
-  identity/height yields no observation. Later parse failures may carry only the
-  validated hash/height. Fix commitment retention in the shared Rust waiter and
-  TS SDK, including later errors and timeouts.
-  After commitment, Retry/Dropped must not end receipt waiting; Unknown/status
-  errors must not replace commitment.
-- **Status and admission:** preserve commitment and surface indexer failure when
-  only a weaker negative scheduler observation is available. Map scheduler
-  AuthenticationRejected, Retryable and InternalError to their distinct error
-  families, with rejection evidence scoped to this attempt. Carry phase/evidence
-  through gateway and local submit queues and outer deadlines. `notAttempted`
-  requires proof that cancellation or queue removal prevents later dispatch;
-  otherwise preserve uncertainty. Hashes are optional until validly computed.
-- **Duplicate submission:** require hogd #4468-equivalent nominated-cache
-  correctness and #4471-equivalent full-capacity coverage. Disabling SDK retries
-  cannot protect the server from manual duplicates. Enable automatic recovery
-  only after its broader nomination, abandonment, reenqueue and replay tests.
-- **Identity:** require configured manifest protocol to match linked codecs.
-  Reset/version old Thruput stores and approvals; preserve Stellar vault/keys.
-  A network hash alone is not a reset identifier.
-
-Early internal fail-closed history fixes can land independently. The final
-contract still needs typed protocol/binding outcomes and query binding. Current
-hogd #4454 still skips missing hydration; #4458 supplies direct seek work to
-combine with the candidate cap. General byte/time budgets and cancellation remain
-separate. Coordinate those changes rather than duplicate them.
-
-### Narrow funding scope
-
-Keep optional method/field migration, the hosted faucet's own RPC-client update,
-service-stop/unresolved error mappings, existing signed evidence and checked
-retry-hint preservation. For this major, SDK `requestAirdrop` makes one
-`faucet_requestAirdrop` call on hosted and local-node endpoints. It never
-automatically repeats that RPC, including policy refusals and pending polls.
-Pending with a hash continues through read-only status/receipt waiting; an RPC
-error or pending without a hash stops automatic progression with retained
-cause/evidence. Qualify the local first-pending-response path through commitment.
-A validated succeeded result completes normally. Explicit caller retry/resume
-remains available with retained identity and delay hints. Do
-not add a funding dispatch field solely for optional automatic retries, or reuse
-transaction admission for funding-policy errors.
-
-Durable shared storage, replica coordination, terminal retention, amount replay
-and richer funding outcomes stay in a follow-up. Explicit hosted resume must
-state the duplicate-test-funding risk when continuity is not proven.
+Funding stays narrow: migrate the optional methods and consumers, preserve
+signed evidence and retry hints, and correct stop/unresolved errors. SDK
+`requestAirdrop` calls `faucet_requestAirdrop` once on hosted or local endpoints,
+then waits through read-only status/receipt calls when pending includes a hash.
+Durability, replica coordination and richer funding outcomes remain follow-up work.
 
 ## Eight review slices
 
-These are review boundaries, not eight monolithic PRs. Start means inputs needed
-for development after the hold is lifted. Land means reviewed, buildable commits
-with compatible dependencies. Release is controlled publication, separate from
-merge. Relative size reflects breadth and behavioural work, not elapsed-time
-estimates.
+Slices can contain several PRs. **Start** describes available development inputs;
+**land** requires buildable commits with matching dependencies. Publication and
+final qualification have separate gates below. All starts require the hold to be
+lifted and shared-file ownership to be agreed.
 
-| Slice | Can start with | Needs before landing/integration | Acceptance boundary |
+| Slice | Start | Landing dependencies | Acceptance boundary |
 | --- | --- | --- | --- |
-| **1. Wire foundation and fixtures (L)** | Contract review and inspected GH-506/507 overlap | One owner per shared file, agreed codecs/vectors and coordinated major; carry same-workspace consumers | Strict DTO dispatch, typed client and generated schema agree on every method, optional/null rule and error |
-| **2. History integrity (L)** | Current backend and proposed error/cursor semantics, in parallel with 1 | Coordinate protocol/bindings/hogd/adapter changes and #4454/#4458; internal fixes can land early | Complete history minimum on both methods, candidate cap/direct seek with advancing cursors, poison rows and regressed W |
-| **3. Shared server, gateway and local node (M–L)** | Usable types/fixtures from 1; do not wait for all of 2 | Runtime codec/manifest agreement; pull compile fixes from 6; history exposure needs 2 | Gateway/local parity, race-aware admission, validated receipt identity, no silent event loss and final configured discovery |
-| **4. TS transport, parsers and gates (M–L)** | Stable fixtures from 1, alongside 3 | Coordinate GH-506/provider codecs; integrate with 3 before release | Named params, canonical codecs, network/wire/method gates, minor-feature checks and tolerant results |
-| **5. SDK lifecycle, wallet and funding (M)** | Evidence/recovery state-machine fixtures alongside 3/4 | Final decoded types from 4 and server error contract from 3; qualified runtime for automatic redispatch | Existing call/deploy/wait/assert composition, retained signed evidence and commitment, safe funding behaviour |
-| **6. CLI, Rust, faucet, chuckd and generated consumers (M)** | Inventory and interfaces from 1/3 as available | Compile consumers accompany producer changes; generated TS flows need 4/5; chuckd needs matching metadata/Go bindings; coordinate #553 and runtime pins | Sticky Rust commitment, receipt-based CLI output, faucet RPC path, chuckd manifest parsing, generated projects and Ed25519/PQ smokes |
-| **7. React, apps, provider and docs (M–L)** | Proxy/cache/identifier audits and candidate fixtures | Apps need 4/5; generated examples also 6; matching React peers and wallet/provider gate | Counter/swap/token-launchpad proxy flows, fresh/reset state, preserved Stellar behaviour and complete history |
-| **8. Launchers, artifacts and qualification (M + measurement)** | Workload/threshold design and launcher/probe audit alongside other slices | Compatible launcher fixes can land early; final tests need the artifact chain below | Exact final set, installation/restart, live flows, bounded method/error metrics and accepted resource measurements |
+| **1. Wire foundation and fixtures** | Reviewed contract and inspected GH-506/507 diffs | Agreed codecs/vectors and wire major; include required same-workspace compile fixes | DTOs, registration/client plumbing and generated schemas agree on names, params, optional/null rules and errors |
+| **2. Runtime correctness** | Current backend and agreed history/submission semantics, alongside 1 | History and duplicate repairs can land independently; final history integration needs matching protocol/bindings and slice-1 error types | Both history methods meet integrity rules; candidate cap/direct seek advance correctly; nominated duplicates and full-capacity admission are safe |
+| **3. Server and adapters** | Usable types/fixtures from 1 | Non-history handlers can land independently of 2; final history exposure needs 2; include Rust compile fixes from 6 | Gateway/local parity, codec checks, truthful admission/status, validated receipt evidence, event integrity and configured discovery |
+| **4. TS transport and readers** | Stable fixtures from 1, alongside 3 | Matching encoding/provider codecs; can land before live server integration, which is required before release | Named params, canonical codecs, error/result/history-page decoding, wire/network/method gates and raw-preserving unknown variants |
+| **5. SDK workflows** | State-machine and history-walker fixtures alongside 3/4 | Integrate with types from 4 and server contract from 3; can land with automatic redispatch disabled | Call/deploy/wait/assert composition, retained evidence, sticky commitment, single-call funding and complete history walking/checkpoint rules |
+| **6. Rust, bootstrap and generated consumers** | Producer interfaces from 1/3; metadata and Go bindings for chuckd | Rust fixes accompany producers; bootstrap tooling precedes SDK publication; final generated TS consumers follow 4/5; chuckd follows metadata/bindings independently | Rust receipt waiting and CLI output, faucet RPC client, bootstrap/manifest path, generated projects and Ed25519/PQ smokes |
+| **7. Apps, wallet and documentation** | Proxy/cache/identifier audits and fixtures | SDK integrations need 4/5; generated examples need the relevant part of 6; align React peers and wallet/provider versions | All three proxies, explorer/history flows, fresh/reset wallet state, preserved Stellar behaviour and runnable docs |
+| **8. Launchers, artifacts and qualification** | Launcher/probe audit and workload/threshold design | Compatible operational fixes can land early; final qualification needs the complete pinned artifact set | Install/restart, hosted bootstrap, live flows, method/error metrics and accepted resource measurements |
 
-After hold release, the main parallel tracks are:
+Slice 2 has independent history and scheduler tracks. Coordinate history with
+[hogd #4454](https://github.com/thruputchain/hogd/pull/4454), which still skips
+missing hydration at the reviewed head, and
+[#4458](https://github.com/thruputchain/hogd/pull/4458), which addresses direct
+seeking. Include [#4468](https://github.com/thruputchain/hogd/pull/4468)-equivalent
+nominated-duplicate repair and [#4471](https://github.com/thruputchain/hogd/pull/4471)-equivalent
+full-capacity coverage before announcement, even when SDK retries are disabled.
+Raw callers can submit duplicates themselves. The current [scheduler cleanup](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_mempool/scheduler.cc#L1451-L1454)
+requires a cached entry for each nominated hash.
 
-1. Establish the contract/encoding fixtures, then develop server and TS transport
-   in parallel.
-2. Develop history/runtime correctness alongside that track. Encoding does not
-   change the underlying history semantics, but final protocol artifacts must
-   contain both sets of work.
-3. Develop SDK behaviour and move consumers as each producer interface becomes
-   usable. Rust call-site fixes do not wait for all TS SDK work.
+Slice 6 has three landing paths, not a dependency on the whole SDK:
 
-Launcher repair, inventory, compatible metrics fixes and qualification design
-can proceed independently of the complete native API. A global `-32011` metrics
-relabel cannot precede freshness moving to `-32012` unless it distinguishes the
-framework/application origin.
+- **Rust consumers:** compile fixes land with 1/3; sticky receipt waiting, CLI
+  receipt rendering and the faucet client complete against those interfaces.
+- **Generator/bootstrap:** prepare the tools candidate needed to build the SDK;
+  pin final generated TS templates only after the matching SDK is available.
+- **chuckd:** migrate hogd metadata parsing and hosted manifest output with the
+  matching Go bindings; qualify its final installed artifact in slice 8.
 
-## Coordination with PQ and encoding
+Slices 1/2 and operational preparation can start in parallel. Server and TS work
+then proceed from shared fixtures. SDK/app work follows usable interfaces rather
+than waiting for entire slices. **Automatic exact-byte redispatch is optional:**
+slice 5 and announcement can complete with it disabled. Enabling it additionally
+requires nomination, abandonment, reenqueue and replay qualification plus the
+[recovery preconditions](appendix/contract-details.md#sdk-recovery-policy).
 
-Three changes meet in shared files and release artifacts:
+## PQ, encoding and ownership
 
-- **PQ:** binary envelopes, signing, account derivation and runtime support.
-- **Encoding:** textual identifiers, codecs, manifests and consumer parsing.
-- **Native API:** method names, request/result/error shapes and discovery.
+Inspect the actual GH-507/GH-506 diffs before editing shared types, parsers or
+schema code. A supplied patch or local review is sufficient; branch publication
+is not required. Coordinate GH-502/503 vectors, GH-513 protocol/bindings, GH-505
+manifests and GH-500 PQ qualification. PQ binary/signing changes, textual encoding
+and native API changes must converge on matching artifacts.
 
-Reuse GH-507/GH-506 work after inspecting its actual diff. Reported unpublished
-commits are not an inspected integration baseline. An exact supplied patch or
-local review can satisfy this dependency; publishing those branches is optional
-and needs owner authorization. Agree ownership before editing overlapping types, parsers or schema code. Coordinate GH-502/503 vectors,
-GH-513 protocol/bindings, GH-505 manifests and GH-500 PQ qualification.
+Wire 13 is the planning target, subject to confirming it is unpublished with a
+different contract. Assign one wire-major owner. Freeze token event/error
+signature identity at version 0.1 and `groundhog-erc20-if`; run existing native/RV32
+parity tests against final pins. Package renaming alone does not preserve that identity.
 
-Wire 13 is the planning target, subject to confirming it has not been published
-with a different contract. One owner coordinates the major; parallel tasks must
-not publish competing interpretations. Keep token event/error signature identity
-at version 0.1 with the existing `groundhog-erc20-if` label and run existing
-native/RV32 parity coverage. Package rename alone is not the entire identity rule.
+Before work starts, name component/shared-file owners, the publication owner and
+the qualification owner. Existing issue assignees do not implicitly own this
+expanded scope. Refresh overlapping PRs: tools #553/#292/#293/#394/#469,
+Freighter #3, examples #134 and ops #230. Tools #187 and the earlier StrKey branch
+are design inputs to reconcile, not additional API commitments.
 
 ## Consumer coverage
 
-| Consumer | Work that literal method-name searches can miss |
+| Consumer | Required migration and checks |
 | --- | --- |
-| CLI, client, simulator, testkit and bench | Typed Rust calls, shared receipt waiter and error evidence, report readers, generated-project templates and offline build behaviour |
-| chuckd | hogd bootstrap metadata, Go protocol pin, hosted manifest output and final packaging pin |
-| Hosted faucet | Tip/send/receipt calls through its typed RPC client, telemetry and final artifact pin |
-| TS SDK/provider and generated bindings | Evidence retention, discovery events, approvals, package exports and unsupported outcomes |
-| thruput-react | Identifier case folding, network/query cache keys, SDK peer range and example pins |
-| Freighter and Stellar adapter | Final wire/provider gate, fresh install/reopen, Thruput store reset and preservation of Stellar keys/flows |
-| Counter, swap and token-launchpad proxies | Named-object validation, allowlists, filtered discovery, bounded typed errors and saved identities; preserve Counter write policy and the others' read-only policy |
-| Explorer | Indirect SDK calls, hex helpers, generated bindings, root/event history and package pins |
-| Packaging and ops | Installed launch commands, qualification readers, eBPF labels/map sizes/build symbols and collectors |
-| Runtime/protocol/Rust SDK | Manifests, PQ bindings and token event/error identity |
-| Docs and agent guidance | Runnable examples, selected bundled snapshot and guidance in its owning repository |
+| CLI, client, simulator, testkit, bench | Typed calls and reports, Rust receipt waiting, generated templates, offline build behaviour |
+| Hosted faucet | Typed tip/send/receipt client, telemetry and final artifact pin |
+| chuckd | Bootstrap metadata, Go protocol pin, hosted manifest output and packaged binary |
+| TS SDK/provider | Evidence, discovery, approvals, package exports and unsupported outcomes |
+| thruput-react | Case-sensitive identifiers, network/query caches, peer ranges and example pins |
+| Freighter/Stellar adapter | Provider gate, fresh install/reopen, Thruput reset and preserved Stellar keys/flows |
+| Counter, swap, token-launchpad | Named params, allowlists, filtered discovery and bounded typed errors; preserve each proxy's write policy |
+| Explorer | SDK/codecs, generated bindings, root/event history and pins |
+| Packaging/ops | Installed commands, probes, report readers, eBPF labels/map sizes/symbols and collectors |
+| Docs/agent guidance | Runnable examples, selected bundled snapshot and guidance in its owning repository |
 
-Remove obsolete `--nthreads`/`-n` and `EXEC_NTHREADS` wiring from packaging
-entrypoints and ops validator/bootstrap/nightly launchers. Test the actual
-packaged commands. Proxies must expose bootstrap discovery/network methods,
-intersect advertised support with their policy and preserve bounded typed error
-data. Test all three independently; shared helpers are optional. Remove the CLI
-call/deploy probe for unserved `groundhog_dev_getTransactionDetail` and render
-receipt data. Preserve the event formatter used by `view`; delete exported detail
-DTOs/dependencies only after a reference and public-API audit.
+Remove obsolete `--nthreads`/`-n` and `EXEC_NTHREADS` launcher wiring and test
+packaged commands. Remove the unsupported CLI detail probe; preserve the event
+formatter used by `view` and audit exported types before deletion. Proxies must
+advertise the intersection of upstream support and their policy. Test all three;
+shared helpers are optional.
 
-Tools #553, Freighter #3, examples #134 and ops #230 overlap this migration.
-Tools #187 is design input, not an implicit block-method commitment. Tools
-#292/#293/#394/#469 and the earlier StrKey branch need current-base coordination.
-Exact reviewed heads and evidence are in the [appendix](appendix/review-evidence.md).
+Metrics cover every registered method and selected error family with bounded
+labels. A `-32011` relabel cannot precede freshness moving to `-32012` unless it
+distinguishes framework/application origin. These fixes can land independently
+when compatible with the current wire.
 
 ## Artifact and release order
 
-Use a manual stable-publication freeze for affected packages while partial
-breaking changes land. Current tools and SDK publication workflows are manually
-dispatched. Keep main buildable; no long-lived integration branch is required.
+Keep main buildable and freeze stable publication of affected packages while
+partial breaking changes land. Current tools/SDK publishing is manually dispatched.
 
-1. Select protocol/bindings (including Go) and runtime. Align chuckd with hogd
-   bootstrap metadata and tools runtime-manifest schemas. Preserve raw XDR as hex
-   and distinguish chain hashes from Git/artifact identities. Qualify and publish
-   the public devnode artifact required by the tools catalog.
-2. Build and, if needed by the SDK publication workflow, publish a controlled
-   tools bootstrap RC through the normal release workflow. Local candidate
-   checks can use `THRUPUT_CLI` and `THRUPUT_DEVNODE_BINARY`; those overrides do
-   not establish an equivalent hosted publication path.
-3. Qualify and publish the matching SDK. The current npm workflow has no
-   isolated `next` channel: keep candidates local or explicitly qualify channel
-   support before relying on it.
-4. Pin final tools templates to that SDK, then assemble final tools, bundles,
-   images, manifests, chuckd, React, Freighter, apps, probes and docs. Pin the
-   final chuckd artifact, not just its source branch. Qualify installed hogd
-   metadata → chuckd bootstrap commit → hosted manifest → gateway startup.
-5. Deploy the final set to fresh devnet, qualify it and announce after acceptance.
+1. Select matching protocol/bindings, including Go, and runtime. Qualify and
+   publish the public devnode required by the tools catalog.
+2. Build the slice-6 bootstrap tools candidate and publish a controlled RC if
+   needed by SDK publication. Local `THRUPUT_CLI`/`THRUPUT_DEVNODE_BINARY`
+   overrides do not establish an equivalent hosted publication path.
+3. Qualify and publish the SDK. The current npm workflow has no isolated `next`
+   channel; keep candidates local unless channel support is explicitly qualified.
+4. Pin final tools templates to that SDK. Assemble tools, chuckd, images,
+   manifests, React, Freighter, apps, probes and docs at exact versions.
+5. Deploy fresh devnet, qualify the installed set and announce after acceptance.
 
-Bootstrap artifacts are build dependencies, not an intermediate hosted API.
-There is no legacy endpoint, preparation window, dual-wire probe or old-state
-rollback requirement. A changed candidate requires qualification against its
-final identities.
+The hosted path must pass **hogd metadata → chuckd bootstrap commit → hosted
+manifest → gateway startup** with matching codecs. Preserve raw XDR as hex and
+keep Git/artifact identities distinct from chain hashes. Bootstrap packages are
+build dependencies, not an intermediate hosted API. Changed final artifacts need
+qualification again.
+
+Relevant source: [chuckd bootstrap](https://github.com/thruputchain/chuckd/blob/6db13472df621feba39626c49e65e292f8baef16/chuckd/cmd/hosted_bootstrap.go),
+[Go bindings pin](https://github.com/thruputchain/chuckd/blob/6db13472df621feba39626c49e65e292f8baef16/go.mod),
+[packaging pin](https://github.com/thruputchain/packaging/blob/73566ec94a6152b5bc4899b15e43ca005aa60b3c/release-manifest.toml#L21-L26),
+and [tools manifest reader](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-types/src/runtime_manifest.rs).
 
 ## Deferred work
 
-| Follow-up | Boundary for this release |
+| Follow-up | Release boundary |
 | --- | --- |
-| General scan budgets and cancellation | Candidate cap/direct seek land in slice 2; time/byte budgets and cancellation follow. Measure dense/selective/no-match history and work after timeout |
-| Retention, repair and reset recovery | Strict fresh origin and within-instance checkpoint rules; no durable cross-reset cursors |
-| Historical nonexecution proof and replacement helpers | No automatic expiry/nonce replacement or inference from a miss/dropped status |
-| Funding durability and richer outcomes | Narrow contract/evidence fixes only, as described above |
-| Optional Stellar-style copy/QR | Base58 is default; optional C copy needs explicit cross-chain safety qualification |
-| Dynamic capability typing and transport metadata | Runtime method gates now; broader type redesign and layer-specific limit discovery later |
-| Independent event wire-version override | Freeze existing identity for this release; add machinery only if package version must cross it |
-| New API capabilities | Block/body/envelope reads, registered PQ, global feeds, public health and historical state need their own producers/contracts |
-
-An unacceptable history resource envelope blocks announcement unless we
-explicitly reduce the product scope and change its consumers. Deferral is not a
-claim that downstream cancellation or durable recovery already works.
+| General scan budgets/cancellation | Candidate cap/direct seek are required now; time/byte budgets and cancellation follow. Qualify work after timeout. |
+| Retention, repair and reset recovery | Strict fresh origin and within-instance checkpoints; no durable cross-reset cursors. |
+| Replacement/nonexecution proof | No automatic expiry/nonce replacement or inference from missing/dropped status. |
+| Funding durability/richer outcomes | Shared storage, replica ownership/retention, original-amount replay, persisted terminal observations and richer producer outcomes follow. No durable hosted recovery promise now. |
+| Optional Stellar copy/QR | Base58 remains default; C-format display needs separate cross-chain safety qualification. |
+| Dynamic capability typing/transport metadata | Runtime gates now; broader type redesign and layer-specific limit discovery later. |
+| Independent event-version override | Freeze existing identity now; add controls only when package versions must cross it. |
+| New API capabilities | Block/body/envelope reads, registered PQ, global feeds, health and historical state need separate producers/contracts. |
 
 ## Review and readiness
 
-Before implementation, review the API and these scope boundaries, inspect the
-in-flight shared diffs, and assign component/shared-file owners plus the
-wire-major, publication and qualification owners. Those assignments remain open.
-The implementation hold must be lifted explicitly.
+Announcement requires:
 
-Before announcement, require:
+- All 15 core methods, truthful optional discovery and DTO/schema/client parity;
+  all 12 application error kinds under 11 code components, plus framework errors.
+- History integrity and runtime duplicate correctness from slice 2, independently
+  of whether automatic SDK redispatch is enabled.
+- Gateway/local parity, Rust/TS unknown-variant handling, sticky commitment and
+  the local faucet pending-to-receipt path.
+- Installed CLI/generated-project, faucet/proxy and wallet connect/sign/reopen/
+  reset tests; Ed25519/PQ/mixed invalid traffic, envelope/batch bounds, lost replies,
+  receipt lag and malformed-data checks.
+- One exact artifact set, working installation/restart and bounded method/error
+  metrics. A named owner must set dataset, query/submission mix, concurrency,
+  duration and numerical latency/resource/overload/recovery thresholds before
+  measurement, including work after timeout or abandonment.
+- A public admission policy and acceptable measured resource envelope. Failure
+  blocks announcement unless product scope and its consumers are explicitly changed.
 
-- Reviewed slices, one exact artifact set, full core method support, truthful
-  optional discovery and generated schema/dispatch/client agreement. Cover all
-  12 application error kinds under 11 code components, plus framework errors.
-  Use thin typed Rust clients for flat DTOs; settle generator details in slice 1.
-  Test unknown response variants with nested payloads in Rust and TS.
-- Bounded metrics labels cover all registered methods and selected error codes,
-  with an unknown bucket and framework/application distinctions; never label
-  metrics with arbitrary method strings or diagnostic payloads.
-- Real gateway/local, CLI/generated-project, faucet/proxy, wallet installation,
-  connect/sign/reopen and reset-state qualification.
-- Ed25519/PQ/mixed invalid traffic, envelope/batch bounds, lost replies,
-  duplicate submission, commitment/receipt lag and malformed-data checks.
-- A named measurement owner, fixed dataset and query/submission mix, concurrency,
-  run duration, and numerical latency/resource/overload/recovery thresholds set
-  before the run. Include work continuing after timeout or client abandonment.
-- Public admission policy and a measured acceptable envelope. No qualification
-  pass is claimed by this proposal.
-
-Native API qualification should have a separate evidence record linked to
-GH-512 encoding, GH-500 PQ, GH-422 lifecycle and GH-432 admission/resource work.
-Existing assignees do not implicitly own this expanded scope.
+Track native qualification separately, linked to GH-512 encoding, GH-500 PQ,
+GH-422 lifecycle and GH-432 admission/resource work. No runtime qualification is
+claimed here. The [source baseline](appendix/contract-details.md#source-baseline)
+records the review boundary.
 
 Proposed Linear changes remain unapplied: link the contract under GH-413/GH-470;
-clarify wire boundaries and ownership under GH-502/503/506/507; expand GH-428
-history acceptance; record runtime duplicate qualification, candidate-bounded
-scans, Rust commitment retention, chuckd/all-three-proxy coverage and fresh wallet
-state; assign qualification ownership and keep deferred work separate. Review should settle whether these are the right announcement
-requirements before implementation is scheduled.
+clarify shared ownership under GH-502/503/506/507; expand GH-428 history acceptance;
+record duplicate correctness, SDK history walking, Rust commitment, chuckd/proxy
+coverage and wallet reset; assign qualification ownership and separate follow-ups.
