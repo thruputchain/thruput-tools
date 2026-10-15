@@ -133,6 +133,15 @@ ephemeral node:
 thruput test --integration --network-config max_rv32_memory_bytes=16M
 ```
 
+To pass any other flags to the ephemeral `hog-devnode`, use repeatable
+`--node-arg`. Each value is split with shell quoting rules, and the result is
+appended after the flags `thruput` sets, so a repeated flag overrides
+`thruput`'s value:
+
+```bash
+thruput test --integration -p my-contract --node-arg "--ramdb-bytes 4294967296"
+```
+
 ## Contract call gas
 
 `thruput call --gas-limit 200000000` sets the total transaction gas budget

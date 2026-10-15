@@ -2,6 +2,7 @@
 
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -410,6 +411,9 @@ pub struct HogdDevConfig {
     /// of the ones stock genesis states. The child still rejects a value
     /// outside the ceilings its build was compiled with.
     pub network_config_overrides: BTreeMap<ConfigParamName, u32>,
+    /// Raw arguments appended after every flag the supervisor sets, so a
+    /// repeated flag here overrides the supervisor's value. Not persisted.
+    pub extra_args: Vec<OsString>,
     /// Signing domain for a new chain. Omission initializes the zero development domain.
     ///
     /// An initialized directory rejects this option, even if the value matches.
@@ -432,6 +436,7 @@ impl Default for HogdDevConfig {
             bootstrap_accounts: Vec::new(),
             ramdb_bytes: None,
             network_config_overrides: BTreeMap::new(),
+            extra_args: Vec::new(),
             init_network_hash: None,
             pid_file: None,
         }
@@ -524,6 +529,17 @@ impl HogdDevConfig {
     #[must_use]
     pub fn with_ramdb_bytes(mut self, ramdb_bytes: u64) -> Self {
         self.ramdb_bytes = Some(ramdb_bytes);
+        self
+    }
+
+    /// Return a copy with raw arguments appended to the hog-devnode command line.
+    #[must_use]
+    pub fn with_extra_args<I, A>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = A>,
+        A: Into<OsString>,
+    {
+        self.extra_args = args.into_iter().map(Into::into).collect();
         self
     }
 

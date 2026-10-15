@@ -48,6 +48,7 @@ keywords = ["thruput"]
 categories = ["development-tools"]
 
 [workspace.dependencies]
+shlex = "2"
 reqwest = "0.12"
 fs2 = "0.4"
 flate2 = "1"
