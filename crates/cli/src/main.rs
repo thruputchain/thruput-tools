@@ -672,6 +672,11 @@ struct TestArgs {
     #[arg(long = "network-config", value_name = "NAME=VALUE", requires = "integration",
           value_parser = thruput_cli::node::parse_network_config_override)]
     network_config: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
+    /// RAM database capacity for the integration node (decimal, 0x hex, or a
+    /// K/M/G suffix such as 2G). Mirrors `thruput node --ramdb-bytes`.
+    #[arg(long, value_name = "SIZE", requires = "integration",
+          value_parser = thruput_cli::byte_size::parse_byte_size)]
+    ramdb_bytes: Option<u64>,
     /// Config profile to use
     #[arg(long = "profile")]
     profile: Option<String>,
@@ -707,6 +712,7 @@ impl TestArgs {
                     hogd_protocol: self.hogd_protocol,
                     hog_devnode_version: self.hog_devnode_version,
                     network_config_overrides: self.network_config,
+                    ramdb_bytes: self.ramdb_bytes,
                     offline: ctx.offline,
                     verbose: self.verbose,
                 },
@@ -3036,5 +3042,19 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn test_integration_ramdb_bytes_flag_parses() {
+        let cli = Cli::try_parse_from(["thruput", "test", "--integration", "--ramdb-bytes", "2G"])
+            .unwrap();
+        match cli.command {
+            Command::Test(TestArgs { ramdb_bytes, .. }) => {
+                assert_eq!(ramdb_bytes, Some(2_147_483_648));
+            }
+            _ => panic!("expected test command"),
+        }
+        // The capacity only reaches a node, so it needs --integration.
+        assert!(Cli::try_parse_from(["thruput", "test", "--ramdb-bytes", "2G"]).is_err());
     }
 }

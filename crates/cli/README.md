@@ -133,6 +133,13 @@ ephemeral node:
 thruput test --integration --network-config max_rv32_memory_bytes=16M
 ```
 
+It also accepts `--ramdb-bytes` (same syntax as `thruput node --ramdb-bytes`)
+to size the ephemeral node's RAM database:
+
+```bash
+thruput test --integration -p my-contract --ramdb-bytes 4G
+```
+
 ## Contract call gas
 
 `thruput call --gas-limit 200000000` sets the total transaction gas budget
