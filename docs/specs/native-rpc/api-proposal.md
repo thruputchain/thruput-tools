@@ -6,7 +6,7 @@ current server behaviour. Implementation and Linear changes remain on hold.
 Read this proposal first, then the [delivery plan](delivery-plan.md). The
 [contract appendix](appendix/contract-details.md) has complete field shapes and
 edge cases. The [evidence appendix](appendix/review-evidence.md) records source
-checks and all 65 independent-review dispositions.
+checks, all 65 original finding dispositions and the follow-up review corrections.
 
 ## Why change the surface now?
 
@@ -143,21 +143,25 @@ Poll `getTransactionStatus({ transactionHash })` for commitment, then retrieve
 ```
 
 Current execution labels become `return`, `abort` and `fault`, shared with
-simulation. Receipt return/abort bytes can be unavailable; `"0x"` means known
-empty bytes. Historical/unknown outcomes remain distinguishable. Gas and events
+simulation. `returnData` and `abortData` are required for their respective
+variants; `"0x"` means empty bytes. The fresh chain needs no missing-buffer
+compatibility case. Unknown outcomes remain distinguishable. Gas and events
 stay beside `execution` because they apply across outcomes.
 
 A committed transaction can fail execution. A null receipt after committed
 status can mean receipt lag; an indexer failure must remain an error. Keep known
 commitment through weaker later observations. Malformed events or inconsistent
 execution data fail the lookup rather than producing a successful partial
-receipt; independently trusted commitment can be retained in error evidence.
+receipt. Receipt-error evidence contains only validated transaction hash and
+block height. The shared adapter must check the backend log hash against the
+requested hash before returning either a receipt or commitment evidence.
 
 The SDK preserves the ordinary flow through existing `waitForTransactionReceipt`,
 `assertTransactionSuccess` and `waitForExecution`, with an observe-only
 `waitForCommitment` helper. Receipt waiting returns failed receipts; the assertion
 checks execution. `KnownCommitment` carries network hash, transaction hash and
-block height. Waits never sign or resubmit.
+block height. The shared Rust waiter must preserve commitment through weaker
+statuses, lookup failures and timeouts too. Waits never sign or resubmit.
 
 ## Simulate an invocation
 
@@ -216,6 +220,8 @@ Both history methods require exactly one of `start` or a nonempty `cursor`.
 Repeat predicates on continuation; page size may change within the advertised
 bound. Cursors bind the method and query and fix the walk's upper watermark.
 `nextCursor: null` means exhaustion. Empty pages with a cursor are not terminal.
+A bounded event scan advances past its last validated candidate, including
+nonmatches. This bounds candidate count, not database latency or cancellation.
 
 Topic positions are optional wildcards; supplied topics are raw 32-byte hex even
 when they contain an address. Reuse typed event helpers. Incoming native
@@ -255,7 +261,10 @@ policy are separate:
 
 `notAttempted`, `rejected` and `unknown` describe this attempt only. A later
 refusal does not resolve an earlier uncertain send. Numeric codes alone never
-establish admission. The [full catalogue](appendix/contract-details.md#proposed-common-catalogue-and-optional-reason-enums)
+establish admission. Preserve evidence through queue expiry and outer deadlines;
+claim `notAttempted` only when later dispatch is ruled out. Structural parameter
+errors may carry only `kind: "invalidParams"`; optional reasons and paths must
+come from reliable validation evidence, never parsed error messages. The [full catalogue](appendix/contract-details.md#proposed-common-catalogue-and-optional-reason-enums)
 includes freshness `-32012`, unavailable history `-32013`, invalid backend data
 `-32054`, funding stop `-32030` and unresolved funding `-32031`.
 
@@ -266,9 +275,12 @@ permission. Never automatically refresh expiry/nonce or replay a consumed wallet
 approval. Expiry, missing records and dropped status do not prove nonexecution.
 
 Funding keeps its existing results with narrow error/evidence corrections.
-After a possibly executing hosted request, reconcile known hashes through reads.
-A clean, proven pre-attempt refusal can be retried with its policy delay; a
-repeated nonce or unchanged URL does not prove durable idempotence.
+For this major, the hosted SDK helper makes one funding-service call and does
+not automatically repeat it, including after a policy refusal or pending result.
+Reconcile known hashes through reads; otherwise return retained unresolved
+evidence. Preserve delay hints for explicit caller retries. A repeated nonce or
+unchanged URL does not prove durable idempotence. Funding-service policy errors
+do not carry transaction admission evidence.
 
 ## Questions for review
 

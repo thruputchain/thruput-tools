@@ -4,8 +4,8 @@ Review snapshot: 15 October 2026. Read the [API proposal](../api-proposal.md)
 and [delivery plan](../delivery-plan.md) first. The
 [contract appendix](contract-details.md) contains the detailed target shapes.
 
-This appendix records all 65 finding IDs from an independent review and the
-follow-up source verification. The original summary stated 60; the raw findings
+This appendix records all 65 finding IDs from the original independent review
+and the [follow-up PR review](#follow-up-pr-review). The original summary stated 60; the raw findings
 contained 65. Dispositions explain the proposal's choices and do not establish
 team approval or runtime readiness. Implementation and Linear changes remain on
 hold; this draft PR contains documentation only.
@@ -16,7 +16,7 @@ Three independent source-verification agents divided all 65 IDs (20 tools/Ethere
 
 Deployment scope: internal-only devnet, disposable state. Final path: land slices, assemble one final artifact set, fresh deployment, qualification, announcement. A controlled bootstrap package can be a build prerequisite without becoming an intermediate hosted API.
 
-## Disposition summary
+## Original review disposition summary
 
 | Disposition | Count |
 | --- | ---: |
@@ -253,7 +253,7 @@ Root invocation history is not credits/all-account participation. Native Transfe
 - [Source 4](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L2152-L2162)
 - [Source 5](https://solana.com/docs/rpc/http/getsignaturesforaddress)
 
-**Follow-up:** Indexed participant/transfer history and general scan budgets remain follow-up.
+**Follow-up:** Indexed participant/transfer history, general time/byte budgets and cancellation remain follow-up. The follow-up PR review adds candidate cap/direct seek to slice 2.
 
 #### SOL-6: accept
 
@@ -629,7 +629,7 @@ Scheduler Some currently suppresses indexed errors; retained Succeeded normally 
 
 Cursor storage is hogd-internal; current query outcome carries only not-ready/internal failure. Safe failure can land first without protocol changes, but final promised invalidCursor/historyUnavailable/data-invalid mapping requires typed carriers and consumers. Plain cursor encoding has no authentication.
 
-**Disposition / plan change:** Stage backend fail-closed repairs before typed protocol/bindings/gateway release. Final GA still requires promised typed errors. Query-binding digest and version bump must fit256-byte cap and distinguish method+query identity; call it accidental-mismatch detection, not tamper-proof authorization. Include4458 direct seek separately from deferred general scan budgeting.
+**Disposition / plan change:** Stage backend fail-closed repairs before typed protocol/bindings/gateway release. Final GA still requires promised typed errors. Query-binding digest and version bump must fit256-byte cap and distinguish method+query identity; call it accidental-mismatch detection, not tamper-proof authorization. Include4458 direct seek with the follow-up candidate cap in slice2; general time/byte budgets and cancellation remain deferred.
 
 **Reverified evidence:**
 - [Source 1](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/event_cursor.h#L15-L31)
@@ -684,9 +684,9 @@ The plan already calls for proxy migration; the missing piece is an explicit con
 
 **Reviewed claim:** The single-call funding default disables the hosted faucet's own request-driven recovery and contention handling
 
-A single call regresses clean pre-attempt contention; retryAfter alone does not prove globally safe replay once an earlier request was ambiguous. Pending recovery is request-driven. A later current-store miss cannot disprove a previous attempt lost on restart.
+A single call gives up automatic recovery from clean pre-attempt contention; retryAfter alone does not prove globally safe replay once an earlier request was ambiguous. The follow-up review confirms that the current wire contract lacks positive pre-attempt proof, so this major deliberately accepts that convenience tradeoff. Pending recovery is request-driven. A later current-store miss cannot disprove a previous attempt lost on restart.
 
-**Disposition / plan change:** Allow bounded same-nonce repeats for proven pre-attempt refusals ONLY while the whole helper history has no prior potentially accepted/unknown attempt. Keep nonce/network/recipient/hash evidence on interruption. After possible execution, default to read-only reconciliation; return explicit same-nonce resume evidence if reads cannot finish. Do not silently regenerate nonce or promise durable hosted idempotence. A resume that calls the nondurable service requires explicit caller opt-in to its documented duplicate-test-fund risk. Durable recovery stays follow-up. Preserve existing producer retry hints through checked seconds-to-milliseconds conversion in the narrow GA adapter scope; invalid hints fail closed instead of falling back to an earlier delay. No policy hint alone proves a clean pre-attempt history.
+**Disposition / plan change:** Updated after the follow-up PR review: disable automatic hosted funding-service repeats for this major, including policy refusals and pending polls. Do not add a new evidence field solely for that optimization. Keep nonce/network/recipient/hash evidence on interruption. After possible execution, default to read-only reconciliation; return explicit same-nonce resume evidence if reads cannot finish. Do not silently regenerate nonce or promise durable hosted idempotence. A resume that calls the nondurable service requires explicit caller opt-in to its documented duplicate-test-fund risk. Durable recovery stays follow-up. Preserve existing producer retry hints through checked seconds-to-milliseconds conversion in the narrow GA adapter scope; invalid hints fail closed instead of falling back to an earlier delay. Delay hints serve explicit caller retries; they do not authorize automatic service calls.
 
 **Reverified evidence:**
 - tools@d0a8cdc9 crates/faucet/src/airdrop.rs:144-179,357-378,387-425,627-648,727-747
@@ -714,7 +714,7 @@ Existing composition is compatible with extending evidence carriers; a blanket w
 
 Current HTTP/custom transport exposes no reconnect event. New instance on changed endpoint is already sufficient in common use.
 
-**Disposition / plan change:** Scope discovery cache to client/transport instance; new instance means new validation. Expose explicit invalidation for mutable custom transports; invalidate/revalidate after incompatible known-method response, -32601, supported unknownField signal or network mismatch. Do not transparently replay mutations after refreshing. Remove imaginary HTTP reconnect criterion and prohibit mixed incompatible backends behind one endpoint.
+**Disposition / plan change:** Scope discovery cache to client/transport instance; new instance means new validation. Expose explicit invalidation for mutable custom transports; invalidate/revalidate after incompatible known-method response, -32601 or network mismatch. Do not transparently replay mutations after refreshing. Remove imaginary HTTP reconnect criterion and prohibit mixed incompatible backends behind one endpoint.
 
 **Reverified evidence:**
 - sdk-ts@8ce62f4 src/transport/types.ts:8-29; src/transport/http.ts:162-190
@@ -960,3 +960,66 @@ File overlap and review/qualification concentration are real. Existing role desc
 No code or runtime result is implied by these dispositions. Required work and open owners/thresholds are in the [main readiness criteria](../delivery-plan.md#review-and-readiness). The proposed Linear edits there are not applied. Deferred ETH-4 and STL-2 have explicit qualification boundaries; accepted-with-change items also identify deferred portions instead of hiding them in GA scope.
 
 Implementation remains on hold pending explicit approval.
+
+
+## Follow-up PR review
+
+The second review examined draft PR #555 at `b98d4b8`. Its sections below use
+that review's labels, separate from the original 65-ID count. Source verification
+on 15 October rechecked tools `d0a8cd…`, hogd `15d536…`, protocol `af043b…`,
+examples `c8ba87…`, SDK TS `8ce62f…`, packaging `73566e…` and ops `f03432…`
+against origin. chuckd was additionally checked at
+`6db13472df621feba39626c49e65e292f8baef16`. No runtime tests were run. These are
+accepted proposal revisions, not evidence of implementation or qualification.
+
+| Review item | Disposition | Selected change or correction |
+| --- | --- | --- |
+| 1A event scan/cursor | Accept with change | Slice 2 includes a positive examined-candidate cap, last-validated-visited cursor and direct seeking. Test ascending/descending, overlapping filters, no-match pages and exhaustion. Current empty-nonterminal branch is unreachable without an earlier scan stop; the example is a target shape. Reject the estimate that a tiny patch removes resource qualification. |
+| 1B chuckd | Accept with change | Add hosted bootstrap metadata → chuckd → runtime manifest → tools, matching Go bindings and final packaging pin. Only networkHash enforces lowercase unprefixed hex today; initialization hashes also accept prefixed/uppercase hex. Raw XDR stays hex. Nested commit.valueHash is not currently parsed by tools, so that field alone is not its startup blocker. |
+| 1C.1 structural params | Accept with change | Keep strict DTOs; generic serde failures may supply only invalidParams. Optional typed reasons/path require reliable evidence. No message parsing, second general validator or unknownField-based discovery dependency. Path tracking can retain some paths; not all tagged-enum inner paths are guaranteed. |
+| 1C.2 funding retry proof | Accept with change | Disable automatic hosted service repeats this major, including refusal/pending. Preserve explicit resume and hints. Do not add admission or a fundingDispatch field for the optional optimization. Stronger service evidence and automatic recovery follow with durability work. |
+| 1C.3 submission timeout | Accept with change | Preserve evidence across queue expiry, cancellation, sink handoff and outer deadlines in gateway/local paths. Claim notAttempted only when later dispatch is impossible. A precheck timeout before hashing can omit the hash. |
+| 1C.4 error schema | Accept with change | One named component per numeric code, with typed data unions covering all 12 kinds across 11 codes and valid operation-specific evidence. Existing components already use names; numeric lookup is the limitation. Per-method error codes must be unique. |
+| 1D client/schema | Accept with change | Replace macro-generated wrapped clients with thin flat-DTO ClientT adapters; choose explicit versus small generated wrappers in the spike. Add paramStructure by-name and whole-object extension. No mandatory broad macro rewrite. |
+| 1D continuation | Accept | Supply valid ignored XDR order/anchor placeholders; backend continuation uses cursor-owned state. No XDR layout break solely for omitted start. |
+| 1D registration | Reject claimed API limitation | Pinned jsonrpsee has remove_method. Retain final registration/discovery agreement before serving; register-only builders or an initialized immutable method list are implementation choices. |
+| 1D server limits | Accept | Omit simulationBatch when its method is unconfigured. Temporary health does not alter support metadata. |
+| 1E Rust waiter/receipt hash | Accept with change | Retain strongest commitment in shared Rust wait/error paths; validate backend log hash and height before receipt/error observation. Poll ordering is an optimization, not a required rewrite. |
+| Simplification 1 buffers | Accept with change | Require returnData/abortData for current respective receipt variants. No old-chain missing-buffer case. Retain ABI decode errors and supported ExecResult/root-output combination checks; failed commit can follow root Return. |
+| Simplification 2 observation | Accept | Receipt-error observation contains only validated transactionHash and blockHeight. No partial execution/gas, and no observation fabricated from a mismatched log. |
+| Simplification 3 detail probe | Accept with change | Remove unsupported call/deploy probe and diagnostics. It runs beyond verbose mode. Preserve view's event formatter; audit public DTO/test/dependency references before deleting them. |
+| Simplification 4 tolerant readers | Accept with change | Rust and TS preserve unknown tag/payload. Reject the claim that serde(other) rejects extra fields: it accepts then discards them. Unknown XDR adapter values need their own supported projection or typed backend-data failure. |
+| Simplification 5 metrics | Accept | Cover final method set and error catalogue with bounded labels, including framework size errors and an unknown bucket. Do not label arbitrary incoming strings. |
+| Simplification 6 proxies | Accept with change | Cover Counter, swap and token-launchpad separately. Only swap currently strips typed error data; all require native migration. Shared helpers are optional; preserve distinct write policies. |
+| Simplification 7 branch pushes | Reject mandatory publication | Require exact inspectable GH-506/507 diffs and ownership, not branch pushes. A patch or local review suffices; publication needs separate owner authorization. |
+
+### Source evidence for these revisions
+
+- Event loop/filter/cursor: [hogd indexer](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L2090-L2214), [current skip-past](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L1861-L1885), and [direct seek #4458](https://github.com/thruputchain/hogd/pull/4458). Candidate counting does not bound initial seeks, repeated full-log decoding, RocksDB read latency or cancellation tails.
+- Receipt identity and lifecycle: [shared adapter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/x23/hogd-backend/src/receipt.rs#L29-L48), [Rust waiter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-client/src/receipt.rs#L155-L248), [root-output union](https://github.com/thruputchain/thruput-protocol/blob/af043b5c1983c0c8b44683975a3c389369844e09/transaction.x#L88-L102), [commit path](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_exec/runtime/syscall_handler.cc#L537-L662), and [buffer producer](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_exec/runtime/syscall_handler.cc#L1319-L1333).
+- Hosted artifact path: [chuckd bootstrap](https://github.com/thruputchain/chuckd/blob/6db13472df621feba39626c49e65e292f8baef16/chuckd/cmd/hosted_bootstrap.go), [Go pin](https://github.com/thruputchain/chuckd/blob/6db13472df621feba39626c49e65e292f8baef16/go.mod), [tools runtime manifest](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-types/src/runtime_manifest.rs), and [packaging pin](https://github.com/thruputchain/packaging/blob/73566ec94a6152b5bc4899b15e43ca005aa60b3c/release-manifest.toml#L21-L26). Current Go pin is `v0.0.0-20261012233407-471321271e0f`; packaged chuckd is `v0.1.31-rc.6` at `4cb36e49`, not current main. Qualify final installed pins through the existing hosted-bootstrap smoke.
+- Dispatch/error boundaries: [submitter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-gateway/src/submitter.rs), [shared deadlines/limits](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-server/src/server.rs), [faucet adapter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-gateway/src/airdrop.rs), and [error schema generator](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/open-rpc-spec/src/lib.rs).
+- CLI cleanup: [detail probe/formatter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/cli/src/dev_detail.rs), [call](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/cli/src/call.rs#L148), [deploy](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/cli/src/deploy.rs#L262), and [view formatter consumer](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/cli/src/view.rs#L19).
+- App proxies: [Counter](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/counter/server/http.ts), [swap](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/swap/server/http.ts), and [token-launchpad](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/token-launchpad/server/http.ts).
+
+Pinned dependency checks used installed source: jsonrpsee 0.25.1
+`core/src/server/rpc_module.rs:599` exposes `remove_method`;
+`proc-macros/src/render_client.rs:230–271` wraps arguments. Serde 1.0.229
+`private/de.rs:2990–2996` drains extra fields through `InternallyTaggedUnitVisitor`;
+`serde_derive/src/de/enum_internally.rs:82–93` selects it. serde_json 1.0.151
+`error.rs:433–450` retains structural failures as text. These mechanics were
+verified in the exact local dependency sources; failed upstream source fetches
+are not cited as independent verification.
+
+External conventions were checked against [Serde variant attributes](https://serde.rs/variant-attrs.html)
+and the [OpenRPC specification](https://spec.open-rpc.org/). The latter's current
+1.4.x spec defines `paramStructure` and unique per-method error codes. Validation
+against the implementation's selected meta-schema, including any retained 1.2.6
+version, remains a slice-1 check; no successful archived-schema fetch is claimed.
+
+The duplicate-submission announcement gate remains unconditional: [cached
+transaction requeue](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_mempool/scheduler.cc#L667-L685),
+[duplicate nomination](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_mempool/scheduler.cc#L1290-L1305)
+and [commit cleanup](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_mempool/scheduler.cc#L1451-L1454)
+support the #4468-equivalent repair/#4471-equivalent coverage requirement even
+when SDK recovery is off. Broader automatic redispatch qualification stays separate.
