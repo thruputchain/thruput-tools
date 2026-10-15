@@ -213,9 +213,11 @@ this is not complete balance history.
 
 `getTransactionsByRootAddress({ address, start?, cursor?, limit? })`:
 Returns transactions whose root invocation targets the supplied address, including
-DefaultWallet account addresses. For a wallet this is the transactions it sent;
-it excludes internal calls and incoming transfers. For incoming native transfers,
-query `getEvents` for the token Transfer event.
+DefaultWallet account addresses. The root address is the transaction's sender:
+authorization is checked against it, and replay protection is scoped to it.
+Results exclude transactions where the address is only called internally or
+receives a transfer. For incoming native transfers, query `getEvents` for the
+token Transfer event.
 
 Event order is height, decoded transaction hash bytes, then sequence number.
 It is not causal order or base58 string order.

@@ -413,7 +413,9 @@ Receipt, event and scheduler retention differ; page bounds are not a global rete
 
 `getTransactionsByRootAddress({ address, start?, cursor?, limit? })`:
 
-Returns transactions whose root invocation targets the supplied address, including DefaultWallet account addresses. For a wallet this is the transactions it sent; it excludes internal calls and incoming transfers. For incoming native transfers, query `getEvents` for the token Transfer event.
+Returns transactions whose root invocation targets the supplied address, including DefaultWallet account addresses. The root address is the transaction's sender: authorization is checked against it, and replay protection is scoped to it. Results exclude transactions where the address is only called internally or receives a transfer. For incoming native transfers, query `getEvents` for the token Transfer event.
+
+Sender semantics follow the [pubkey-address check](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/auth_claim/verify.cc#L260-L270), [root-address auth lookup](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_auth/auth_server.cc#L240-L280) and [address-scoped replay protection](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/transaction.x#L108-L120).
 
 The result contains transaction references, not bodies. Use `getTransactionsByRootAddress` for the planned sdk-ts helper too, with the same `address` parameter and scope. Keep `Root`: [Solana address history](https://solana.com/docs/rpc/http/getsignaturesforaddress) includes transactions referencing the address in accountKeys, and [Etherscan address history](https://info.etherscan.com/how-to-filter-transactions-of-an-address/) includes incoming transactions. Thruput indexes only the root target, as defined by the [protocol query](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/indexer.x#L188-L200) and [index key](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L231-L240).
 
