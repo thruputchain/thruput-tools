@@ -65,6 +65,12 @@ pub struct IntegrationTestOptions {
     pub verbose: bool,
 }
 
+/// Split one `--node-arg` value into hog-devnode arguments with shell quoting
+/// rules, so `"--ramdb-bytes 4294967296"` yields two arguments.
+pub fn parse_node_arg(value: &str) -> Result<Vec<String>, String> {
+    shlex::split(value).ok_or_else(|| format!("unbalanced quotes or escape in {value:?}"))
+}
+
 /// Environment fallback for the integration node's protocol override.
 const HOGD_PROTOCOL_ENV: &str = "THRUPUT_HOGD_PROTOCOL";
 

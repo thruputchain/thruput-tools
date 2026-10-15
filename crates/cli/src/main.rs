@@ -672,16 +672,17 @@ struct TestArgs {
     #[arg(long = "network-config", value_name = "NAME=VALUE", requires = "integration",
           value_parser = thruput_cli::node::parse_network_config_override)]
     network_config: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
-    /// Pass one raw argument to the integration hog-devnode (repeatable,
-    /// one token each: `--node-arg --ramdb-bytes --node-arg 4294967296`).
-    /// Appended last, so it overrides flags thruput sets.
+    /// Pass arguments to the integration hog-devnode (repeatable). Each value
+    /// is split with shell quoting rules: `--node-arg "--ramdb-bytes 4294967296"`.
+    /// Appended last, so they override flags thruput sets.
     #[arg(
         long = "node-arg",
-        value_name = "ARG",
+        value_name = "ARGS",
         requires = "integration",
-        allow_hyphen_values = true
+        allow_hyphen_values = true,
+        value_parser = parse_node_arg
     )]
-    node_arg: Vec<String>,
+    node_arg: Vec<NodeArgWords>,
     /// Config profile to use
     #[arg(long = "profile")]
     profile: Option<String>,
@@ -690,6 +691,14 @@ struct TestArgs {
     /// Extra arguments forwarded to the test harness (after --)
     #[arg(last = true)]
     cargo_args: Vec<String>,
+}
+
+/// One `--node-arg` value after shell-style splitting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NodeArgWords(Vec<String>);
+
+fn parse_node_arg(value: &str) -> Result<NodeArgWords, String> {
+    thruput_cli::test_cmd::parse_node_arg(value).map(NodeArgWords)
 }
 
 impl TestArgs {
@@ -717,7 +726,11 @@ impl TestArgs {
                     hogd_protocol: self.hogd_protocol,
                     hog_devnode_version: self.hog_devnode_version,
                     network_config_overrides: self.network_config,
-                    node_args: self.node_arg,
+                    node_args: self
+                        .node_arg
+                        .into_iter()
+                        .flat_map(|words| words.0)
+                        .collect(),
                     offline: ctx.offline,
                     verbose: self.verbose,
                 },
@@ -3056,9 +3069,9 @@ mod tests {
             "test",
             "--integration",
             "--node-arg",
-            "--ramdb-bytes",
+            "--ramdb-bytes 4294967296",
             "--node-arg",
-            "4294967296",
+            "--contract-artifacts-dir '/tmp/my contracts'",
             "--",
             "--nocapture",
         ])
@@ -3069,12 +3082,26 @@ mod tests {
                 cargo_args,
                 ..
             }) => {
-                assert_eq!(node_arg, ["--ramdb-bytes", "4294967296"]);
+                assert_eq!(
+                    node_arg,
+                    [
+                        NodeArgWords(vec!["--ramdb-bytes".into(), "4294967296".into()]),
+                        NodeArgWords(vec![
+                            "--contract-artifacts-dir".into(),
+                            "/tmp/my contracts".into()
+                        ]),
+                    ]
+                );
                 assert_eq!(cargo_args, ["--nocapture"]);
             }
             _ => panic!("expected test command"),
         }
         // The arguments only reach a node, so they need --integration.
         assert!(Cli::try_parse_from(["thruput", "test", "--node-arg", "--ramdb-bytes"]).is_err());
+        // Unbalanced quotes are a parse error.
+        assert!(
+            Cli::try_parse_from(["thruput", "test", "--integration", "--node-arg", "'--x"])
+                .is_err()
+        );
     }
 }

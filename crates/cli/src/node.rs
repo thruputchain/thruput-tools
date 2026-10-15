@@ -1541,6 +1541,7 @@ mod tests {
             rpc_batch_concurrency: Some(17.try_into().unwrap()),
             ramdb_bytes: Some(2_147_483_648),
             network_config_overrides: vec![(ConfigParamName::MaxRv32MemoryBytes, 16_777_216)],
+            node_args: Vec::new(),
             bundle_identity: Some(supplied_identity.clone()),
         })
         .expect("bug: local node config should build");
