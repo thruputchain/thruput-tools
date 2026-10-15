@@ -25,6 +25,13 @@ The [contract appendix](appendix/contract-details.md) defines the acceptance
 rules. Omitting history from announcement would require an explicit product
 scope change and corresponding CLI, explorer, smoke and PQ-demo changes.
 
+Address naming is part of the same wire major: simulation uses `address`,
+event filters use `addresses`, and emitted events use `address`. Slice 1 fixes
+the shapes; slices 3/4 migrate producers and readers; slice 5 uses
+`getTransactionsByRootAddress({ address, ... })` for the SDK helper. Slice 7
+keeps root-address history distinct from incoming-transfer event queries.
+These renames add no backend index or slice dependency.
+
 Funding stays narrow: migrate the optional methods and consumers, preserve
 signed evidence and retry hints, and correct stop/unresolved errors. SDK
 `requestAirdrop` calls `faucet_requestAirdrop` once on hosted or local endpoints,
@@ -105,7 +112,7 @@ are design inputs to reconcile, not additional API commitments.
 | thruput-react | Case-sensitive identifiers, network/query caches, peer ranges and example pins |
 | Freighter/Stellar adapter | Provider gate, fresh install/reopen, Thruput reset and preserved Stellar keys/flows |
 | Counter, swap, token-launchpad | Named params, allowlists, filtered discovery and bounded typed errors; preserve each proxy's write policy |
-| Explorer | SDK/codecs, generated bindings, root/event history and pins |
+| Explorer | SDK/codecs, generated bindings, root-address/event history and pins |
 | Packaging/ops | Installed commands, probes, report readers, eBPF labels/map sizes/symbols and collectors |
 | Docs/agent guidance | Runnable examples, selected bundled snapshot and guidance in its owning repository |
 

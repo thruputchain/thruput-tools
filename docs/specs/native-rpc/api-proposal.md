@@ -35,13 +35,13 @@ wrapper. Types and defaults are defined in the [contract appendix](appendix/cont
 | `sendRawTransaction` | `sendTransaction` | `{ signedTransaction }` | `{ transactionHash, admission: "accepted" }` |
 | `getTransactionStatus` | `getTransactionStatus` | `{ transactionHash }` | Current lifecycle observation |
 | `getTransactionReceipt` | `getTransactionReceipt` | `{ transactionHash }` | Committed receipt or `null` |
-| `view` | `simulateInvocation` | `{ contract, entrypoint, calldata, caller?, assumedAuth?, gasLimit?, minStateBlockHeight? }` | `{ stateBlockHeight, output, events, gasUsed }` |
+| `view` | `simulateInvocation` | `{ address, entrypoint, calldata, caller?, assumedAuth?, gasLimit?, minStateBlockHeight? }` | `{ stateBlockHeight, output, events, gasUsed }` |
 | `viewBatch` | `simulateInvocations` | `{ invocations, minStateBlockHeight? }` | `{ stateBlockHeight, results }` |
 | `getStorageAt` | `getStorage` | `{ address, key }` | `{ stateBlockHeight, item }`; item can be `null` |
 | `getBalance` | `getBalance` | `{ address }` | `{ address, stateBlockHeight, rawBalance }` |
 | `getAddressAuthData` | `getRegisteredAuth` | `{ address }` | `{ address, stateBlockHeight, configuration }`; configuration can be `null` |
 | `getEvents` | `getEvents` | `{ filters, start?, cursor?, limit? }` | Events, indexed bounds and nullable `nextCursor` |
-| `getTransactionsByAddress` | `getTransactionsByRootContract` | `{ contract, start?, cursor?, limit? }` | Root-target transaction references, indexed bounds and nullable `nextCursor` |
+| `getTransactionsByAddress` | `getTransactionsByRootAddress` | `{ address, start?, cursor?, limit? }` | Root-target transaction references, indexed bounds and nullable `nextCursor` |
 | `requestAirdrop` | `faucet_requestAirdrop` | `{ recipient, clientNonce }` | Existing pending/succeeded funding-attempt semantics |
 | `fundAccount` | `dev_fundAccount` | `{ recipient, rawAmount, clientNonce, faucet }` | Retained transaction hash and signed submission evidence |
 | `pendingTransactionCount` | `dev_getPendingTransactionCount` | `{}` | `{ count }`; local implementation only |
@@ -67,6 +67,9 @@ assembles a transaction, not a footprint or gas estimate.
   hashes and signatures. C/G StrKey conversion belongs in typed human-input
   helpers, not as an alternate RPC/provider wire format. Public keys, key hashes
   and derived account addresses remain distinct types.
+- **Addresses:** an address identifies a contract instance, including pubkey
+  wallet accounts; contract code is identified separately by its deployed
+  contract hash and type. Thruput has no Stellar-style account/contract split.
 - **Opaque bytes:** lowercase `0x` hex for signed XDR, calldata, return/abort
   buffers, storage keys, topics, event data and opaque cursors.
 - **Numbers:** canonical decimal strings for integers 64 bits or wider; JSON
@@ -155,7 +158,7 @@ waiters preserve commitment through errors and timeouts. They never resubmit.
   "id": 4,
   "method": "simulateInvocation",
   "params": {
-    "contract": "<base58-contract>",
+    "address": "<base58-address>",
     "entrypoint": "0x0102030405060708",
     "calldata": "0x",
     "gasLimit": "500000",
@@ -208,9 +211,14 @@ when they contain an address. Reuse typed event helpers. Incoming native
 transfers can be queried through the token Transfer event and destination topic;
 this is not complete balance history.
 
-`getTransactionsByRootContract` covers the root invocation target only, not
-nested calls or every address touched. Event order is height, decoded transaction
-hash bytes, then sequence number. It is not causal order or base58 string order.
+`getTransactionsByRootAddress({ address, start?, cursor?, limit? })`:
+Returns transactions whose root invocation targets the supplied address, including
+DefaultWallet account addresses. For a wallet this is the transactions it sent;
+it excludes internal calls and incoming transfers. For incoming native transfers,
+query `getEvents` for the token Transfer event.
+
+Event order is height, decoded transaction hash bytes, then sequence number.
+It is not causal order or base58 string order.
 
 The SDK walker checkpoints the initial watermark W only after processing all
 pages through exhaustion. Data errors or serving height below W fail the walk.

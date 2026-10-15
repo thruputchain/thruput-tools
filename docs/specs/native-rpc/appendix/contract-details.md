@@ -12,6 +12,7 @@ design notation, and angle-bracket examples are not executable fixtures.
 | Decision | Selection |
 | --- | --- |
 | Method surface | Bare core names; optional faucet_/dev_ services; separate status and receipt. |
+| Address naming | Simulation/event fields use address/addresses; history and its SDK helper use getTransactionsByRootAddress, including wallet accounts. |
 | Parameters | Strict named objects. Noarg canonical {}; accept omission/[] and transport-normalized null. |
 | Encoding | Canonical case-sensitive base58 identifiers; typed C/G human-input conversion; opaque bytes remain hex. |
 | Execution | Nested receipt execution with sibling events/gas; required return/abort bytes; gas meters work. |
@@ -27,7 +28,7 @@ Keep existing SDK assertTransactionSuccess, waitForExecution and prepareTransact
 helpers. The latter assembles a transaction, not a footprint or gas estimate.
 The chosen names describe supplied data: getChainTip has no block body,
 simulateInvocation does not validate a complete signed envelope,
-getTransactionsByRootContract excludes nested/address activity, and
+getTransactionsByRootAddress excludes internal calls and incoming transfers, and
 getRegisteredAuth cannot recover a pubkey account's key.
 
 ## Shared JSON contract
@@ -38,6 +39,7 @@ Use JSON-RPC 2.0 with one named params object. No request/query wrapper. Nested 
 - Optional request fields are omitted. Reject explicit null unless a field specifically allows it. Reject unknown request properties at every boundary, including tagged-union variants.
 - Outputs tolerate additional fields. Readers preserve or surface unknown union variants as unsupported data; they must not infer success, absence or permission to replace a transaction.
 - Use base58 for typed addresses, keys, hashes and signatures. Preserve hex for signed XDR, calldata, return/abort buffers, raw storage keys, topics, event data and opaque cursors. RPC/provider typed identifiers accept canonical base58 only, not C/G wire aliases. Explicit typed human-input SDK/CLI/wallet helpers may convert C addresses or G keys before serialization; S is only explicit secret import/export. No legacy hex fallback for identifiers. Coordinate this clarification with GH-502/GH-503/GH-507.
+- An address identifies a contract instance, including pubkey wallet accounts; contract code is identified separately by its deployed contract hash and type. Thruput has no Stellar-style account/contract split. See the shared [address type](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/types.x#L133-L136), [pubkey address derivation](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/preimage.x#L19-L23) and [deployed code metadata](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/contract.x#L236-L272).
 - All 64-bit-or-wider integers are canonical decimal strings, including small values. Smaller bounded integers are JSON numbers. Domain bounds remain enforced; a string is not permission to accept arbitrary precision everywhere.
 - `transactionHash` always means the canonical hash of the unsigned transaction body. It is neither a signature nor an identity for the exact signed envelope.
 - `blockHeight` identifies a committed block; `stateBlockHeight` identifies the committed snapshot read. `attemptBlockHeight` identifies a failed proposal attempt. Separate reads can return different heights.
@@ -205,7 +207,7 @@ Keep byte-array and bigint SDK ergonomics with validated transport codecs.
 
 ```ts
 type Invocation = {
-  contract: Address;
+  address: Address;
   entrypoint: Hex;           // exactly 8 decoded bytes
   calldata: Hex;
   caller?: Address;
@@ -244,7 +246,7 @@ type SimulationResults = {
   "id": 2,
   "method": "simulateInvocation",
   "params": {
-    "contract": "<base58-contract>",
+    "address": "<base58-address>",
     "entrypoint": "0x0102030405060708",
     "calldata": "0x",
     "gasLimit": "500000",
@@ -328,7 +330,7 @@ Select only the implemented Ed25519 registered-key projection (32 decoded bytes)
 
 Do not add fake historical selectors, pending-state reads, or a cross-read consistency guarantee. Extending freshness floors to these three reads is useful additive work, but it requires real enforcement rather than silently ignored parameters.
 
-## Events and root contract history
+## Events and root address history
 
 Initial and continuation requests are distinct. Repeat query predicates and use `nextCursor: null` for exhaustion.
 
@@ -343,11 +345,11 @@ type PageRequest =
   | { cursor: Cursor; start?: never; limit?: U32 };
 
 type TopicFilter = { topic0?: Hex[]; topic1?: Hex[]; topic2?: Hex[] };
-type EventFilter = { contractAddresses: Address[]; topics?: TopicFilter };
+type EventFilter = { addresses: Address[]; topics?: TopicFilter };
 type EventQuery = PageRequest & { filters: EventFilter[] };
-type RootContractQuery = PageRequest & { contract: Address };
+type RootAddressQuery = PageRequest & { address: Address };
 
-type EmittedEvent = { contractAddress: Address; topics: Hex[]; data: Hex };
+type EmittedEvent = { address: Address; topics: Hex[]; data: Hex };
 type IdentifiedEvent = {
   transactionHash: Hash;
   blockHeight: Height;
@@ -375,7 +377,7 @@ type TransactionRefPage = PageBounds & {
   "method": "getEvents",
   "params": {
     "filters": [{
-      "contractAddresses": ["<base58-contract>"],
+      "addresses": ["<base58-address>"],
       "topics": { "topic0": [], "topic1": [], "topic2": [] }
     }],
     "start": { "order": "ascending", "anchor": { "kind": "atHeight", "blockHeight": "800" } },
@@ -397,9 +399,9 @@ type TransactionRefPage = PageBounds & {
 }
 ```
 
-Continuation repeats filters (or the root-history contract), cursor and optional limit; it omits start. Require exactly one of start or a nonempty cursor. Default limit is 50; reject zero or values above the advertised cap. Page size may change. Bind the method and canonical decoded query, excluding page size. Preserve ordered filter/address/topic arrays; reordered lists may be rejected as queryMismatch. Object property order and equivalent wildcard forms do not change identity. Direction and upper watermark remain cursor-owned.
+Continuation repeats filters (or the root-history address), cursor and optional limit; it omits start. Require exactly one of start or a nonempty cursor. Default limit is 50; reject zero or values above the advertised cap. Page size may change. Bind the method and canonical decoded query, excluding page size. Preserve ordered filter/address/topic arrays; reordered lists may be rejected as queryMismatch. Object property order and equivalent wildcard forms do not change identity. Direction and upper watermark remain cursor-owned.
 
-Retain current topic semantics: OR across filters; contract membership AND topic conditions within each filter; OR within each topic position; AND across positions. An omitted topics object, omitted position or empty topic list is a wildcard. Normalize these equivalent forms before query binding; null is invalid. Each specified topic is exactly 32 bytes; there are at most three positions. Keep nonempty contract lists and the current filter/value bounds. Do not interpret an empty contract list as a full-chain scan.
+Retain current topic semantics: OR across filters; address membership AND topic conditions within each filter; OR within each topic position; AND across positions. An omitted topics object, omitted position or empty topic list is a wildcard. Normalize these equivalent forms before query binding; null is invalid. Each specified topic is exactly 32 bytes; there are at most three positions. Keep nonempty address lists and the current filter/value bounds. Do not interpret an empty address list as a full-chain scan.
 
 An explicit `atHeight` anchor is inclusive when available. `atBeginning` is valid only ascending; `atEnd` only descending. Reject the opposite combinations as InvalidParams, rather than preserving today's surprising empty-page behavior. These boundaries refer to the retained serving range. An ascending explicit anchor beyond the available tip exhausts immediately; descending starts at the available tip. An explicit height below retained history should report unavailable history instead of silently clamping or exhausting; this requires the backend outcome described below.
 
@@ -409,27 +411,31 @@ An event's identity within a chain instance is `(transactionHash, sequenceNumber
 
 Receipt, event and scheduler retention differ; page bounds are not a global retention guarantee.
 
-Root history returns references only to transactions whose root invocation targets `contract`. It excludes internal invocations and addresses merely touched, debited or credited. It is not full wallet history, a transfer index, or a transaction-body fetch. SDK helper names must preserve this distinction.
+`getTransactionsByRootAddress({ address, start?, cursor?, limit? })`:
+
+Returns transactions whose root invocation targets the supplied address, including DefaultWallet account addresses. For a wallet this is the transactions it sent; it excludes internal calls and incoming transfers. For incoming native transfers, query `getEvents` for the token Transfer event.
+
+The result contains transaction references, not bodies. Use `getTransactionsByRootAddress` for the planned sdk-ts helper too, with the same `address` parameter and scope. Keep `Root`: [Solana address history](https://solana.com/docs/rpc/http/getsignaturesforaddress) includes transactions referencing the address in accountKeys, and [Etherscan address history](https://info.etherscan.com/how-to-filter-transactions-of-an-address/) includes incoming transactions. Thruput indexes only the root target, as defined by the [protocol query](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/indexer.x#L188-L200) and [index key](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L231-L240).
 
 ### Backend correctness gates
 
 The full announced application profile requires both history methods. Partial developer endpoints may omit them, but doing so for announcement requires explicit product re-scope and updates to CLI, explorer, smokes and PQ demo.
 
 1. Invalid/malformed/unsupported cursors and predicate mismatch are typed protocol/indexer outcomes, mapped to invalidCursor/-32602. Binding includes method and canonical decoded query, excludes page size, remains backend-owned and fits the 256-byte cap. It prevents accidental mismatch, not malicious token forgery. A gateway must not decode cursor internals.
-2. Check RocksDB iterator status, malformed in-range keys, every missing/unreadable/undecodable linked hydration row, out-of-range event position and malformed projection. Fail whole page with typed error and no successful cursor/exhaustion. Current atomic/no-pruning indexing gives no legitimate missing-linked-row exception. Cover events and root-contract history, plus malformed receipt/single/batch simulation events.
+2. Check RocksDB iterator status, malformed in-range keys, every missing/unreadable/undecodable linked hydration row, out-of-range event position and malformed projection. Fail whole page with typed error and no successful cursor/exhaustion. Current atomic/no-pruning indexing gives no legitimate missing-linked-row exception. Cover events and root-address history, plus malformed receipt/single/batch simulation events.
 3. Keep block/emitter consistency checks but turn query-triggered CHECK failures into typed errors rather than process termination. Retain appropriate ingestion invariants. Test poison rows without losing service for other queries.
 4. Reject regressed serving watermark below cursor W; do not clamp continuation. Test ascending/descending restored/replaced-indexer cases. SDK defensive walking must also refuse checkpoint advancement.
 5. Report outsideRetention only with authoritative retained-range evidence. Current strict fresh origin requires epoch0, first height1 and contiguous later epochs, so oldest0 is genesis-inclusive and not a proven hidden gap. Qualify the strict fresh origin; do not invent non-genesis support or reset identity.
 
 When start is absent, supply fixed valid legacy XDR order/anchor placeholders, such as Ascending/AtBeginning. Continuation uses cursor-owned order/position/W and ignores placeholders for query binding. Test equivalent results with different valid placeholders; omitting start alone needs no binary layout change. Typed protocol errors/query binding are required for final integration; internal fail-closed repairs may land earlier.
 
-Add a positive configured examined-candidate cap per event page in slice 2. Resume exclusively after the last successfully validated visited position, including nonmatches, and emit a cursor only when candidates remain. Preserve query binding and W. Integrity/I/O errors fail the page rather than returning partial results or a checkpoint. Pair with #4458-equivalent direct seeking. Test both directions, interleaved contracts, overlapping filters, cap=1, selective/no-match initial and continuation pages, exact exhaustion and result-limit-before-candidate-limit. Empty nonterminal pages are a target shape; the current uncapped loop does not normally emit them.
+Add a positive configured examined-candidate cap per event page in slice 2. Resume exclusively after the last successfully validated visited position, including nonmatches, and emit a cursor only when candidates remain. Preserve query binding and W. Integrity/I/O errors fail the page rather than returning partial results or a checkpoint. Pair with #4458-equivalent direct seeking. Test both directions, interleaved emitter addresses, overlapping filters, cap=1, selective/no-match initial and continuation pages, exact exhaustion and result-limit-before-candidate-limit. Empty nonterminal pages are a target shape; the current uncapped loop does not normally emit them.
 
 The candidate cap does not bound RocksDB latency, repeated whole-log decoding, initial fanout or post-timeout work. General time/byte budgets and cancellation follow; [release qualification](../delivery-plan.md#review-and-readiness) must still establish an acceptable resource envelope.
 
 Slice 5 owns SDK history walking: freeze predicates and initial W, handle empty nonterminal pages, deduplicate event identities and emit completedThroughBlockHeight only after processing terminal completion with every serving bound at least W. Ascending order is `(blockHeight, decoded transactionHash bytes, sequenceNumber)`; descending reverses it. Root references use height/hash. This is not causal or base58 lexical order.
 
-Incoming-native-transfer recipe: query the native-token contract, canonical Transfer signature topic0 and destination address bytes as 32-byte hex topic2. Reuse generated typed topic helpers and test address-to-topic conversion. Generated signature leaves two indexed value positions. Transfer events are not full balance history. Freeze token event/error signature identity at 0.1 and `groundhog-erc20-if` for this release; a package 0.2/1 bump changes it even with the label pinned. Run the existing native/RV32 parity test with exact candidate pins. Independent event-version controls can follow. See [signature derivation](https://github.com/thruputchain/thruput-sdk-rs/blob/12337492533acfa45a475cabc5af88ffe456559d/crates/macros/src/derive_event.rs#L298-L313) and [native/RV32 parity coverage](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_exec/contract_tests/native_rv32_token_event_parity_test.cc#L371-L419).
+Incoming-native-transfer recipe: query the native-token address, canonical Transfer signature topic0 and destination address bytes as 32-byte hex topic2. Reuse generated typed topic helpers and test address-to-topic conversion. Generated signature leaves two indexed value positions. Transfer events are not full balance history. Freeze token event/error signature identity at 0.1 and `groundhog-erc20-if` for this release; a package 0.2/1 bump changes it even with the label pinned. Run the existing native/RV32 parity test with exact candidate pins. Independent event-version controls can follow. See [signature derivation](https://github.com/thruputchain/thruput-sdk-rs/blob/12337492533acfa45a475cabc5af88ffe456559d/crates/macros/src/derive_event.rs#L298-L313) and [native/RV32 parity coverage](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_exec/contract_tests/native_rv32_token_event_parity_test.cc#L371-L419).
 
 Sources: [indexer scan/cursor](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L2090-L2214), [cursor seeking](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L1861-L1885), [indexer protocol](https://github.com/thruputchain/thruput-protocol/blob/af043b5c1983c0c8b44683975a3c389369844e09/indexer.x#L229-L259), and [RocksDB iterator errors](https://github.com/facebook/rocksdb/wiki/Iterator).
 
@@ -465,7 +471,7 @@ Generate sorted, unique `supportedMethods` from actual configured registration, 
 | DB | getChainTip, getChainConfig, getStorage, getBalance, getRegisteredAuth |
 | Indexer | getTransactionReceipt |
 | Indexer + scheduler | getTransactionStatus |
-| Qualified indexer history | getEvents, getTransactionsByRootContract |
+| Qualified indexer history | getEvents, getTransactionsByRootAddress |
 | View backend | simulateInvocation, simulateInvocations |
 | Local scheduler | dev_getPendingTransactionCount |
 | Hosted faucet REST adapter | faucet_requestAirdrop |
@@ -900,6 +906,10 @@ Sources: [hosted producer](https://github.com/thruputchain/thruput-tools/blob/d0
 and [local journal](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/node-supervisor/src/funding_journal.rs#L30).
 
 ## Source baseline
+
+Address naming was rechecked against origin on 15 October 2026: protocol
+`47f88b2`, hogd `15d53691` and tools `d0a8cdc9`. The broader review below retains
+its original baseline.
 
 Source review dated 15 October 2026: tools `d0a8cdc9`, hogd `15d53691`, protocol
 `af043b5c`, TS SDK `8ce62f45`, examples `c8ba8730`, chuckd `6db13472`, packaging
