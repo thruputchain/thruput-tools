@@ -1,11 +1,11 @@
-# Proposal: native Thruput JSON-RPC API
+# Native Thruput JSON-RPC API specification
 
-**Draft for team review, 15 October 2026.** This describes a proposed API, not
-current server behaviour. Implementation and Linear changes remain on hold.
+**Agreed target contract, 15 October 2026.** This specifies the API to implement,
+not current server behaviour. Implementation status is tracked in Linear.
 
-Read this proposal first, then the [delivery plan](delivery-plan.md). The
-[contract appendix](appendix/contract-details.md) defines exact shapes, edge cases
-and source references.
+Read the method map and conventions here, then the
+[contract appendix](appendix/contract-details.md) for exact shapes, edge cases
+and source references. [Linear](https://linear.app/grndhg/document/native-rpc-delivery-and-first-batch-review-79be0ac4d8c9) owns delivery, dependencies and readiness.
 
 ## Why change the surface now?
 
@@ -15,8 +15,7 @@ familiar names and calling patterns where they fit.
 
 Submission, commitment and execution are separate. Simulation discards writes
 and needs no footprint preparation. Gas meters work rather than burning tokens.
-There are no external devnet users or state to preserve, so one new wire major
-and matching SDK can launch on a freshly qualified devnet.
+The new surface requires a coordinated wire major and matching SDK.
 
 ## Complete method map
 
@@ -45,7 +44,7 @@ wrapper. Types and defaults are defined in the [contract appendix](appendix/cont
 | `requestAirdrop` | `faucet_requestAirdrop` | `{ recipient, clientNonce }` | Existing pending/succeeded funding-attempt semantics |
 | `fundAccount` | `dev_fundAccount` | `{ recipient, rawAmount, clientNonce, faucet }` | Retained transaction hash and signed submission evidence |
 | `pendingTransactionCount` | `dev_getPendingTransactionCount` | `{}` | `{ count }`; local implementation only |
-| `getBlockByNumber` | Deferred | None | No implemented public backend to advertise |
+| `getBlockByNumber` | Deferred | None | Outside this native method set; current-wire block work is separate |
 
 The first 15 methods form the full application endpoint. Optional services and
 partial developer endpoints advertise only configured, implemented methods.
@@ -268,17 +267,9 @@ after validation. An error or pending without a hash stops progression with
 retained evidence. Explicit retries retain delay hints and original identity;
 a repeated nonce or unchanged URL does not prove durable idempotence.
 
-## Questions for review
+## Specification and delivery
 
-- Do the names and payloads describe what Thruput actually does, particularly
-  signed submission, invocation simulation, registered auth and root history?
-- Does the separate status/receipt API provide enough evidence while the SDK
-  keeps ordinary application code simple?
-- Are the strict parameter rules, canonical wire encodings and proposed error
-  families worth settling in this major? Which would be costly to reverse?
-- Are any proposed guarantees unsupported by the minimum backend work, or are
-  we making an additive improvement unnecessarily block announcement?
-
-Continue with the [delivery plan](delivery-plan.md) for the eight slices, their
-dependencies and release gates. Detailed field and recovery rules are in the
-[contract appendix](appendix/contract-details.md).
+The API surface is agreed. Changes to methods, payloads or semantics must update
+this specification and its [contract appendix](appendix/contract-details.md).
+Delivery slices, owners, dependencies, implementation gaps and announcement
+qualification are tracked in [Linear](https://linear.app/grndhg/document/native-rpc-delivery-and-first-batch-review-79be0ac4d8c9).

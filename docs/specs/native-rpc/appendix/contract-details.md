@@ -1,9 +1,9 @@
-# Appendix: proposed RPC contract details
+# Appendix: native RPC contract details
 
 This appendix defines the target shapes and edge cases behind the
-[API proposal and complete method map](../api-proposal.md). The
-[delivery plan](../delivery-plan.md) owns scope, dependencies and readiness.
-These are proposed semantics; implementation and Linear changes remain on hold.
+[API specification and complete method map](../api-proposal.md).
+[Linear](https://linear.app/grndhg/document/native-rpc-delivery-and-first-batch-review-79be0ac4d8c9) owns implementation scope, dependencies and readiness.
+These are agreed target semantics, not a claim of implemented behavior.
 Rust types will generate the implementation schemas. The sketches below are
 design notation, and angle-bracket examples are not executable fixtures.
 
@@ -22,7 +22,6 @@ design notation, and angle-bracket examples are not executable fixtures.
 | Commitment | Validate log identity/height first; error observation contains only hash/height; Rust and TS retain commitment. |
 | History | Start/cursor exclusivity, query binding and fixed watermark; fail closed; candidate cap/direct seek in scope. |
 | Funding | One SDK faucet call, then read-only waiting for a pending hash. Durable recovery and richer outcomes follow. |
-| Release | One coordinated wire major and matching artifacts, fresh devnet, qualification, announcement. |
 
 Keep existing SDK assertTransactionSuccess, waitForExecution and prepareTransaction
 helpers. The latter assembles a transaction, not a footprint or gas estimate.
@@ -38,7 +37,7 @@ Use JSON-RPC 2.0 with one named params object. No request/query wrapper. Nested 
 - Canonical no-argument call: `params: {}`. Accept omitted `params`, `[]` and noarg `null` normalized to omission. Reject nonempty objects/arrays. For parameterized methods require a named object; omitted/null/array params are invalid. This narrow noarg exception is deliberate: jsonrpsee 0.25.1 collapses absent and null before dispatch. Do not fork the transport or add a second envelope parser for this distinction.
 - Optional request fields are omitted. Reject explicit null unless a field specifically allows it. Reject unknown request properties at every boundary, including tagged-union variants.
 - Outputs tolerate additional fields. Readers preserve or surface unknown union variants as unsupported data; they must not infer success, absence or permission to replace a transaction.
-- Use base58 for typed addresses, keys, hashes and signatures. Preserve hex for signed XDR, calldata, return/abort buffers, raw storage keys, topics, event data and opaque cursors. RPC/provider typed identifiers accept canonical base58 only, not C/G wire aliases. Explicit typed human-input SDK/CLI/wallet helpers may convert C addresses or G keys before serialization; S is only explicit secret import/export. No legacy hex fallback for identifiers. Coordinate this clarification with GH-502/GH-503/GH-507.
+- Use base58 for typed addresses, keys, hashes and signatures. Preserve hex for signed XDR, calldata, return/abort buffers, raw storage keys, topics, event data and opaque cursors. RPC/provider typed identifiers accept canonical base58 only, not C/G wire aliases. Explicit typed human-input SDK/CLI/wallet helpers may convert C addresses or G keys before serialization; S is only explicit secret import/export. No legacy hex fallback for identifiers.
 - An address identifies a contract instance, including pubkey wallet accounts; contract code is identified separately by its deployed contract hash and type. Thruput has no Stellar-style account/contract split. See the shared [address type](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/types.x#L133-L136), [pubkey address derivation](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/preimage.x#L19-L23) and [deployed code metadata](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/contract.x#L236-L272).
 - All 64-bit-or-wider integers are canonical decimal strings, including small values. Smaller bounded integers are JSON numbers. Domain bounds remain enforced; a string is not permission to accept arbitrary precision everywhere.
 - `transactionHash` always means the canonical hash of the unsigned transaction body. It is neither a signature nor an identity for the exact signed envelope.
@@ -57,7 +56,7 @@ type Cursor = Hex;           // opaque, nonempty bytes when used to continue
 type Height = string;        // canonical nonnegative decimal, maximum 2^63 - 1
 ```
 
-Strict request DTOs own omission/null/unknown-field validation. Use shared raw-Params registration, thin `ClientT::request(method, requestDto)` adapters with `ToRpcParams`, and schemas generated from those DTOs. Pinned `#[rpc(client)]` wraps arguments, so it cannot be retained for flat-object calls. Preserve backend traits. Slice 1 chooses explicit or small generated adapters and proves gateway/local/client/schema parity. Parameterized methods declare `paramStructure: "by-name"` plus whole-object `x-params-schema`; document noarg normalizations separately and validate the selected OpenRPC meta-schema. See [OpenRPC](https://spec.open-rpc.org/) and the [existing generator](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/open-rpc-spec/src/lib.rs).
+Strict request DTOs own omission/null/unknown-field validation. Generate schemas from those DTOs and preserve gateway/local/client/schema parity. Parameterized methods declare `paramStructure: "by-name"` plus whole-object `x-params-schema`; document noarg normalizations separately and validate the selected OpenRPC meta-schema. See [OpenRPC](https://spec.open-rpc.org/) and the [existing generator](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/open-rpc-spec/src/lib.rs).
 
 Use distinct SDK semantic types/constructors for keys, public-key hashes and derived addresses. Never implicitly turn a G/public key into an account address. Valid32-byte text cannot always reveal a mistaken semantic type. The body hash excludes network identity; signatures bind it. Records use verified networkHash plus transactionHash and explicit reset invalidation, even if networkHash is reused.
 
@@ -419,23 +418,23 @@ Sender semantics follow the [pubkey-address check](https://github.com/thruputcha
 
 The result contains transaction references, not bodies. Use `getTransactionsByRootAddress` for the planned sdk-ts helper too, with the same `address` parameter and scope. Keep `Root`: [Solana address history](https://solana.com/docs/rpc/http/getsignaturesforaddress) includes transactions referencing the address in accountKeys, and [Etherscan address history](https://info.etherscan.com/how-to-filter-transactions-of-an-address/) includes incoming transactions. Thruput indexes only the root target, as defined by the [protocol query](https://github.com/thruputchain/thruput-protocol/blob/47f88b234927cb20909e0af7185db9b5a977b613/indexer.x#L188-L200) and [index key](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L231-L240).
 
-### Backend correctness gates
+### History integrity
 
-The full announced application profile requires both history methods. Partial developer endpoints may omit them, but doing so for announcement requires explicit product re-scope and updates to CLI, explorer, smokes and PQ demo.
+The full announced application profile requires both history methods. Partial developer endpoints may omit them; the full application profile cannot.
 
 1. Invalid/malformed/unsupported cursors and predicate mismatch are typed protocol/indexer outcomes, mapped to invalidCursor/-32602. Binding includes method and canonical decoded query, excludes page size, remains backend-owned and fits the 256-byte cap. It prevents accidental mismatch, not malicious token forgery. A gateway must not decode cursor internals.
 2. Check RocksDB iterator status, malformed in-range keys, every missing/unreadable/undecodable linked hydration row, out-of-range event position and malformed projection. Fail whole page with typed error and no successful cursor/exhaustion. Current atomic/no-pruning indexing gives no legitimate missing-linked-row exception. Cover events and root-address history, plus malformed receipt/single/batch simulation events.
-3. Keep block/emitter consistency checks but turn query-triggered CHECK failures into typed errors rather than process termination. Retain appropriate ingestion invariants. Test poison rows without losing service for other queries.
-4. Reject regressed serving watermark below cursor W; do not clamp continuation. Test ascending/descending restored/replaced-indexer cases. SDK defensive walking must also refuse checkpoint advancement.
-5. Report outsideRetention only with authoritative retained-range evidence. Current strict fresh origin requires epoch0, first height1 and contiguous later epochs, so oldest0 is genesis-inclusive and not a proven hidden gap. Qualify the strict fresh origin; do not invent non-genesis support or reset identity.
+3. Keep block/emitter consistency checks but turn query-triggered CHECK failures into typed errors rather than process termination. Retain appropriate ingestion invariants. Other queries must remain available when a query encounters invalid data.
+4. Reject regressed serving watermark below cursor W; do not clamp continuation. This applies to ascending and descending walks, including restored or replaced indexers. SDK defensive walking must also refuse checkpoint advancement.
+5. Report outsideRetention only with authoritative retained-range evidence. Current strict fresh origin requires epoch0, first height1 and contiguous later epochs, so oldest0 is genesis-inclusive and not a proven hidden gap. Do not infer non-genesis support or reset identity.
 
-When start is absent, supply fixed valid legacy XDR order/anchor placeholders, such as Ascending/AtBeginning. Continuation uses cursor-owned order/position/W and ignores placeholders for query binding. Test equivalent results with different valid placeholders; omitting start alone needs no binary layout change. Typed protocol errors/query binding are required for final integration; internal fail-closed repairs may land earlier.
+When start is absent, supply fixed valid legacy XDR order/anchor placeholders, such as Ascending/AtBeginning. Continuation uses cursor-owned order/position/W and ignores placeholders for query binding. Different valid placeholders must produce equivalent continuation results; omitting start alone needs no binary layout change.
 
-Add a positive configured examined-candidate cap per event page in slice 2. Resume exclusively after the last successfully validated visited position, including nonmatches, and emit a cursor only when candidates remain. Preserve query binding and W. Integrity/I/O errors fail the page rather than returning partial results or a checkpoint. Pair with #4458-equivalent direct seeking. Test both directions, interleaved emitter addresses, overlapping filters, cap=1, selective/no-match initial and continuation pages, exact exhaustion and result-limit-before-candidate-limit. Empty nonterminal pages are a target shape; the current uncapped loop does not normally emit them.
+Use a positive configured examined-candidate cap per event page. Resume exclusively after the last successfully validated visited position, including nonmatches, and emit a cursor only when candidates remain. Preserve query binding and W. Integrity/I/O errors fail the page rather than returning partial results or a checkpoint. Direct seeking must avoid rescanning positions before the continuation. The cap applies in both directions and must preserve exact exhaustion and result-limit behavior. Empty nonterminal pages are a target shape; the current uncapped loop does not normally emit them.
 
-The candidate cap does not bound RocksDB latency, repeated whole-log decoding, initial fanout or post-timeout work. General time/byte budgets and cancellation follow; [release qualification](../delivery-plan.md#review-and-readiness) must still establish an acceptable resource envelope.
+The candidate cap does not bound RocksDB latency, repeated whole-log decoding, initial fanout or post-timeout work. The API does not promise general time/byte budgets or cancellation. [Delivery and qualification](https://linear.app/grndhg/document/native-rpc-delivery-and-first-batch-review-79be0ac4d8c9) track those implementation limits.
 
-Slice 5 owns SDK history walking: freeze predicates and initial W, handle empty nonterminal pages, deduplicate event identities and emit completedThroughBlockHeight only after processing terminal completion with every serving bound at least W. Ascending order is `(blockHeight, decoded transactionHash bytes, sequenceNumber)`; descending reverses it. Root references use height/hash. This is not causal or base58 lexical order.
+SDK history walkers must freeze predicates and initial W, handle empty nonterminal pages, deduplicate event identities and emit completedThroughBlockHeight only after processing terminal completion with every serving bound at least W. Ascending order is `(blockHeight, decoded transactionHash bytes, sequenceNumber)`; descending reverses it. Root references use height/hash. This is not causal or base58 lexical order.
 
 Incoming-native-transfer recipe: query the native-token address, canonical Transfer signature topic0 and destination address bytes as 32-byte hex topic2. Reuse generated typed topic helpers and test address-to-topic conversion. Generated signature leaves two indexed value positions. Transfer events are not full balance history. Freeze token event/error signature identity at 0.1 and `groundhog-erc20-if` for this release; a package 0.2/1 bump changes it even with the label pinned. Run the existing native/RV32 parity test with exact candidate pins. Independent event-version controls can follow. See [signature derivation](https://github.com/thruputchain/thruput-sdk-rs/blob/12337492533acfa45a475cabc5af88ffe456559d/crates/macros/src/derive_event.rs#L298-L313) and [native/RV32 parity coverage](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_exec/contract_tests/native_rv32_token_event_parity_test.cc#L371-L419).
 
@@ -479,7 +478,7 @@ Generate sorted, unique `supportedMethods` from actual configured registration, 
 | Hosted faucet REST adapter | faucet_requestAirdrop |
 | Local submit/indexer + validated signer/journal/funding config | dev_fundAccount and local faucet_requestAirdrop |
 
-Finalize discovery after module merging/removal, before serving. Pinned jsonrpsee 0.25.1 supports remove_method; choose an immutable method list or register-only builder in the spike. Configured outage returns an error; unconfigured planes are absent. Full service requires scheduler/DB/indexer/view. Startup must compare manifest protocol with linked codecs; an intro-token override alone cannot prove compatibility.
+Finalize discovery after module merging/removal, before serving. Pinned jsonrpsee 0.25.1 supports remove_method; the chosen registration strategy must expose the final configured list. Configured outage returns an error; unconfigured planes are absent. Full service requires scheduler/DB/indexer/view. Startup must compare manifest protocol with linked codecs; an intro-token override alone cannot prove compatibility.
 
 Keep `wireFormat` as the compatibility authority. Release/implementation fields remain diagnostic; validated bundle identity retains its existing producer-owned format and provenance. Do not blindly re-encode Git commit IDs or artifact identifiers as chain hashes. Omit unavailable diagnostic fields consistently, including commitHash.
 
@@ -489,7 +488,7 @@ Cache discovery per client/transport instance; validate new instances and expose
 
 App proxies expose getVersionInfo/getNetworkInfo, advertise upstream support intersected with policy, accept named objects, preserve bounded typed errors and return -32601 for filtered methods. HTTP authentication/rate limiting is separate. Static SDK capabilities express expectations; unavailable optional methods fail locally. Test [Counter](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/counter/server/http.ts), [swap](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/swap/server/http.ts) and [token-launchpad](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/token-launchpad/server/http.ts) independently, preserving their write policies. Shared helpers are optional.
 
-New SDK versions target the native API only. New output variants are minor additions only after supported readers demonstrate safe raw/unsupported fallback; otherwise they require a major. The planning target is `>=13.0.0 <14.0.0`, conditional on the coordinated major and demonstrated minor-version reader compatibility. If GH-507 already consumes that major with a different contract, choose the next coordinated major. Diagnostic implementation/release versions never select codecs. A new optional request field or enum variant is not automatically supported by an older server in the same major: gate it by observed wire minor or raise the SDK's minimum required minor. If the caller explicitly requests an unsupported feature, fail locally as unsupported; never silently drop that constraint. Test new-client/old-server and old-client/new-server directions, including strict unknown-field rejection; `supportedMethods` alone does not negotiate parameter support.
+New SDK versions target the native API only. New output variants are minor additions only after supported readers demonstrate safe raw/unsupported fallback; otherwise they require a major. The planning target is `>=13.0.0 <14.0.0`, conditional on the coordinated major and demonstrated minor-version reader compatibility. If that major already identifies a different published contract, choose the next coordinated major. Diagnostic implementation/release versions never select codecs. A new optional request field or enum variant is not automatically supported by an older server in the same major: gate it by observed wire minor or raise the SDK's minimum required minor. If the caller explicitly requests an unsupported feature, fail locally as unsupported; never silently drop that constraint. Test new-client/old-server and old-client/new-server directions, including strict unknown-field rejection; `supportedMethods` alone does not negotiate parameter support.
 
 The public `networkHash` binds signing identity. It does not currently prove a particular reset/instance or provide a genesis descriptor. Do not add invented `genesisHash`, `chainInstanceId`, protocol version or native network label. A required verified instance identifier would be useful, but needs a runtime/bootstrap contract and explicit reset behavior.
 
@@ -838,7 +837,7 @@ A generic `retryable` boolean cannot distinguish read retry, same-byte submissio
 | Receipt with failed execution | Return the committed receipt. A separate success assertion may throw; do not repeat the business action automatically. |
 | Invalid cursor, unavailable history or malformed backend data | Do not advance checkpoint or silently restart/skip. Require correction or explicit recovery. |
 
-Runtime duplicate correctness is mandatory in slice 2 even with SDK retries disabled. Automatic exact-byte redispatch additionally requires nomination-between-chunks, full-queue, abandonment/reenqueue and postcommit replay qualification. Until then, automatic repeats are limited to proven never-dispatched attempts with no earlier uncertainty. A later rejection never clears earlier uncertainty.
+Runtime duplicate correctness is mandatory even with SDK retries disabled. Automatic exact-byte redispatch additionally requires nomination-between-chunks, full-queue, abandonment/reenqueue and postcommit replay qualification. Until then, automatic repeats are limited to proven never-dispatched attempts with no earlier uncertainty. A later rejection never clears earlier uncertainty.
 
 After qualification, exact-byte recovery requires identical approved bytes/hash,
 verified expected network, unchanged chain instance, unexpired validity, no known
@@ -916,8 +915,8 @@ its original baseline.
 Source review dated 15 October 2026: tools `d0a8cdc9`, hogd `15d53691`, protocol
 `af043b5c`, TS SDK `8ce62f45`, examples `c8ba8730`, chuckd `6db13472`, packaging
 `73566ec9` and ops `f03432c9`. Links above pin the relevant source. This was source
-inspection, not runtime qualification. Refresh in-flight PRs before implementation;
-reported unpublished GH-506/507 work was not independently inspected.
+inspection, not runtime qualification. The baseline does not describe subsequent
+implementation progress; current work and validation are tracked in Linear.
 
 Dependency mechanics were checked in installed jsonrpsee 0.25.1, serde 1.0.229
 and serde_json 1.0.151 sources. The OpenRPC reference is current 1.4.x;
