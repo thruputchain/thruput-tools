@@ -33,6 +33,7 @@ Read the guide for the area you are changing:
 
 These describe proposed work, not the current implementation:
 
+- [Native JSON-RPC API and delivery plan](specs/native-rpc/api-proposal.md)
 - [CLI TUI](specs/2026-09-21-cli-tui-mvp.md)
 - [Project scaffolding](specs/2026-09-21-project-scaffolding.md)
 
