@@ -697,9 +697,10 @@
             "$ref": "#/components/schemas/DecimalBlockHeight"
           },
           "limit": {
-            "description": "Zero selects 50, subject to the endpoint cap. Maximum 200.",
+            "description": "Positive page size, at most 200 and subject to the endpoint cap.\nZero is invalid. Send 50 for a normal page.",
             "format": "uint32",
-            "minimum": 0,
+            "maximum": 200,
+            "minimum": 1,
             "type": "integer"
           },
           "order": {

@@ -346,6 +346,15 @@ async fn block_pages_preserve_cursors_and_reject_invalid_requests_before_dispatc
             .is_err()
     );
     query.height = 5.into();
+    query.limit = 0;
+    let error = client
+        .get_transactions_by_block(query.clone())
+        .await
+        .unwrap_err();
+    match error {
+        jsonrpsee::core::ClientError::Call(error) => assert_eq!(error.code(), -32602),
+        other => panic!("expected invalid params, got {other}"),
+    }
     query.limit = 201;
     assert!(
         client

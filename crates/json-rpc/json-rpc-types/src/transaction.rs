@@ -358,7 +358,9 @@ pub struct BlockTransactionQuery {
     /// A continuation cursor supplies its original order. Invalid or stale
     /// cursors return an empty terminal page; oversized cursors are rejected.
     pub cursor: PaginationCursor,
-    /// Zero selects 50, subject to the endpoint cap. Maximum 200.
+    /// Positive page size, at most 200 and subject to the endpoint cap.
+    /// Zero is invalid. Send 50 for a normal page.
+    #[schemars(range(min = 1, max = 200))]
     pub limit: u32,
 }
 

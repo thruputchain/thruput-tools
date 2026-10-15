@@ -145,7 +145,7 @@ async fn verify(
         height: empty_height,
         order: IterationOrder::Ascending,
         cursor: PaginationCursor(vec![]),
-        limit: 0,
+        limit: 50,
     };
     let empty = client
         .get_transactions_by_block(query.clone())

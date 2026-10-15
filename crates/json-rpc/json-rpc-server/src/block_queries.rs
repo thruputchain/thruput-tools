@@ -18,12 +18,17 @@ pub(crate) fn validate_height(height: &BlockHeight) -> Result<(), RpcServerError
 }
 
 pub(crate) fn validate_query(
-    query: &mut BlockTransactionQuery,
+    query: &BlockTransactionQuery,
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
     validate_height(&query.height)?;
     let cap = config.max_transactions_per_page.min(200);
-    if cap == 0 || query.limit > cap {
+    if query.limit == 0 {
+        return Err(RpcServerError::InvalidParam(
+            "limit must be greater than zero".into(),
+        ));
+    }
+    if query.limit > cap {
         return Err(RpcServerError::InvalidParam(format!(
             "limit exceeds maximum {cap}"
         )));
@@ -33,9 +38,6 @@ pub(crate) fn validate_query(
             "cursor length exceeds maximum {}",
             config.max_cursor_bytes
         )));
-    }
-    if query.limit == 0 {
-        query.limit = 50.min(cap);
     }
     Ok(())
 }
@@ -118,26 +120,27 @@ mod tests {
     }
 
     #[test]
-    fn bounds_and_default_are_enforced_before_dispatch() {
+    fn positive_limits_and_bounds_are_enforced_before_dispatch() {
         let config = RpcServerConfig::default().with_max_transactions_per_page(10);
         let mut q = query();
         q.limit = 0;
-        validate_query(&mut q, &config).unwrap();
-        assert_eq!(q.limit, 10);
+        assert!(validate_query(&q, &config).is_err());
+        q.limit = 10;
+        validate_query(&q, &config).unwrap();
         q.limit = 11;
-        assert!(validate_query(&mut q, &config).is_err());
+        assert!(validate_query(&q, &config).is_err());
         q.limit = 1;
         q.height = (-1).into();
-        assert!(validate_query(&mut q, &config).is_err());
+        assert!(validate_query(&q, &config).is_err());
         q.height = i64::MAX.into();
-        validate_query(&mut q, &config).unwrap();
+        validate_query(&q, &config).unwrap();
         q.cursor.0.resize(257, 0);
-        assert!(validate_query(&mut q, &config).is_err());
+        assert!(validate_query(&q, &config).is_err());
         q.cursor.0.clear();
         q.limit = 201;
         assert!(
             validate_query(
-                &mut q,
+                &q,
                 &RpcServerConfig::default().with_max_transactions_per_page(500)
             )
             .is_err()

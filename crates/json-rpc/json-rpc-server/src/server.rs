@@ -454,11 +454,11 @@ where
     #[tracing::instrument(skip_all, fields(?query.height, limit = query.limit))]
     async fn get_transactions_by_block(
         &self,
-        mut query: BlockTransactionQuery,
+        query: BlockTransactionQuery,
     ) -> RpcResult<TransactionRefPage> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            crate::block_queries::validate_query(&mut query, &self.config)?;
+            crate::block_queries::validate_query(&query, &self.config)?;
             let page = self
                 .read
                 .transactions_by_block(context, query.clone())

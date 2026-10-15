@@ -183,8 +183,9 @@ It returns `null` outside indexed coverage, including genesis. An unavailable or
 corrupt index is a backend error, not a missing block.
 
 `getTransactionsByBlock` takes `height`, `order`, `cursor`, and `limit`. References
-are ordered by unsigned transaction-hash bytes, not execution order. A zero limit
-selects 50, reduced by the endpoint cap if necessary; the maximum is 200. The
+are ordered by unsigned transaction-hash bytes, not execution order. The limit
+must be positive and no greater than the endpoint cap or 200. Zero is rejected
+before backend dispatch; send 50 for a normal page. The
 shared server checks page size, height membership, coverage, and strict ordering.
 It rejects invalid backend pages rather than dropping their rows.
 
