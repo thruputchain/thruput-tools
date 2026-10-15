@@ -41,9 +41,12 @@ automatic escape from unfinished integrity work.
   Candidate count alone does not bound latency, bytes or cancellation tails.
 - **Receipt and simulation:** fail malformed events and contradictory execution
   data. Require return/abort bytes for their respective receipt variants. Check
-  the backend log hash and height before returning receipt or commitment evidence;
-  error observations contain only hash/height. Fix commitment retention in the
-  shared Rust waiter as well as the TS SDK, including later errors and timeouts.
+  the backend log hash and height before event/execution parsing; an invalid
+  identity/height yields no observation. Later parse failures may carry only the
+  validated hash/height. Fix commitment retention in the shared Rust waiter and
+  TS SDK, including later errors and timeouts.
+  After commitment, Retry/Dropped must not end receipt waiting; Unknown/status
+  errors must not replace commitment.
 - **Status and admission:** preserve commitment and surface indexer failure when
   only a weaker negative scheduler observation is available. Map scheduler
   AuthenticationRejected, Retryable and InternalError to their distinct error
@@ -69,10 +72,14 @@ separate. Coordinate those changes rather than duplicate them.
 
 Keep optional method/field migration, the hosted faucet's own RPC-client update,
 service-stop/unresolved error mappings, existing signed evidence and checked
-retry-hint preservation. For this major, the hosted helper makes one service call
-and never automatically repeats it, including policy refusals and pending polls.
-It observes a known hash through reads or returns unresolved evidence. Explicit
-caller retry/resume remains available with retained identity and delay hints. Do
+retry-hint preservation. For this major, SDK `requestAirdrop` makes one
+`faucet_requestAirdrop` call on hosted and local-node endpoints. It never
+automatically repeats that RPC, including policy refusals and pending polls.
+Pending with a hash continues through read-only status/receipt waiting; an RPC
+error or pending without a hash stops automatic progression with retained
+cause/evidence. Qualify the local first-pending-response path through commitment.
+A validated succeeded result completes normally. Explicit caller retry/resume
+remains available with retained identity and delay hints. Do
 not add a funding dispatch field solely for optional automatic retries, or reuse
 transaction admission for funding-policy errors.
 

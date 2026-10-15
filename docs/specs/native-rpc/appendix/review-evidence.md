@@ -1023,3 +1023,32 @@ transaction requeue](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae
 and [commit cleanup](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_mempool/scheduler.cc#L1451-L1454)
 support the #4468-equivalent repair/#4471-equivalent coverage requirement even
 when SDK recovery is off. Broader automatic redispatch qualification stays separate.
+
+
+### Final reviewer clarifications
+
+The original reviewer accepted the corrections above. Three acceptance details
+are explicit in the contract and delivery plan:
+
+1. Validate the backend log's transaction hash and nonnegative height before
+   event parsing or execution consistency checks. Identity/height failure has no
+   commitment observation. Only subsequent parsing failures may attach the
+   validated hash/height.
+2. After observed or supplied commitment, Rust receipt waiting continues through
+   Retry/Dropped and retains commitment through Unknown/status lookup errors.
+   Neither an early Status error nor an older RecentFailure may replace it.
+3. SDK requestAirdrop calls faucet_requestAirdrop once on hosted and local-node
+   endpoints. Pending with a hash continues through read-only status/receipt
+   polling. An error or pending without a hash stops automatic funding progression;
+   an already-succeeded response completes normally after validation. This does
+   not change explicit dev_fundAccount journal recovery.
+
+The existing [receipt adapter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/x23/hogd-backend/src/receipt.rs#L29-L48)
+and [Rust waiter](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-client/src/receipt.rs#L206-L248)
+confirm the required changes. The [local faucet pending path](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/node-supervisor/src/airdrop.rs#L528-L590)
+supports the single-call plus read-only-wait composition. The [remote CLI call](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/cli/src/airdrop.rs#L650-L675)
+already invokes the mutation once, but currently returns a retry instruction on
+pending; it does not establish the proposed SDK wait behaviour. Source inspection
+supports these paths, not a measured claim that the first response is almost
+always pending. Origin remains at the cited tools revision; no runtime tests
+were run.

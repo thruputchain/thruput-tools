@@ -275,9 +275,13 @@ permission. Never automatically refresh expiry/nonce or replay a consumed wallet
 approval. Expiry, missing records and dropped status do not prove nonexecution.
 
 Funding keeps its existing results with narrow error/evidence corrections.
-For this major, the hosted SDK helper makes one funding-service call and does
-not automatically repeat it, including after a policy refusal or pending result.
-Reconcile known hashes through reads; otherwise return retained unresolved
+For this major, the SDK `requestAirdrop` helper makes one
+`faucet_requestAirdrop` call on hosted and local-node endpoints. It does not
+automatically repeat that call after a refusal or pending result. Pending with a
+transaction hash starts read-only status/receipt waiting within the caller budget.
+This lets the SDK observe completion after asynchronous local block driving. A
+validated succeeded result completes normally. An error or pending without a hash
+stops automatic funding progression and preserves the cause and available
 evidence. Preserve delay hints for explicit caller retries. A repeated nonce or
 unchanged URL does not prove durable idempotence. Funding-service policy errors
 do not carry transaction admission evidence.
