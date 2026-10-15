@@ -332,7 +332,7 @@ where
             self.config.view_gas_limit,
             self.config.max_view_calldata_bytes as u64,
             self.config.max_events_per_page,
-            self.config.max_transactions_per_page.min(200),
+            self.config.transaction_page_cap(),
             self.config.max_cursor_bytes as u64,
         )
         .with_view_batch(
@@ -834,11 +834,11 @@ fn validate_address_transaction_query(
     query: &AddressTransactionQuery,
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
-    if query.limit > config.max_transactions_per_page.min(200) {
+    if query.limit > config.transaction_page_cap() {
         return Err(RpcServerError::InvalidParam(format!(
             "limit {} exceeds maximum {}",
             query.limit,
-            config.max_transactions_per_page.min(200)
+            config.transaction_page_cap()
         )));
     }
     if query.cursor.0.len() > config.max_cursor_bytes {

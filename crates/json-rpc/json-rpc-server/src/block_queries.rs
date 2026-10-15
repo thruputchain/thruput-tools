@@ -22,7 +22,7 @@ pub(crate) fn validate_query(
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
     validate_height(&query.height)?;
-    let cap = config.max_transactions_per_page.min(200);
+    let cap = config.transaction_page_cap();
     if query.limit == 0 {
         return Err(RpcServerError::InvalidParam(
             "limit must be greater than zero".into(),

@@ -149,6 +149,11 @@ impl RpcServerConfig {
         self
     }
 
+    /// Effective transaction-reference page cap, bounded by the indexer's limit.
+    pub fn transaction_page_cap(&self) -> u32 {
+        self.max_transactions_per_page.min(200)
+    }
+
     /// Override the cursor byte length cap.
     #[must_use]
     pub fn with_max_cursor_bytes(mut self, max: usize) -> Self {
