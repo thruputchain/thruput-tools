@@ -1,7 +1,6 @@
 //! `groundhog_chainTip`, `groundhog_getBlockByNumber`, and
 //! `groundhog_pendingTransactionCount` handlers.
 
-use thruput_indexer::{BlockLookupOutcome, BlockLookupResult};
 use thruput_json_rpc_server::{RpcRequestContext, RpcServerError, TipReading};
 use thruput_json_rpc_types::BlockHeight;
 use thruput_json_rpc_types::block::BlockInfo;
@@ -39,23 +38,21 @@ pub async fn get_block_by_number(
         .await
         .clone()
         .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
-    let result = timed_backend_call(
+    timed_backend_call(
         &ctx.metrics,
         HealthBackend::Indexer,
         "get_block_by_height",
         INDEXER,
         backend_deadline(context, ctx.config.backend_request_timeout())?,
-        client.get_block_by_height(&height),
-        |result| match result {
-            BlockLookupResult::BlockFound { .. } => true,
-            BlockLookupResult::Default { outcome } => {
-                *outcome == BlockLookupOutcome::BlockNotFound.0
-            }
-            _ => false,
+        async {
+            client
+                .get_block_by_height(&height)
+                .await
+                .map(|result| thruput_hogd_backend::indexer::block_lookup(INDEXER, &height, result))
         },
+        Result::is_ok,
     )
-    .await?;
-    thruput_hogd_backend::indexer::block_lookup(INDEXER, &height, result)
+    .await?
 }
 
 /// Number of transactions in the mempool.
@@ -68,3 +65,6 @@ pub async fn pending_transaction_count(_ctx: &GatewayContext) -> Result<u64, Rpc
         "pendingTransactionCount".into(),
     ))
 }
+
+#[cfg(test)]
+mod tests;
