@@ -228,6 +228,9 @@ pub struct LocalNodeOptions {
     /// Genesis parameter values to use in place of the ones stock genesis
     /// states. Whether hog-devnode's build accepts a value is its own call.
     pub network_config_overrides: Vec<(ConfigParamName, u32)>,
+    /// Raw arguments appended to the hog-devnode command line, after every
+    /// flag the CLI sets.
+    pub node_args: Vec<String>,
     /// Validated release identity supplied by an embedding client process.
     /// When absent, the `thruput` client identity is discovered while building the config.
     pub bundle_identity: Option<thruput_bundle_identity::BundleIdentity>,
@@ -1181,7 +1184,9 @@ fn local_node_config(
             });
         }
     }
-    let hogd = hogd.with_network_config_overrides(network_config_overrides);
+    let hogd = hogd
+        .with_network_config_overrides(network_config_overrides)
+        .with_extra_args(options.node_args);
     let hogd = match options.init_network_hash {
         Some(network_hash) => hogd.with_init_network_hash(network_hash),
         None => hogd,

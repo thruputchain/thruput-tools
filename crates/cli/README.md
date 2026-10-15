@@ -133,11 +133,13 @@ ephemeral node:
 thruput test --integration --network-config max_rv32_memory_bytes=16M
 ```
 
-It also accepts `--ramdb-bytes` (same syntax as `thruput node --ramdb-bytes`)
-to size the ephemeral node's RAM database:
+To pass any other flag to the ephemeral `hog-devnode`, use repeatable
+`--node-arg`, one argument per occurrence. They are appended after the flags
+`thruput` sets, so a repeated flag overrides `thruput`'s value:
 
 ```bash
-thruput test --integration -p my-contract --ramdb-bytes 4G
+thruput test --integration -p my-contract \
+  --node-arg --ramdb-bytes --node-arg 4294967296
 ```
 
 ## Contract call gas
