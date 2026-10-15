@@ -22,8 +22,8 @@ use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
 use thruput_json_rpc_types::protocol_token::protocol_text;
 use thruput_json_rpc_types::{
     address_auth::{AuthPublicKey, AuthSigner},
+    base58::Base58,
     events::{EventFilterList, EventQuery},
-    hex::Hex0x,
     transaction::{TransactionStatus, TxHash},
 };
 use thruput_scheduler::{
@@ -734,11 +734,13 @@ async fn make_read_backend_with_gateway(
 }
 
 fn canned_tx_hash(bytes: [u8; 32]) -> TxHash {
-    TxHash(thruput_json_rpc_types::hex::Hex0x(SHA256Hash::from(bytes)))
+    TxHash(thruput_json_rpc_types::base58::Base58(SHA256Hash::from(
+        bytes,
+    )))
 }
 
 fn canned_storage_address() -> thruput_json_rpc_types::ContractAddress {
-    Hex0x(ContractAddress::from([0u8; 32]))
+    Base58(ContractAddress::from([0u8; 32]))
 }
 
 fn canned_failure_diagnostic() -> thruput_trace::TxFailureDiagnostic {
@@ -1099,7 +1101,7 @@ async fn read_address_auth_data_projects_registered_signers_at_snapshot_height()
         vec![AuthSigner {
             key_id: 1,
             public_key: AuthPublicKey::Ed25519 {
-                key: Hex0x(Ed25519PublicKey::from([0x5a; 32])),
+                key: Base58(Ed25519PublicKey::from([0x5a; 32])),
             },
             max_weight: 2,
         }]

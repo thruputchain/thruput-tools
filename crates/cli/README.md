@@ -375,7 +375,9 @@ thruput keys rm <name>         # remove a stored key (with confirmation)
 The first generated key automatically becomes the default. `dev-N` names are
 ordinary stored key names; they have no implicit account or private key.
 
-`keys export` prints the 32-byte private key as lowercase, `0x`-prefixed hex.
+`keys export` prints the 32-byte private seed as unprefixed, case-sensitive base58.
+Use `--format strkey` to export an S StrKey. `keys import` accepts either encoding
+through stdin or a hidden terminal prompt.
 With `--json`, read it from `data.key.privateKey`. Treat it as a secret. Do not
 expose it in logs or CI output, or commit it to a file.
 
@@ -629,7 +631,7 @@ contract simulation through `groundhog_view`.
 
 ```bash
 thruput storage my-counter 0x0000000000000000000000000000000000000000000000000000000000000000
-thruput storage 0xabc123... 0x4242424242424242424242424242424242424242424242424242424242424242
+thruput storage <base58-address> 0x4242424242424242424242424242424242424242424242424242424242424242
 thruput storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --rpc-url http://<your-rpc-host>:8545
 thruput storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --json
 ```
@@ -767,7 +769,7 @@ limit later transactions. Without a selected key, startup creates no user accoun
 Harnesses can pass `--bootstrap-accounts FILE`, an array of public allocations:
 
 ```json
-[{"publicKey":"0x<64 lowercase hex characters>","initialStorageTokens":"1000000000"}]
+[{"publicKey":"<base58-public-key>","initialStorageTokens":"1000000000"}]
 ```
 
 This conflicts with `--key` and `--initial-account-hog`. Each entry names a
@@ -782,14 +784,14 @@ network hashes differ. With a stored `alice` key, start these in separate termin
 
 ```bash
 thruput node --key alice --port 9545 --data-dir .thruput/a \
-  --init-network-hash aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  --init-network-hash CVDFLCAjXhVWiPXH9nTCTpCgVzmDVoiPzNJYuccr1dqB
 thruput node --key alice --port 9546 --data-dir .thruput/b \
-  --init-network-hash 0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  --init-network-hash DdqGmK5uamYN5vmuZrzpQhKeehLdwtPLVJdhu5P2iJKC
 ```
 
-`--init-network-hash` accepts exactly 64 lowercase hexadecimal digits with an optional
-lowercase `0x` prefix, using the same parser as profile `network-hash`. Manifests
-store the unprefixed value; RPC bytes retain their `0x` prefix. For a new chain,
+`--init-network-hash` accepts unprefixed, case-sensitive base58 encoding of exactly
+32 bytes, using the same parser as profile `network-hash`. Manifests and RPC
+responses use that same base58 value. For a new chain,
 omission and an explicit zero hash both select the all-zero development domain.
 No identity is generated automatically. A profile's signing hash does not change a node's chain.
 

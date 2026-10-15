@@ -11,7 +11,6 @@ use thruput_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EmittedEvent, EventFilter, EventFilterList, EventQuery,
     EventTopicFilter, IdentifiedEvent, IterationOrder, PaginationCursor, TopicList,
 };
-use thruput_json_rpc_types::hex::{Hex0x, HexBytes, Topic};
 use thruput_json_rpc_types::network_descriptor::{
     AirdropDescriptor, FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NativeHogDescriptor,
     NetworkDescriptor, NetworkDescriptorEndpoints,
@@ -23,6 +22,10 @@ use thruput_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
 };
 use thruput_json_rpc_types::view::{RootInvocationOutput, ViewRequest, ViewResponse};
+use thruput_json_rpc_types::{
+    base58::Base58,
+    hex::{HexBytes, Topic},
+};
 use thruput_scheduler::{ConsensusValue, ProposalTxsHash};
 use thruput_xdr::{
     address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt},
@@ -38,11 +41,11 @@ use thruput_json_rpc_types::{BlockHeight, SHA256Hash};
 use xdr_common::{BytesM, VecM};
 
 fn zero_hash() -> SHA256Hash {
-    Hex0x(thruput_xdr::types::SHA256Hash::from([0u8; 32]))
+    Base58(thruput_xdr::types::SHA256Hash::from([0u8; 32]))
 }
 
 fn zero_address() -> thruput_json_rpc_types::ContractAddress {
-    Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32]))
+    Base58(thruput_xdr::types::ContractAddress::from([0u8; 32]))
 }
 
 fn test_consensus_value() -> ConsensusValue {
@@ -97,8 +100,8 @@ fn chain_tip_wire_format() {
     };
     let v: Value = serde_json::to_value(&tip).unwrap();
     assert_eq!(v["height"], "42");
-    assert!(v["blockHash"].as_str().unwrap().starts_with("0x"));
-    assert_eq!(v["blockHash"].as_str().unwrap().len(), 66); // 0x + 64
+    assert_eq!(v["blockHash"], "1".repeat(32));
+    assert_eq!(v["blockHash"].as_str().unwrap().len(), 32); // 32 leading zero bytes
     // Verify camelCase
     assert!(v.get("block_hash").is_none());
 }
@@ -112,7 +115,7 @@ fn network_descriptor_wire_format_is_public_and_camel_case() {
     assert_eq!(value["schemaVersion"], NETWORK_DESCRIPTOR_SCHEMA_VERSION);
     assert_eq!(value["kind"], "groundhog-network");
     assert_eq!(value["networkId"], "devnet-preview");
-    assert_eq!(value["networkHash"], format!("0x{}", "12".repeat(32)));
+    assert_eq!(value["networkHash"], thruput_encoding::encode(&[0x12; 32]));
     assert_eq!(value["endpoints"]["rpcUrl"], "https://rpc.devnet.example");
     assert!(value["endpoints"].get("faucetUrl").is_none());
     assert_eq!(value["nativeHog"]["decimals"], 7);
@@ -227,7 +230,7 @@ fn transaction_receipt_wire_format() {
         gas_used: 123_456,
     };
     let v: Value = serde_json::to_value(&receipt).unwrap();
-    assert!(v["txHash"].as_str().unwrap().starts_with("0x"));
+    assert_eq!(v["txHash"], "1".repeat(32));
     assert_eq!(v["gasUsed"], "123456");
     assert_eq!(v["height"], "50");
     assert_eq!(v["status"]["result"], "ok");
@@ -251,7 +254,7 @@ fn view_request_wire_format() {
         gas_limit: None,
     };
     let v: Value = serde_json::to_value(&request).unwrap();
-    assert!(v["contract"].as_str().unwrap().starts_with("0x"));
+    assert_eq!(v["contract"], "1".repeat(32));
     assert_eq!(v["entrypoint"], "0x0102030405060708");
     assert_eq!(v["calldata"], "0xcafe");
     assert!(v.get("caller").is_none());
@@ -360,7 +363,7 @@ fn emitted_event_wire_format() {
         data: HexBytes(vec![0xca, 0xfe]),
     };
     let v: Value = serde_json::to_value(&event).unwrap();
-    assert!(v["contractAddress"].as_str().unwrap().starts_with("0x"));
+    assert_eq!(v["contractAddress"], "1".repeat(32));
     assert!(v["topics"][0].as_str().unwrap().starts_with("0x"));
     assert_eq!(v["topics"][0].as_str().unwrap().len(), 66);
     assert!(v["data"].as_str().unwrap().starts_with("0x"));
@@ -381,7 +384,7 @@ fn identified_event_wire_format() {
         },
     };
     let v: Value = serde_json::to_value(&event).unwrap();
-    assert!(v["txHash"].as_str().unwrap().starts_with("0x"));
+    assert_eq!(v["txHash"], "1".repeat(32));
     assert_eq!(v["blockHeight"], "10");
     assert_eq!(v["sequenceNumber"], 0);
     assert!(v.get("tx_hash").is_none());
@@ -390,7 +393,7 @@ fn identified_event_wire_format() {
 }
 
 #[test]
-fn event_query_wire_format_uses_rpc_hex_projections() {
+fn event_query_wire_format_splits_identifiers_and_hex_payloads() {
     let query = EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
             contract_addresses: ContractAddressList(VecM(vec![zero_address()])),
@@ -406,12 +409,7 @@ fn event_query_wire_format_uses_rpc_hex_projections() {
         limit: 50,
     };
     let v: Value = serde_json::to_value(&query).unwrap();
-    assert!(
-        v["filters"][0]["contractAddresses"][0]
-            .as_str()
-            .unwrap()
-            .starts_with("0x")
-    );
+    assert_eq!(v["filters"][0]["contractAddresses"][0], "1".repeat(32));
     assert!(v["filters"][0].get("contract_addresses").is_none());
     assert!(
         v["filters"][0]["topics"]["topic0"][0]
@@ -511,7 +509,7 @@ fn request_types_reject_unknown_fields() {
 }
 
 #[test]
-fn address_transaction_query_wire_format_uses_rpc_hex_projections() {
+fn address_transaction_query_wire_format_splits_identifiers_and_cursor() {
     let query = AddressTransactionQuery {
         address: zero_address(),
         order: IterationOrder::Descending,
@@ -520,7 +518,7 @@ fn address_transaction_query_wire_format_uses_rpc_hex_projections() {
         limit: 50,
     };
     let v: Value = serde_json::to_value(&query).unwrap();
-    assert!(v["address"].as_str().unwrap().starts_with("0x"));
+    assert_eq!(v["address"], "1".repeat(32));
     assert_eq!(v["order"], "descending");
     assert_eq!(v["anchor"]["kind"], "atEnd");
     assert_eq!(v["cursor"], "0x");
@@ -534,7 +532,7 @@ fn address_transaction_query_wire_format_uses_rpc_hex_projections() {
 fn transaction_ref_page_wire_format() {
     let page = TransactionRefPage {
         refs: vec![TransactionRef {
-            tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0xab; 32]))),
+            tx_hash: TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0xab; 32]))),
             height: BlockHeight::from(7),
         }],
         cursor: PaginationCursor(vec![0x01, 0x02]),
@@ -542,7 +540,10 @@ fn transaction_ref_page_wire_format() {
         oldest_block: BlockHeight::from(0),
     };
     let v: Value = serde_json::to_value(&page).unwrap();
-    assert!(v["refs"][0]["txHash"].as_str().unwrap().starts_with("0x"));
+    assert_eq!(
+        v["refs"][0]["txHash"],
+        thruput_encoding::encode(&[0xab; 32])
+    );
     assert!(v["refs"][0].get("tx_hash").is_none());
     assert_eq!(v["refs"][0]["height"], "7");
     assert_eq!(v["cursor"], "0x0102");
@@ -563,16 +564,16 @@ fn block_info_wire_format() {
         serde_json::to_value(expected_block_hash).unwrap()
     );
     assert_eq!(v["protocol"], 1);
-    assert_eq!(v["networkHash"], format!("0x{}", "01".repeat(32)));
-    assert_eq!(v["configHash"], format!("0x{}", "08".repeat(32)));
-    assert_eq!(v["proposer"], format!("0x{}", "02".repeat(32)));
+    assert_eq!(v["networkHash"], thruput_encoding::encode(&[0x01; 32]));
+    assert_eq!(v["configHash"], thruput_encoding::encode(&[0x08; 32]));
+    assert_eq!(v["proposer"], thruput_encoding::encode(&[0x02; 32]));
     assert_eq!(v["blockTimepoint"], "123");
     assert_eq!(v["blockHeight"], "99");
-    assert_eq!(v["txsHash"], format!("0x{}", "03".repeat(32)));
-    assert_eq!(v["storageHash"], format!("0x{}", "04".repeat(32)));
-    assert_eq!(v["eventsHash"], format!("0x{}", "05".repeat(32)));
-    assert_eq!(v["proposalTxsHash"], format!("0x{}", "06".repeat(32)));
-    assert_eq!(v["prevBlockHash"], format!("0x{}", "07".repeat(32)));
+    assert_eq!(v["txsHash"], thruput_encoding::encode(&[0x03; 32]));
+    assert_eq!(v["storageHash"], thruput_encoding::encode(&[0x04; 32]));
+    assert_eq!(v["eventsHash"], thruput_encoding::encode(&[0x05; 32]));
+    assert_eq!(v["proposalTxsHash"], thruput_encoding::encode(&[0x06; 32]));
+    assert_eq!(v["prevBlockHash"], thruput_encoding::encode(&[0x07; 32]));
     assert_eq!(v["upgrades"], serde_json::json!(["0xaabb"]));
     // camelCase
     assert!(v.get("network_hash").is_none());
@@ -585,8 +586,12 @@ fn consensus_value_hash_has_stable_golden_vector() {
     let hash = consensus_value_hash(&test_consensus_value())
         .expect("bug: valid consensus value should hash");
     assert_eq!(
-        serde_json::to_value(hash).expect("bug: hash should serialize"),
-        "0x77027501d110d5b4b92b76f64f3953f3f7a41f1280e31ae7de433e3f9677f9b0"
+        hex::encode(hash.0.as_ref()),
+        "77027501d110d5b4b92b76f64f3953f3f7a41f1280e31ae7de433e3f9677f9b0"
+    );
+    assert_eq!(
+        serde_json::to_value(hash).unwrap(),
+        "91Zgy2dZ6Gv3z68UQaQGVLDyQSnFudJNFRgpYvR8u4kw"
     );
 }
 
@@ -653,18 +658,18 @@ fn address_auth_data_wire_format_lists_occupied_slots_by_key_id() {
     assert_eq!(
         v,
         serde_json::json!({
-            "address": format!("0x{}", "00".repeat(32)),
+            "address": thruput_encoding::encode(&[0x00; 32]),
             "height": "9",
             "authData": {
                 "signers": [
                     {
                         "keyId": 0,
-                        "publicKey": { "scheme": "ed25519", "key": format!("0x{}", "aa".repeat(32)) },
+                        "publicKey": { "scheme": "ed25519", "key": thruput_encoding::encode(&[0xaa; 32]) },
                         "maxWeight": 1,
                     },
                     {
                         "keyId": 3,
-                        "publicKey": { "scheme": "ed25519", "key": format!("0x{}", "bb".repeat(32)) },
+                        "publicKey": { "scheme": "ed25519", "key": thruput_encoding::encode(&[0xbb; 32]) },
                         "maxWeight": 2,
                     },
                 ],

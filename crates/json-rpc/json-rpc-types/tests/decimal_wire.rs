@@ -16,7 +16,7 @@ fn protocol_heights_roundtrip_at_precision_and_signed_boundaries() {
         i64::MAX,
     ] {
         let text = height.to_string();
-        let tip = json!({"height": text, "blockHash": format!("0x{}", "00".repeat(32))});
+        let tip = json!({"height": text, "blockHash": thruput_encoding::encode(&[0x00; 32])});
         let decoded: ChainTip = serde_json::from_str(&tip.to_string()).unwrap();
         assert_eq!(*decoded.height, height);
         assert_eq!(serde_json::to_value(decoded).unwrap(), tip);
@@ -34,7 +34,7 @@ fn protocol_heights_roundtrip_at_precision_and_signed_boundaries() {
 #[test]
 fn optional_gas_is_lossless_and_numeric_json_is_rejected() {
     let request = json!({
-        "contract": format!("0x{}", "00".repeat(32)),
+        "contract": thruput_encoding::encode(&[0x00; 32]),
         "entrypoint": "0x0000000000000000", "calldata": "0x"
     });
     let decoded: ViewRequest = serde_json::from_value(request.clone()).unwrap();

@@ -394,13 +394,13 @@ mod tests {
 
     #[test]
     fn receipt_timeout_preserves_status_without_echoing_endpoint() {
-        use thruput_json_rpc_types::hex::Hex0x;
+        use thruput_json_rpc_types::base58::Base58;
         for (status, expected) in [
             (Some(TransactionStatus::Unknown), "unknown"),
             (Some(TransactionStatus::Pending), "pending"),
             (None, "unavailable"),
         ] {
-            let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
+            let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
             let error = map_submit_and_poll_error(
                 thruput_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
                     tx_hash,
@@ -489,11 +489,12 @@ mod tests {
     fn recent_bounds_failure_maps_to_actionable_cli_error() {
         use thruput_json_rpc_types::{
             BlockHeight,
-            hex::{Hex0x, HexBytes},
+            base58::Base58,
+            hex::HexBytes,
             transaction::{ConflictCode, ConflictDiagnostic},
         };
 
-        let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
+        let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
         let error = map_submit_and_poll_error(
             thruput_json_rpc_client::SubmitAndPollError::TransactionStatus {
                 tx_hash,
@@ -502,7 +503,7 @@ mod tests {
                     cause:
                         thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
                             conflict: ConflictDiagnostic {
-                                address: Hex0x(thruput_xdr::types::ContractAddress::from(
+                                address: Base58(thruput_xdr::types::ContractAddress::from(
                                     [0x55; 32],
                                 )),
                                 key: HexBytes(vec![0, 0, 0, 1]),
@@ -527,7 +528,7 @@ mod tests {
         use thruput_json_rpc_types::transaction::{ContractRejectCode, TransactionFailureCause};
         let error = map_submit_and_poll_error(
             thruput_json_rpc_client::SubmitAndPollError::TransactionStatus {
-                tx_hash: TxHash(thruput_json_rpc_types::hex::Hex0x(
+                tx_hash: TxHash(thruput_json_rpc_types::base58::Base58(
                     thruput_xdr::types::SHA256Hash::from([0x44; 32]),
                 )),
                 status: TransactionStatus::RecentFailure {

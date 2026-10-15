@@ -294,7 +294,7 @@ fn run_integration_with_dev_node(
     let default_key = "integration";
     let bootstrap_accounts = vec![
         thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-            thruput_json_rpc_types::hex::Hex0x(fixture.signer.verifying_key_bytes().into()),
+            thruput_json_rpc_types::base58::Base58(fixture.signer.verifying_key_bytes().into()),
             thruput_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS.to_string(),
         ),
     ];

@@ -1,5 +1,4 @@
 use thruput_json_rpc_client::GroundhogApiClient;
-use thruput_json_rpc_types::hex::prefixed_hex;
 use thruput_json_rpc_types::network_descriptor::{
     AirdropDescriptor, NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION,
     NetworkDescriptor,
@@ -139,7 +138,7 @@ fn remote_airdrop_descriptor(
 
     Ok(RemoteAirdropDescriptor {
         network_id: descriptor.network_id,
-        genesis_hash: prefixed_hex(descriptor.genesis_hash.0.as_ref()),
+        genesis_hash: descriptor.genesis_hash.to_string(),
         policy,
         amount_hog: crate::hog::format_amount(raw_amount),
     })
@@ -230,8 +229,8 @@ fn validate_network_info(
 ) -> Result<(), CliError> {
     matches_expected(
         "networkHash",
-        &prefixed_hex(network_info.network_hash.0.as_ref()),
-        &prefixed_hex(descriptor.network_hash.0.as_ref()),
+        &network_info.network_hash.to_string(),
+        &descriptor.network_hash.to_string(),
     )
 }
 
@@ -242,8 +241,8 @@ fn validated_signing_network_hash(
     if let Some(configured) = configured {
         matches_expected(
             "networkHash",
-            &prefixed_hex(configured.as_ref()),
-            &prefixed_hex(network_info.network_hash.0.as_ref()),
+            &thruput_encoding::encode(configured.as_ref()),
+            &network_info.network_hash.to_string(),
         )?;
     }
     Ok(thruput_xdr::types::NetworkHash::from(
@@ -447,16 +446,16 @@ mod tests {
             "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": NETWORK_DESCRIPTOR_KIND,
             "networkId": "devnet",
-            "networkHash": format!("0x{}", "42".repeat(32)),
+            "networkHash": thruput_json_rpc_types::NetworkHashText::from([0x42; 32]),
             "protocol": "hogp/test00000000000",
-            "genesisHash": format!("0x{}", "42".repeat(32)),
+            "genesisHash": thruput_json_rpc_types::NetworkHashText::from([0x42; 32]),
             "endpoints": { "rpcUrl": "https://rpc.devnet.example" },
             "nativeHog": {
-                "tokenAddress": format!("0x{}", "61".repeat(32)),
+                "tokenAddress": thruput_json_rpc_types::NetworkHashText::from([0x61; 32]),
                 "decimals": 7,
                 "transferEntrypoint": "0x63285b3523f9dc3f"
             },
-            "faucet": { "walletAddress": format!("0x{}", "71".repeat(32)) },
+            "faucet": { "walletAddress": thruput_json_rpc_types::NetworkHashText::from([0x71; 32]) },
             "airdrop": {
                 "rawAmount": "100000000",
                 "recipientCooldownSeconds": "43200",

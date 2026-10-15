@@ -564,7 +564,7 @@ mod tests {
             let handle = server.start(facade.clone().into_rpc());
             let body: Vec<_> = (1..=65).map(|id| json!({
                 "jsonrpc": "2.0", "id": id, "method": "groundhog_requestAirdrop",
-                "params": [{"recipient": format!("0x{}", format!("{id:02x}").repeat(32)), "clientNonce": "0x01"}]
+                "params": [{"recipient": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([u8::try_from(id).unwrap(); 32])), "clientNonce": "0x01"}]
             })).collect();
             let response = tokio::spawn(async move {
                 reqwest::Client::new()
@@ -817,7 +817,8 @@ mod tests {
     #[tokio::test]
     async fn descriptor_network_hash_mismatch_is_startup_fatal() {
         let mut descriptor = network_descriptor("devnet");
-        descriptor["networkHash"] = json!(format!("0x{}", "34".repeat(32)));
+        descriptor["networkHash"] =
+            json!(thruput_json_rpc_types::NetworkHashText::from([0x34; 32]));
         let (base_url, _server) = spawn_server(
             descriptor,
             StatusCode::OK,
@@ -921,7 +922,7 @@ mod tests {
             .expect("matching descriptor should pass startup")
             .expect("configured facade should exist");
         let request = serde_json::from_value(json!({
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": airdrop_request().recipient,
             "clientNonce": "0x01"
         }))
         .expect("bug: request fixture should decode");
@@ -1064,7 +1065,7 @@ mod tests {
                             release_post.notified().await;
                             Json(json!({
                                 "attemptStatus": "pending",
-                                "recipient": format!("0x{}", "11".repeat(32)),
+                                "recipient": airdrop_request().recipient,
                                 "rawAmount": "100000000",
                                 "retryAfterSeconds": "5"
                             }))
@@ -1137,9 +1138,9 @@ mod tests {
                             release_post.notified().await;
                             Json(json!({
                                 "attemptStatus": "succeeded",
-                                "recipient": format!("0x{}", "11".repeat(32)),
+                                "recipient": airdrop_request().recipient,
                                 "rawAmount": "100000000",
-                                "txHash": format!("0x{}", "22".repeat(32)),
+                                "txHash": SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22; 32])),
                                 "height": "42",
                                 "status": { "result": "ok" }
                             }))
@@ -1185,9 +1186,9 @@ mod tests {
     async fn pending_and_succeeded_responses_round_trip() {
         let pending_body = json!({
             "attemptStatus": "pending",
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": airdrop_request().recipient,
             "rawAmount": "100000000",
-            "txHash": format!("0x{}", "22".repeat(32)),
+            "txHash": SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22; 32])),
             "retryAfterSeconds": "5"
         });
         let (pending_url, _pending_server) = spawn_server(
@@ -1209,9 +1210,9 @@ mod tests {
 
         let succeeded_body = json!({
             "attemptStatus": "succeeded",
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": airdrop_request().recipient,
             "rawAmount": "100000000",
-            "txHash": format!("0x{}", "22".repeat(32)),
+            "txHash": SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22; 32])),
             "height": "42",
             "status": { "result": "ok" }
         });
@@ -1284,7 +1285,7 @@ mod tests {
             .expect("matching descriptor should pass startup")
             .expect("configured facade should exist");
         let request = serde_json::from_value(json!({
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": airdrop_request().recipient,
             "clientNonce": "0x01"
         }))
         .expect("bug: request fixture should decode");
@@ -1311,7 +1312,7 @@ mod tests {
             .expect("matching descriptor should pass startup")
             .expect("configured facade should exist");
         let request = serde_json::from_value(json!({
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": airdrop_request().recipient,
             "clientNonce": "0x01"
         }))
         .expect("bug: request fixture should decode");
@@ -1331,9 +1332,9 @@ mod tests {
             StatusCode::OK,
             json!({
                 "attemptStatus": "succeeded",
-                "recipient": format!("0x{}", "11".repeat(32)),
+                "recipient": airdrop_request().recipient,
                 "rawAmount": "100000000",
-                "txHash": format!("0x{}", "22".repeat(32)),
+                "txHash": SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22; 32])),
                 "height": "42",
                 "status": { "result": "reverted", "message": "denied" }
             }),
@@ -1374,7 +1375,7 @@ mod tests {
                                 StatusCode::ACCEPTED,
                                 Json(json!({
                                     "attemptStatus": "pending",
-                                    "recipient": format!("0x{}", "11".repeat(32)),
+                                    "recipient": airdrop_request().recipient,
                                     "rawAmount": "100000000",
                                     "retryAfterSeconds": "5"
                                 })),
@@ -1402,11 +1403,11 @@ mod tests {
         assert_eq!(
             serde_json::to_value(forwarded).expect("forwarded request should serialize"),
             json!({
-                "recipient": format!("0x{}", "11".repeat(32)),
+                "recipient": airdrop_request().recipient,
                 "clientNonce": "0x01",
                 "networkId": "devnet",
-                "networkHash": format!("0x{}", "12".repeat(32)),
-                "genesisHash": format!("0x{}", "42".repeat(32))
+                "networkHash": thruput_json_rpc_types::NetworkHashText::from([0x12; 32]),
+                "genesisHash": genesis_hash()
             })
         );
     }
@@ -1418,7 +1419,7 @@ mod tests {
             StatusCode::BAD_GATEWAY,
             json!({
                 "attemptStatus": "pending",
-                "recipient": format!("0x{}", "11".repeat(32)),
+                "recipient": airdrop_request().recipient,
                 "rawAmount": "100000000",
                 "retryAfterSeconds": "5"
             }),
@@ -1430,7 +1431,7 @@ mod tests {
             .expect("matching descriptor should pass startup")
             .expect("configured facade should exist");
         let request = serde_json::from_value(json!({
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": airdrop_request().recipient,
             "clientNonce": "0x01"
         }))
         .expect("bug: request fixture should decode");
@@ -1450,7 +1451,7 @@ mod tests {
             StatusCode::ACCEPTED,
             json!({
                 "attemptStatus": "pending",
-                "recipient": format!("0x{}", "99".repeat(32)),
+                "recipient": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x99; 32])),
                 "rawAmount": "100000000",
                 "retryAfterSeconds": "5"
             }),
@@ -1603,7 +1604,7 @@ mod tests {
 
     fn airdrop_request() -> AirdropRequest {
         serde_json::from_value(json!({
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x11; 32])),
             "clientNonce": "0x01"
         }))
         .expect("bug: request fixture should decode")
@@ -1612,7 +1613,7 @@ mod tests {
     fn config(base_url: &str) -> GatewayConfig {
         GatewayConfig {
             network_id: Some("devnet".into()),
-            network_hash: Some(thruput_json_rpc_types::NetworkHashHex::from([0x12; 32])),
+            network_hash: Some(thruput_json_rpc_types::NetworkHashText::from([0x12; 32])),
             genesis_hash: Some(genesis_hash()),
             faucet_url: Some(base_url.into()),
             request_timeout_ms: 200,
@@ -1623,14 +1624,13 @@ mod tests {
 
     fn network_info() -> NetworkInfo {
         serde_json::from_value(json!({
-            "networkHash": format!("0x{}", "12".repeat(32))
+            "networkHash": thruput_json_rpc_types::NetworkHashText::from([0x12; 32])
         }))
         .expect("bug: network fixture should decode")
     }
 
     fn genesis_hash() -> SHA256Hash {
-        serde_json::from_value(json!(format!("0x{}", "42".repeat(32))))
-            .expect("bug: genesis hash fixture should decode")
+        thruput_xdr::types::SHA256Hash::from([0x42; 32]).into()
     }
 
     fn network_descriptor(network_id: &str) -> serde_json::Value {
@@ -1638,19 +1638,19 @@ mod tests {
             "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": NETWORK_DESCRIPTOR_KIND,
             "networkId": network_id,
-            "networkHash": format!("0x{}", "12".repeat(32)),
+            "networkHash": thruput_json_rpc_types::NetworkHashText::from([0x12; 32]),
             "protocol": "hogp/test00000000000",
-            "genesisHash": format!("0x{}", "42".repeat(32)),
+            "genesisHash": genesis_hash(),
             "endpoints": { "rpcUrl": "https://rpc.example" },
             "nativeHog": {
-                "tokenAddress": format!("0x{}", "11".repeat(32)),
+                "tokenAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x11; 32])),
                 "decimals": 18,
                 "transferEntrypoint": "0x0102030405060708"
             },
-            "faucet": { "walletAddress": format!("0x{}", "22".repeat(32)) },
+            "faucet": { "walletAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x22; 32])) },
             "walletCreate": {
                 "prefundRawAmount": "1000",
-                "walletContractHash": format!("0x{}", "33".repeat(32))
+                "walletContractHash": SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x33; 32]))
             },
             "devWallet": {
                 "deployEntrypoint": "0x0102030405060708",

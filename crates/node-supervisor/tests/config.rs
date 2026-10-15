@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use serde_json::json;
-use thruput_json_rpc_types::NetworkHashHex;
+use thruput_json_rpc_types::NetworkHashText;
 
 use thruput_node_supervisor::config::{BlockDriverConfig, BlockDriverMode, HogdDevConfig};
 
@@ -84,14 +84,14 @@ fn manual_block_driver_keeps_default_interval_inert() {
 
 #[test]
 fn hogd_dev_config_lowers_to_public_allocations() {
-    use thruput_json_rpc_types::{bootstrap_manifest::BootstrapManifestAllocation, hex::Hex0x};
-    let key = Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x42; 32]));
+    use thruput_json_rpc_types::{base58::Base58, bootstrap_manifest::BootstrapManifestAllocation};
+    let key = Base58(thruput_xdr::types::Ed25519PublicKey::from([0x42; 32]));
     let config = HogdDevConfig::default()
         .with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(key, "42")]);
     let value =
-        serde_json::to_value(config.to_bootstrap_manifest(NetworkHashHex::from([0x51; 32]), key))
+        serde_json::to_value(config.to_bootstrap_manifest(NetworkHashText::from([0x51; 32]), key))
             .unwrap();
-    assert_eq!(value["schemaVersion"], 4);
+    assert_eq!(value["schemaVersion"], 5);
     assert_eq!(
         value["bootstrapAccounts"],
         json!([{ "publicKey": key, "initialStorageTokens": "42" }])

@@ -7,6 +7,8 @@ use std::borrow::Cow;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
+use thruput_xdr::types::{NetworkHash, SHA256Hash};
+
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -121,3 +123,109 @@ impl<T> From<T> for Base58<T> {
 
 #[cfg(test)]
 mod tests;
+
+/// A canonical base58-encoded 32-byte network hash.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NetworkHashText(String);
+
+impl NetworkHashText {
+    /// Construct a network hash from its raw bytes.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(thruput_encoding::encode(&bytes))
+    }
+
+    /// Borrow the canonical wire representation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The protocol network hash this wire value encodes.
+    ///
+    /// Callers signing transactions need this: the network hash is part of
+    /// every signature preimage.
+    pub fn to_network_hash(&self) -> NetworkHash {
+        let bytes = thruput_encoding::decode_fixed::<32>(&self.0)
+            .expect("bug: NetworkHashText is validated on construction");
+        NetworkHash::new(SHA256Hash::new(bytes))
+    }
+}
+
+impl TryFrom<String> for NetworkHashText {
+    type Error = NetworkHashTextError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if thruput_encoding::decode_fixed::<32>(&value).is_ok() {
+            return Ok(Self(value));
+        }
+        Err(NetworkHashTextError)
+    }
+}
+
+impl TryFrom<&str> for NetworkHashText {
+    type Error = NetworkHashTextError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::try_from(value.to_owned())
+    }
+}
+
+impl From<[u8; 32]> for NetworkHashText {
+    fn from(value: [u8; 32]) -> Self {
+        Self::from_bytes(value)
+    }
+}
+
+impl AsRef<str> for NetworkHashText {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for NetworkHashText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Debug for NetworkHashText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("NetworkHashText").field(&self.0).finish()
+    }
+}
+
+impl Serialize for NetworkHashText {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for NetworkHashText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for NetworkHashText {
+    fn schema_name() -> Cow<'static, str> {
+        "NetworkHashText".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::NetworkHashText").into()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+            "minLength": 32,
+            "maxLength": thruput_encoding::max_encoded_len(32),
+            "description": "Base58 encoding of exactly 32 bytes"
+        })
+    }
+}
+
+/// Error returned for a non-canonical network hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("networkHash must be base58 encoding of exactly 32 bytes")]
+pub struct NetworkHashTextError;

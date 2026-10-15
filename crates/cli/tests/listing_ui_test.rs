@@ -137,7 +137,7 @@ fn terminal_capture_with_input(
 #[test]
 fn key_import_shows_only_public_results_in_all_output_modes() {
     let fixture = Fixture::new();
-    let seed = format!("0x{}\n", "11".repeat(32));
+    let seed = format!("{}\n", thruput_encoding::encode(&[0x11; 32]));
     for (name, flags) in [
         ("imported", vec![]),
         ("plain", vec!["--non-interactive"]),
@@ -276,7 +276,7 @@ fn wallet_selection_and_secret_export_keep_their_output_contracts() {
         .unwrap();
     assert!(generated.status.success());
     let key: serde_json::Value = serde_json::from_slice(&generated.stdout).unwrap();
-    fs::write(fixture.root.path().join("thruput.toml"), format!("default_profile = \"local\"\n[profile.local]\n[profile.local.wallets.owned]\naddress = \"0x{}\"\nowner_public_key = \"{}\"\n", "ab".repeat(32), key["data"]["key"]["public_key"].as_str().unwrap())).unwrap();
+    fs::write(fixture.root.path().join("thruput.toml"), format!("default_profile = \"local\"\n[profile.local]\n[profile.local.wallets.owned]\naddress = \"{}\"\nowner_public_key = \"{}\"\n", thruput_encoding::encode(&[0xab; 32]), key["data"]["key"]["public_key"].as_str().unwrap())).unwrap();
     let selected = terminal_capture(fixture.command(&["wallet", "use", "owned"]), 80, true);
     assert!(
         selected.status.success() && selected.stdout.is_empty(),

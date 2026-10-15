@@ -13,8 +13,8 @@ use thruput_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
 use thruput_json_rpc_server::BuildVersion;
 use thruput_json_rpc_types::{
     airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
+    base58::Base58,
     error::codes,
-    hex::Hex0x,
 };
 
 use super::*;
@@ -36,8 +36,7 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 0000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a00000000000000\
 0000000001000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695031\
 c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
-const CANONICAL_HASH_VECTOR_TX_HASH_JSON: &str =
-    "0x9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
+const CANONICAL_HASH_VECTOR_TX_HASH_JSON: &str = "BcubycGRta3GfG7dkL7QaZxzXS4eHFSAsL3XV63BCEEv";
 
 fn write_matching_client_manifest() -> (TempDir, BundleIdentity, String) {
     const VERSION: &str = "9.8.7-test";
@@ -272,7 +271,7 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
     );
     assert_eq!(
         serde_json::to_value(tip.block_hash).expect("bug: block hash should serialize"),
-        "0xe0b0468f28980b4982a63bea1018c0ec2bb12e8bd41b5f43dd1ac5fefb31cfe9"
+        "G86DxMgpV6arteLsJ4J5UxdRLvFfH5yPAo2G8hNpFPcc"
     );
     let chain_config = client
         .chain_config()
@@ -299,7 +298,7 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
 
     let airdrop_error = client
         .request_airdrop(AirdropRequest {
-            recipient: Hex0x(thruput_xdr::types::ContractAddress::from([0x88; 32])),
+            recipient: Base58(thruput_xdr::types::ContractAddress::from([0x88; 32])),
             client_nonce: ClientNonce::new(vec![0x99])
                 .expect("bug: test client nonce should validate"),
         })
@@ -1132,7 +1131,7 @@ async fn custom_network_preserves_independent_scheduler_and_gateway_checks() {
         let error = NodeSupervisorHandle::start(config).await.unwrap_err();
         assert!(
             matches!(error, NodeSupervisorError::SchedulerNetworkHashMismatch { expected, .. }
-            if expected == thruput_json_rpc_types::NetworkHashHex::from([0xab; 32])),
+            if expected == thruput_json_rpc_types::NetworkHashText::from([0xab; 32])),
             "{mode}"
         );
     }
@@ -1177,8 +1176,8 @@ async fn start_rolls_back_hogd_dev_when_scheduler_network_hash_mismatches_manife
             NodeSupervisorError::SchedulerNetworkHashMismatch {
                 expected,
                 observed,
-            } if expected == &thruput_json_rpc_types::NetworkHashHex::from([0; 32])
-                && observed == &thruput_json_rpc_types::NetworkHashHex::from([0xff; 32])
+            } if expected == &thruput_json_rpc_types::NetworkHashText::from([0; 32])
+                && observed == &thruput_json_rpc_types::NetworkHashText::from([0xff; 32])
         ),
         "expected SchedulerNetworkHashMismatch, got {err:?}",
     );
@@ -1505,10 +1504,8 @@ fn backend_planes_hogd_dev_storage_only_serializes_correctly() {
 
 /// Canned tx hashes from the fake indexer's committed set.
 /// Mirrors the constants in `tests/fixtures/fake_hogd_dev.rs`.
-const CANNED_HASH_A_HEX: &str =
-    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const CANNED_HASH_UNKNOWN_HEX: &str =
-    "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+const CANNED_HASH_A: &str = "CVDFLCAjXhVWiPXH9nTCTpCgVzmDVoiPzNJYuccr1dqB";
+const CANNED_HASH_UNKNOWN: &str = "JEKNVnkbo3jma5nREBBJCDoXFVeKkD56V3xKrvRmWxFG";
 const CANNED_HEIGHT_A: i64 = 5;
 const CANNED_GAS_USED_A: u64 = 1_500;
 const CANNED_STORAGE_KEY_HEX: &str =
@@ -1544,7 +1541,7 @@ async fn start_with_indexer_reports_hogd_dev_full_backend_planes() {
 
     let response = client
         .request_airdrop(AirdropRequest {
-            recipient: Hex0x(thruput_xdr::types::ContractAddress::from([0x88; 32])),
+            recipient: Base58(thruput_xdr::types::ContractAddress::from([0x88; 32])),
             client_nonce: ClientNonce::new(vec![0x99])
                 .expect("bug: test client nonce should validate"),
         })
@@ -1581,7 +1578,7 @@ async fn start_with_gateway_without_indexer_reports_storage_only_backend_planes(
         .expect("bug: jsonrpsee http client builds");
     let error = client
         .request_airdrop(AirdropRequest {
-            recipient: Hex0x(thruput_xdr::types::ContractAddress::from([0x88; 32])),
+            recipient: Base58(thruput_xdr::types::ContractAddress::from([0x88; 32])),
             client_nonce: ClientNonce::new(vec![0x99])
                 .expect("bug: test client nonce should validate"),
         })
@@ -1622,7 +1619,7 @@ async fn transaction_status_committed_returns_committed_with_correct_height() {
     let status: serde_json::Value = client
         .request(
             "groundhog_getTransactionStatus",
-            jsonrpsee::rpc_params![CANNED_HASH_A_HEX],
+            jsonrpsee::rpc_params![CANNED_HASH_A],
         )
         .await
         .expect("bug: getTransactionStatus should succeed");
@@ -1666,7 +1663,7 @@ async fn transaction_status_unknown_hash_returns_unknown() {
     let status: serde_json::Value = client
         .request(
             "groundhog_getTransactionStatus",
-            jsonrpsee::rpc_params![CANNED_HASH_UNKNOWN_HEX],
+            jsonrpsee::rpc_params![CANNED_HASH_UNKNOWN],
         )
         .await
         .expect("bug: getTransactionStatus should succeed for unknown hash");
@@ -1705,7 +1702,7 @@ async fn transaction_receipt_committed_returns_some() {
     let receipt: serde_json::Value = client
         .request(
             "groundhog_getTransactionReceipt",
-            jsonrpsee::rpc_params![CANNED_HASH_A_HEX],
+            jsonrpsee::rpc_params![CANNED_HASH_A],
         )
         .await
         .expect("bug: getTransactionReceipt should succeed");
@@ -1721,8 +1718,8 @@ async fn transaction_receipt_committed_returns_some() {
         "receipt height should be CANNED_HEIGHT_A"
     );
     assert_eq!(
-        receipt["txHash"].as_str().unwrap_or("").to_lowercase(),
-        CANNED_HASH_A_HEX,
+        receipt["txHash"].as_str().unwrap_or(""),
+        CANNED_HASH_A,
         "receipt txHash should round-trip"
     );
     assert_eq!(
@@ -1760,7 +1757,10 @@ async fn contract_events_first_page_returns_two_events() {
     //   - `IterationOrder` serializes as "ascending" / "descending"
     //   - `BlockAnchor` serializes as a tagged object
     //   - `PaginationCursor` serializes as `0x`-prefixed hex; `0x` = empty
-    let contract = format!("0x{}", "01".repeat(32));
+    let contract = thruput_json_rpc_types::ContractAddress::from(
+        thruput_xdr::types::ContractAddress::from([1; 32]),
+    )
+    .to_string();
     let query = serde_json::json!({
         "filters": [{
             "contractAddresses": [contract],
@@ -1818,7 +1818,7 @@ async fn get_storage_at_existing_key_returns_item_from_hogd_dev_gateway() {
     let client = HttpClientBuilder::default()
         .build(&url)
         .expect("bug: jsonrpsee http client builds");
-    let address = format!("0x{}", "00".repeat(32));
+    let address = "1".repeat(32);
 
     // Act
     let read: serde_json::Value = client
@@ -1857,7 +1857,7 @@ async fn get_storage_at_works_when_gateway_is_advertised_without_indexer() {
     let client = HttpClientBuilder::default()
         .build(&url)
         .expect("bug: jsonrpsee http client builds");
-    let address = format!("0x{}", "00".repeat(32));
+    let address = "1".repeat(32);
 
     // Act
     let read: serde_json::Value = client
@@ -1876,7 +1876,7 @@ async fn get_storage_at_works_when_gateway_is_advertised_without_indexer() {
     let err = client
         .request::<serde_json::Value, _>(
             "groundhog_getTransactionReceipt",
-            jsonrpsee::rpc_params![CANNED_HASH_A_HEX],
+            jsonrpsee::rpc_params![CANNED_HASH_A],
         )
         .await
         .expect_err("bug: receipt reads should remain unavailable without indexer");
@@ -1908,7 +1908,7 @@ async fn get_storage_at_missing_key_returns_null_item_with_snapshot_height() {
     let client = HttpClientBuilder::default()
         .build(&url)
         .expect("bug: jsonrpsee http client builds");
-    let address = format!("0x{}", "00".repeat(32));
+    let address = "1".repeat(32);
 
     // Act
     let read: serde_json::Value = client
@@ -1949,7 +1949,7 @@ async fn get_storage_at_without_gateway_endpoint_returns_backend_unavailable() {
     let client = HttpClientBuilder::default()
         .build(&url)
         .expect("bug: jsonrpsee http client builds");
-    let address = format!("0x{}", "00".repeat(32));
+    let address = "1".repeat(32);
 
     // Act
     let err = client
@@ -2120,7 +2120,7 @@ async fn transaction_status_indexer_runtime_rpc_fail_surfaces_backend_unavailabl
     let err = client
         .request::<serde_json::Value, _>(
             "groundhog_getTransactionStatus",
-            jsonrpsee::rpc_params![CANNED_HASH_A_HEX],
+            jsonrpsee::rpc_params![CANNED_HASH_A],
         )
         .await
         .expect_err("bug: getTransactionStatus should error when indexer data-plane fails");

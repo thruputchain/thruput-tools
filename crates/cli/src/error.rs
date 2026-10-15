@@ -20,7 +20,7 @@ const KEY_NAME_HINT: &str = "key names may only contain letters, digits, \
 
 /// Accepted spellings of an account or contract the command acts on.
 const ADDRESS_TARGET_HINT: &str =
-    "use a saved wallet, contract alias, stored key, or 32-byte 0x-prefixed address";
+    "use a saved wallet, contract alias, stored key, base58 address, or C StrKey";
 
 /// Accepted spelling of any 32-byte value passed on the command line.
 const HASH_32_BYTES_HINT: &str =
@@ -315,7 +315,7 @@ pub enum CliError {
     )]
     #[hint(text = KEY_NAME_HINT)]
     KeyNameInvalid,
-    #[error("expected an S StrKey or 32-byte hex Ed25519 seed on stdin")]
+    #[error("expected an S StrKey or base58 encoding of a 32-byte Ed25519 seed on stdin")]
     #[hint(
         "provide one private seed through stdin or the hidden prompt; never pass it as a command argument"
     )]
@@ -491,7 +491,7 @@ pub enum CliError {
     UnknownAddressTarget { target: String },
     #[error("unknown contract alias `{alias}` in profile `{profile}`")]
     #[hint(
-        "use a configured contract alias or a 32-byte 0x-prefixed address; inspect aliases \
+        "use a configured contract alias, base58 address, or C StrKey; inspect aliases \
          with `thruput config get {} --sources`",
         render_shell_arg(profile)
     )]

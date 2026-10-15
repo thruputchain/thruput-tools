@@ -2,7 +2,7 @@ use serde_json::json;
 use thruput_json_rpc_types::view::{ViewAuthClaim, ViewBatchRequest, ViewRequest};
 
 fn call() -> serde_json::Value {
-    json!({"contract": format!("0x{}", "07".repeat(32)), "entrypoint":"0x0000000000000000", "calldata":"0x"})
+    json!({"contract": thruput_encoding::encode(&[0x07; 32]), "entrypoint":"0x0000000000000000", "calldata":"0x"})
 }
 
 #[test]
@@ -10,7 +10,7 @@ fn optional_claims_round_trip_on_single_and_batch_calls() {
     for claim in [
         json!({"kind":"sourceAddress","allowedKeys":0,"requiredWeight":0}),
         json!({"kind":"sourceAddress","allowedKeys":u32::MAX,"requiredWeight":u32::MAX}),
-        json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "ab".repeat(32)),"nonce":"18446744073709551615"}),
+        json!({"kind":"pubkeySignature","publicKey":thruput_encoding::encode(&[0xab; 32]),"nonce":"18446744073709551615"}),
     ] {
         let mut input = call();
         input["authClaim"] = claim.clone();
@@ -47,9 +47,9 @@ fn malformed_claims_are_rejected_consistently() {
         json!({"kind":"sourceAddress","allowedKeys":0,"requiredWeight":"1"}),
         json!({"kind":"sourceAddress","allowedKeys":0,"requiredWeight":0,"signature":"0x"}),
         json!({"kind":"pubkeySignature","publicKey":"0x01","nonce":"0"}),
-        json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "00".repeat(32)),"nonce":0}),
-        json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "00".repeat(32)),"nonce":"01"}),
-        json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "00".repeat(32)),"nonce":"18446744073709551616"}),
+        json!({"kind":"pubkeySignature","publicKey":thruput_encoding::encode(&[0x00; 32]),"nonce":0}),
+        json!({"kind":"pubkeySignature","publicKey":thruput_encoding::encode(&[0x00; 32]),"nonce":"01"}),
+        json!({"kind":"pubkeySignature","publicKey":thruput_encoding::encode(&[0x00; 32]),"nonce":"18446744073709551616"}),
     ] {
         let mut input = call();
         input["authClaim"] = claim;
@@ -74,7 +74,7 @@ fn public_claims_use_existing_protocol_variants() {
     };
     assert_eq!(source_address_claim.allowed_keys, 5);
     assert_eq!(source_address_claim.required_weight, 3);
-    let claim: ViewAuthClaim = serde_json::from_value(json!({"kind":"pubkeySignature","publicKey":format!("0x{}", "ab".repeat(32)),"nonce":"9007199254740993"})).unwrap();
+    let claim: ViewAuthClaim = serde_json::from_value(json!({"kind":"pubkeySignature","publicKey":thruput_encoding::encode(&[0xab; 32]),"nonce":"9007199254740993"})).unwrap();
     let AuthClaim::kPubkeySignature { pubkey_preimage } = AuthClaim::from(claim) else {
         panic!("pubkey variant")
     };

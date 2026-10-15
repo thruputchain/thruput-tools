@@ -22,7 +22,7 @@ pub struct ProjectProfile {
     pub network: Option<Network>,
     #[serde(default)]
     pub rpc_url: Option<String>,
-    /// Network the profile's endpoint serves, as 64 lowercase hex digits.
+    /// Network the profile's endpoint serves, as base58 encoding of exactly 32 bytes.
     ///
     /// Bound into every transaction signature, so a profile carrying the wrong
     /// one produces transactions the network rejects. One endpoint serves one
@@ -95,7 +95,7 @@ pub struct ResolvedProfile {
     pub name: String,
     pub network: Option<Network>,
     pub rpc_url: Option<String>,
-    /// Network the profile's endpoint serves, as 64 lowercase hex digits.
+    /// Network the profile's endpoint serves, as base58 encoding of exactly 32 bytes.
     pub network_hash: Option<String>,
     pub faucet_url: Option<String>,
     #[serde(skip)]
@@ -303,12 +303,13 @@ pub fn save_profile_contract_alias(
     if address.trim().is_empty() {
         return Err(CliError::Other("contract address cannot be empty".into()));
     }
-    if !is_valid_address(address.trim()) {
-        return Err(CliError::Other(
-            "contract address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
-                .into(),
-        ));
-    }
+    let address =
+        thruput_signing::strkey::parse_contract_address(address.trim()).map_err(|_| {
+            CliError::Other(
+                "contract address must be a C StrKey or base58 encoding of exactly 32 bytes".into(),
+            )
+        })?;
+    let address = crate::codec::format_contract_address(&address);
 
     let profile_name = profile_name_for_write(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;
@@ -371,17 +372,21 @@ pub fn save_profile_wallet_address_with_default(
     if address.trim().is_empty() {
         return Err(CliError::Other("wallet address cannot be empty".into()));
     }
-    if !is_valid_address(address.trim()) {
-        return Err(CliError::Other(
-            "wallet address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
-                .into(),
-        ));
-    }
-    if thruput_signing::strkey::parse_public_key(owner_public_key.trim()).is_err() {
-        return Err(CliError::Other(
-            "wallet owner public key must be a G StrKey or 64 hex characters, optionally prefixed with 0x".into(),
-        ));
-    }
+    let address =
+        thruput_signing::strkey::parse_contract_address(address.trim()).map_err(|_| {
+            CliError::Other(
+                "wallet address must be a C StrKey or base58 encoding of exactly 32 bytes".into(),
+            )
+        })?;
+    let address = crate::codec::format_contract_address(&address);
+    let owner_public_key = thruput_signing::strkey::parse_public_key(owner_public_key.trim())
+        .map_err(|_| {
+            CliError::Other(
+                "wallet owner public key must be a G StrKey or base58 encoding of exactly 32 bytes"
+                    .into(),
+            )
+        })?;
+    let owner_public_key = thruput_encoding::encode(&owner_public_key);
 
     let profile_name = profile_name_for_write(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;

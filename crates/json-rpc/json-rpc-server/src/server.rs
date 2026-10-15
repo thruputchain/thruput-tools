@@ -824,11 +824,11 @@ mod tests {
     use super::*;
     use crate::{TipReading, ValidatedTransaction, ViewPlane};
     use thruput_json_rpc_types::NetworkHash;
+    use thruput_json_rpc_types::base58::Base58;
     use thruput_json_rpc_types::events::{
         BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventTopicFilter,
         IterationOrder, PaginationCursor, TopicList,
     };
-    use thruput_json_rpc_types::hex::Hex0x;
     use xdr_common::VecM;
 
     // Canonical XDR/hash vector only. This transaction is structurally valid
@@ -894,7 +894,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         TipReading::new(
             ChainTip {
                 height: BlockHeight::from(height),
-                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0u8; 32])),
+                block_hash: Base58(thruput_xdr::types::SHA256Hash::from([0u8; 32])),
             },
             thruput_xdr::network_config::NetworkConfig::_0 {
                 v0: thruput_xdr::network_config::NetworkConfigV0 {
@@ -1099,7 +1099,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .unwrap();
         let address = transport.local_addr().unwrap();
         let handle = transport.start(server(backend.clone()).into_rpc());
-        let hash = format!("0x{CANONICAL_HASH_VECTOR_TX_HASH_HEX}");
+        let hash = serde_json::to_value(Base58(thruput_xdr::types::SHA256Hash::from(
+            <[u8; 32]>::try_from(hex::decode(CANONICAL_HASH_VECTOR_TX_HASH_HEX).unwrap()).unwrap(),
+        )))
+        .unwrap();
         let read = json!({"jsonrpc":"2.0", "method":"groundhog_getTransactionStatus",
             "id":null, "params":[hash]});
         let body = json!([
@@ -1657,9 +1660,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 thruput_json_rpc_types::network_config::ExecutionConfig::new(
                     ChainTip {
                         height: BlockHeight::from(42),
-                        block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0u8; 32])),
+                        block_hash: Base58(thruput_xdr::types::SHA256Hash::from([0u8; 32])),
                     },
-                    Hex0x(thruput_xdr::types::SHA256Hash::from([7u8; 32])),
+                    Base58(thruput_xdr::types::SHA256Hash::from([7u8; 32])),
                     limits,
                     (&storage_cost_model()).into(),
                 ),
@@ -2477,7 +2480,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let request = ViewRequest {
             auth_claim: None,
             min_height: None,
-            contract: Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32])),
+            contract: Base58(thruput_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
@@ -2543,7 +2546,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         );
         let request = |min_height: Option<i64>| ViewRequest {
             auth_claim: None,
-            contract: Hex0x(thruput_xdr::types::ContractAddress::from([0; 32])),
+            contract: Base58(thruput_xdr::types::ContractAddress::from([0; 32])),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
@@ -2829,7 +2832,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     fn simple_query() -> EventQuery {
         EventQuery {
             filters: EventFilterList(VecM(vec![EventFilter {
-                contract_addresses: ContractAddressList(VecM(vec![Hex0x(
+                contract_addresses: ContractAddressList(VecM(vec![Base58(
                     thruput_xdr::types::ContractAddress::from([0u8; 32]),
                 )])),
                 topics: EventTopicFilter {
@@ -2856,7 +2859,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     fn simple_address_query() -> AddressTransactionQuery {
         AddressTransactionQuery {
-            address: Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32])),
+            address: Base58(thruput_xdr::types::ContractAddress::from([0u8; 32])),
             order: IterationOrder::Ascending,
             anchor: BlockAnchor::AtBeginning,
             cursor: PaginationCursor(vec![]),

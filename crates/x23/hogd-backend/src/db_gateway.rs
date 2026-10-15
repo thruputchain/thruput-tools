@@ -20,7 +20,7 @@ use thruput_xdr::types::{StorageKey, StorageKeyContractData};
 pub fn tip_reading(
     service: &str,
     result: thruput_db_gateway::DbGatewayConfigResult,
-    expected_network: Option<&thruput_json_rpc_types::NetworkHashHex>,
+    expected_network: Option<&thruput_json_rpc_types::NetworkHashText>,
 ) -> Result<TipReading, RpcServerError> {
     use thruput_json_rpc_types::network_config::{ExecutionConfig, NetworkConfigParams};
     let thruput_db_gateway::DbGatewayConfigResult::kRPCNone { config } = result else {
@@ -29,7 +29,7 @@ pub fn tip_reading(
         )));
     };
     if let Some(expected) = expected_network {
-        let observed = thruput_json_rpc_types::NetworkHashHex::from(
+        let observed = thruput_json_rpc_types::NetworkHashText::from(
             config
                 .tip
                 .value
@@ -60,7 +60,7 @@ pub fn tip_reading(
     }
     let execution = ExecutionConfig::new(
         tip.clone(),
-        thruput_json_rpc_types::hex::Hex0x(*config.tip.value.proposal_header.config_hash),
+        thruput_json_rpc_types::base58::Base58(*config.tip.value.proposal_header.config_hash),
         effective,
         (&config.storage_cost_model).into(),
     );

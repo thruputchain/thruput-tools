@@ -18,7 +18,7 @@ use thruput_xdr::{
 type InitCalldata = (ContractEntrypointID, u64, Vec<u8>);
 type DeployCalldata = (SHA256Hash, SHA256Hash, u128, Option<InitCalldata>);
 
-const NETWORK: &str = "0707070707070707070707070707070707070707070707070707070707070707";
+const NETWORK: &str = "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx";
 
 struct Fixture {
     dir: TempDir,
@@ -99,7 +99,7 @@ async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
     profile.remove("default_wallet");
     std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
     let original = std::fs::read(&path).unwrap();
-    let target = format!("0x{}", "ab".repeat(32));
+    let target = thruput_encoding::encode(&[0xab; 32]);
     let outputs = [
         (
             fixture
@@ -167,15 +167,12 @@ fn signed(hex_value: &str) -> SignedTransaction {
     xdrs::txs::decode(&hex::decode(hex_value.trim_start_matches("0x")).unwrap()).unwrap()
 }
 fn identity(signed: &SignedTransaction) -> (String, String) {
-    let hash = format!(
-        "0x{}",
-        hex::encode(transaction_hash(&signed.tx).unwrap().as_ref())
-    );
+    let hash = thruput_encoding::encode(transaction_hash(&signed.tx).unwrap().as_ref());
     let (nonce, code_hash, _amount, _init): DeployCalldata =
         xdrs::cxs::decode(&signed.tx.invocation.calldata.0).unwrap();
     let address =
         derive_deploy_address(&signed.tx.invocation.invoked_address, &nonce, &code_hash).unwrap();
-    (hash, format!("0x{}", hex::encode(address.as_ref())))
+    (hash, thruput_encoding::encode(address.as_ref()))
 }
 async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
     let state = Arc::new(State {
@@ -186,11 +183,11 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
     let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", server.local_addr().unwrap());
     let mut module = RpcModule::new(state.clone());
-    module.register_method("groundhog_networkInfo", |_, _, _| json!({"networkHash":format!("0x{NETWORK}"), "genesisHash":format!("0x{}", "42".repeat(32))})).unwrap();
+    module.register_method("groundhog_networkInfo", |_, _, _| json!({"networkHash":NETWORK, "genesisHash":thruput_encoding::encode(&[0x42; 32])})).unwrap();
     module
         .register_method(
             "groundhog_chainTip",
-            |_, _, _| json!({"height":"42","blockHash":format!("0x{}","00".repeat(32))}),
+            |_, _, _| json!({"height":"42","blockHash":thruput_encoding::encode(&[0; 32])}),
         )
         .unwrap();
     module
@@ -214,7 +211,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
                     "scheduler connection lost after dispatch",
                     None::<()>,
                 )),
-                Outcome::SendHashMismatch => Ok(format!("0x{}", "bb".repeat(32))),
+                Outcome::SendHashMismatch => Ok(thruput_encoding::encode(&[0xbb; 32])),
                 _ => Ok(hash),
             }
         })
@@ -224,9 +221,10 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
         if matches!(state.outcome, Outcome::LookupError) { return Err(ErrorObjectOwned::owned(-32000, "receipt unavailable", None::<()>)); }
         let signed = signed(state.submissions.lock().unwrap().first().unwrap());
         let (hash, address) = identity(&signed);
-        let mut receipt = json!({"txHash":hash,"height":"43","status":{"result":"ok"},"events":[],"gasUsed":"99","returnData":address});
+        let returned = format!("0x{}", hex::encode(thruput_encoding::decode_fixed::<32>(&address).unwrap()));
+        let mut receipt = json!({"txHash":hash,"height":"43","status":{"result":"ok"},"events":[],"gasUsed":"99","returnData":returned});
         match state.outcome {
-            Outcome::ReceiptHashMismatch => receipt["txHash"] = json!(format!("0x{}", "bb".repeat(32))),
+            Outcome::ReceiptHashMismatch => receipt["txHash"] = json!(thruput_encoding::encode(&[0xbb; 32])),
             Outcome::MissingReturn => { receipt.as_object_mut().unwrap().remove("returnData"); },
             Outcome::ShortReturn => receipt["returnData"] = json!("0x01"),
             Outcome::WrongAddress => receipt["returnData"] = json!(format!("0x{}", "bb".repeat(32))),
@@ -294,7 +292,7 @@ async fn native_deployment_rejects_network_mismatch_before_submission() {
     let path = fixture.dir.path().join("thruput.toml");
     let config = std::fs::read_to_string(&path)
         .unwrap()
-        .replace(NETWORK, &"08".repeat(32));
+        .replace(NETWORK, &thruput_encoding::encode(&[0x08; 32]));
     std::fs::write(path, config).unwrap();
     let output = fixture.deploy(&["--fund", "5"]);
     assert!(!output.status.success());
@@ -338,10 +336,7 @@ async fn native_deploy_dry_run_describes_canonical_effects_without_sending() {
         data["nativeDeployment"]["deploymentNonce"],
         format!("0x{}", hex::encode(nonce.as_ref()))
     );
-    assert_eq!(
-        data["nativeDeployment"]["networkHash"],
-        format!("0x{NETWORK}")
-    );
+    assert_eq!(data["nativeDeployment"]["networkHash"], NETWORK);
     assert_eq!(
         code_hash,
         wallet_contract_hash(&tx.tx.contracts_to_deploy.0[0]).unwrap()

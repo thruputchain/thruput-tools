@@ -325,7 +325,7 @@ pub fn decode_abort_payload(
     })
 }
 
-/// Parse a C `StrKey` or legacy hex contract address, including in typed calldata.
+/// Parse a C `StrKey` or base58 contract address, including in typed calldata.
 pub fn parse_contract_address(value: &str) -> Result<ContractAddress, Error> {
     thruput_signing::strkey::parse_contract_address(value).map_err(|error| Error::InvalidArgument {
         argument: "contract address".into(),
@@ -342,9 +342,9 @@ fn parse_public_key(value: &str) -> Result<Ed25519PublicKey, Error> {
         })
 }
 
-/// Format a contract address as 0x-prefixed lowercase hex.
+/// Format a contract address as unprefixed, case-sensitive base58.
 pub fn format_contract_address(address: &ContractAddress) -> String {
-    prefixed_hex(address)
+    thruput_json_rpc_types::ContractAddress::from(*address).to_string()
 }
 
 /// Render a spec id for a diagnostic, validating every segment.
@@ -1232,7 +1232,12 @@ fn encode_single_value(ty: &str, value: &str, path: &str) -> Result<Vec<u8>, Err
         "ContractAddress" => encode_local_xdr_value(parse_contract_address(value)?, path),
         "Ed25519PublicKey" => encode_local_xdr_value(parse_public_key(value)?, path),
         "SHA256Hash" => encode_local_xdr_value(
-            SHA256Hash::from(parse_fixed_hex::<32>(value, "sha256 hash")?),
+            SHA256Hash::from(thruput_encoding::decode_fixed(value).map_err(|error| {
+                Error::InvalidArgument {
+                    argument: "sha256 hash".into(),
+                    message: error.to_string(),
+                }
+            })?),
             path,
         ),
         "ContractEntrypointID" => encode_local_xdr_value(
@@ -1514,7 +1519,7 @@ fn decode_spec_scalar_value_from_reader(
                 .map_err(|e| decode_value_error(path, format!("failed to decode bytes: {e}"))),
         ),
         ContractType::Address => {
-            Some(read_xdr_value::<ContractAddress>(reader, path).map(hex_json_value))
+            Some(read_xdr_value::<ContractAddress>(reader, path).map(base58_json_value))
         }
         _ => None,
     }
@@ -1783,9 +1788,9 @@ fn decode_single_value(ty: &str, bytes: &[u8]) -> Option<Value> {
             .map(|value| Value::from(value.to_string())),
         "bool" => decode_xdr_value::<bool>(bytes).map(Value::from),
         "String" | "str" => decode_xdr_value::<String>(bytes).map(Value::from),
-        "ContractAddress" => decode_xdr_value::<ContractAddress>(bytes).map(hex_json_value),
-        "Ed25519PublicKey" => decode_xdr_value::<Ed25519PublicKey>(bytes).map(hex_json_value),
-        "SHA256Hash" => decode_xdr_value::<SHA256Hash>(bytes).map(hex_json_value),
+        "ContractAddress" => decode_xdr_value::<ContractAddress>(bytes).map(base58_json_value),
+        "Ed25519PublicKey" => decode_xdr_value::<Ed25519PublicKey>(bytes).map(base58_json_value),
+        "SHA256Hash" => decode_xdr_value::<SHA256Hash>(bytes).map(base58_json_value),
         "ContractEntrypointID" => {
             decode_xdr_value::<ContractEntrypointID>(bytes).map(hex_json_value)
         }
@@ -1819,6 +1824,10 @@ fn parse_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], 
             FixedHexError::InvalidLength { len, .. } => format!("must be {N} bytes, got {len}"),
         },
     })
+}
+
+fn base58_json_value<T: AsRef<[u8]>>(value: T) -> Value {
+    Value::from(thruput_encoding::encode(value.as_ref()))
 }
 
 fn hex_json_value<T>(value: T) -> Value

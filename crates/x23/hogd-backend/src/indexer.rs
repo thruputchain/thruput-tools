@@ -13,8 +13,8 @@ use thruput_indexer::{
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::{
     BlockHeight,
+    base58::Base58,
     events::{EventPage as PublicEventPage, IdentifiedEvent},
-    hex::Hex0x,
     transaction::{TransactionStatus, TxHash},
 };
 use thruput_trace::TxFailureDiagnostic;
@@ -150,7 +150,7 @@ pub fn public_event_page(page: EventPage) -> DecodedEventPage {
     let mut events = Vec::with_capacity(page.events.0.len());
     let mut dropped = Vec::new();
     for identified in page.events.0 {
-        let tx_hash = TxHash(Hex0x(identified.tx_hash));
+        let tx_hash = TxHash(Base58(identified.tx_hash));
         match parse_emitted_event(identified.emitted_event) {
             Some(event) => events.push(IdentifiedEvent {
                 tx_hash,

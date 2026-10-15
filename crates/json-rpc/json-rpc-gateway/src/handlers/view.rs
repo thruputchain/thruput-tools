@@ -371,7 +371,7 @@ mod tests {
         .into_rpc();
         for min_height in ["42", "43"] {
             let calls: Vec<_> = [("0x01", "123"), ("0x02", "456")].into_iter().map(|(calldata, gas)| serde_json::json!({
-                "contract": format!("0x{}", "07".repeat(32)), "entrypoint": "0x0808080808080808",
+                "contract": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])), "entrypoint": "0x0808080808080808",
                 "authClaim": {"kind":"sourceAddress", "allowedKeys":5, "requiredWeight": if calldata == "0x01" { 3 } else { 4 }},
                 "calldata": calldata, "gasLimit": gas,
             })).collect();

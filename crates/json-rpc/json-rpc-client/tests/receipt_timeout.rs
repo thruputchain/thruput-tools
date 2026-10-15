@@ -3,7 +3,7 @@ use std::{collections::VecDeque, sync::Mutex, time::Duration};
 use thruput_json_rpc_client::{PollTransactionReceiptError, poll_transaction_receipt_with_config};
 use thruput_json_rpc_types::{
     BlockHeight,
-    hex::Hex0x,
+    base58::Base58,
     receipt::{ExecStatus, TransactionReceipt},
     transaction::{TransactionStatus, TxHash},
 };
@@ -12,7 +12,7 @@ async fn poll(
     statuses: Vec<Option<TransactionStatus>>,
     receipt_after: Option<usize>,
 ) -> Result<TransactionReceipt, PollTransactionReceiptError> {
-    let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x33; 32])));
+    let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x33; 32])));
     let attempts = statuses.len();
     let mut module = RpcModule::new(Mutex::new((VecDeque::from(statuses), 0usize)));
     module

@@ -12,7 +12,6 @@ use std::{
     thread,
     time::Duration,
 };
-use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
 use async_trait::async_trait;
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
@@ -30,7 +29,7 @@ use thruput_indexer::{
     TransactionPage, TransactionPageResult, TransactionQuery, TransactionRefPage,
     TransactionRefPageResult, TxInfo, TxInfoResult,
 };
-use thruput_json_rpc_types::hex::Hex0x;
+use thruput_json_rpc_types::base58::Base58;
 use thruput_json_rpc_types::protocol_token::protocol_text;
 use thruput_scheduler::{
     BlockID, ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, ExpectedDBTip,
@@ -71,7 +70,7 @@ static TERMINATED: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone)]
 struct FakeStartupConfig {
     accounts: Vec<Value>,
-    network_hash: thruput_json_rpc_types::NetworkHashHex,
+    network_hash: thruput_json_rpc_types::NetworkHashText,
 }
 
 impl FakeStartupConfig {
@@ -90,7 +89,7 @@ impl FakeStartupConfig {
         let path = &pair[1];
         let manifest: thruput_json_rpc_types::bootstrap_manifest::BootstrapManifest =
             serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-        assert_eq!(manifest.schema_version, 4);
+        assert_eq!(manifest.schema_version, 5);
         let accounts = std::iter::once(&manifest.bootstrap_faucet)
             .chain(manifest.bootstrap_accounts.iter())
             .enumerate()
@@ -101,7 +100,7 @@ impl FakeStartupConfig {
                 json!({
                     "role": if position == 0 { "faucet" } else { "local_user" },
                     "publicKey": allocation.public_key,
-                    "walletAddress": Hex0x(address),
+                    "walletAddress": Base58(address),
                     "initialStorageTokens": allocation.initial_storage_tokens,
                 })
             })
@@ -629,10 +628,13 @@ fn readiness_pointer(endpoints: &Value) -> String {
     let manifest = runtime_manifest(endpoints, &config);
     let manifest_bytes =
         serde_json::to_vec_pretty(&manifest).expect("bug: runtime manifest should serialize");
-    let manifest_hash = sha256_prefixed_hex(&manifest_bytes);
+    let manifest_hash = Base58(thruput_xdr::types::SHA256Hash::from(<[u8; 32]>::from(
+        Sha256::digest(&manifest_bytes),
+    )))
+    .to_string();
     let manifest_path = write_runtime_manifest(&manifest_bytes);
     format!(
-        r#"{{"schemaVersion":3,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
+        r#"{{"schemaVersion":4,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
         manifest_path.display(),
         manifest_hash,
     )
@@ -647,7 +649,7 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
     }
 
     json!({
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
         "networkHash": config.network_hash,
@@ -673,7 +675,7 @@ fn storage_cost_model() -> Value {
         balance_cost: "1234",
     };
     json!({
-        "hash": Hex0x(SHA256Hash::from(storage_cost_model_hash(&fields))),
+        "hash": Base58(SHA256Hash::from(storage_cost_model_hash(&fields))),
         "baseDataItemCost": fields.base_data_item_cost,
         "bytestringCostPerByte": fields.bytestring_cost_per_byte,
         "baseContractDeploymentCost": fields.base_contract_deployment_cost,

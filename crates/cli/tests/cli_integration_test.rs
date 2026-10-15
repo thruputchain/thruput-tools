@@ -131,7 +131,7 @@ fn write_chain_data_fixture(root: &std::path::Path) {
     std::fs::create_dir_all(root.join("indexer")).unwrap();
     std::fs::write(
         root.join("hog-devnode-data.json"),
-        br#"{"schemaVersion":4,"kind":"hog-devnode-data"}"#,
+        br#"{"schemaVersion":5,"kind":"hog-devnode-data"}"#,
     )
     .unwrap();
     std::fs::write(root.join("ramdb/0.log"), b"ramdb-state").unwrap();
@@ -1937,7 +1937,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
         .arg("--initial-account-hog")
         .arg("25.0000001")
         .arg("--init-network-hash")
-        .arg(format!("0x{}", "ab".repeat(32)))
+        .arg(thruput_encoding::encode(&[0xab; 32]))
         .env("THRUPUT_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("THRUPUT_FAKE_HOGD_DEV_PID_FILE", &pid_path)
         .env("XDG_CONFIG_HOME", config_home.path())
@@ -1959,7 +1959,10 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
 
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "node");
-    assert_eq!(payload["data"]["chain"], "ab".repeat(32));
+    assert_eq!(
+        payload["data"]["chain"],
+        thruput_encoding::encode(&[0xab; 32])
+    );
     assert_eq!(payload["data"]["schemaVersion"], 4);
     assert_eq!(payload["data"]["chain_state"], "fresh");
     assert_eq!(payload["data"]["data_dir"], data_dir.display().to_string());
@@ -1999,7 +2002,10 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     assert_split_bootstrap_accounts(std::path::Path::new(manifest_path), "250000001");
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
-    assert_eq!(manifest["networkHash"], "ab".repeat(32));
+    assert_eq!(
+        manifest["networkHash"],
+        thruput_encoding::encode(&[0xab; 32])
+    );
 
     assert_local_runtime_state_rpc_url(config_home.path(), &rpc_url);
 
@@ -2023,14 +2029,14 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     let pid = read_pid_file(&pid_path);
     let journal_path = data_dir.join("groundhog-funding.json");
     let journal = std::fs::read(&journal_path).unwrap();
-    for hash in ["ab", "cd", "00"] {
+    for hash in [0xab, 0xcd, 0x00] {
         let output = thruput()
             .args([
                 "node",
                 "--port",
                 "0",
                 "--init-network-hash",
-                &hash.repeat(32),
+                &thruput_encoding::encode(&[hash; 32]),
             ])
             .arg("--hog-devnode-binary")
             .arg(fake_hogd_dev_binary())
@@ -3049,7 +3055,7 @@ fn global_non_interactive_key_import_accepts_piped_seed() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let seed = "42".repeat(32);
+    let seed = thruput_encoding::encode(&[0x42; 32]);
     child
         .stdin
         .take()
@@ -3103,8 +3109,8 @@ fn status_checks_wallet_owner_without_private_key_bytes() {
     std::fs::write(
         project.join("thruput.toml"),
         format!(
-            "{original}\ndefault_wallet = 'trading'\n[profile.default.wallets.trading]\nkind = 'native'\naccount_nonce = 7\naddress = '0x{}'\nowner_public_key = '{owner}'\n",
-            hex::encode(account.address().as_ref())
+            "{original}\ndefault_wallet = 'trading'\n[profile.default.wallets.trading]\nkind = 'native'\naccount_nonce = 7\naddress = '{}'\nowner_public_key = '{owner}'\n",
+            thruput_encoding::encode(account.address().as_ref())
         ),
     )
     .unwrap();
@@ -3194,7 +3200,7 @@ fn interactive_init_points_to_created_project() {
 
     assert!(terminal_output.contains("Setup Complete"));
     assert!(terminal_output.contains("Key"));
-    assert!(terminal_output.contains("default (0x"));
+    assert!(terminal_output.contains("default ("));
     assert!(terminal_output.contains("Project"));
     assert!(terminal_output.contains("demo-contract"));
     assert!(terminal_output.contains("Next:"));
@@ -4134,8 +4140,8 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("--contract-artifacts-dir <DIR>"));
     assert!(stdout.contains("--hog-devnode-version"));
     assert!(stdout.contains("--data-dir"));
-    assert!(stdout.contains("--init-network-hash <HEX64>"));
-    assert!(stdout.contains("optionally 0x-prefixed"));
+    assert!(stdout.contains("--init-network-hash <BASE58>"));
+    assert!(stdout.contains("base58 encoding of exactly 32 bytes"));
     assert!(stdout.contains("default: all zeros for new chains"));
     assert!(stdout.contains("persistent hog-devnode state"));
     assert!(stdout.contains("--key <KEY>"));
@@ -5040,7 +5046,7 @@ fn deploy_workspace_package_persists_selected_package_alias() {
         String::from_utf8_lossy(&output.stderr)
     );
     let config = std::fs::read_to_string(workspace.join("thruput.toml")).unwrap();
-    let expected_address = format!("0x{}", "bb".repeat(32));
+    let expected_address = thruput_encoding::encode(&[0xbb; 32]);
     assert!(config.contains(&format!("counter = \"{expected_address}\"")));
     assert!(!config.contains("shared-workspace ="));
 }
@@ -5082,7 +5088,7 @@ fn deploy_artifact_records_no_alias_without_one_and_never_the_directory() {
     );
 
     let config = std::fs::read_to_string(workspace.join("thruput.toml")).unwrap();
-    let deployed_address = format!("0x{}", "bb".repeat(32));
+    let deployed_address = thruput_encoding::encode(&[0xbb; 32]);
     assert!(
         !config.contains("shared-workspace ="),
         "the project directory name must never become an alias; config was:\n{config}"
@@ -5128,7 +5134,7 @@ fn deploy_artifact_with_alias_records_that_name() {
     );
 
     let config = std::fs::read_to_string(workspace.join("thruput.toml")).unwrap();
-    let deployed_address = format!("0x{}", "bb".repeat(32));
+    let deployed_address = thruput_encoding::encode(&[0xbb; 32]);
     assert!(
         config.contains(&format!("token = \"{deployed_address}\"")),
         "--alias should be recorded verbatim; config was:\n{config}"
@@ -5158,8 +5164,8 @@ fn deploy_alias_outside_a_project_lands_in_the_global_profile() {
     write_global_config(
         &config_home,
         &format!(
-            "default_profile = \"default\"\ndefault_key = \"alice\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
-            "aa".repeat(32)
+            "default_profile = \"default\"\ndefault_key = \"alice\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\n\n[profile.default.wallets.alice]\naddress = \"{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            thruput_encoding::encode(&[0xaa; 32])
         ),
     );
 
@@ -5190,7 +5196,7 @@ fn deploy_alias_outside_a_project_lands_in_the_global_profile() {
 
     let global = std::fs::read_to_string(config_home.join("thruput").join("config.toml"))
         .expect("global config should exist");
-    let deployed_address = format!("0x{}", "bb".repeat(32));
+    let deployed_address = thruput_encoding::encode(&[0xbb; 32]);
     assert!(
         global.contains(&format!("token = \"{deployed_address}\"")),
         "the alias should land in the global profile; config was:\n{global}"
@@ -5264,7 +5270,7 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     let owner = write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    let trading = format!("0x{}", "bb".repeat(32));
+    let trading = thruput_encoding::encode(&[0xbb; 32]);
     let mut config = std::fs::read_to_string(project.join("thruput.toml")).unwrap();
     write!(
         config,
@@ -5319,10 +5325,8 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     );
     assert_eq!(stdout["data"]["artifactBytes"], "13");
     assert!(
-        stdout["data"]["predictedAddress"]
-            .as_str()
-            .unwrap()
-            .starts_with("0x")
+        thruput_encoding::decode_fixed::<32>(stdout["data"]["predictedAddress"].as_str().unwrap())
+            .is_ok()
     );
     assert!(
         stdout["data"]["signedTx"]
@@ -5336,10 +5340,7 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     );
     let signed_tx = decode_signed_tx(stdout["data"]["signedTx"].as_str().unwrap());
     assert_eq!(
-        format!(
-            "0x{}",
-            hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
-        ),
+        thruput_encoding::encode(signed_tx.tx.invocation.invoked_address.as_ref()),
         trading
     );
 }
@@ -5476,19 +5477,19 @@ fn wallet_create_uses_public_metadata_and_signing_still_checks_ownership() {
     let account = thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 0);
     assert_eq!(
         actual["data"]["wallet"],
-        format!("0x{}", hex::encode(account.address().as_ref()))
+        thruput_encoding::encode(account.address().as_ref())
     );
     assert_ne!(actual["data"]["wallet"], original["data"]["wallet"]);
     assert_eq!(
         actual["data"]["ownerPublicKey"],
-        format!("0x{}", hex::encode(public_key))
+        thruput_encoding::encode(&public_key)
     );
     let output = thruput()
         .args([
             "--json",
             "transfer",
             "--dry-run",
-            &format!("0x{}", "11".repeat(32)),
+            &thruput_encoding::encode(&[0x11; 32]),
             "1",
         ])
         .current_dir(&project)
@@ -5554,13 +5555,16 @@ fn wallet_use_preserves_bindings_and_checks_owner_without_signer() {
         let keyfile: serde_json::Value =
             serde_json::from_slice(&std::fs::read(config.join("thruput/keys/owner.json")).unwrap())
                 .unwrap();
-        let owner = keyfile["public_key_hex"].as_str().unwrap();
-        let public_key = thruput_signing::strkey::parse_public_key(owner).unwrap();
+        let public_key: [u8; 32] = hex::decode(keyfile["public_key_hex"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let owner = thruput_encoding::encode(&public_key);
         let address = if native {
             let account = thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 7);
-            format!("0x{}", hex::encode(account.address().as_ref()))
+            thruput_encoding::encode(account.address().as_ref())
         } else {
-            format!("0x{}", "ab".repeat(32))
+            thruput_encoding::encode(&[0xab; 32])
         };
         let kind = if native {
             "kind = 'native'\naccount_nonce = 7\n"
@@ -5668,8 +5672,10 @@ fn wallet_create_preserves_global_key_selection_when_adding_another_account() {
                 &std::fs::read(config.join("thruput/keys/owner.json")).unwrap(),
             )
             .unwrap();
-            let public_key = format!("0x{}", key["public_key_hex"].as_str().unwrap());
-            write!(project_config, "\n[profile.default.wallets.legacy]\naddress = '0x{}'\nowner_public_key = '{public_key}'\n", "ab".repeat(32)).unwrap();
+            let public_key = thruput_encoding::encode(
+                &hex::decode(key["public_key_hex"].as_str().unwrap()).unwrap(),
+            );
+            write!(project_config, "\n[profile.default.wallets.legacy]\naddress = '{}'\nowner_public_key = '{public_key}'\n", thruput_encoding::encode(&[0xab; 32])).unwrap();
         }
         std::fs::write(project.join("thruput.toml"), project_config).unwrap();
         if !legacy_wallet {
@@ -5721,7 +5727,9 @@ fn wallet_create_dry_run_only_derives_and_prefund_is_rejected() {
     assert_eq!(report["data"]["dryRun"], true);
     assert_eq!(report["data"]["saved"], false);
     assert_eq!(report["data"]["name"], "trading");
-    assert!(report["data"]["wallet"].as_str().unwrap().starts_with("0x"));
+    assert!(
+        thruput_encoding::decode_fixed::<32>(report["data"]["wallet"].as_str().unwrap()).is_ok()
+    );
     let output = create_empty_wallet(&project, &config, &["--prefund", "2"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("wallet_create_prefund_unsupported"));
@@ -5871,10 +5879,10 @@ fn wallet_ls_json_outputs_saved_wallets() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let alice = format!("0x{}", "ab".repeat(32));
-    let bob = format!("0x{}", "cd".repeat(32));
-    let alice_owner = format!("0x{}", "11".repeat(32));
-    let bob_owner = format!("0x{}", "22".repeat(32));
+    let alice = thruput_encoding::encode(&[0xab; 32]);
+    let bob = thruput_encoding::encode(&[0xcd; 32]);
+    let alice_owner = thruput_encoding::encode(&[0x11; 32]);
+    let bob_owner = thruput_encoding::encode(&[0x22; 32]);
     std::fs::write(
         project.join("thruput.toml"),
         format!(
@@ -5930,7 +5938,7 @@ fn wallet_use_persists_valid_owner_matched_default() {
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     let owner = generate_key_public_key(&config_home, "alice");
-    let address = format!("0x{}", "ab".repeat(32));
+    let address = thruput_encoding::encode(&[0xab; 32]);
     std::fs::write(
         project.join("thruput.toml"),
         format!(
@@ -5971,8 +5979,8 @@ fn wallet_rm_rejects_inherited_default_with_project_only_binding() {
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::create_dir_all(config_home.join("thruput")).unwrap();
-    let address = format!("0x{}", "ab".repeat(32));
-    let owner = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0xab; 32]);
+    let owner = thruput_encoding::encode(&[0x11; 32]);
     std::fs::write(
         config_home.join("thruput/config.toml"),
         "[profile.devnet]\ndefault_wallet = \"alice\"\n",
@@ -6008,7 +6016,7 @@ fn wallet_rm_reports_inherited_default_after_clearing_project_default() {
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::create_dir_all(config_home.join("thruput")).unwrap();
-    let owner = format!("0x{}", "11".repeat(32));
+    let owner = thruput_encoding::encode(&[0x11; 32]);
     std::fs::write(
         config_home.join("thruput/config.toml"),
         format!(
@@ -6066,7 +6074,7 @@ fn wallet_rm_rejects_dangling_same_named_inherited_default() {
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::create_dir_all(config_home.join("thruput")).unwrap();
-    let owner = format!("0x{}", "11".repeat(32));
+    let owner = thruput_encoding::encode(&[0x11; 32]);
     std::fs::write(
         config_home.join("thruput/config.toml"),
         "[profile.devnet]\ndefault_wallet = \"alice\"\n",
@@ -6111,8 +6119,8 @@ fn airdrop_dry_run_json_uses_default_wallet_when_recipient_is_omitted() {
     let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
     let (rpc_url, rpc_server) =
         spawn_balance_then_chain_tip_rpc(&faucet_wallet, "100000000000", 42);
-    let recipient_wallet = format!("0x{}", "ab".repeat(32));
-    let recipient_owner = format!("0x{}", "cd".repeat(32));
+    let recipient_wallet = thruput_encoding::encode(&[0xab; 32]);
+    let recipient_owner = thruput_encoding::encode(&[0xcd; 32]);
     std::fs::write(
         project.join("thruput.toml"),
         format!(
@@ -6198,7 +6206,7 @@ fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again(
         assert_eq!(report["data"]["recipient"], "alice");
         assert_eq!(
             report["data"]["recipientWallet"],
-            format!("0x{}", hex::encode(account.address().as_ref()))
+            thruput_encoding::encode(account.address().as_ref())
         );
     }
 }
@@ -6216,9 +6224,9 @@ fn airdrop_default_submits_without_recipient_signer() {
             let nonce = if selection == "native" { 7 } else { 0 };
             let account = thruput_signing::PubkeyAccount::from_public_key_bytes(owner_bytes, nonce);
             let recipient = if selection == "legacy" {
-                format!("0x{}", "ab".repeat(32))
+                thruput_encoding::encode(&[0xab; 32])
             } else {
-                format!("0x{}", hex::encode(account.address().as_ref()))
+                thruput_encoding::encode(account.address().as_ref())
             };
             let binding = match selection {
                 "legacy" => format!(
@@ -6302,7 +6310,7 @@ fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
         thruput_signing::strkey::parse_public_key(&owner).unwrap(),
         0,
     );
-    let recipient = format!("0x{}", hex::encode(account.address().as_ref()));
+    let recipient = thruput_encoding::encode(account.address().as_ref());
     let faucet = advertised_dev_wallet_address(0);
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
@@ -6330,9 +6338,10 @@ fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
     assert!(!output.status.success());
     let signed = server.join().unwrap();
     let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    let hash = format!(
-        "0x{}",
-        hex::encode(thruput_signing::transaction_hash(&signed.tx).unwrap())
+    let hash = thruput_encoding::encode(
+        thruput_signing::transaction_hash(&signed.tx)
+            .unwrap()
+            .as_ref(),
     );
     assert_eq!(report["error"]["code"], "local_funding_unresolved");
     assert_eq!(report["error"]["details"]["txHash"], hash);
@@ -6348,8 +6357,7 @@ fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
 
 #[test]
 fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
-    let bare_address = "ab".repeat(32);
-    let prefixed_address = format!("0x{bare_address}");
+    let bare_address = thruput_encoding::encode(&[0xab; 32]);
     let strkey_address = thruput_signing::strkey::format_contract_address(&[0xab; 32].into());
     for (selection, key_name) in [
         ("unsaved", "alice"),
@@ -6357,7 +6365,6 @@ fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
         ("unsaved", "0xowner"),
         ("unsaved", "0Xowner"),
         ("literal", bare_address.as_str()),
-        ("literal", prefixed_address.as_str()),
         ("literal", strkey_address.as_str()),
         ("legacy", "alice"),
         ("native", "alice"),
@@ -6374,8 +6381,8 @@ fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
         let owner_bytes = thruput_signing::strkey::parse_public_key(&owner).unwrap();
         let nonce = if selection == "native" { 7 } else { 0 };
         let native = thruput_signing::PubkeyAccount::from_public_key_bytes(owner_bytes, nonce);
-        let native_address = format!("0x{}", hex::encode(native.address().as_ref()));
-        let legacy_address = format!("0x{}", "ab".repeat(32));
+        let native_address = thruput_encoding::encode(native.address().as_ref());
+        let legacy_address = thruput_encoding::encode(&[0xab; 32]);
         let expected = match selection {
             "unsaved" | "native" => native_address.as_str(),
             _ => legacy_address.as_str(),
@@ -6388,9 +6395,9 @@ fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
                 "\n[profile.default.wallets.trading]\nkind = 'native'\naccount_nonce = 7\naddress = '{native_address}'\nowner_public_key = '{owner}'\n"
             ),
             "saved-name" => format!(
-                "\n[profile.default.wallets.alice]\naddress = '{legacy_address}'\nowner_public_key = '0x{}'\n\n[profile.default.contracts]\nalice = '0x{}'\n",
-                "cd".repeat(32),
-                "ef".repeat(32)
+                "\n[profile.default.wallets.alice]\naddress = '{legacy_address}'\nowner_public_key = '{}'\n\n[profile.default.contracts]\nalice = '{}'\n",
+                thruput_encoding::encode(&[0xcd; 32]),
+                thruput_encoding::encode(&[0xef; 32])
             ),
             "alias" => format!("\n[profile.default.contracts]\nalice = '{legacy_address}'\n"),
             _ => String::new(),
@@ -6451,14 +6458,14 @@ fn airdrop_explicit_key_rejects_ambiguous_or_invalid_saved_accounts_before_rpc()
         let owner = generate_key_public_key(&config_home, "alice");
         let binding = if invalid_binding {
             format!(
-                "[profile.default.wallets.alice]\nkind = 'native'\naccount_nonce = 0\naddress = '0x{}'\nowner_public_key = '{owner}'\n",
-                "ab".repeat(32)
+                "[profile.default.wallets.alice]\nkind = 'native'\naccount_nonce = 0\naddress = '{}'\nowner_public_key = '{owner}'\n",
+                thruput_encoding::encode(&[0xab; 32])
             )
         } else {
             format!(
-                "[profile.default.wallets.primary]\naddress = '0x{}'\nowner_public_key = '{owner}'\n[profile.default.wallets.trading]\naddress = '0x{}'\nowner_public_key = '{owner}'\n",
-                "ab".repeat(32),
-                "cd".repeat(32)
+                "[profile.default.wallets.primary]\naddress = '{}'\nowner_public_key = '{owner}'\n[profile.default.wallets.trading]\naddress = '{}'\nowner_public_key = '{owner}'\n",
+                thruput_encoding::encode(&[0xab; 32]),
+                thruput_encoding::encode(&[0xcd; 32])
             )
         };
         let config = format!(
@@ -6496,8 +6503,8 @@ fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
 
     let faucet_wallet = advertised_dev_wallet_address(0);
     let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
-    let recipient_wallet = format!("0x{}", "ab".repeat(32));
-    let recipient_owner = format!("0x{}", "cd".repeat(32));
+    let recipient_wallet = thruput_encoding::encode(&[0xab; 32]);
+    let recipient_owner = thruput_encoding::encode(&[0xcd; 32]);
     std::fs::write(
         project.join("thruput.toml"),
         format!(
@@ -6540,7 +6547,7 @@ fn local_airdrop_json_warns_when_projected_faucet_balance_is_below_ten_hog() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let faucet = advertised_dev_wallet_address(0);
-    let recipient = format!("0x{}", "ab".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xab; 32]);
     let manifest_path = write_runtime_manifest(&project, 0, &faucet, None);
     let (rpc_url, rpc_server) = spawn_local_airdrop_rpc(&faucet, &recipient);
     std::fs::write(
@@ -6579,7 +6586,7 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     let config_home = tmp.path().join("config-home");
     let cache_home = tmp.path().join("cache-home");
     std::fs::create_dir_all(&project).unwrap();
-    let recipient = format!("0x{}", "aa".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xaa; 32]);
     let (rpc_url, rpc_server) = spawn_airdrop_rpc(&recipient);
     let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
@@ -6605,7 +6612,10 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     assert_eq!(stdout["data"]["schemaVersion"], 4);
     assert_eq!(stdout["data"]["recipientWallet"], recipient);
     assert_eq!(stdout["data"]["rawAmount"], "25000000");
-    assert_eq!(stdout["data"]["txHash"], format!("0x{}", "22".repeat(32)));
+    assert_eq!(
+        stdout["data"]["txHash"],
+        thruput_encoding::encode(&[0x22; 32])
+    );
 }
 
 #[test]
@@ -6619,8 +6629,8 @@ fn transaction_commands_require_force_before_submission_or_attempt_state() {
     write_project_config_with_alice_wallet(&project, rpc_url, &config_home);
     add_faucet_to_default_profile(&project, "http://127.0.0.1:8");
     let artifact = write_opaque_rv32_artifact(tmp.path());
-    let contract = format!("0x{}", "11".repeat(32));
-    let recipient = format!("0x{}", "22".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
+    let recipient = thruput_encoding::encode(&[0x22; 32]);
 
     let invocations = [
         (
@@ -6692,7 +6702,7 @@ fn funding_commands_refuse_without_force_before_reading_the_profile() {
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     write_project_config_with_alice_wallet(&project, "http://127.0.0.1:9", &config_home);
-    let recipient = format!("0x{}", "22".repeat(32));
+    let recipient = thruput_encoding::encode(&[0x22; 32]);
 
     let invocations = [
         (vec!["airdrop".to_owned(), recipient], "request an airdrop"),
@@ -6750,7 +6760,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let sender = advertised_dev_wallet_address(0);
-    let recipient = format!("0x{}", "ab".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xab; 32]);
     let manifest_path = write_runtime_manifest(&project, 0, &sender, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
@@ -6791,16 +6801,16 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     assert_eq!(data["senderWallet"], serde_json::Value::Null);
     assert_eq!(
         data["signerPublicKey"],
-        format!(
-            "0x{}",
-            hex::encode(
-                thruput_signing::derive_default_dev_account_signer(0).verifying_key_bytes()
-            )
+        thruput_encoding::encode(
+            &thruput_signing::derive_default_dev_account_signer(0).verifying_key_bytes()
         )
     );
     assert_eq!(data["recipientInput"], "alice");
     assert_eq!(data["recipient"], recipient);
-    assert_eq!(data["tokenAddress"], format!("0x{}01", "00".repeat(31)));
+    assert_eq!(
+        data["tokenAddress"],
+        thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+    );
     assert_eq!(data["amount"], "10.5");
     assert_eq!(data["rawAmount"], "105000000");
     assert_eq!(data["expiryHeight"], "1042");
@@ -6818,10 +6828,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
 
     let signed_tx = decode_signed_tx(data["signedTransaction"].as_str().unwrap());
     assert_eq!(
-        format!(
-            "0x{}",
-            hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
-        ),
+        thruput_encoding::encode(signed_tx.tx.invocation.invoked_address.as_ref()),
         sender
     );
     assert_eq!(
@@ -6831,18 +6838,22 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     assert_eq!(*signed_tx.tx.uniquifier.block_expiry_height, 1042);
     assert_eq!(
         data["txHash"],
-        format!(
-            "0x{}",
-            hex::encode(thruput_signing::transaction_hash(&signed_tx.tx).unwrap())
+        thruput_encoding::encode(
+            thruput_signing::transaction_hash(&signed_tx.tx)
+                .unwrap()
+                .as_ref()
         )
     );
     let (target, entrypoint, target_calldata) = decode_wallet_action(&signed_tx);
-    assert_eq!(target, format!("0x{}01", "00".repeat(31)));
+    assert_eq!(
+        target,
+        thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+    );
     assert_eq!(entrypoint, "0x63285b3523f9dc3f");
     let (calldata_recipient, raw_amount): (thruput_xdr::types::ContractAddress, u128) =
         xdrs::cxs::decode(&target_calldata).unwrap();
     assert_eq!(
-        format!("0x{}", hex::encode(calldata_recipient.as_ref())),
+        thruput_encoding::encode(calldata_recipient.as_ref()),
         recipient
     );
     assert_eq!(raw_amount, 105_000_000);
@@ -6856,7 +6867,7 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
     let sender = advertised_dev_wallet_address(0);
     let manifest_path = write_runtime_manifest(&project, 0, &sender, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    let recipient = format!("0x{}", "ab".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xab; 32]);
     std::fs::write(
         project.join("thruput.toml"),
         format!(
@@ -6881,9 +6892,8 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
     );
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    let public_key = format!(
-        "0x{}",
-        hex::encode(thruput_signing::derive_default_dev_account_signer(0).verifying_key_bytes())
+    let public_key = thruput_encoding::encode(
+        &thruput_signing::derive_default_dev_account_signer(0).verifying_key_bytes(),
     );
     assert!(stderr.contains(&format!("sender: {sender}")));
     assert!(stderr.contains(&format!("signer public key: {public_key}")));
@@ -6902,7 +6912,7 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
     let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
     add_faucet_to_default_profile(&project, &faucet_url);
-    let recipient = format!("0x{}", "bc".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xbc; 32]);
 
     let output = thruput()
         .args(["--json", "transfer", &recipient, "1", "--dry-run"])
@@ -6925,7 +6935,10 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
         signed_tx_entrypoint_from_decoded(&signed_tx),
         "0x19846d750fad81d6"
     );
-    assert_eq!(target, format!("0x{}01", "00".repeat(31)));
+    assert_eq!(
+        target,
+        thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+    );
     assert_eq!(entrypoint, "0x63285b3523f9dc3f");
 }
 
@@ -6958,9 +6971,9 @@ fn initialized_devnet_profile_discovers_signing_identity_for_all_transaction_com
         config["profile"]["devnet"]["faucet_url"] = toml_edit::value(&faucet_url);
         std::fs::write(&path, config.to_string()).unwrap();
         std::fs::write(tmp.path().join("thruput.toml"), format!(
-            "[profile.devnet.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner}\"\n", "aa".repeat(32)
+            "[profile.devnet.wallets.alice]\naddress = \"{}\"\nowner_public_key = \"{owner}\"\n", thruput_encoding::encode(&[0xaa; 32])
         )).unwrap();
-        let target = format!("0x{}", "bc".repeat(32));
+        let target = thruput_encoding::encode(&[0xbc; 32]);
         let artifact = write_opaque_rv32_artifact(tmp.path());
         let mut invocation = thruput();
         invocation
@@ -7002,7 +7015,7 @@ fn initialized_devnet_profile_discovers_signing_identity_for_all_transaction_com
 fn hosted_signing_without_a_pin_rejects_disagreeing_descriptor_and_rpc() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
-    let (rpc_url, rpc_server) = spawn_network_info_rpc(&"42".repeat(32));
+    let (rpc_url, rpc_server) = spawn_network_info_rpc(&thruput_encoding::encode(&[0x42; 32]));
     let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     write_project_config_with_alice_wallet(tmp.path(), &rpc_url, &config_home);
     add_faucet_to_default_profile(tmp.path(), &faucet_url);
@@ -7019,7 +7032,7 @@ fn hosted_signing_without_a_pin_rejects_disagreeing_descriptor_and_rpc() {
     let output = thruput()
         .args([
             "transfer",
-            &format!("0x{}", "bc".repeat(32)),
+            &thruput_encoding::encode(&[0xbc; 32]),
             "1",
             "--dry-run",
             "--json",
@@ -7042,13 +7055,13 @@ fn hosted_signing_rejects_profile_network_hash_mismatch() {
     let project = tmp.path().join("project");
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
-    let live_network_hash = "42".repeat(32);
+    let live_network_hash = thruput_encoding::encode(&[0x42; 32]);
     let (rpc_url, rpc_server) = spawn_network_info_rpc(&live_network_hash);
     let (faucet_url, descriptor_server) =
         spawn_network_descriptor_with_hash(&rpc_url, &live_network_hash);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
     add_faucet_to_default_profile(&project, &faucet_url);
-    let recipient = format!("0x{}", "bc".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xbc; 32]);
 
     let output = thruput()
         .args(["--json", "transfer", &recipient, "1", "--dry-run"])
@@ -7081,7 +7094,7 @@ fn native_wallet_transfer_discovers_unconfigured_hosted_network_identity() {
     let output = thruput()
         .args([
             "transfer",
-            &format!("0x{}", "bc".repeat(32)),
+            &thruput_encoding::encode(&[0xbc; 32]),
             "0.01",
             "--dry-run",
             "--json",
@@ -7100,7 +7113,7 @@ fn native_wallet_transfer_discovers_unconfigured_hosted_network_identity() {
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         report["data"]["sender"],
-        format!("0x{}", hex::encode(account.address().as_ref()))
+        thruput_encoding::encode(account.address().as_ref())
     );
     assert_eq!(report["data"]["submitted"], false);
     assert!(report["data"]["signedTransaction"].as_str().is_some());
@@ -7114,7 +7127,7 @@ fn transfer_dry_run_uses_legacy_wallet_entrypoint() {
     std::fs::create_dir_all(&project).unwrap();
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    let recipient = format!("0x{}", "bc".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xbc; 32]);
 
     let output = thruput()
         .args(["--json", "transfer", &recipient, "1", "--dry-run"])
@@ -7145,7 +7158,7 @@ fn transfer_dry_run_profile_and_cli_target_overrides_select_endpoint() {
     let sender = advertised_dev_wallet_address(0);
     let manifest_path = write_runtime_manifest(tmp.path(), 0, &sender, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    let recipient = format!("0x{}", "bc".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xbc; 32]);
     std::fs::write(
         project.join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:2\"\ndefault_key = \"dev-0\"\n",
@@ -7202,7 +7215,7 @@ fn transfer_dry_run_rejects_invalid_inputs_before_rpc() {
 
     for (recipient, amount, expected_code) in [
         (
-            format!("0x{}", "ab".repeat(32)),
+            thruput_encoding::encode(&[0xab; 32]),
             "1.00000001",
             "invalid_hog_amount",
         ),
@@ -7230,7 +7243,7 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     generate_key_public_key(&config_home, "alice");
-    let recipient = format!("0x{}", "bc".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xbc; 32]);
 
     std::fs::write(
         project.join("thruput.toml"),
@@ -7295,7 +7308,7 @@ fn transfer_rejects_unique_wallet_self_transfer_before_rpc() {
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     let owner = generate_key_public_key(&config_home, "alice");
-    let address = format!("0x{}", "ab".repeat(32));
+    let address = thruput_encoding::encode(&[0xab; 32]);
     let (rpc_url, rpc_server) = spawn_no_request_rpc();
     std::fs::write(
         project.join("thruput.toml"),
@@ -7328,9 +7341,9 @@ fn transfer_from_selects_named_owner_matched_wallet() {
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     let owner = generate_key_public_key(&config_home, "alice");
-    let primary = format!("0x{}", "a1".repeat(32));
-    let trading = format!("0x{}", "b2".repeat(32));
-    let recipient = format!("0x{}", "c3".repeat(32));
+    let primary = thruput_encoding::encode(&[0xa1; 32]);
+    let trading = thruput_encoding::encode(&[0xb2; 32]);
+    let recipient = thruput_encoding::encode(&[0xc3; 32]);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("thruput.toml"),
@@ -7384,7 +7397,10 @@ fn transfer_live_reports_selected_saved_wallet_for_each_report_shape() {
     assert!(committed.output.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&committed.output.stdout).unwrap();
     assert_eq!(stdout["data"]["senderWallet"], "primary");
-    assert_eq!(stdout["data"]["sender"], format!("0x{}", "a1".repeat(32)));
+    assert_eq!(
+        stdout["data"]["sender"],
+        thruput_encoding::encode(&[0xa1; 32])
+    );
     assert_eq!(stdout["data"]["txHash"], committed.local_hash);
 
     let unavailable = run_saved_wallet_transfer_live_mock(
@@ -7400,14 +7416,17 @@ fn transfer_live_reports_selected_saved_wallet_for_each_report_shape() {
     let stdout: serde_json::Value = serde_json::from_slice(&unavailable.output.stdout).unwrap();
     assert_eq!(stdout["data"]["confirmation"], "unavailable");
     assert_eq!(stdout["data"]["senderWallet"], "trading");
-    assert_eq!(stdout["data"]["sender"], format!("0x{}", "b2".repeat(32)));
+    assert_eq!(
+        stdout["data"]["sender"],
+        thruput_encoding::encode(&[0xb2; 32])
+    );
     assert_eq!(stdout["data"]["txHash"], unavailable.local_hash);
 }
 
 #[test]
 fn transfer_live_success_returns_matching_receipt_and_events() {
     let event = serde_json::json!({
-        "contractAddress": format!("0x{}", "01".repeat(32)),
+        "contractAddress": thruput_encoding::encode(&[0x01; 32]),
         "topics": [format!("0x{}", "02".repeat(32))],
         "data": "0x0304",
     });
@@ -7468,7 +7487,7 @@ fn transfer_live_rejects_invalid_persisted_rpc_url() {
         ),
     )
     .unwrap();
-    let recipient = format!("0x{}", "ab".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xab; 32]);
 
     let output = thruput()
         .args(["--json", "transfer", &recipient, "1.5"])
@@ -7496,7 +7515,7 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
         ),
     ] {
         let event = serde_json::json!({
-            "contractAddress": format!("0x{}", "09".repeat(32)),
+            "contractAddress": thruput_encoding::encode(&[0x09; 32]),
             "topics": [],
             "data": "0x0a0b",
         });
@@ -7626,7 +7645,7 @@ fn transfer_live_poll_failures_are_unavailable_command_failures() {
         "status": "recentFailure",
         "attemptHeight": "43",
         "cause": { "kind": "dbConflict", "conflict": {
-            "address": format!("0x{}", "77".repeat(32)),
+            "address": thruput_encoding::encode(&[0x77; 32]),
             "key": "0x0102",
             "code": "boundsExceeded",
         } },
@@ -7854,7 +7873,7 @@ fn transfer_live_human_unavailable_quotes_cli_rpc_override() {
 
 #[test]
 fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
-    let success = run_transfer_live_mock(
+    let success = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Receipt {
@@ -7867,15 +7886,18 @@ fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
         },
         false,
     );
-    assert!(success.status.success());
-    assert!(success.stdout.is_empty());
-    let stderr = String::from_utf8(success.stderr).unwrap();
+    assert!(success.output.status.success());
+    assert!(success.output.stdout.is_empty());
+    let stderr = String::from_utf8(success.output.stderr).unwrap();
     assert!(stderr.contains("Transferred 1.5 HOG."));
-    assert!(stderr.contains("recipient: 0x"));
-    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.contains(&format!(
+        "recipient: {}",
+        thruput_encoding::encode(&[0xab; 32])
+    )));
+    assert!(stderr.contains(&format!("tx: {}", success.local_hash)));
     assert!(stderr.contains("height: 43"));
 
-    let failure = run_transfer_live_mock(
+    let failure = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Receipt {
@@ -7891,11 +7913,11 @@ fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
         },
         false,
     );
-    assert!(!failure.status.success());
-    assert!(failure.stdout.is_empty());
-    let stderr = String::from_utf8(failure.stderr).unwrap();
+    assert!(!failure.output.status.success());
+    assert!(failure.output.stdout.is_empty());
+    let stderr = String::from_utf8(failure.output.stderr).unwrap();
     assert!(stderr.contains("Transfer reverted: denied"));
-    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.contains(&format!("tx: {}", failure.local_hash)));
     assert!(stderr.contains("height: 43"));
     assert!(stderr.contains("abort data: 0x0102"));
 }
@@ -7981,11 +8003,17 @@ fn assert_transfer_live_common(
     assert!(
         data["signerPublicKey"]
             .as_str()
-            .is_some_and(|value| value.starts_with("0x"))
+            .is_some_and(|value| thruput_encoding::decode_fixed::<32>(value).is_ok())
     );
-    assert_eq!(data["recipientInput"], format!("0x{}", "ab".repeat(32)));
-    assert_eq!(data["recipient"], format!("0x{}", "ab".repeat(32)));
-    assert_eq!(data["tokenAddress"], format!("0x{}01", "00".repeat(31)));
+    assert_eq!(
+        data["recipientInput"],
+        thruput_encoding::encode(&[0xab; 32])
+    );
+    assert_eq!(data["recipient"], thruput_encoding::encode(&[0xab; 32]));
+    assert_eq!(
+        data["tokenAddress"],
+        thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+    );
     assert_eq!(data["amount"], "1.5");
     assert_eq!(data["rawAmount"], "15000000");
     assert_eq!(data["txHash"], local_hash);
@@ -8162,8 +8190,8 @@ fn assert_deploy_estimate(
         let result = if available {
             serde_json::json!({
                 "execution": {
-                    "observedTip": { "height": "7", "blockHash": format!("0x{}", "11".repeat(32)) },
-                    "configHash": format!("0x{}", "22".repeat(32)),
+                    "observedTip": { "height": "7", "blockHash": thruput_json_rpc_types::NetworkHashText::from([0x11; 32]) },
+                    "configHash": thruput_json_rpc_types::NetworkHashText::from([0x22; 32]),
                     "effectiveLimits": {
                         "maxContractSizeBytes": 1_000_000,
                         "maxRv32CodeBytes": code_limit,
@@ -8615,13 +8643,12 @@ fn deploy_live_json_submits_and_returns_receipt() {
         .output()
         .unwrap();
 
-    rpc_server.join().unwrap();
-
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    rpc_server.join().unwrap();
     assert!(output.stderr.is_empty());
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -8633,8 +8660,8 @@ fn deploy_live_json_submits_and_returns_receipt() {
         thruput_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
     );
 
-    // The mock returns 0xbb..bb as the deployed address via return_data.
-    let expected_address = format!("0x{}", "bb".repeat(32));
+    // Raw return bytes carry an address; the report renders that address as base58.
+    let expected_address = thruput_encoding::encode(&[0xbb; 32]);
     assert_eq!(stdout["data"]["address"], expected_address);
     assert_eq!(stdout["data"]["addressSource"], "receipt");
     assert_eq!(stdout["data"]["gasUsed"], "1500");
@@ -8643,7 +8670,9 @@ fn deploy_live_json_submits_and_returns_receipt() {
     assert!(stdout["data"].get("returnData").is_none());
     assert!(stdout["data"].get("abortData").is_none());
     assert!(stdout["data"]["transactionDetail"].is_null());
-    assert!(stdout["data"]["txHash"].as_str().unwrap().starts_with("0x"));
+    assert!(
+        thruput_encoding::decode_fixed::<32>(stdout["data"]["txHash"].as_str().unwrap()).is_ok()
+    );
 }
 
 #[test]
@@ -8686,7 +8715,9 @@ fn deploy_live_json_fails_with_receipt_context() {
     assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
     assert_eq!(stdout["data"]["returnData"], "0x0102");
     assert_eq!(stdout["data"]["abortData"], "0x0304");
-    assert!(stdout["data"]["txHash"].as_str().unwrap().starts_with("0x"));
+    assert!(
+        thruput_encoding::decode_fixed::<32>(stdout["data"]["txHash"].as_str().unwrap()).is_ok()
+    );
 }
 
 #[test]
@@ -8814,7 +8845,11 @@ fn deploy_live_human_fails_after_printing_receipt_context() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("warning: Deploy failed with deterministic execution error"));
-    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.lines().any(|line| {
+        line.trim()
+            .strip_prefix("tx: ")
+            .is_some_and(|hash| thruput_encoding::decode_fixed::<32>(hash).is_ok())
+    }));
     assert!(stderr.contains("height: 42"));
     assert!(stderr.contains("return data: 0x0102"), "stderr: {stderr}");
     assert!(stderr.contains("abort data: 0x0304"), "stderr: {stderr}");
@@ -8885,7 +8920,7 @@ fn call_json_fails_without_config() {
 #[test]
 fn storage_json_fails_without_config() {
     let tmp = TempDir::new().unwrap();
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let key = format!("0x{}", "42".repeat(32));
     let output = thruput()
         .args(["--json", "storage", &address, &key])
@@ -8903,7 +8938,7 @@ fn storage_json_fails_without_config() {
 #[test]
 fn view_json_fails_without_config() {
     let tmp = TempDir::new().unwrap();
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args(["--json", "view", &address, "0x0102030405060708"])
         .env("XDG_CONFIG_HOME", tmp.path())
@@ -8923,7 +8958,7 @@ fn view_json_returns_raw_output() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let entrypoint = "0x0102030405060708";
     let calldata = "0xdeadbeef";
     let (rpc_url, rpc_server) = spawn_view_rpc(&address, entrypoint, calldata);
@@ -8979,8 +9014,8 @@ fn view_json_resolves_contract_alias_and_from_address() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
-    let caller = format!("0x{}", "22".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    let caller = thruput_encoding::encode(&[0x22; 32]);
     let entrypoint = "0x0102030405060708";
     let calldata = "0x";
     let (rpc_url, rpc_server) = spawn_view_rpc_with_caller(&address, entrypoint, calldata, &caller);
@@ -9049,9 +9084,9 @@ fn view_json_resolves_named_callers_without_private_key_bytes() {
         let public_key = thruput_signing::strkey::parse_public_key(&owner).unwrap();
         let native_address = |nonce| {
             let account = thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, nonce);
-            format!("0x{}", hex::encode(account.address().as_ref()))
+            thruput_encoding::encode(account.address().as_ref())
         };
-        let alias_address = format!("0x{}", "33".repeat(32));
+        let alias_address = thruput_encoding::encode(&[0x33; 32]);
         let native_kind = "kind = 'native'\naccount_nonce = 7\n";
         let (from, caller, binding_kind, alias_name) = match selection {
             Caller::UnsavedKey => ("owner", native_address(0), None, None),
@@ -9063,7 +9098,7 @@ fn view_json_resolves_named_callers_without_private_key_bytes() {
             ),
             Caller::LegacyWallet => (
                 "primary",
-                format!("0x{}", "22".repeat(32)),
+                thruput_encoding::encode(&[0x22; 32]),
                 Some(""),
                 Some("primary"),
             ),
@@ -9082,7 +9117,7 @@ fn view_json_resolves_named_callers_without_private_key_bytes() {
         } else {
             String::new()
         };
-        let address = format!("0x{}", "11".repeat(32));
+        let address = thruput_encoding::encode(&[0x11; 32]);
         let entrypoint = "0x0102030405060708";
         let (rpc_url, server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
         let project_config = format!(
@@ -9112,7 +9147,7 @@ fn view_json_omitted_caller_does_not_use_the_default_wallet() {
     let (_tmp, project, config) = empty_wallet_fixture();
     assert!(create_empty_wallet(&project, &config, &[]).status.success());
     make_local_keypair_unavailable(&config, "owner");
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let entrypoint = "0x0102030405060708";
     let (rpc_url, server) = spawn_view_rpc(&address, entrypoint, "0x");
     let profile = project.join("thruput.toml");
@@ -9141,11 +9176,11 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
         let project = tmp.path().join("project");
         std::fs::create_dir_all(&project).unwrap();
 
-        let address = format!("0x{}", "11".repeat(32));
+        let address = thruput_encoding::encode(&[0x11; 32]);
         let caller = advertised_dev_wallet_address(0);
         let entrypoint = "0x0102030405060708";
         let manifest_path = write_runtime_manifest(tmp.path(), 0, &caller, None);
-        let shadow_address = format!("0x{}", "22".repeat(32));
+        let shadow_address = thruput_encoding::encode(&[0x22; 32]);
         let mut bindings = String::new();
         if matches!(collision, "alias" | "both") {
             write!(
@@ -9207,7 +9242,7 @@ fn view_json_surfaces_abort_as_success_body() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let entrypoint = "0x0102030405060708";
     let (rpc_url, rpc_server) = spawn_view_rpc_with_output(
         &address,
@@ -9249,7 +9284,7 @@ fn view_json_surfaces_fault_as_success_body() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let entrypoint = "0x0102030405060708";
     let (rpc_url, rpc_server) = spawn_view_rpc_with_output(
         &address,
@@ -9287,7 +9322,7 @@ fn view_human_prints_event_details() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let entrypoint = "0x0102030405060708";
     let topic = format!("0x{}", "22".repeat(32));
     let event_data = "0x1234";
@@ -9333,7 +9368,7 @@ fn storage_json_reads_latest_item() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let key = format!("0x{}", "42".repeat(32));
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
     write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
@@ -9375,8 +9410,8 @@ fn balance_json_uses_default_wallet_when_target_is_omitted() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
-    let owner = format!("0x{}", "12".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    let owner = thruput_encoding::encode(&[0x12; 32]);
     let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "123456789");
     std::fs::write(
         project.join("thruput.toml"),
@@ -9419,8 +9454,8 @@ fn balance_json_uses_global_default_profile_when_profile_omitted() {
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(config_home.join("thruput")).unwrap();
 
-    let address = format!("0x{}", "77".repeat(32));
-    let owner = format!("0x{}", "78".repeat(32));
+    let address = thruput_encoding::encode(&[0x77; 32]);
+    let owner = thruput_encoding::encode(&[0x78; 32]);
     let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "70000000");
     std::fs::write(
         config_home.join("thruput/config.toml"),
@@ -9455,8 +9490,9 @@ fn balance_json_cli_rpc_url_overrides_profile() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "22".repeat(32));
-    let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "42");
+    let address_hex = thruput_encoding::encode(&[0x22; 32]);
+    let address = rpc_address_from_hex_fixture(&address_hex);
+    let (rpc_url, rpc_server) = spawn_balance_rpc(&address_hex, "42");
     std::fs::write(
         project.join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
@@ -9469,13 +9505,12 @@ fn balance_json_cli_rpc_url_overrides_profile() {
         .output()
         .unwrap();
 
-    rpc_server.join().unwrap();
-
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    rpc_server.join().unwrap();
     assert!(output.stderr.is_empty());
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -9489,7 +9524,7 @@ fn balance_json_cli_rpc_url_overrides_profile() {
 
 #[test]
 fn balance_json_rejects_invalid_cli_rpc_url_before_rpc() {
-    let address = format!("0x{}", "22".repeat(32));
+    let address = thruput_encoding::encode(&[0x22; 32]);
     let output = thruput()
         .args(["--json", "balance", "--rpc-url", "not-a-url", &address])
         .output()
@@ -9577,7 +9612,7 @@ fn storage_json_uses_profile_runtime_manifest_with_global_dev_key() {
     )
     .unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let key = format!("0x{}", "42".repeat(32));
     let manifest_path =
         write_runtime_manifest(tmp.path(), 0, &advertised_dev_wallet_address(0), None);
@@ -9616,7 +9651,7 @@ fn storage_json_cli_rpc_url_overrides_profile_rpc_url() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let key = format!("0x{}", "42".repeat(32));
     let manifest_path =
         write_runtime_manifest(tmp.path(), 0, &advertised_dev_wallet_address(0), None);
@@ -9654,7 +9689,7 @@ fn storage_json_resolves_contract_alias() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let key = format!("0x{}", "42".repeat(32));
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
     std::fs::write(
@@ -9849,7 +9884,7 @@ fn contract_command_preserves_prefixed_address_validation_error() {
         stderr["error"]["details"]["message"]
             .as_str()
             .unwrap()
-            .contains("C StrKey or 64 hex characters, optionally prefixed with 0x")
+            .contains("C StrKey or base58 encoding of exactly 32 bytes")
     );
 }
 
@@ -9864,7 +9899,7 @@ fn storage_json_rejects_short_key_before_rpc() {
     )
     .unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args(["--json", "storage", &address, "0x1234"])
         .current_dir(&project)
@@ -9899,7 +9934,7 @@ fn call_dry_run_json_outputs_prepared_transaction() {
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     let owner = write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    let trading = format!("0x{}", "bb".repeat(32));
+    let trading = thruput_encoding::encode(&[0xbb; 32]);
     let mut config = std::fs::read_to_string(project.join("thruput.toml")).unwrap();
     write!(
         config,
@@ -9908,7 +9943,7 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     .unwrap();
     std::fs::write(project.join("thruput.toml"), config).unwrap();
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -9969,10 +10004,7 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     ) = xdrs::txs::decode(&inner).unwrap();
     assert_eq!(target_gas, 25_000_000);
     assert_eq!(
-        format!(
-            "0x{}",
-            hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
-        ),
+        thruput_encoding::encode(signed_tx.tx.invocation.invoked_address.as_ref()),
         trading
     );
 }
@@ -9988,7 +10020,7 @@ fn call_dry_run_uses_hosted_descriptor_entrypoint() {
     let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
     add_faucet_to_default_profile(&project, &faucet_url);
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
 
     let output = thruput()
         .args([
@@ -10038,7 +10070,7 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
     )
     .unwrap();
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -10088,17 +10120,17 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
             &request["id"],
             serde_json::json!({
                 "height": "42",
-                "blockHash": format!("0x{}", "00".repeat(32)),
+                "blockHash": "1".repeat(32),
             }),
         );
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
         assert_eq!(request["method"], "groundhog_getBalance");
-        assert_eq!(request["params"][0], format!("0x{}", "aa".repeat(32)));
+        assert_eq!(request["params"][0], thruput_encoding::encode(&[0xaa; 32]));
         send_jsonrpc_response(
             stream,
             &request["id"],
             serde_json::json!({
-                "address": format!("0x{}", "aa".repeat(32)),
+                "address": thruput_encoding::encode(&[0xaa; 32]),
                 "rawBalance": "10000000",
                 "height": "42",
             }),
@@ -10107,7 +10139,7 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
     });
     write_project_config_with_alice_wallet(&project, &format!("http://{addr}"), &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -10130,7 +10162,7 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
     assert_eq!(result["error"]["code"], "call_gas_balance_insufficient");
     assert_eq!(
         result["error"]["details"]["wallet"],
-        format!("0x{}", "aa".repeat(32))
+        thruput_encoding::encode(&[0xaa; 32])
     );
     assert_eq!(result["error"]["details"]["availableRaw"], 10_000_000);
     assert_eq!(result["error"]["details"]["requiredRaw"], 25_000_000);
@@ -10184,13 +10216,13 @@ fn call_human_raw_return_uses_child_bytes_for_native_and_legacy_wallets() {
                 wallet["kind"] = toml_edit::value("native");
                 wallet["account_nonce"] = toml_edit::value(0);
                 wallet["address"] =
-                    toml_edit::value(format!("0x{}", hex::encode(account.address().as_ref())));
+                    toml_edit::value(thruput_encoding::encode(account.address().as_ref()));
                 std::fs::write(path, document.to_string()).unwrap();
             }
             let output = thruput()
                 .args([
                     "call",
-                    &format!("0x{}", "11".repeat(32)),
+                    &thruput_encoding::encode(&[0x11; 32]),
                     "0x0123456789abcdef",
                     "0x",
                     "--force",
@@ -10228,7 +10260,7 @@ fn call_live_human_appends_transaction_detail_sections() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
@@ -10269,7 +10301,7 @@ fn call_live_human_warns_when_transaction_detail_fails() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
@@ -10313,7 +10345,7 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     )
     .unwrap();
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -10340,7 +10372,7 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     assert_eq!(stdout["data"]["gasUsed"], "1500");
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["address"],
-        advertised_wallet
+        rpc_address_from_hex_fixture(&advertised_wallet)
     );
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["entrypointId"],
@@ -10378,7 +10410,7 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -10424,7 +10456,7 @@ fn call_live_human_fails_after_printing_receipt_context() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
@@ -10438,11 +10470,18 @@ fn call_live_human_fails_after_printing_receipt_context() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("warning: Call failed with a deterministic execution fault"));
-    assert!(stderr.contains("contract: 0x"));
-    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.contains(&format!("contract: {contract}")));
+    let tx_hash = stderr
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("tx: "))
+        .expect("transaction diagnostic should contain its hash");
+    assert!(thruput_encoding::decode_fixed::<32>(tx_hash).is_ok());
     assert!(stderr.contains("height: 42"));
     assert!(stderr.contains("gas used: 1500"), "stderr: {stderr}");
-    assert!(stderr.contains("wallet: 0x"));
+    assert!(stderr.contains(&format!(
+        "wallet: {}",
+        thruput_encoding::encode(&[0xaa; 32])
+    )));
 }
 
 fn write_counter_with_exception_spec(project: &std::path::Path, selector: u64) {
@@ -10523,7 +10562,7 @@ fn call_native_decodes_forwarded_aborts_and_preserves_unknown_bytes() {
                 "default_profile = 'default'\n[profile.default]\ndefault_key = 'alice'\nrpc_url = '{rpc_url}'\nnetwork_hash = '{TEST_NETWORK_HASH}'\n"
             )).unwrap();
             write_counter_with_exception_spec(project, selector);
-            let contract = format!("0x{}", "11".repeat(32));
+            let contract = thruput_encoding::encode(&[0x11; 32]);
             let mut command = thruput();
             if json {
                 command.arg("--json");
@@ -10591,7 +10630,7 @@ fn call_live_json_decodes_library_abort() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -10649,7 +10688,7 @@ fn call_live_json_decodes_erc20_permit_abort() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -10699,7 +10738,7 @@ fn call_live_human_prints_decoded_abort() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
@@ -10743,7 +10782,7 @@ fn call_live_json_omits_abort_fields_on_success() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -10758,13 +10797,12 @@ fn call_live_json_omits_abort_fields_on_success() {
         .output()
         .unwrap();
 
-    rpc_server.join().unwrap();
-
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    rpc_server.join().unwrap();
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["data"]["status"]["result"], "ok");
@@ -10789,7 +10827,7 @@ fn call_live_json_reports_abort_decode_error() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -10834,7 +10872,7 @@ fn call_live_human_reports_abort_decode_error() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let contract = format!("0x{}", "11".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
     let output = thruput()
         .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
@@ -10994,14 +11032,7 @@ fn keys_export_outputs_client_compatible_private_key() {
     assert!(exported.status.success());
     assert!(exported.stderr.is_empty());
     let plain = String::from_utf8(exported.stdout).unwrap();
-    assert_eq!(plain.len(), 67);
-    assert!(plain.starts_with("0x"));
     assert!(plain.ends_with('\n'));
-    assert!(
-        plain[2..66]
-            .chars()
-            .all(|character| { character.is_ascii_hexdigit() && !character.is_ascii_uppercase() })
-    );
 
     let private_key = plain.trim_end();
     let stored: serde_json::Value = serde_json::from_slice(
@@ -11009,12 +11040,15 @@ fn keys_export_outputs_client_compatible_private_key() {
     )
     .unwrap();
     let stored_keypair = stored["keypair_hex"].as_str().unwrap();
-    assert_eq!(private_key, format!("0x{}", &stored_keypair[..64]));
+    assert_eq!(
+        private_key,
+        thruput_encoding::encode(&hex::decode(&stored_keypair[..64]).unwrap())
+    );
 
-    let private_key_bytes: [u8; 32] = hex::decode(&private_key[2..]).unwrap().try_into().unwrap();
+    let private_key_bytes = thruput_encoding::decode_fixed::<32>(private_key).unwrap();
     let signer = thruput_signing::LocalSigner::from_secret_key(private_key_bytes);
     assert_eq!(
-        format!("0x{}", hex::encode(signer.verifying_key_bytes())),
+        thruput_encoding::encode(&signer.verifying_key_bytes()),
         generated["data"]["key"]["public_key"]
     );
 
@@ -11173,7 +11207,7 @@ fn keys_export_help_warns_that_output_is_secret() {
         .unwrap();
     assert!(export_help.status.success());
     let stdout = String::from_utf8(export_help.stdout).unwrap();
-    assert!(stdout.contains("written to stdout as lowercase, 0x-prefixed hex"));
+    assert!(stdout.contains("written to stdout as unprefixed, case-sensitive base58"));
     assert!(stdout.contains("Treat it as a secret"));
     assert!(stdout.contains("logs, CI output, or committed files"));
 }
@@ -11410,9 +11444,9 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
         "[profile.devnet]\nrpc_url = \"http://127.0.0.1:1\"\n",
     )
     .unwrap();
-    let hash = format!("0x{}", "ab".repeat(32));
+    let hash = thruput_encoding::encode(&[0xab; 32]);
     let event = serde_json::json!({
-        "contractAddress": format!("0x{}", "11".repeat(32)),
+        "contractAddress": thruput_encoding::encode(&[0x11; 32]),
         "topics": [format!("0x{}", "22".repeat(32))],
         "data": "0x0304",
     });
@@ -11439,7 +11473,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
             "--json",
             "tx",
             "show",
-            &hash.to_uppercase(),
+            &hash,
             "--profile",
             "devnet",
             "--rpc-url",
@@ -11472,7 +11506,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
 
 #[test]
 fn tx_show_committed_height_handles_indexer_catching_up() {
-    let hash = format!("0x{}", "ab".repeat(32));
+    let hash = thruput_encoding::encode(&[0xab; 32]);
     for json_output in [false, true] {
         for receipt_available in [false, true] {
             let tmp = TempDir::new().unwrap();
@@ -11531,9 +11565,12 @@ fn tx_show_committed_height_handles_indexer_catching_up() {
 }
 
 #[test]
-fn tx_show_binary_accepts_unprefixed_and_mixed_case_hashes() {
-    let canonical = format!("0x{}", "ab".repeat(32));
-    for input in ["aB".repeat(32), format!("0x{}", "Ab".repeat(32))] {
+fn tx_show_binary_preserves_case_sensitive_base58_hashes() {
+    for input in [
+        thruput_encoding::encode(&[0xab; 32]),
+        thruput_encoding::encode(&[0xcd; 32]),
+    ] {
+        let canonical = input.clone();
         let tmp = TempDir::new().unwrap();
         let (rpc_url, rpc_server) = spawn_tx_show_rpc(
             &canonical,
@@ -11582,9 +11619,9 @@ fn tx_show_help_describes_one_shot_public_lookup() {
 #[test]
 fn tx_show_human_output_includes_raw_committed_receipt_data() {
     let tmp = TempDir::new().unwrap();
-    let hash = format!("0x{}", "ac".repeat(32));
+    let hash = thruput_encoding::encode(&[0xac; 32]);
     let event = serde_json::json!({
-        "contractAddress": format!("0x{}", "11".repeat(32)),
+        "contractAddress": thruput_encoding::encode(&[0x11; 32]),
         "topics": [],
         "data": "0xaabb",
     });
@@ -11627,7 +11664,7 @@ fn tx_show_human_output_includes_raw_committed_receipt_data() {
 
 #[test]
 fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
-    let hash = format!("0x{}", "bc".repeat(32));
+    let hash = thruput_encoding::encode(&[0xbc; 32]);
     let statuses = [
         serde_json::json!({ "status": "pending" }),
         serde_json::json!({ "status": "invalid", "reason": "bad transaction" }),
@@ -11635,7 +11672,7 @@ fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
             "status": "recentFailure",
             "attemptHeight": "17",
             "cause": { "kind": "dbConflict", "conflict": {
-                "address": format!("0x{}", "11".repeat(32)),
+                "address": thruput_encoding::encode(&[0x11; 32]),
                 "key": "0xaabb",
                 "code": "boundsExceeded",
             } },
@@ -11677,7 +11714,7 @@ fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
 #[test]
 fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
     let tmp = TempDir::new().unwrap();
-    let hash = format!("0x{}", "cd".repeat(32));
+    let hash = thruput_encoding::encode(&[0xcd; 32]);
     let (rpc_url, rpc_server) = spawn_tx_show_rpc(
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
@@ -11712,7 +11749,7 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
 #[test]
 fn tx_show_matching_receipt_omits_absent_optional_fields() {
     let tmp = TempDir::new().unwrap();
-    let hash = format!("0x{}", "cf".repeat(32));
+    let hash = thruput_encoding::encode(&[0xcf; 32]);
     let (rpc_url, rpc_server) = spawn_tx_show_rpc(
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
@@ -11753,7 +11790,7 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
 
 #[test]
 fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
-    let hash = format!("0x{}", "d1".repeat(32));
+    let hash = thruput_encoding::encode(&[0xd1; 32]);
     for (status, receipt, expected, forbidden) in [
         (
             serde_json::json!({ "status": "committed", "height": "53" }),
@@ -11793,7 +11830,7 @@ fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
 #[test]
 fn tx_show_uses_profile_rpc_url_without_cli_override() {
     let tmp = TempDir::new().unwrap();
-    let hash = format!("0x{}", "ce".repeat(32));
+    let hash = thruput_encoding::encode(&[0xce; 32]);
     let (rpc_url, rpc_server) = spawn_tx_show_rpc(
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({ "status": "pending" })),
@@ -11820,12 +11857,12 @@ fn tx_show_uses_profile_rpc_url_without_cli_override() {
 
 #[test]
 fn tx_show_rejects_receipt_hash_and_height_mismatches() {
-    let hash = format!("0x{}", "de".repeat(32));
+    let hash = thruput_encoding::encode(&[0xde; 32]);
     for (name, receipt) in [
         (
             "hash",
             serde_json::json!({
-                "txHash": format!("0x{}", "ef".repeat(32)),
+                "txHash": thruput_encoding::encode(&[0xef; 32]),
                 "height": "61",
                 "gasUsed": "1500",
                 "status": { "result": "ok" },
@@ -11874,7 +11911,7 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
 
 #[test]
 fn tx_show_maps_only_unsupported_rpc_codes_to_capability_error() {
-    let hash = format!("0x{}", "ef".repeat(32));
+    let hash = thruput_encoding::encode(&[0xef; 32]);
     for code in [-32601, -32052] {
         let tmp = TempDir::new().unwrap();
         let (rpc_url, rpc_server) = spawn_tx_show_rpc(
@@ -11936,7 +11973,7 @@ fn tx_show_maps_only_unsupported_rpc_codes_to_capability_error() {
 
 #[test]
 fn tx_show_human_error_escapes_invalid_rpc_url() {
-    let hash = format!("0x{}", "ab".repeat(32));
+    let hash = thruput_encoding::encode(&[0xab; 32]);
     let rpc_url = "http://[bad\n\u{1b}[31m";
     let output = thruput()
         .args(["tx", "show", &hash, "--rpc-url", rpc_url])
@@ -11953,7 +11990,7 @@ fn tx_show_human_error_escapes_invalid_rpc_url() {
 
 #[test]
 fn proxy_errors_never_print_credentials() {
-    let hash = format!("0x{}", "ab".repeat(32));
+    let hash = thruput_encoding::encode(&[0xab; 32]);
     let unused_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let unused_address = unused_listener.local_addr().unwrap();
     drop(unused_listener);
@@ -12000,7 +12037,7 @@ fn proxy_errors_never_print_credentials() {
 #[test]
 fn tx_show_receipt_rpc_errors_remain_failures() {
     let tmp = TempDir::new().unwrap();
-    let hash = format!("0x{}", "f1".repeat(32));
+    let hash = thruput_encoding::encode(&[0xf1; 32]);
     let (rpc_url, rpc_server) = spawn_tx_show_rpc(
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
@@ -12076,7 +12113,7 @@ fn tx_show_human_error_escapes_invalid_hash_input() {
 #[test]
 fn tx_show_human_output_escapes_untrusted_status_text() {
     let tmp = TempDir::new().unwrap();
-    let hash = format!("0x{}", "f2".repeat(32));
+    let hash = thruput_encoding::encode(&[0xf2; 32]);
     let (rpc_url, rpc_server) = spawn_tx_show_rpc(
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
@@ -12127,9 +12164,9 @@ fn tx_list_help_describes_one_page_root_invocation_history() {
 #[test]
 fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
     let tmp = TempDir::new().unwrap();
-    let wallet_address = format!("0x{}", "11".repeat(32));
-    let contract_address = format!("0x{}", "22".repeat(32));
-    let owner = format!("0x{}", "33".repeat(32));
+    let wallet_address = thruput_encoding::encode(&[0x11; 32]);
+    let contract_address = thruput_encoding::encode(&[0x22; 32]);
+    let owner = thruput_encoding::encode(&[0x33; 32]);
     std::fs::write(
         tmp.path().join("thruput.toml"),
         format!(
@@ -12139,8 +12176,8 @@ fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
         ),
     )
     .unwrap();
-    let first_hash = format!("0x{}", "44".repeat(32));
-    let second_hash = format!("0x{}", "55".repeat(32));
+    let first_hash = thruput_encoding::encode(&[0x44; 32]);
+    let second_hash = thruput_encoding::encode(&[0x55; 32]);
     let expected_query = serde_json::json!({
         "address": wallet_address,
         "order": "descending",
@@ -12215,7 +12252,7 @@ fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
 #[test]
 fn tx_list_continuation_forwards_cursor_and_endpoint_owned_limit() {
     let tmp = TempDir::new().unwrap();
-    let address = format!("0x{}", "66".repeat(32));
+    let address = thruput_encoding::encode(&[0x66; 32]);
     let cursor_input = format!("0X{}", "Ab".repeat(257));
     let canonical_cursor = format!("0x{}", "ab".repeat(257));
     let expected_query = serde_json::json!({
@@ -12262,7 +12299,7 @@ fn tx_list_continuation_forwards_cursor_and_endpoint_owned_limit() {
 #[test]
 fn tx_list_rejects_page_larger_than_requested_limit() {
     let tmp = TempDir::new().unwrap();
-    let address = format!("0x{}", "65".repeat(32));
+    let address = thruput_encoding::encode(&[0x65; 32]);
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         serde_json::json!({
             "address": address,
@@ -12273,8 +12310,8 @@ fn tx_list_rejects_page_larger_than_requested_limit() {
         }),
         TxListRpcResponse::Result(serde_json::json!({
             "refs": [
-                { "txHash": format!("0x{}", "66".repeat(32)), "height": "2" },
-                { "txHash": format!("0x{}", "67".repeat(32)), "height": "1" },
+                { "txHash": thruput_encoding::encode(&[0x66; 32]), "height": "2" },
+                { "txHash": thruput_encoding::encode(&[0x67; 32]), "height": "1" },
             ],
             "cursor": "0x",
             "latestBlock": "2",
@@ -12313,7 +12350,7 @@ fn tx_list_rejects_page_larger_than_requested_limit() {
 #[test]
 fn tx_list_accepts_empty_exhausted_page() {
     let tmp = TempDir::new().unwrap();
-    let address = format!("0x{}", "67".repeat(32));
+    let address = thruput_encoding::encode(&[0x67; 32]);
     let expected_query = serde_json::json!({
         "address": address,
         "order": "descending",
@@ -12356,7 +12393,7 @@ fn tx_list_accepts_empty_exhausted_page() {
 #[test]
 fn tx_list_human_output_marks_exhausted_empty_page() {
     let tmp = TempDir::new().unwrap();
-    let address = format!("0x{}", "68".repeat(32));
+    let address = thruput_encoding::encode(&[0x68; 32]);
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         serde_json::json!({
             "address": address,
@@ -12391,13 +12428,13 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
     for target_kind in ["contract", "direct", "dev"] {
         let tmp = TempDir::new().unwrap();
         let address = match target_kind {
-            "contract" => format!("0x{}", "71".repeat(32)),
-            "direct" => format!("0x{}", "72".repeat(32)),
+            "contract" => thruput_encoding::encode(&[0x71; 32]),
+            "direct" => thruput_encoding::encode(&[0x72; 32]),
             _ => advertised_dev_wallet_address(1),
         };
         let target = match target_kind {
             "contract" => "counter".to_owned(),
-            "direct" => address.to_uppercase(),
+            "direct" => address.clone(),
             _ => "dev-1".to_owned(),
         };
         let (rpc_url, rpc_server) = spawn_tx_list_rpc(
@@ -12460,7 +12497,7 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
 
 #[test]
 fn tx_list_rejects_invalid_limit_and_cursor_before_rpc() {
-    let address = format!("0x{}", "81".repeat(32));
+    let address = thruput_encoding::encode(&[0x81; 32]);
     for (flag, value, expected_code) in [
         ("--limit", "0", "invalid_transaction_history_limit"),
         ("--limit", "-1", "invalid_transaction_history_limit"),
@@ -12544,7 +12581,7 @@ fn tx_list_rejects_address_resolution_failures_before_rpc() {
 
 #[test]
 fn tx_list_classifies_capability_and_other_rpc_errors() {
-    let address = format!("0x{}", "82".repeat(32));
+    let address = thruput_encoding::encode(&[0x82; 32]);
     let query = serde_json::json!({
         "address": address,
         "order": "descending",
@@ -12592,7 +12629,7 @@ fn tx_list_classifies_capability_and_other_rpc_errors() {
 #[test]
 fn tx_list_human_output_marks_sparse_page_and_reusable_cursor() {
     let tmp = TempDir::new().unwrap();
-    let address = format!("0x{}", "83".repeat(32));
+    let address = thruput_encoding::encode(&[0x83; 32]);
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         serde_json::json!({
             "address": address,
@@ -12637,7 +12674,7 @@ fn tx_list_human_output_marks_sparse_page_and_reusable_cursor() {
 #[test]
 fn tx_list_human_output_shows_each_reference_without_receipts() {
     let tmp = TempDir::new().unwrap();
-    let address = format!("0x{}", "84".repeat(32));
+    let address = thruput_encoding::encode(&[0x84; 32]);
     std::fs::write(
         tmp.path().join("thruput.toml"),
         format!(
@@ -12646,7 +12683,7 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
         ),
     )
     .unwrap();
-    let tx_hash = format!("0x{}", "85".repeat(32));
+    let tx_hash = thruput_encoding::encode(&[0x85; 32]);
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         serde_json::json!({
             "address": address,
@@ -12748,7 +12785,7 @@ fn events_list_help_describes_raw_filtered_single_page_query() {
 fn events_spec_selected_event_injects_filter_and_decodes_payload() {
     let tmp = TempDir::new().unwrap();
     let spec_path = write_event_spec(&tmp);
-    let contract = format!("0x{}", "81".repeat(32));
+    let contract = thruput_encoding::encode(&[0x81; 32]);
     let signature = format!("0x{}", "91".repeat(32));
     let tag = format!("0x{}", "92".repeat(32));
     let data = format!("0x{}", hex::encode(xdrs::cxs::encode(&7_u64).unwrap()));
@@ -12765,7 +12802,7 @@ fn events_spec_selected_event_injects_filter_and_decodes_payload() {
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [{
-                "txHash": format!("0x{}", "82".repeat(32)),
+                "txHash": thruput_encoding::encode(&[0x82; 32]),
                 "blockHeight": "9",
                 "sequenceNumber": 1,
                 "event": {
@@ -12831,7 +12868,7 @@ fn events_spec_selected_event_injects_filter_and_decodes_payload() {
 fn events_spec_human_output_uses_named_topics_without_raw_duplicates() {
     let tmp = TempDir::new().unwrap();
     let spec_path = write_event_spec(&tmp);
-    let contract = format!("0x{}", "93".repeat(32));
+    let contract = thruput_encoding::encode(&[0x93; 32]);
     let signature = format!("0x{}", "91".repeat(32));
     let tag = format!("0x{}", "92".repeat(32));
     let data = format!("0x{}", hex::encode(xdrs::cxs::encode(&7_u64).unwrap()));
@@ -12848,7 +12885,7 @@ fn events_spec_human_output_uses_named_topics_without_raw_duplicates() {
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [{
-                "txHash": format!("0x{}", "94".repeat(32)),
+                "txHash": thruput_encoding::encode(&[0x94; 32]),
                 "blockHeight": "9",
                 "sequenceNumber": 1,
                 "event": {
@@ -12884,7 +12921,7 @@ fn events_spec_human_output_uses_named_topics_without_raw_duplicates() {
         "\nevent\n",
         "height: 9",
         "sequence: 1",
-        "txn: 0x",
+        &format!("txn: {}", thruput_encoding::encode(&[0x94; 32])),
         "decoded event: PingEvent",
         &format!("signature: {signature}"),
         &format!("tag: {tag}"),
@@ -12908,7 +12945,7 @@ fn events_spec_human_output_uses_named_topics_without_raw_duplicates() {
 #[test]
 fn events_spec_rejects_option_and_artifact_failures_before_rpc() {
     let tmp = TempDir::new().unwrap();
-    let contract = format!("0x{}", "83".repeat(32));
+    let contract = thruput_encoding::encode(&[0x83; 32]);
     std::fs::write(tmp.path().join("malformed.spec.xdr"), [0xff]).unwrap();
     std::fs::write(tmp.path().join("unsupported.spec.json"), b"{}").unwrap();
     std::fs::write(tmp.path().join("no-spec.rv32a"), b"rv32-artifact").unwrap();
@@ -12987,9 +13024,9 @@ fn events_spec_rejects_option_and_artifact_failures_before_rpc() {
 #[test]
 fn events_list_json_sends_default_filter_and_reports_complete_raw_schema() {
     let tmp = TempDir::new().unwrap();
-    let contract = format!("0x{}", "11".repeat(32));
-    let emitter = format!("0x{}", "22".repeat(32));
-    let tx_hash = format!("0x{}", "33".repeat(32));
+    let contract = thruput_encoding::encode(&[0x11; 32]);
+    let emitter = thruput_encoding::encode(&[0x22; 32]);
+    let tx_hash = thruput_encoding::encode(&[0x33; 32]);
     let topic = format!("0x{}", "44".repeat(32));
     let expected_query = serde_json::json!({
         "filters": [{
@@ -13069,15 +13106,15 @@ fn events_list_json_sends_default_filter_and_reports_complete_raw_schema() {
 #[test]
 fn events_list_preserves_duplicate_returned_records_in_order() {
     let tmp = TempDir::new().unwrap();
-    let contract = format!("0x{}", "45".repeat(32));
+    let contract = thruput_encoding::encode(&[0x45; 32]);
     let first = serde_json::json!({
-        "txHash": format!("0x{}", "46".repeat(32)),
+        "txHash": thruput_encoding::encode(&[0x46; 32]),
         "blockHeight": "9",
         "sequenceNumber": 2,
         "event": { "contractAddress": contract, "topics": [], "data": "0xaaaa" },
     });
     let second = serde_json::json!({
-        "txHash": format!("0x{}", "47".repeat(32)),
+        "txHash": thruput_encoding::encode(&[0x47; 32]),
         "blockHeight": "8",
         "sequenceNumber": 1,
         "event": { "contractAddress": contract, "topics": [], "data": "0xbbbb" },
@@ -13120,7 +13157,7 @@ fn events_list_preserves_duplicate_returned_records_in_order() {
 #[test]
 fn events_list_preserves_repeated_topic_order_and_forwards_cursor_and_limit() {
     let tmp = TempDir::new().unwrap();
-    let contract = format!("0x{}", "51".repeat(32));
+    let contract = thruput_encoding::encode(&[0x51; 32]);
     let topic_a_input = format!("0X{}", "AA".repeat(32));
     let topic_a = format!("0x{}", "aa".repeat(32));
     let topic_b = format!("0x{}", "bb".repeat(32));
@@ -13182,7 +13219,7 @@ fn events_list_preserves_repeated_topic_order_and_forwards_cursor_and_limit() {
 
 #[test]
 fn events_list_uses_selected_profile_rpc_and_explicit_rpc_precedence() {
-    let contract = format!("0x{}", "61".repeat(32));
+    let contract = thruput_encoding::encode(&[0x61; 32]);
     for explicit_override in [false, true] {
         let tmp = TempDir::new().unwrap();
         let (rpc_url, rpc_server) = spawn_events_rpc(
@@ -13281,9 +13318,9 @@ fn events_list_resolves_runtime_manifest_dev_account() {
 
 #[test]
 fn events_list_resolves_saved_wallet_before_contract_alias_and_alias_without_wallet() {
-    let wallet_address = format!("0x{}", "72".repeat(32));
-    let contract_address = format!("0x{}", "73".repeat(32));
-    let owner = format!("0x{}", "74".repeat(32));
+    let wallet_address = thruput_encoding::encode(&[0x72; 32]);
+    let contract_address = thruput_encoding::encode(&[0x73; 32]);
+    let owner = thruput_encoding::encode(&[0x74; 32]);
 
     for has_wallet in [true, false] {
         let tmp = TempDir::new().unwrap();
@@ -13341,16 +13378,13 @@ fn events_list_explicit_runtime_manifest_overrides_profile_manifest_for_dev_acco
     let explicit_tmp = TempDir::new().unwrap();
     let profile_address = advertised_dev_wallet_address(7);
     let explicit_signer = thruput_signing::derive_dev_account_signer("alternate-event-seed", 7);
-    let explicit_address = format!(
-        "0x{}",
-        hex::encode(
-            thruput_signing::PubkeyAccount::from_public_key_bytes(
-                explicit_signer.verifying_key_bytes(),
-                0
-            )
-            .address()
-            .as_ref()
+    let explicit_address = thruput_encoding::encode(
+        thruput_signing::PubkeyAccount::from_public_key_bytes(
+            explicit_signer.verifying_key_bytes(),
+            0,
         )
+        .address()
+        .as_ref(),
     );
     let profile_manifest = write_runtime_manifest(tmp.path(), 7, &profile_address, None);
     let explicit_manifest = write_runtime_manifest_with_seed(
@@ -13409,7 +13443,7 @@ fn events_list_explicit_runtime_manifest_overrides_profile_manifest_for_dev_acco
 
 #[test]
 fn events_list_rejects_invalid_inputs_before_rpc_with_structured_details() {
-    let contract = format!("0x{}", "81".repeat(32));
+    let contract = thruput_encoding::encode(&[0x81; 32]);
     let invalid_cases = [
         (
             vec!["--limit".to_owned(), "0".to_owned()],
@@ -13478,9 +13512,9 @@ fn events_list_rejects_invalid_inputs_before_rpc_with_structured_details() {
 #[test]
 fn events_list_rejects_page_larger_than_requested_limit() {
     let tmp = TempDir::new().unwrap();
-    let contract = format!("0x{}", "91".repeat(32));
+    let contract = thruput_encoding::encode(&[0x91; 32]);
     let event = serde_json::json!({
-        "txHash": format!("0x{}", "92".repeat(32)),
+        "txHash": thruput_encoding::encode(&[0x92; 32]),
         "blockHeight": "2",
         "sequenceNumber": 0,
         "event": { "contractAddress": contract, "topics": [], "data": "0x" },
@@ -13531,7 +13565,7 @@ fn events_list_rejects_page_larger_than_requested_limit() {
 
 #[test]
 fn events_list_rejects_oversized_event_shapes() {
-    let contract = format!("0x{}", "a1".repeat(32));
+    let contract = thruput_encoding::encode(&[0xa1; 32]);
     let topic = format!("0x{}", "a2".repeat(32));
     for (topics, data, expected_message) in [
         (
@@ -13559,7 +13593,7 @@ fn events_list_rejects_oversized_event_shapes() {
             }),
             EventRpcResponse::Result(serde_json::json!({
                 "events": [{
-                    "txHash": format!("0x{}", "a4".repeat(32)),
+                    "txHash": thruput_encoding::encode(&[0xa4; 32]),
                     "blockHeight": "12",
                     "sequenceNumber": 4,
                     "event": { "contractAddress": contract, "topics": topics, "data": data },
@@ -13585,7 +13619,7 @@ fn events_list_rejects_oversized_event_shapes() {
 
 #[test]
 fn events_list_enforces_exact_combined_serialized_event_bound() {
-    let contract = format!("0x{}", "a5".repeat(32));
+    let contract = thruput_encoding::encode(&[0xa5; 32]);
     let topics = ["a6", "a7", "a8"]
         .map(|byte| format!("0x{}", byte.repeat(32)))
         .to_vec();
@@ -13605,7 +13639,7 @@ fn events_list_enforces_exact_combined_serialized_event_bound() {
             }),
             EventRpcResponse::Result(serde_json::json!({
                 "events": [{
-                    "txHash": format!("0x{}", "a9".repeat(32)),
+                    "txHash": thruput_encoding::encode(&[0xa9; 32]),
                     "blockHeight": "12",
                     "sequenceNumber": 4,
                     "event": {
@@ -13641,9 +13675,9 @@ fn events_list_enforces_exact_combined_serialized_event_bound() {
 #[test]
 fn events_list_nonempty_human_output_reports_complete_raw_event() {
     let tmp = TempDir::new().unwrap();
-    let queried_address = format!("0x{}", "b2".repeat(32));
-    let emitter = format!("0x{}", "b3".repeat(32));
-    let tx_hash = format!("0x{}", "b4".repeat(32));
+    let queried_address = thruput_encoding::encode(&[0xb2; 32]);
+    let emitter = thruput_encoding::encode(&[0xb3; 32]);
+    let tx_hash = thruput_encoding::encode(&[0xb4; 32]);
     let topics = ["b5", "b6", "b7"].map(|byte| format!("0x{}", byte.repeat(32)));
     let event = serde_json::json!({
         "txHash": tx_hash,
@@ -13721,7 +13755,7 @@ fn events_list_nonempty_human_output_reports_complete_raw_event() {
 
 #[test]
 fn events_list_connection_error_escapes_malicious_rpc_url() {
-    let contract = format!("0x{}", "b8".repeat(32));
+    let contract = thruput_encoding::encode(&[0xb8; 32]);
     let rpc_url = "http://[bad\n\u{1b}[31m\u{202e}spoof";
 
     let output = thruput()
@@ -13743,7 +13777,7 @@ fn events_list_connection_error_escapes_malicious_rpc_url() {
 
 #[test]
 fn events_list_human_output_distinguishes_empty_page_states() {
-    let contract = format!("0x{}", "b1".repeat(32));
+    let contract = thruput_encoding::encode(&[0xb1; 32]);
     for (request_cursor, response_cursor, expected) in [
         (None, "0x", "events: no events found; stream exhausted"),
         (
@@ -13808,7 +13842,7 @@ fn events_list_human_output_distinguishes_empty_page_states() {
 
 #[test]
 fn events_list_classifies_capability_and_ordinary_rpc_errors() {
-    let contract = format!("0x{}", "c1".repeat(32));
+    let contract = thruput_encoding::encode(&[0xc1; 32]);
     for (code, expected_code) in [
         (-32601, "rpc_capability_unsupported"),
         (-32052, "rpc_capability_unsupported"),
@@ -13881,12 +13915,12 @@ fn token_event_json(
     let (tx_byte, block_height, sequence_number) = identity;
     let [token, signature, from, to] = addresses;
     serde_json::json!({
-        "txHash": format!("0x{}", tx_byte.repeat(32)),
+        "txHash": thruput_encoding::encode(&hex::decode(tx_byte.repeat(32)).unwrap()),
         "blockHeight": block_height.to_string(),
         "sequenceNumber": sequence_number,
         "event": {
             "contractAddress": token,
-            "topics": [signature, from, to],
+            "topics": [signature, &address_topic(from), &address_topic(to)],
             "data": data,
         },
     })
@@ -13900,8 +13934,15 @@ fn token_supply_event_json(
     data: &str,
 ) -> serde_json::Value {
     let mut event = token_event_json(identity, [token, signature, participant, participant], data);
-    event["event"]["topics"] = serde_json::json!([signature, participant]);
+    event["event"]["topics"] = serde_json::json!([signature, address_topic(participant)]);
     event
+}
+
+fn address_topic(address: &str) -> String {
+    format!(
+        "0x{}",
+        hex::encode(thruput_encoding::decode_fixed::<32>(address).unwrap())
+    )
 }
 
 #[test]
@@ -13937,9 +13978,9 @@ fn token_transfers_help_describes_canonical_filtered_history() {
 #[test]
 fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_records() {
     let tmp = TempDir::new().unwrap();
-    let token = format!("0x{}", "a1".repeat(32));
-    let from = format!("0x{}", "a2".repeat(32));
-    let to = format!("0x{}", "a3".repeat(32));
+    let token = thruput_encoding::encode(&[0xa1; 32]);
+    let from = thruput_encoding::encode(&[0xa2; 32]);
+    let to = thruput_encoding::encode(&[0xa3; 32]);
     let signature = transfer_signature();
     let amount_data = format!("0x{}", hex::encode(xdrs::cxs::encode(&125_i128).unwrap()));
     let negative_data = format!("0x{}", hex::encode(xdrs::cxs::encode(&-1_i128).unwrap()));
@@ -14023,27 +14064,27 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
 #[test]
 fn token_transfers_account_uses_four_server_side_filters_in_one_request() {
     let tmp = TempDir::new().unwrap();
-    let token = format!("0x{}", "b1".repeat(32));
-    let account = format!("0x{}", "b2".repeat(32));
+    let token = thruput_encoding::encode(&[0xb1; 32]);
+    let account = thruput_encoding::encode(&[0xb2; 32]);
     let signature = transfer_signature();
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [
                 {
                     "contractAddresses": [token],
-                    "topics": { "topic0": [signature], "topic1": [account], "topic2": [] },
+                    "topics": { "topic0": [signature], "topic1": [address_topic(&account)], "topic2": [] },
                 },
                 {
                     "contractAddresses": [token],
-                    "topics": { "topic0": [signature], "topic1": [], "topic2": [account] },
+                    "topics": { "topic0": [signature], "topic1": [], "topic2": [address_topic(&account)] },
                 },
                 {
                     "contractAddresses": [token],
-                    "topics": { "topic0": [mint_signature()], "topic1": [account], "topic2": [] },
+                    "topics": { "topic0": [mint_signature()], "topic1": [address_topic(&account)], "topic2": [] },
                 },
                 {
                     "contractAddresses": [token],
-                    "topics": { "topic0": [burn_signature()], "topic1": [account], "topic2": [] },
+                    "topics": { "topic0": [burn_signature()], "topic1": [address_topic(&account)], "topic2": [] },
                 },
             ],
             "order": "descending",
@@ -14086,16 +14127,21 @@ fn token_transfers_account_uses_four_server_side_filters_in_one_request() {
 
 #[test]
 fn token_transfers_maps_directional_filters_and_cursor_to_one_query() {
-    let token = format!("0x{}", "d1".repeat(32));
-    let from = format!("0x{}", "d2".repeat(32));
-    let to = format!("0x{}", "d3".repeat(32));
+    let token = thruput_encoding::encode(&[0xd1; 32]);
+    let from = thruput_encoding::encode(&[0xd2; 32]);
+    let to = thruput_encoding::encode(&[0xd3; 32]);
     for (flags, topic1, topic2, filter_kind) in [
-        (vec!["--from", &from], vec![from.clone()], vec![], "from"),
-        (vec!["--to", &to], vec![], vec![to.clone()], "to"),
+        (
+            vec!["--from", &from],
+            vec![address_topic(&from)],
+            vec![],
+            "from",
+        ),
+        (vec!["--to", &to], vec![], vec![address_topic(&to)], "to"),
         (
             vec!["--from", &from, "--to", &to],
-            vec![from.clone()],
-            vec![to.clone()],
+            vec![address_topic(&from)],
+            vec![address_topic(&to)],
             "fromTo",
         ),
     ] {
@@ -14113,7 +14159,7 @@ fn token_transfers_maps_directional_filters_and_cursor_to_one_query() {
             };
             filters.push(serde_json::json!({
                 "contractAddresses": [token],
-                "topics": { "topic0": [supply_signature], "topic1": [participant], "topic2": [] },
+                "topics": { "topic0": [supply_signature], "topic1": [address_topic(participant)], "topic2": [] },
             }));
         }
         let (rpc_url, rpc_server) = spawn_events_rpc(
@@ -14151,9 +14197,9 @@ fn token_transfers_maps_directional_filters_and_cursor_to_one_query() {
 #[test]
 fn token_transfers_human_output_preserves_participants_and_malformed_evidence() {
     let tmp = TempDir::new().unwrap();
-    let token = format!("0x{}", "e1".repeat(32));
-    let from = format!("0x{}", "e2".repeat(32));
-    let to = format!("0x{}", "e3".repeat(32));
+    let token = thruput_encoding::encode(&[0xe1; 32]);
+    let from = thruput_encoding::encode(&[0xe2; 32]);
+    let to = thruput_encoding::encode(&[0xe3; 32]);
     let signature = transfer_signature();
     let amount_data = format!("0x{}", hex::encode(xdrs::cxs::encode(&125_i128).unwrap()));
     let malformed_data = "0xff";
@@ -14168,42 +14214,42 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
         EventRpcResponse::Result(serde_json::json!({
             "events": [
                 {
-                    "txHash": format!("0x{}", "e4".repeat(32)),
+                    "txHash": thruput_encoding::encode(&[0xe4; 32]),
                     "blockHeight": "12",
                     "sequenceNumber": 1,
                     "event": {
                         "contractAddress": token,
-                        "topics": [signature, from, to],
+                        "topics": [signature, address_topic(&from), address_topic(&to)],
                         "data": amount_data,
                     },
                 },
                 {
-                    "txHash": format!("0x{}", "e5".repeat(32)),
+                    "txHash": thruput_encoding::encode(&[0xe5; 32]),
                     "blockHeight": "11",
                     "sequenceNumber": 2,
                     "event": {
                         "contractAddress": token,
-                        "topics": [mint_signature(), to],
+                        "topics": [mint_signature(), address_topic(&to)],
                         "data": amount_data,
                     },
                 },
                 {
-                    "txHash": format!("0x{}", "e6".repeat(32)),
+                    "txHash": thruput_encoding::encode(&[0xe6; 32]),
                     "blockHeight": "10",
                     "sequenceNumber": 1,
                     "event": {
                         "contractAddress": token,
-                        "topics": [burn_signature(), from],
+                        "topics": [burn_signature(), address_topic(&from)],
                         "data": amount_data,
                     },
                 },
                 {
-                    "txHash": format!("0x{}", "e7".repeat(32)),
+                    "txHash": thruput_encoding::encode(&[0xe7; 32]),
                     "blockHeight": "9",
                     "sequenceNumber": 0,
                     "event": {
                         "contractAddress": token,
-                        "topics": [signature, from, to],
+                        "topics": [signature, address_topic(&from), address_topic(&to)],
                         "data": malformed_data,
                     },
                 },
@@ -14226,7 +14272,10 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
     assert!(stderr.contains("\ntransfer\n"), "stderr: {stderr}");
     assert!(stderr.contains("height: 12"), "stderr: {stderr}");
     assert!(stderr.contains("sequence: 1"), "stderr: {stderr}");
-    assert!(stderr.contains("txn: 0x"), "stderr: {stderr}");
+    assert!(
+        stderr.contains(&format!("txn: {}", thruput_encoding::encode(&[0xe4; 32]))),
+        "stderr: {stderr}"
+    );
     assert!(stderr.contains("raw amount: 125"), "stderr: {stderr}");
     assert!(!stderr.contains("\"transfer\""), "stderr: {stderr}");
     assert!(stderr.contains("\nmint\n"), "stderr: {stderr}");
@@ -14249,7 +14298,7 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
 
 #[test]
 fn token_transfers_human_output_distinguishes_empty_page_states() {
-    let token = format!("0x{}", "f1".repeat(32));
+    let token = thruput_encoding::encode(&[0xf1; 32]);
     for (request_cursor, response_cursor, expected) in [
         (None, "0x", "transfers: no events found; stream exhausted"),
         (
@@ -14311,8 +14360,8 @@ fn token_transfers_human_output_distinguishes_empty_page_states() {
 
 #[test]
 fn token_transfers_rejects_account_conflicts_before_rpc() {
-    let token = format!("0x{}", "c1".repeat(32));
-    let account = format!("0x{}", "c2".repeat(32));
+    let token = thruput_encoding::encode(&[0xc1; 32]);
+    let account = thruput_encoding::encode(&[0xc2; 32]);
     let output = thruput()
         .args([
             "--json",
@@ -14340,7 +14389,7 @@ fn token_transfers_rejects_account_conflicts_before_rpc() {
 
 #[test]
 fn token_transfers_reports_command_specific_pagination_errors() {
-    let token = format!("0x{}", "c1".repeat(32));
+    let token = thruput_encoding::encode(&[0xc1; 32]);
     for (option, value, expected_code, expected_hint) in [
         (
             "--limit",
@@ -14496,7 +14545,7 @@ fn send_tx_show_response(
 
 /// Read one HTTP POST request from a TCP stream and return the parsed JSON body.
 /// Network hash the test profiles declare in `thruput.toml`.
-const TEST_NETWORK_HASH: &str = "3333333333333333333333333333333333333333333333333333333333333333";
+const TEST_NETWORK_HASH: &str = "4Ss5JMkXAD9Z7cktFEdrqeMuT6jGMF1pVozTyPHZ6zT4";
 
 fn read_jsonrpc_request(
     listener: &TcpListener,
@@ -14585,16 +14634,16 @@ fn spawn_network_descriptor_with_hash(
             "schemaVersion": thruput_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet",
-            "networkHash": format!("0x{network_hash}"),
+            "networkHash": network_hash,
             "protocol": "hogp/test00000000000",
-            "genesisHash": format!("0x{}", "42".repeat(32)),
+            "genesisHash": thruput_json_rpc_types::NetworkHashText::from([0x42; 32]),
             "endpoints": { "rpcUrl": rpc_url },
             "nativeHog": {
-                "tokenAddress": format!("0x{}", "61".repeat(32)),
+                "tokenAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x61; 32])),
                 "decimals": 7,
                 "transferEntrypoint": "0x63285b3523f9dc3f"
             },
-            "faucet": { "walletAddress": format!("0x{}", "71".repeat(32)) },
+            "faucet": { "walletAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x71; 32])) },
             "airdrop": {
                 "rawAmount": "25000000",
                 "recipientCooldownSeconds": "60",
@@ -14629,8 +14678,8 @@ fn spawn_network_info_rpc(network_hash: &str) -> (String, thread::JoinHandle<()>
             stream,
             &request["id"],
             serde_json::json!({
-                "networkHash": format!("0x{network_hash}"),
-                "genesisHash": format!("0x{}", "42".repeat(32)),
+                "networkHash": network_hash,
+                "genesisHash": thruput_encoding::encode(&[0x42; 32]),
             }),
         );
         assert_no_follow_up_rpc(&listener);
@@ -14700,8 +14749,8 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
                 stream,
                 &request["id"],
                 serde_json::json!({
-                    "networkHash": format!("0x{TEST_NETWORK_HASH}"),
-                    "genesisHash": format!("0x{}", "42".repeat(32)),
+                    "networkHash": TEST_NETWORK_HASH,
+                    "genesisHash": thruput_encoding::encode(&[0x42; 32]),
                 }),
             );
             (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
@@ -14713,7 +14762,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
             &request["id"],
             serde_json::json!({
                 "height": height.to_string(),
-                "blockHash": format!("0x{}", "00".repeat(32)),
+                "blockHash": "1".repeat(32),
             }),
         );
 
@@ -14754,8 +14803,8 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
             stream,
             &request["id"],
             serde_json::json!({
-                "networkHash": format!("0x{TEST_NETWORK_HASH}"),
-                "genesisHash": format!("0x{}", "42".repeat(32)),
+                "networkHash": TEST_NETWORK_HASH,
+                "genesisHash": thruput_encoding::encode(&[0x42; 32]),
             }),
         );
 
@@ -14781,7 +14830,7 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
                 "attemptStatus": "succeeded",
                 "recipient": recipient,
                 "rawAmount": "25000000",
-                "txHash": format!("0x{}", "22".repeat(32)),
+                "txHash": thruput_encoding::encode(&[0x22; 32]),
                 "height": "42",
                 "gasUsed": "1500",
                 "status": { "result": "ok" },
@@ -14809,10 +14858,7 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
         let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
         assert_eq!(
             target,
-            format!(
-                "0x{}",
-                hex::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
-            )
+            thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
         );
         assert_eq!(
             entrypoint,
@@ -14824,19 +14870,16 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
         let (actual_recipient, amount): (thruput_xdr::types::ContractAddress, u128) =
             xdrs::cxs::decode(&calldata).unwrap();
         assert_eq!(
-            format!("0x{}", hex::encode(actual_recipient.as_ref())),
+            thruput_encoding::encode(actual_recipient.as_ref()),
             recipient
         );
         assert_eq!(amount, 100_000_000);
         assert_eq!(
-            format!(
-                "0x{}",
-                hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
-            ),
+            thruput_encoding::encode(signed_tx.tx.invocation.invoked_address.as_ref()),
             faucet
         );
         let sponsor = thruput_signing::derive_default_dev_account_signer(0);
-        let network_hash = thruput_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
+        let network_hash = thruput_json_rpc_types::NetworkHashText::try_from(TEST_NETWORK_HASH)
             .unwrap()
             .to_network_hash();
         let expected = thruput_signing::sign_transaction(
@@ -14880,7 +14923,7 @@ fn serve_local_funding_transaction_with_receipt_failure(
     assert_eq!(request["params"][0]["recipient"], recipient);
     assert_eq!(request["params"][0]["rawAmount"], "100000000");
     let sponsor = thruput_signing::derive_default_dev_account_signer(0);
-    let network = thruput_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
+    let network = thruput_json_rpc_types::NetworkHashText::try_from(TEST_NETWORK_HASH)
         .unwrap()
         .to_network_hash();
     let account =
@@ -14907,9 +14950,10 @@ fn serve_local_funding_transaction_with_receipt_failure(
         &network,
     )
     .unwrap();
-    let tx_hash = format!(
-        "0x{}",
-        hex::encode(thruput_signing::transaction_hash(&signed_tx.tx).unwrap())
+    let tx_hash = thruput_encoding::encode(
+        thruput_signing::transaction_hash(&signed_tx.tx)
+            .unwrap()
+            .as_ref(),
     );
     send_jsonrpc_response(
         stream,
@@ -14938,6 +14982,7 @@ fn serve_balance(
     raw_balance: &str,
     height: i64,
 ) {
+    let address = rpc_address_from_hex_fixture(address);
     let (stream, request) = read_jsonrpc_request(listener, deadline, "getBalance");
     assert_eq!(request["method"], "groundhog_getBalance");
     assert_eq!(request["params"][0], address);
@@ -14958,7 +15003,7 @@ fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
         send_jsonrpc_response(
             stream,
             &request["id"],
-            serde_json::json!({"networkHash":format!("0x{TEST_NETWORK_HASH}"),"genesisHash":format!("0x{}", "42".repeat(32))}),
+            serde_json::json!({"networkHash":TEST_NETWORK_HASH,"genesisHash":thruput_json_rpc_types::NetworkHashText::from([0x42; 32])}),
         );
         (stream, request) = read_jsonrpc_request(listener, deadline, "chainTip");
     }
@@ -14968,7 +15013,7 @@ fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
         &request["id"],
         serde_json::json!({
             "height": height.to_string(),
-            "blockHash": format!("0x{}", "00".repeat(32)),
+            "blockHash": "1".repeat(32),
         }),
     );
 }
@@ -14981,7 +15026,7 @@ fn spawn_balance_then_chain_tip_rpc(
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
-    let address = address.to_owned();
+    let address = rpc_address_from_hex_fixture(address);
     let raw_balance = raw_balance.to_owned();
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
@@ -15087,7 +15132,7 @@ fn run_transfer_live_mock_with_rpc_override(
         ),
     )
     .unwrap();
-    let recipient = format!("0x{}", "ab".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xab; 32]);
     let mut command = thruput();
     if json {
         command.arg("--json");
@@ -15121,8 +15166,8 @@ fn run_saved_wallet_transfer_live_mock(
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     let owner = generate_key_public_key(&config_home, "alice");
-    let primary = format!("0x{}", "a1".repeat(32));
-    let trading = format!("0x{}", "b2".repeat(32));
+    let primary = thruput_encoding::encode(&[0xa1; 32]);
+    let trading = thruput_encoding::encode(&[0xb2; 32]);
     let expected_sender = if explicit_wallet.is_some() {
         trading.clone()
     } else {
@@ -15136,7 +15181,7 @@ fn run_saved_wallet_transfer_live_mock(
         ),
     )
     .unwrap();
-    let recipient = format!("0x{}", "ab".repeat(32));
+    let recipient = thruput_encoding::encode(&[0xab; 32]);
     let mut command = thruput();
     command.args(["--json", "transfer", &recipient, "1.5", "--force"]);
     if let Some(wallet) = explicit_wallet {
@@ -15173,7 +15218,7 @@ fn spawn_transfer_rpc(
             send_jsonrpc_response(
                 stream,
                 &request["id"],
-                serde_json::json!({"networkHash":format!("0x{TEST_NETWORK_HASH}"),"genesisHash":format!("0x{}", "42".repeat(32))}),
+                serde_json::json!({"networkHash":TEST_NETWORK_HASH,"genesisHash":thruput_json_rpc_types::NetworkHashText::from([0x42; 32])}),
             );
             (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         }
@@ -15183,7 +15228,7 @@ fn spawn_transfer_rpc(
             &request["id"],
             serde_json::json!({
                 "height": "42",
-                "blockHash": format!("0x{}", "00".repeat(32)),
+                "blockHash": "1".repeat(32),
             }),
         );
 
@@ -15191,20 +15236,21 @@ fn spawn_transfer_rpc(
         assert_eq!(request["method"], "groundhog_sendRawTransaction");
         let signed_hex = request["params"][0].as_str().unwrap();
         let signed_tx = decode_signed_tx(signed_hex);
-        let local_hash = format!(
-            "0x{}",
-            hex::encode(thruput_signing::transaction_hash(&signed_tx.tx).unwrap())
+        let local_hash = thruput_encoding::encode(
+            thruput_signing::transaction_hash(&signed_tx.tx)
+                .unwrap()
+                .as_ref(),
         );
         local_hash_tx.send(local_hash.clone()).unwrap();
         assert_eq!(
-            format!(
-                "0x{}",
-                hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
-            ),
+            thruput_encoding::encode(signed_tx.tx.invocation.invoked_address.as_ref()),
             expected_sender
         );
         let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
-        assert_eq!(target, format!("0x{}01", "00".repeat(31)));
+        assert_eq!(
+            target,
+            thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+        );
         assert_eq!(entrypoint, "0x63285b3523f9dc3f");
         let (recipient, raw_amount): (thruput_xdr::types::ContractAddress, u128) =
             xdrs::cxs::decode(&calldata).unwrap();
@@ -15222,7 +15268,7 @@ fn spawn_transfer_rpc(
                 send_jsonrpc_response(
                     stream,
                     &request["id"],
-                    serde_json::json!(format!("0x{}", "ff".repeat(32))),
+                    serde_json::json!(thruput_encoding::encode(&[0xff; 32])),
                 );
             }
             TransferSubmitMock::Error(code) => {
@@ -15263,7 +15309,7 @@ fn serve_transfer_poll(
         } => {
             let mut receipt = serde_json::json!({
                 "txHash": if mismatched_hash {
-                    format!("0x{}", "ee".repeat(32))
+                    thruput_encoding::encode(&[0xee; 32])
                 } else {
                     local_hash.to_owned()
                 },
@@ -15428,12 +15474,24 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
     (format!("http://{addr}"), handle)
 }
 
+// CLI presentation/config fixtures are migrated separately from the RPC boundary.
+fn rpc_address_from_hex_fixture(address: &str) -> String {
+    if !address.starts_with("0x") {
+        thruput_encoding::parse_address(address).unwrap();
+        return address.to_owned();
+    }
+    thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from(
+        thruput_json_rpc_types::hex::decode_fixed_hex::<32>(address).unwrap(),
+    ))
+    .to_string()
+}
+
 fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinHandle<()>) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
-    let expected_address = address.to_owned();
+    let expected_address = rpc_address_from_hex_fixture(address);
     let raw_balance = raw_balance.to_owned();
 
     let handle = thread::spawn(move || {
@@ -15585,7 +15643,7 @@ fn advertised_dev_wallet_address(index: u8) -> String {
     let address =
         thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
             .address();
-    format!("0x{}", hex::encode(address.as_ref()))
+    thruput_encoding::encode(address.as_ref())
 }
 
 fn assert_split_bootstrap_accounts(manifest_path: &std::path::Path, user_tokens: &str) {
@@ -15631,12 +15689,12 @@ fn write_runtime_manifest_with_seed(
     let public_key = public_key_override.unwrap_or_else(|| signer.verifying_key_bytes());
     let path = dir.join(format!("runtime-manifest-{index}.json"));
     let manifest = serde_json::json!({
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
         "networkHash": TEST_NETWORK_HASH,
         "protocol": "hogp/test00000000000",
-        "genesisHash": format!("0x{}", "42".repeat(32)),
+        "genesisHash": thruput_encoding::encode(&[0x42; 32]),
         "producer": {
             "binary": "hog-devnode",
             "version": "0.1.0"
@@ -15646,8 +15704,8 @@ fn write_runtime_manifest_with_seed(
         },
         "bootstrapAccounts": [{
             "role": if index == 0 { "faucet" } else { "local_user" },
-            "publicKey": format!("0x{}", hex::encode(public_key)),
-            "walletAddress": address,
+            "publicKey": thruput_json_rpc_types::Ed25519PublicKey::from(thruput_xdr::types::Ed25519PublicKey::from(public_key)),
+            "walletAddress": rpc_address_from_hex_fixture(address),
             "initialStorageTokens": if index == 0 {
                 thruput_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS
             } else {
@@ -15656,7 +15714,7 @@ fn write_runtime_manifest_with_seed(
         }],
         "bootstrap": {
             "storageCostModel": {
-                "hash": format!("0x{}", "53".repeat(32)),
+                "hash": thruput_json_rpc_types::NetworkHashText::from([0x53; 32]),
                 "baseDataItemCost": "12000",
                 "bytestringCostPerByte": "10",
                 "baseContractDeploymentCost": "12000",
@@ -15693,8 +15751,8 @@ fn write_project_config_with_alice_wallet(
     std::fs::write(
         project.join("thruput.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
-            "aa".repeat(32)
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\n\n[profile.default.wallets.alice]\naddress = \"{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            thruput_encoding::encode(&[0xaa; 32])
         ),
     )
     .unwrap();
@@ -15719,9 +15777,9 @@ fn write_project_config_with_dummy_alice_wallet(project: &std::path::Path, rpc_u
     std::fs::write(
         project.join("thruput.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"0x{}\"\n",
-            "aa".repeat(32),
-            "bb".repeat(32),
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"{}\"\nowner_public_key = \"{}\"\n",
+            thruput_encoding::encode(&[0xaa; 32]),
+            thruput_encoding::encode(&[0xbb; 32]),
         ),
     )
     .unwrap();
@@ -15756,10 +15814,7 @@ fn generate_key_public_key(config_home: &std::path::Path, name: &str) -> String 
 fn signed_tx_invoked_address(tx_hex: &str) -> String {
     let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex)).unwrap();
     let signed_tx: thruput_xdr::transaction::SignedTransaction = xdrs::txs::decode(&bytes).unwrap();
-    format!(
-        "0x{}",
-        hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
-    )
+    thruput_encoding::encode(signed_tx.tx.invocation.invoked_address.as_ref())
 }
 
 fn decode_signed_tx(tx_hex: &str) -> thruput_xdr::transaction::SignedTransaction {
@@ -15793,7 +15848,7 @@ fn decode_wallet_action(
         let (address, entrypoint, gas, calldata) = &calls[0];
         assert_eq!(*gas, thruput_signing::DEFAULT_TX_GAS_LIMIT);
         return (
-            format!("0x{}", hex::encode(address.as_ref())),
+            thruput_encoding::encode(address.as_ref()),
             format!("0x{}", hex::encode(entrypoint.as_ref())),
             calldata.clone(),
         );
@@ -15807,7 +15862,7 @@ fn decode_wallet_action(
     ) = xdrs::txs::decode(&inner).unwrap();
     assert_eq!(gas_limit, thruput_signing::DEFAULT_TX_GAS_LIMIT);
     (
-        format!("0x{}", hex::encode(target.as_ref())),
+        thruput_encoding::encode(target.as_ref()),
         format!("0x{}", hex::encode(entrypoint.as_ref())),
         calldata,
     )
@@ -15844,7 +15899,7 @@ enum DevDetailRpcResponse {
 }
 
 fn mock_tx_hash() -> String {
-    format!("0x{}", "aa".repeat(32))
+    thruput_json_rpc_types::NetworkHashText::from([0xaa; 32]).to_string()
 }
 
 /// Mock RPC server that handles the full deploy flow:
@@ -15899,9 +15954,10 @@ fn spawn_transaction_rpc(
             "sendRawTransaction should receive 0x-prefixed tx hex"
         );
         let signed_tx = decode_signed_tx(request["params"][0].as_str().unwrap());
-        let tx_hash = format!(
-            "0x{}",
-            hex::encode(thruput_signing::transaction_hash(&signed_tx.tx).unwrap())
+        let tx_hash = thruput_encoding::encode(
+            thruput_signing::transaction_hash(&signed_tx.tx)
+                .unwrap()
+                .as_ref(),
         );
         receipt["txHash"] = serde_json::json!(tx_hash);
         send_jsonrpc_response(stream, &request["id"], serde_json::json!(tx_hash));
@@ -15975,7 +16031,9 @@ fn sample_insufficient_funding_deploy_receipt(height: i64) -> serde_json::Value 
 }
 
 fn sample_call_receipt(height: i64) -> serde_json::Value {
-    let contract_address = format!("0x{}", "11".repeat(32));
+    let contract_address = thruput_json_rpc_types::ContractAddress::from(
+        thruput_xdr::types::ContractAddress::from([0x11; 32]),
+    );
     serde_json::json!({
         "txHash": mock_tx_hash(),
         "height": height.to_string(),
@@ -16042,7 +16100,7 @@ fn library_abort_hex(case_name: &str) -> String {
 }
 
 fn sample_detail_result(height: i64) -> serde_json::Value {
-    let contract_address = format!("0x{}", "11".repeat(32));
+    let contract_address = thruput_encoding::encode(&[0x11; 32]);
     serde_json::json!({
         "receipt": sample_call_receipt(height),
         "gasConsumed": "12450",
@@ -16073,7 +16131,15 @@ fn sample_detail_result(height: i64) -> serde_json::Value {
 }
 
 fn issuer_event_fixture() -> Vec<serde_json::Value> {
-    serde_json::from_str(include_str!("fixtures/issuer-events.json")).unwrap()
+    let mut records: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/issuer-events.json")).unwrap();
+    // The captured contract fixture uses hex; only its typed emitter changes on the RPC wire.
+    for record in &mut records {
+        record["event"]["contractAddress"] = serde_json::json!(rpc_address_from_hex_fixture(
+            record["event"]["contractAddress"].as_str().unwrap()
+        ));
+    }
+    records
 }
 
 fn run_issuer_event_command(
@@ -16088,7 +16154,7 @@ fn run_issuer_event_command(
         .enumerate()
         .map(|(index, record)| {
             serde_json::json!({
-                "txHash": format!("0x{:064x}", index + 1),
+                "txHash": thruput_encoding::encode(&hex::decode(format!("{:064x}", index + 1)).unwrap()),
                 "blockHeight": (20 - index).to_string(),
                 "sequenceNumber": 0,
                 "event": record["event"],
@@ -16188,7 +16254,7 @@ fn issuer_token_movements_count_clawback_once() {
         assert_eq!(record["transfer"]["rawAmount"], amount);
     }
     let clawback_burn = &records[3];
-    let alice = format!("0x{}", "13".repeat(32));
+    let alice = thruput_encoding::encode(&[0x13; 32]);
     assert_eq!(clawback_burn["transfer"]["from"], alice);
     assert!(clawback_burn["transfer"]["to"].is_null());
 }
@@ -16217,7 +16283,7 @@ fn transfer_live_scheduler_failures_preserve_json_outcome() {
 
 #[test]
 fn tx_show_scheduler_failures_render_next_steps() {
-    let hash = format!("0x{}", "bc".repeat(32));
+    let hash = thruput_encoding::encode(&[0xbc; 32]);
     for (tag, next_step) in [
         ("retry", "resubmit the transaction"),
         ("dropped", "modify the transaction"),

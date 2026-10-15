@@ -427,11 +427,9 @@ mod tests {
         let to_address = sdk::ContractAddress::from(to);
         let transfer = TransferEvent::new(&from_address, &to_address, amount);
         IdentifiedEvent {
-            tx_hash: serde_json::from_value(serde_json::Value::String(format!(
-                "0x{}",
-                hex::encode([0x44; 32])
-            )))
-            .unwrap(),
+            tx_hash: thruput_json_rpc_types::transaction::TxHash(
+                thruput_xdr::types::SHA256Hash::from([0x44; 32]).into(),
+            ),
             block_height: BlockHeight::from(8),
             sequence_number: 0,
             event: EmittedEvent {

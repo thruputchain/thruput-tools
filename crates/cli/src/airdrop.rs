@@ -258,7 +258,7 @@ fn local_funding_attempt_path(
 fn retain_local_funding_request(
     prepared: &PreparedLocalAirdrop,
 ) -> Result<(PathBuf, File, FundAccountRequest), CliError> {
-    let network_hash = hex::encode(prepared.network_hash.as_ref());
+    let network_hash = thruput_encoding::encode(prepared.network_hash.as_ref());
     let path = local_funding_attempt_path(
         &network_hash,
         &prepared.faucet_wallet,
@@ -554,7 +554,7 @@ fn prepare_local_airdrop_plan(
     // A retained request may already have spent this balance. Let the service
     // reconcile it instead of rejecting a retry against the post-transfer balance.
     let pending_path = local_funding_attempt_path(
-        &hex::encode(faucet.network_hash.as_ref()),
+        &thruput_encoding::encode(faucet.network_hash.as_ref()),
         &faucet_wallet,
         &recipient_wallet,
     )?;
@@ -1003,11 +1003,10 @@ fn resolve_airdrop_recipient(
     match resolve_address_target(profile, recipient) {
         Ok(address) => Ok(format_contract_address(&address)),
         Err(CliError::InvalidAddressTarget { .. }) => Err(CliError::Other(
-            "wallet address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
-                .into(),
+            "wallet address must be a C StrKey or base58 encoding of exactly 32 bytes".into(),
         )),
         Err(CliError::UnknownAddressTarget { .. }) => Err(CliError::Other(format!(
-            "unknown wallet `{}`; run `thruput wallet create --key={}` or pass a C StrKey or 0x-prefixed wallet address",
+            "unknown wallet `{}`; run `thruput wallet create --key={}` or pass a C StrKey or base58 wallet address",
             crate::terminal::terminal_safe(recipient),
             crate::terminal::render_shell_arg(recipient),
         ))),
@@ -1174,6 +1173,12 @@ mod tests {
         let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
         let mut prepared = prepared_local_airdrop();
         let (path, lock, first) = super::retain_local_funding_request(&prepared).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved["networkHash"],
+            thruput_encoding::encode(prepared.network_hash.as_ref())
+        );
         drop(lock);
         let (_, lock, retry) = super::retain_local_funding_request(&prepared).unwrap();
         assert_eq!(first, retry);
@@ -1186,7 +1191,7 @@ mod tests {
         prepared.raw_amount += 1;
         assert!(super::retain_local_funding_request(&prepared).is_err());
         prepared.raw_amount -= 1;
-        prepared.faucet_wallet = format!("0x{}", "55".repeat(32));
+        prepared.faucet_wallet = thruput_encoding::encode(&[0x55; 32]);
         let (other_path, _, other) = super::retain_local_funding_request(&prepared).unwrap();
         assert_ne!(path, other_path);
         assert_ne!(first.client_nonce, other.client_nonce);
@@ -1208,33 +1213,34 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: format!("0x{}", "aB".repeat(32)),
-                owner_public_key: format!("0x{}", "ef".repeat(32)),
+                address: thruput_encoding::encode(&[0xab; 32]),
+                owner_public_key: thruput_encoding::encode(&[0xef; 32]),
             },
         );
         let profile = test_profile(wallets);
 
         assert_eq!(
             resolve_airdrop_recipient(&profile, "alice").unwrap(),
-            format!("0x{}", "ab".repeat(32))
+            thruput_encoding::encode(&[0xab; 32])
         );
         assert_eq!(
-            resolve_airdrop_recipient(&profile, &format!("0x{}", "cD".repeat(32))).unwrap(),
-            format!("0x{}", "cd".repeat(32))
+            resolve_airdrop_recipient(&profile, &thruput_encoding::encode(&[0xcd; 32])).unwrap(),
+            thruput_encoding::encode(&[0xcd; 32])
         );
         assert!(resolve_airdrop_recipient(&profile, "missing").is_err());
     }
 
     #[test]
     #[serial]
-    fn recipient_hex_casing_selects_the_same_attempt_path() {
+    fn recipient_base58_and_strkey_select_the_same_attempt_path() {
         let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
         let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
         let profile = test_profile(BTreeMap::new());
-        let lower = resolve_airdrop_recipient(&profile, &format!("0x{}", "ab".repeat(32)))
-            .expect("bug: lowercase recipient should resolve");
-        let mixed = resolve_airdrop_recipient(&profile, &format!("0x{}", "aB".repeat(32)))
-            .expect("bug: mixed-case recipient should resolve");
+        let lower = resolve_airdrop_recipient(&profile, &thruput_encoding::encode(&[0xab; 32]))
+            .expect("bug: base58 recipient should resolve");
+        let mixed =
+            resolve_airdrop_recipient(&profile, &thruput_encoding::address_strkey(&[0xab; 32]))
+                .expect("bug: StrKey recipient should resolve");
 
         assert_eq!(lower, mixed);
         assert_eq!(
@@ -1245,15 +1251,15 @@ mod tests {
 
     #[test]
     #[serial]
-    fn migrates_mixed_case_attempt_without_changing_nonce() {
+    fn canonicalizes_strkey_attempt_without_changing_nonce() {
         let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
         let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
         let profile = test_profile(BTreeMap::new());
         let descriptor = test_network_descriptor();
-        let legacy_recipient = format!("0x{}", "aB".repeat(32));
-        let current_recipient = format!("0x{}", "Ab".repeat(32));
+        let legacy_recipient = thruput_encoding::address_strkey(&[0xab; 32]);
+        let current_recipient = thruput_encoding::encode(&[0xab; 32]);
         let recipient_wallet = resolve_airdrop_recipient(&profile, &current_recipient)
-            .expect("bug: mixed-case recipient should resolve");
+            .expect("bug: base58 recipient should resolve");
         let legacy_path = remote_airdrop_attempt_path(
             &profile.name,
             &legacy_recipient,
@@ -1300,7 +1306,7 @@ mod tests {
         let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
         let profile = test_profile(BTreeMap::new());
         let descriptor = test_network_descriptor();
-        let legacy_recipient = format!("0x{}", "aB".repeat(32));
+        let legacy_recipient = thruput_encoding::address_strkey(&[0xab; 32]);
         let recipient_wallet = resolve_airdrop_recipient(&profile, &legacy_recipient).unwrap();
         let canonical_path = remote_airdrop_attempt_path(
             &profile.name,
@@ -1361,7 +1367,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("C StrKey or 64 hex characters, optionally prefixed with 0x")
+                .contains("C StrKey or base58 encoding of exactly 32 bytes")
         );
     }
 
@@ -1390,8 +1396,8 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: format!("0x{}", "ab".repeat(32)),
-                owner_public_key: format!("0x{}", "ef".repeat(32)),
+                address: thruput_encoding::encode(&[0xab; 32]),
+                owner_public_key: thruput_encoding::encode(&[0xef; 32]),
             },
         );
         let mut profile = test_profile(wallets);
@@ -1414,7 +1420,10 @@ mod tests {
         assert_eq!(prepared.faucet_url, "http://127.0.0.1:8081");
         assert_eq!(prepared.rpc_url, "http://127.0.0.1:9545");
         assert_eq!(prepared.recipient_input, "alice");
-        assert_eq!(prepared.recipient_wallet, format!("0x{}", "ab".repeat(32)));
+        assert_eq!(
+            prepared.recipient_wallet,
+            thruput_encoding::encode(&[0xab; 32])
+        );
         assert_eq!(prepared.client_nonce.len(), 34);
         unsafe { env::remove_var("XDG_CACHE_HOME") };
     }
@@ -1640,11 +1649,11 @@ mod tests {
         PreparedLocalAirdrop {
             rpc_url: String::new(),
             recipient_input: "alice".into(),
-            recipient_wallet: format!("0x{}", "ab".repeat(32)),
+            recipient_wallet: thruput_encoding::encode(&[0xab; 32]),
             amount_hog: "10".into(),
             raw_amount: 100_000_000,
             faucet_role: "faucet".into(),
-            faucet_wallet: format!("0x{}", "cd".repeat(32)),
+            faucet_wallet: thruput_encoding::encode(&[0xcd; 32]),
             faucet_balance_height: thruput_json_rpc_types::BlockHeight::from(42),
             funding_projection: crate::balance::LocalFundingProjection {
                 committed_balance: 200_000_000,
@@ -1661,7 +1670,7 @@ mod tests {
     fn reverted_too_large_receipt() -> thruput_json_rpc_types::receipt::TransactionReceipt {
         thruput_json_rpc_types::receipt::TransactionReceipt {
             tx_hash: thruput_json_rpc_types::transaction::TxHash(
-                thruput_json_rpc_types::hex::Hex0x(thruput_xdr::types::SHA256Hash::from(
+                thruput_json_rpc_types::base58::Base58(thruput_xdr::types::SHA256Hash::from(
                     [0x44; 32],
                 )),
             ),
@@ -1718,16 +1727,16 @@ mod tests {
             "schemaVersion": thruput_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet-preview",
-            "networkHash": format!("0x{}", "42".repeat(32)),
+            "networkHash": thruput_json_rpc_types::NetworkHashText::from([0x42; 32]),
             "protocol": "x23",
-            "genesisHash": format!("0x{}", "01".repeat(32)),
+            "genesisHash": thruput_json_rpc_types::NetworkHashText::from([0x01; 32]),
             "endpoints": { "rpcUrl": "http://127.0.0.1:9545" },
             "nativeHog": {
-                "tokenAddress": format!("0x{}", "02".repeat(32)),
+                "tokenAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x02; 32])),
                 "decimals": 7,
                 "transferEntrypoint": "0x63285b3523f9dc3f"
             },
-            "faucet": { "walletAddress": format!("0x{}", "04".repeat(32)) },
+            "faucet": { "walletAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x04; 32])) },
             "airdrop": {
                 "rawAmount": "100000000",
                 "recipientCooldownSeconds": "43200",

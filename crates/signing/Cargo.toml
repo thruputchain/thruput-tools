@@ -21,6 +21,7 @@ exclude = [
 workspace = true
 
 [dependencies]
+thruput-encoding = { workspace = true }
 thruput-xdr = { workspace = true }
 thruput-domain-separator = { workspace = true }
 xdrs = { workspace = true }

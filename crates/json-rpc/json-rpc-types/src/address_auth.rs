@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use thruput_xdr::address_auth::AddressAuthData;
 use thruput_xdr::types::PublicKey;
 
-use crate::hex::Hex0x;
+use crate::base58::Base58;
 use crate::{BlockHeight, ContractAddress, Ed25519PublicKey};
 
 /// Authorization configuration registered at one address, read from the
@@ -96,7 +96,7 @@ impl From<&PublicKey> for AuthPublicKey {
     fn from(key: &PublicKey) -> Self {
         match key {
             PublicKey::Ed25519 { ed25519 } => Self::Ed25519 {
-                key: Hex0x(*ed25519),
+                key: Base58(*ed25519),
             },
             other => Self::Unknown {
                 scheme_id: other.scheme().0,

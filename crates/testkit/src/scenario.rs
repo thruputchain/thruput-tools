@@ -353,7 +353,7 @@ async fn acquire_network(
                 .iter()
                 .map(|account| {
                     thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-                        thruput_json_rpc_types::hex::Hex0x(
+                        thruput_json_rpc_types::base58::Base58(
                             account.signer.verifying_key_bytes().into(),
                         ),
                         config.initial_account_tokens.to_string(),

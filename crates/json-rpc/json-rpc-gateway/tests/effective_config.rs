@@ -7,7 +7,7 @@ fn configuration_dump_is_only_json_with_default_or_verbose_logging() {
         command.args([
             "--dump-effective-config",
             "--network-hash",
-            &"12".repeat(32),
+            thruput_json_rpc_types::NetworkHashText::from([0x12; 32]).as_str(),
             "--listen",
             "not-a-socket-address",
             "--x23-multiplex-connections",

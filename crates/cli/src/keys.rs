@@ -9,7 +9,7 @@ use serde_json::json;
 use std::fs;
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
-use thruput_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
+use thruput_json_rpc_types::hex::decode_fixed_hex;
 use thruput_signing::strkey;
 use thruput_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount};
 use zeroize::{Zeroize, Zeroizing};
@@ -108,7 +108,7 @@ pub fn generate(
     Ok(())
 }
 
-/// Import an S `StrKey` or 32-byte hex seed from a hidden terminal prompt or piped stdin.
+/// Import an S `StrKey` or base58 seed from a hidden terminal prompt or piped stdin.
 /// No secret command-line argument is accepted and existing keys are never overwritten.
 pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
     validate_stored_key_name(name)?;
@@ -116,7 +116,7 @@ pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
         return Err(CliError::KeyExists(name.to_owned()));
     }
     let input = if std::io::stdin().is_terminal() {
-        print.read_secret("Ed25519 secret seed (S StrKey or hex): ")?
+        print.read_secret("Ed25519 secret seed (S StrKey or base58): ")?
     } else {
         // Bound untrusted piped input before allocating or decoding it.
         let mut input = Zeroizing::new(String::new());
@@ -252,15 +252,15 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
 
 /// Export a stored private key after interactive confirmation or `force` authorization.
 pub fn export(name: &str, force: bool, cmd: &'static str, print: &Print) -> Result<(), CliError> {
-    export_with_format(name, force, KeyExportFormat::Hex, cmd, print)
+    export_with_format(name, force, KeyExportFormat::Base58, cmd, print)
 }
 
-/// Encoding explicitly selected for private seed export. Hex remains the compatibility default.
+/// Encoding explicitly selected for private seed export.
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
 pub enum KeyExportFormat {
-    /// A 32-byte lowercase 0x-prefixed seed.
+    /// A 32-byte seed encoded as unprefixed, case-sensitive base58.
     #[default]
-    Hex,
+    Base58,
     /// A checksummed Stellar S `StrKey` containing the same seed.
     Strkey,
 }
@@ -310,7 +310,7 @@ pub fn export_with_format(
             name: name.to_string(),
             scheme: "ed25519".into(),
             private_key: match format {
-                KeyExportFormat::Hex => prefixed_hex(&keypair_bytes[..32]),
+                KeyExportFormat::Base58 => thruput_encoding::encode(&keypair_bytes[..32]),
                 KeyExportFormat::Strkey => seed_strkey(&keypair_bytes),
             },
         },
@@ -452,9 +452,9 @@ fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError>
         name: name.to_owned(),
         is_default: default_key.as_deref() == Some(name),
         key_id: DEFAULT_KEY_ID,
-        public_key: prefixed_hex(public_bytes),
+        public_key: thruput_encoding::encode(&public_bytes),
         public_key_strkey: strkey::format_public_key(&public_bytes),
-        address: prefixed_hex(derive_pubkey_account_address(public_bytes)),
+        address: thruput_encoding::encode(derive_pubkey_account_address(public_bytes).as_ref()),
         path,
     })
 }
@@ -472,9 +472,9 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
         name: name.to_string(),
         is_default: default_key.as_deref() == Some(name),
         key_id: DEFAULT_KEY_ID,
-        public_key: prefixed_hex(public_key),
+        public_key: thruput_encoding::encode(&public_key),
         public_key_strkey: strkey::format_public_key(&public_key),
-        address: prefixed_hex(address),
+        address: thruput_encoding::encode(address.as_ref()),
         path,
     })
 }

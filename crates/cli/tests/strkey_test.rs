@@ -50,10 +50,7 @@ fn strkey_import_preserves_legacy_storage_and_public_identity() {
     assert_eq!(value["data"]["key"]["keyId"], 0);
     assert_eq!(
         value["data"]["key"]["publicKey"],
-        format!(
-            "0x{}",
-            hex::encode(LocalSigner::from_secret_key(seed).verifying_key_bytes())
-        )
+        thruput_encoding::encode(&LocalSigner::from_secret_key(seed).verifying_key_bytes())
     );
     assert!(
         value["data"]["key"]
@@ -83,7 +80,11 @@ fn strkey_import_preserves_legacy_storage_and_public_identity() {
             0o600
         );
     }
-    let duplicate = run(&home, &["keys", "import", "alice"], Some(&"ab".repeat(32)));
+    let duplicate = run(
+        &home,
+        &["keys", "import", "alice"],
+        Some(&thruput_encoding::encode(&[0xab; 32])),
+    );
     assert!(!duplicate.status.success());
     assert_eq!(std::fs::read(&key_path).unwrap(), bytes);
     let listed = run(&home, &["keys", "ls"], None);
@@ -122,7 +123,7 @@ fn strkey_export_preserves_seed_and_requires_confirmation() {
     assert!(legacy.status.success());
     assert_eq!(
         String::from_utf8(legacy.stdout).unwrap().trim(),
-        format!("0x{}", hex::encode(seed))
+        thruput_encoding::encode(&seed)
     );
     let denied = run(
         &home,
@@ -140,6 +141,8 @@ fn import_rejects_invalid_secret_types_and_reserved_names_without_echoing_input(
         strkey::format_public_key(&[42; 32]),
         strkey::format_contract_address(&[42; 32].into()),
         "ab".repeat(64),
+        "ab".repeat(32),
+        format!("0x{}", "ab".repeat(32)),
         "x".repeat(1000),
     ] {
         let home = TempDir::new().unwrap();
@@ -152,10 +155,18 @@ fn import_rejects_invalid_secret_types_and_reserved_names_without_echoing_input(
         assert!(!home.path().join("thruput/keys/alice.json").exists());
     }
     let home = TempDir::new().unwrap();
-    let out = run(&home, &["keys", "import", "dev-1"], Some(&"ab".repeat(32)));
+    let out = run(
+        &home,
+        &["keys", "import", "dev-1"],
+        Some(&thruput_encoding::encode(&[0xab; 32])),
+    );
     assert!(out.status.success());
     assert!(home.path().join("thruput/keys/dev-1.json").exists());
-    let good = run(&home, &["keys", "import", "alice"], Some(&"ab".repeat(32)));
+    let good = run(
+        &home,
+        &["keys", "import", "alice"],
+        Some(&thruput_encoding::encode(&[0xab; 32])),
+    );
     assert!(good.status.success());
 }
 
@@ -170,7 +181,7 @@ fn import_invalid_config_leaves_no_key_and_can_be_retried() {
     let result = run(
         &home,
         &["--json", "keys", "import", "alice"],
-        Some(&"42".repeat(32)),
+        Some(&thruput_encoding::encode(&[0x42; 32])),
     );
     assert!(!result.status.success());
     assert!(!config_dir.join("keys/alice.json").exists());
@@ -179,7 +190,7 @@ fn import_invalid_config_leaves_no_key_and_can_be_retried() {
     let result = run(
         &home,
         &["--json", "keys", "import", "alice"],
-        Some(&"42".repeat(32)),
+        Some(&thruput_encoding::encode(&[0x42; 32])),
     );
     assert!(
         result.status.success(),
@@ -228,7 +239,7 @@ fn import_config_lock_timeout_reports_import_success_and_recovery() {
     let result = run(
         &home,
         &["--json", "keys", "import", "alice"],
-        Some(&"42".repeat(32)),
+        Some(&thruput_encoding::encode(&[0x42; 32])),
     );
     assert_imported_with_default_warning(&result, &home);
     assert!(!config_dir.join("config.toml").exists());
@@ -256,14 +267,18 @@ fn import_rejected_config_write_preserves_key_and_both_config_links() {
     let result = run(
         &home,
         &["--json", "keys", "import", "alice"],
-        Some(&"42".repeat(32)),
+        Some(&thruput_encoding::encode(&[0x42; 32])),
     );
     assert_imported_with_default_warning(&result, &home);
     assert_eq!(std::fs::read_to_string(&config).unwrap(), contents);
     assert_eq!(std::fs::read_to_string(&alias).unwrap(), contents);
     let key = config_dir.join("keys/alice.json");
     let bytes = std::fs::read(&key).unwrap();
-    let retry = run(&home, &["keys", "import", "alice"], Some(&"ab".repeat(32)));
+    let retry = run(
+        &home,
+        &["keys", "import", "alice"],
+        Some(&thruput_encoding::encode(&[0xab; 32])),
+    );
     assert!(!retry.status.success());
     assert_eq!(std::fs::read(key).unwrap(), bytes);
 }
@@ -274,13 +289,13 @@ fn import_preserves_an_existing_default_key() {
     let first = run(
         &home,
         &["--json", "keys", "import", "alice"],
-        Some(&"42".repeat(32)),
+        Some(&thruput_encoding::encode(&[0x42; 32])),
     );
     assert!(first.status.success());
     let second = run(
         &home,
         &["--json", "keys", "import", "bob"],
-        Some(&"ab".repeat(32)),
+        Some(&thruput_encoding::encode(&[0xab; 32])),
     );
     assert!(second.status.success());
     let value: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();

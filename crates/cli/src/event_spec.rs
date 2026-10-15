@@ -976,11 +976,9 @@ mod tests {
 
     fn identified_event(signature: u8, topics: usize, data: Vec<u8>) -> IdentifiedEvent {
         IdentifiedEvent {
-            tx_hash: serde_json::from_value(serde_json::Value::String(format!(
-                "0x{}",
-                hex::encode([0x22; 32])
-            )))
-            .expect("fixture hash should parse"),
+            tx_hash: thruput_json_rpc_types::transaction::TxHash(
+                thruput_xdr::types::SHA256Hash::from([0x22; 32]).into(),
+            ),
             block_height: BlockHeight::from(42),
             sequence_number: 3,
             event: EmittedEvent {

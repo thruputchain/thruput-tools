@@ -15,9 +15,10 @@ use thruput_json_rpc_server::{
 use thruput_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
     address_auth::AddressAuthDataResponse,
+    base58::Base58,
     block::BlockInfo,
     events::{EventPage, EventQuery},
-    hex::{Hex0x, HexBytes},
+    hex::HexBytes,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -64,7 +65,7 @@ fn canned_recent_failure() -> TransactionStatus {
         attempt_height: BlockHeight::from(ATTEMPT_HEIGHT),
         cause: thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
             conflict: ConflictDiagnostic {
-                address: Hex0x(thruput_xdr::types::ContractAddress::from(CONFLICT_ADDRESS)),
+                address: Base58(thruput_xdr::types::ContractAddress::from(CONFLICT_ADDRESS)),
                 key: HexBytes(CONFLICT_KEY.to_vec()),
                 code: ConflictCode::ExclusiveLock,
             },
@@ -197,7 +198,7 @@ async fn receipt_polling_surfaces_recent_failure_status() {
         BuildInfo::for_tests(),
     );
     let handle = server.start(rpc.into_rpc());
-    let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x33; 32])));
+    let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x33; 32])));
 
     let error = poll_transaction_receipt_with_config(
         &format!("http://{addr}"),
@@ -247,7 +248,7 @@ async fn receipt_polling_prefers_a_later_receipt_to_recent_failure() {
         BuildInfo::for_tests(),
     );
     let handle = server.start(rpc.into_rpc());
-    let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
+    let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
 
     let receipt = poll_transaction_receipt_with_config(
         &format!("http://{addr}"),
@@ -288,7 +289,7 @@ async fn recent_failure_status_roundtrips_through_client() {
     let client = HttpClientBuilder::default()
         .build(format!("http://{addr}"))
         .expect("bug: test client should build");
-    let tx_hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x22; 32])));
+    let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x22; 32])));
     let status = client
         .get_transaction_status(tx_hash)
         .await

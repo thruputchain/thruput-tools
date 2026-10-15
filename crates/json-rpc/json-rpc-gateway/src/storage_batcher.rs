@@ -375,7 +375,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::base58::Base58;
     use thruput_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
     use thruput_xdr::storage_item::WireStorageItem;
     use thruput_xdr::types::{Ed25519PublicKey, PublicKey};
@@ -449,7 +449,7 @@ mod tests {
     }
 
     fn address_zero() -> ContractAddress {
-        Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32]))
+        Base58(thruput_xdr::types::ContractAddress::from([0u8; 32]))
     }
 
     fn config_for_tests(

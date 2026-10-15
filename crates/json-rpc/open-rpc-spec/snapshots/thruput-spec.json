@@ -30,8 +30,11 @@
         "message": "Local funding unresolved",
         "x-data-schema": {
           "$defs": {
-            "Hex0x_SHA256Hash": {
-              "pattern": "^0x[0-9a-f]{64}$",
+            "Base58_SHA256Hash": {
+              "description": "Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 bytes. Encoded length and alphabet alone do not validate decoded length.",
+              "maxLength": 45,
+              "minLength": 32,
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
               "type": "string"
             },
             "HexBytes": {
@@ -39,7 +42,7 @@
               "type": "string"
             },
             "TxHash": {
-              "$ref": "#/$defs/Hex0x_SHA256Hash",
+              "$ref": "#/$defs/Base58_SHA256Hash",
               "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as `\"0x...\"` hex string (64 hex chars)."
             }
           },
@@ -318,7 +321,7 @@
         "description": "Authorization configuration registered at one address, read from the\nlatest committed snapshot.",
         "properties": {
           "address": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/Base58_ContractAddress",
             "description": "Address whose authorization configuration was read."
           },
           "authData": {
@@ -348,7 +351,7 @@
         "description": "`getTransactionsByAddress` request: the transaction history of\n`address`, walked in `order` from `anchor`.\n\nA transaction is part of an address's history when its root\ninvocation targets that address; transactions that merely touch the\naddress mid-execution do not match.",
         "properties": {
           "address": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+            "$ref": "#/components/schemas/Base58_ContractAddress"
           },
           "anchor": {
             "$ref": "#/components/schemas/BlockAnchor"
@@ -391,7 +394,7 @@
                 "type": "string"
               },
               "recipient": {
-                "$ref": "#/components/schemas/Hex0x_ContractAddress",
+                "$ref": "#/components/schemas/Base58_ContractAddress",
                 "description": "Address receiving the native HOG transfer."
               },
               "retryAfterSeconds": {
@@ -434,7 +437,7 @@
                 "type": "string"
               },
               "recipient": {
-                "$ref": "#/components/schemas/Hex0x_ContractAddress",
+                "$ref": "#/components/schemas/Base58_ContractAddress",
                 "description": "Address receiving the native HOG transfer."
               },
               "status": {
@@ -467,7 +470,7 @@
             "description": "Caller-selected idempotency key for this recipient and network."
           },
           "recipient": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/Base58_ContractAddress",
             "description": "Address receiving the native HOG transfer."
           }
         },
@@ -484,7 +487,7 @@
             "description": "An Ed25519 public key.",
             "properties": {
               "key": {
-                "$ref": "#/components/schemas/Hex0x_Ed25519PublicKey",
+                "$ref": "#/components/schemas/Base58_Ed25519PublicKey",
                 "description": "The 32-byte public key."
               },
               "scheme": {
@@ -550,7 +553,7 @@
         "description": "Native HOG balance read from committed chain state.",
         "properties": {
           "address": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/Base58_ContractAddress",
             "description": "Address whose native HOG balance was read."
           },
           "height": {
@@ -568,6 +571,34 @@
           "height"
         ],
         "type": "object"
+      },
+      "Base58_ContractAddress": {
+        "description": "Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 bytes. Encoded length and alphabet alone do not validate decoded length.",
+        "maxLength": 45,
+        "minLength": 32,
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+        "type": "string"
+      },
+      "Base58_Ed25519PublicKey": {
+        "description": "Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 bytes. Encoded length and alphabet alone do not validate decoded length.",
+        "maxLength": 45,
+        "minLength": 32,
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+        "type": "string"
+      },
+      "Base58_SHA256Hash": {
+        "description": "Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 bytes. Encoded length and alphabet alone do not validate decoded length.",
+        "maxLength": 45,
+        "minLength": 32,
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+        "type": "string"
+      },
+      "Base58_ValidatorID": {
+        "description": "Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 bytes. Encoded length and alphabet alone do not validate decoded length.",
+        "maxLength": 45,
+        "minLength": 32,
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+        "type": "string"
       },
       "BlockAnchor": {
         "description": "Where to begin iteration on the initial call.",
@@ -621,7 +652,7 @@
         "description": "Block data returned by getBlockByNumber.\n\nMaps the XDR `ConsensusValue` to RPC-friendly serialization\n(camelCase fields, `0x`-prefixed hex). Add RPC-specific fields\nhere without modifying the wire type.",
         "properties": {
           "blockHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "$ref": "#/components/schemas/Base58_SHA256Hash",
             "description": "Canonical SHA-256 hash of the complete XDR-encoded consensus value."
           },
           "blockHeight": {
@@ -633,32 +664,32 @@
             "description": "Unix time in nanoseconds since 1970-01-01 UTC, encoded as a decimal string."
           },
           "configHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "$ref": "#/components/schemas/Base58_SHA256Hash",
             "description": "Hash of the post-block network configuration committed by consensus."
           },
           "eventsHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+            "$ref": "#/components/schemas/Base58_SHA256Hash"
           },
           "networkHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+            "$ref": "#/components/schemas/Base58_SHA256Hash"
           },
           "prevBlockHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+            "$ref": "#/components/schemas/Base58_SHA256Hash"
           },
           "proposalTxsHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+            "$ref": "#/components/schemas/Base58_SHA256Hash"
           },
           "proposer": {
-            "$ref": "#/components/schemas/Hex0x_ValidatorID"
+            "$ref": "#/components/schemas/Base58_ValidatorID"
           },
           "protocol": {
             "$ref": "#/components/schemas/Protocol"
           },
           "storageHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+            "$ref": "#/components/schemas/Base58_SHA256Hash"
           },
           "txsHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+            "$ref": "#/components/schemas/Base58_SHA256Hash"
           },
           "upgrades": {
             "description": "Opaque protocol upgrades selected by consensus for this block.",
@@ -787,7 +818,7 @@
         "description": "Current chain tip. Returned by chainTip.",
         "properties": {
           "blockHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+            "$ref": "#/components/schemas/Base58_SHA256Hash"
           },
           "height": {
             "$ref": "#/components/schemas/DecimalBlockHeight",
@@ -863,7 +894,7 @@
         "description": "One conflicting storage operation reported by two-phase commit.",
         "properties": {
           "address": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/Base58_ContractAddress",
             "description": "Contract whose storage the conflicting operation targeted."
           },
           "code": {
@@ -885,7 +916,7 @@
       "ContractAddressList": {
         "description": "Contract addresses accepted by a single event filter. Mirrors the hogd-indexer per-filter contract-address bound.",
         "items": {
-          "$ref": "#/components/schemas/Hex0x_ContractAddress"
+          "$ref": "#/components/schemas/Base58_ContractAddress"
         },
         "maxItems": 5,
         "minItems": 1,
@@ -947,7 +978,7 @@
         "description": "A single emitted event, as stored by the hogd indexer.\n\nThe gateway parses hogd's `TxEmittedEvent.serialized_event` into\nseparate topics and data. The serialized format is:\n`topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.\n`num_topics` (0–3) determines the split point. Max total 1024 bytes.\n\nSee `docs/gateway/system-design.md` \"Event Parsing\" for details.",
         "properties": {
           "contractAddress": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/Base58_ContractAddress",
             "description": "Contract that emitted this event."
           },
           "data": {
@@ -1180,7 +1211,7 @@
         "description": "Rules read with the committed tip named in `observedTip`, which may be a\nrecent reading this endpoint already held rather than one taken during this\nrequest. Never a lapsed reading: without one recent enough the request\nreads the backend, and a failure surfaces rather than an old price.\nApply to execution following `observedTip`; later inclusion can use newer rules.",
         "properties": {
           "configHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "$ref": "#/components/schemas/Base58_SHA256Hash",
             "description": "Consensus commitment to the stated configuration and storage model."
           },
           "effectiveLimits": {
@@ -1213,7 +1244,7 @@
             "description": "Retained caller-owned idempotency nonce."
           },
           "faucet": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/Base58_ContractAddress",
             "description": "Expected random faucet identity; refuses a different chain at the same URL."
           },
           "rawAmount": {
@@ -1221,7 +1252,7 @@
             "type": "string"
           },
           "recipient": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/Base58_ContractAddress",
             "description": "Native HOG transfer recipient."
           }
         },
@@ -1241,7 +1272,7 @@
             "type": "string"
           },
           "recipient": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/Base58_ContractAddress",
             "description": "Recipient of the retained transfer."
           },
           "signedTransaction": {
@@ -1260,22 +1291,6 @@
           "signedTransaction"
         ],
         "type": "object"
-      },
-      "Hex0x_ContractAddress": {
-        "pattern": "^0x[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "Hex0x_Ed25519PublicKey": {
-        "pattern": "^0x[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "Hex0x_SHA256Hash": {
-        "pattern": "^0x[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "Hex0x_ValidatorID": {
-        "pattern": "^0x[0-9a-f]{64}$",
-        "type": "string"
       },
       "HexBytes": {
         "pattern": "^0x[0-9a-f]*$",
@@ -1410,7 +1425,7 @@
         "description": "Immutable protocol identity reported by a JSON-RPC server.",
         "properties": {
           "networkHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "$ref": "#/components/schemas/Base58_SHA256Hash",
             "description": "Hash of the network name, bound into every transaction signature."
           }
         },
@@ -1709,7 +1724,7 @@
                 "type": "integer"
               },
               "hash": {
-                "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+                "$ref": "#/components/schemas/Base58_SHA256Hash",
                 "description": "Hash of the deployed contract bytecode."
               },
               "kind": {
@@ -2089,7 +2104,7 @@
         ]
       },
       "TxHash": {
-        "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+        "$ref": "#/components/schemas/Base58_SHA256Hash",
         "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as `\"0x...\"` hex string (64 hex chars)."
       },
       "VersionInfo": {
@@ -2179,7 +2194,7 @@
                 "$ref": "#/components/schemas/DecimalU64"
               },
               "publicKey": {
-                "$ref": "#/components/schemas/Hex0x_Ed25519PublicKey",
+                "$ref": "#/components/schemas/Base58_Ed25519PublicKey",
                 "description": "Ed25519 public key (32 bytes). This is public information, not a signature."
               }
             },
@@ -2296,7 +2311,7 @@
           "caller": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Hex0x_ContractAddress"
+                "$ref": "#/components/schemas/Base58_ContractAddress"
               },
               {
                 "type": "null"
@@ -2304,7 +2319,7 @@
             ]
           },
           "contract": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+            "$ref": "#/components/schemas/Base58_ContractAddress"
           },
           "entrypoint": {
             "$ref": "#/components/schemas/HexBytes",
@@ -2375,7 +2390,7 @@
           "caller": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Hex0x_ContractAddress"
+                "$ref": "#/components/schemas/Base58_ContractAddress"
               },
               {
                 "type": "null"
@@ -2384,7 +2399,7 @@
             "description": "Optional simulated caller address observed by `get_msg_sender`."
           },
           "contract": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/Base58_ContractAddress",
             "description": "Contract address to execute."
           },
           "entrypoint": {
@@ -2456,7 +2471,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "11.2.0"
+    "version": "12.0.0"
   },
   "methods": [
     {
@@ -2810,7 +2825,7 @@
           "$ref": "#/components/schemas/EventPage"
         }
       },
-      "summary": "Paginated, filterable contract events. See `EventQuery` / `EventPage` for the Soroban-shaped filter / cursor / topic surface, with RPC-native `0x`-prefixed address and topic projections at the JSON boundary.",
+      "summary": "Paginated, filterable contract events. See `EventQuery` / `EventPage` for the Soroban-shaped filter / cursor / topic surface, with base58 addresses and `0x`-prefixed hex topic projections at the JSON boundary.",
       "tags": [
         {
           "name": "Core API"
@@ -2882,7 +2897,7 @@
           "name": "address",
           "required": true,
           "schema": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+            "$ref": "#/components/schemas/Base58_ContractAddress"
           }
         },
         {
@@ -2930,7 +2945,7 @@
           "name": "address",
           "required": true,
           "schema": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+            "$ref": "#/components/schemas/Base58_ContractAddress"
           }
         }
       ],
@@ -2971,7 +2986,7 @@
           "name": "address",
           "required": true,
           "schema": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+            "$ref": "#/components/schemas/Base58_ContractAddress"
           }
         }
       ],

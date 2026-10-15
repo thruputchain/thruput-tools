@@ -322,17 +322,17 @@ InvalidHogAmount
 
 InvalidAddressTarget
   code: invalid_address_target
-  hint text: use a saved wallet, contract alias, stored key, or 32-byte 0x-prefixed address
+  hint text: use a saved wallet, contract alias, stored key, base58 address, or C StrKey
   details: target, message
 
 UnknownAddressTarget
   code: unknown_address_target
-  hint text: use a saved wallet, contract alias, stored key, or 32-byte 0x-prefixed address
+  hint text: use a saved wallet, contract alias, stored key, base58 address, or C StrKey
   details: target
 
 UnknownContractAlias
   code: unknown_contract_alias
-  hint format: use a configured contract alias or a 32-byte 0x-prefixed address; inspect aliases with `thruput config get {} --sources`
+  hint format: use a configured contract alias, base58 address, or C StrKey; inspect aliases with `thruput config get {} --sources`
   details: alias, profile, configSource, availableAliases
 
 InvalidTransactionHash

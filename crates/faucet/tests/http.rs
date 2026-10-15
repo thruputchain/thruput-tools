@@ -4,7 +4,7 @@ use axum::http::{Request, StatusCode};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-use thruput_json_rpc_types::hex::Hex0x;
+use thruput_json_rpc_types::base58::Base58;
 use thruput_json_rpc_types::network_descriptor::{
     NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
 };
@@ -135,11 +135,11 @@ async fn airdrop_validates_request_then_submits() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "recipient": format!("0x{}", "11".repeat(32)),
+                        "recipient": identifier(0x11),
                         "clientNonce": "0x01",
                         "networkId": "devnet-preview",
-                        "networkHash": format!("0x{}", "00".repeat(32)),
-                        "genesisHash": format!("0x{}", "00".repeat(32))
+                        "networkHash": identifier(0),
+                        "genesisHash": identifier(0)
                     })
                     .to_string(),
                 ))
@@ -158,8 +158,8 @@ async fn airdrop_validates_request_then_submits() {
         json,
         serde_json::json!({
             "attemptStatus": "succeeded",
-            "recipient": format!("0x{}", "11".repeat(32)),
-            "txHash": format!("0x{}", "22".repeat(32)),
+            "recipient": identifier(0x11),
+            "txHash": identifier(0x22),
             "rawAmount": "100000000",
             "height": "42",
             "status": { "result": "ok" }
@@ -170,7 +170,7 @@ async fn airdrop_validates_request_then_submits() {
 #[tokio::test]
 async fn airdrop_rejects_mismatched_genesis_hash() {
     let mut body = airdrop_body();
-    body["genesisHash"] = serde_json::json!(format!("0x{}", "99".repeat(32)));
+    body["genesisHash"] = serde_json::json!(identifier(0x99));
 
     let response = airdrop_request_with_body(&test_config(), body).await;
 
@@ -186,7 +186,7 @@ async fn airdrop_rejects_mismatched_genesis_hash() {
 #[tokio::test]
 async fn airdrop_rejects_mismatched_network_hash() {
     let mut body = airdrop_body();
-    body["networkHash"] = serde_json::json!(format!("0x{}", "99".repeat(32)));
+    body["networkHash"] = serde_json::json!(identifier(0x99));
 
     let response = airdrop_request_with_body(&test_config(), body).await;
 
@@ -280,7 +280,7 @@ async fn airdrop_retry_returns_recorded_success() {
     let json: serde_json::Value =
         serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
     assert_eq!(json["attemptStatus"], "succeeded");
-    assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
+    assert_eq!(json["txHash"], identifier(0x22));
 }
 
 #[test]
@@ -368,10 +368,7 @@ async fn airdrop_final_store_failure_retains_accepted_transaction_for_retry() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
     assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
-    assert_eq!(
-        attempt.tx_hash.as_deref(),
-        Some(format!("0x{}", "22".repeat(32)).as_str())
-    );
+    assert_eq!(attempt.tx_hash.as_deref(), Some(identifier(0x22).as_str()));
     assert!(attempt.expires_at.is_none());
 }
 
@@ -389,7 +386,7 @@ async fn airdrop_duplicate_in_flight_returns_pending_attempt() {
     let json: serde_json::Value =
         serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
     assert_eq!(json["attemptStatus"], "pending");
-    assert_eq!(json["recipient"], format!("0x{}", "11".repeat(32)));
+    assert_eq!(json["recipient"], identifier(0x11));
     assert_eq!(json["retryAfterSeconds"], "5");
     assert!(json.get("txHash").is_none());
 }
@@ -410,8 +407,8 @@ async fn airdrop_pending_response_matches_shared_wire_type() {
         json,
         serde_json::json!({
             "attemptStatus": "pending",
-            "recipient": format!("0x{}", "11".repeat(32)),
-            "txHash": format!("0x{}", "22".repeat(32)),
+            "recipient": identifier(0x11),
+            "txHash": identifier(0x22),
             "rawAmount": "100000000",
             "retryAfterSeconds": "5"
         })
@@ -425,7 +422,7 @@ async fn configured_retained_capacity_rejects_new_keys_but_serves_retries() {
     config.policy_config.airdrop.max_retained_attempts = 1;
     assert_eq!(airdrop_request(&config).await.status(), StatusCode::OK);
     let mut second = airdrop_body();
-    second["recipient"] = serde_json::json!(format!("0x{}", "12".repeat(32)));
+    second["recipient"] = serde_json::json!(identifier(0x12));
     let response = airdrop_request_with_body(&config, second.clone()).await;
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     let body = axum::body::to_bytes(response.into_body(), 4096)
@@ -468,7 +465,7 @@ async fn concurrent_same_key_pending_retries_poll_once_without_consuming_capacit
     seed_airdrop_attempt(
         &config,
         policy::AirdropAttemptStatus::Pending,
-        Some(format!("0x{}", "22".repeat(32))),
+        Some(identifier(0x22)),
     );
     let owner = {
         let config = config.clone();
@@ -511,7 +508,7 @@ async fn airdrop_execution_capacity_bounds_detached_workers() {
     let mut tasks = Vec::new();
     for value in 1_u8..=64 {
         let mut body = airdrop_body();
-        body["recipient"] = serde_json::json!(format!("0x{}", hex::encode([value; 32])));
+        body["recipient"] = serde_json::json!(identifier(value));
         body["clientNonce"] = serde_json::json!(format!("0x{value:02x}"));
         let request = request_with_connect_info(
             Request::builder()
@@ -542,7 +539,7 @@ async fn airdrop_execution_capacity_bounds_detached_workers() {
         );
     }
     let mut overflow_body = airdrop_body();
-    overflow_body["recipient"] = serde_json::json!(format!("0x{}", hex::encode([65; 32])));
+    overflow_body["recipient"] = serde_json::json!(identifier(65));
     overflow_body["clientNonce"] = serde_json::json!("0x41");
 
     let response = router
@@ -678,7 +675,7 @@ async fn panicking_poll_does_not_overwrite_accepted_transaction() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
     assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
-    assert_eq!(attempt.tx_hash, Some(format!("0x{}", "22".repeat(32))));
+    assert_eq!(attempt.tx_hash, Some(identifier(0x22)));
 }
 
 #[tokio::test]
@@ -688,7 +685,7 @@ async fn terminal_same_key_attempt_is_retained_with_zero_cooldown() {
     seed_airdrop_attempt(
         &config,
         policy::AirdropAttemptStatus::FailedTerminal,
-        Some(format!("0x{}", "22".repeat(32))),
+        Some(identifier(0x22)),
     );
 
     let response = airdrop_request(&config).await;
@@ -707,7 +704,7 @@ async fn airdrop_accepted_transaction_is_polled_without_resubmission() {
     seed_airdrop_attempt(
         &config,
         policy::AirdropAttemptStatus::Pending,
-        Some(format!("0x{}", "22".repeat(32))),
+        Some(identifier(0x22)),
     );
 
     let response = airdrop_request(&config).await;
@@ -842,7 +839,7 @@ async fn airdrop_socket_ip_override_uses_finite_override() {
         .await
         .expect("bug: request should complete");
     let mut second_body = airdrop_body();
-    second_body["recipient"] = serde_json::json!(format!("0x{}", "12".repeat(32)));
+    second_body["recipient"] = serde_json::json!(identifier(0x12));
     second_body["clientNonce"] = serde_json::json!("0x02");
     let second_response = airdrop_request_with_body(&config, second_body).await;
 
@@ -921,8 +918,8 @@ async fn airdrop_rejects_malformed_recipient() {
                         "recipient": "0xdeadbeef",
                         "clientNonce": "0x01",
                         "networkId": "devnet-preview",
-                        "networkHash": format!("0x{}", "00".repeat(32)),
-                        "genesisHash": format!("0x{}", "00".repeat(32))
+                        "networkHash": identifier(0),
+                        "genesisHash": identifier(0)
                     })
                     .to_string(),
                 ))
@@ -948,11 +945,11 @@ async fn airdrop_submit_failure_returns_bad_gateway() {
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::json!({
-                    "recipient": format!("0x{}", "11".repeat(32)),
+                    "recipient": identifier(0x11),
                     "clientNonce": "0x01",
                     "networkId": "devnet-preview",
-                    "networkHash": format!("0x{}", "00".repeat(32)),
-                    "genesisHash": format!("0x{}", "00".repeat(32))
+                    "networkHash": identifier(0),
+                    "genesisHash": identifier(0)
                 })
                 .to_string(),
             ))
@@ -1008,13 +1005,18 @@ async fn airdrop_request_with_body(
         .expect("bug: airdrop request should complete")
 }
 
+// All callers use this fixture for a 32-byte typed identifier, never raw bytes.
+fn identifier(byte: u8) -> String {
+    thruput_json_rpc_types::NetworkHashText::from([byte; 32]).to_string()
+}
+
 fn airdrop_body() -> serde_json::Value {
     serde_json::json!({
-        "recipient": format!("0x{}", "11".repeat(32)),
+        "recipient": identifier(0x11),
         "clientNonce": "0x01",
         "networkId": "devnet-preview",
-        "networkHash": format!("0x{}", "00".repeat(32)),
-        "genesisHash": format!("0x{}", "00".repeat(32))
+        "networkHash": identifier(0),
+        "genesisHash": identifier(0)
     })
 }
 
@@ -1033,8 +1035,8 @@ fn airdrop_attempt_key() -> policy::AirdropAttemptKey {
 fn airdrop_attempt_key_for(recipient_byte: u8, client_nonce: &str) -> policy::AirdropAttemptKey {
     policy::AirdropAttemptKey {
         network_id: "devnet-preview".into(),
-        genesis_hash: format!("0x{}", "00".repeat(32)),
-        recipient: format!("0x{}", hex::encode([recipient_byte; 32])),
+        genesis_hash: identifier(0),
+        recipient: identifier(recipient_byte),
         client_nonce: client_nonce.into(),
     }
 }
@@ -1188,19 +1190,19 @@ fn test_network_descriptor() -> NetworkDescriptor {
         "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
         "kind": "groundhog-network",
         "networkId": "devnet-preview",
-        "networkHash": format!("0x{}", "00".repeat(32)),
+        "networkHash": identifier(0),
         "protocol": "x23",
-        "genesisHash": format!("0x{}", "00".repeat(32)),
+        "genesisHash": identifier(0),
         "endpoints": {
             "rpcUrl": "https://rpc.devnet.example"
         },
         "nativeHog": {
-            "tokenAddress": format!("0x{}", "00".repeat(32)),
+            "tokenAddress": identifier(0),
             "decimals": 7,
             "transferEntrypoint": "0x63285b3523f9dc3f"
         },
         "faucet": {
-            "walletAddress": format!("0x{}", "00".repeat(32))
+            "walletAddress": identifier(0)
         },
         "airdrop": {
             "rawAmount": "100000000",
@@ -1510,7 +1512,7 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
 }
 
 fn test_tx_hash() -> TxHash {
-    TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x22; 32])))
+    TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x22; 32])))
 }
 
 fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
@@ -1637,7 +1639,7 @@ async fn retry_without_retained_bytes_never_signs_a_replacement() {
     seed_airdrop_attempt(
         &config,
         policy::AirdropAttemptStatus::Pending,
-        Some(format!("0x{}", "22".repeat(32))),
+        Some(identifier(0x22)),
     );
     assert_eq!(
         airdrop_request(&config).await.status(),
@@ -1664,7 +1666,7 @@ async fn concurrent_same_key_retry_has_one_broadcast() {
     seed_airdrop_attempt(
         &config,
         policy::AirdropAttemptStatus::Pending,
-        Some(format!("0x{}", "22".repeat(32))),
+        Some(identifier(0x22)),
     );
     let mut attempt = stored_airdrop_attempt(&config).unwrap();
     attempt.transaction = Some(prepared_airdrop("100000000"));

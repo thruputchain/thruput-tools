@@ -14,12 +14,13 @@ use thruput_json_rpc_server::{
 use thruput_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
     address_auth::{AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey, AuthSigner},
+    base58::Base58,
     block::{BlockInfo, ChainTip},
     events::{
         BlockAnchor, ContractAddressList, EmittedEvent, EventFilter, EventFilterList, EventPage,
         EventQuery, EventTopicFilter, IdentifiedEvent, IterationOrder, PaginationCursor, TopicList,
     },
-    hex::{Hex0x, HexBytes, Topic},
+    hex::{HexBytes, Topic},
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
@@ -59,11 +60,11 @@ struct PopulatedReadBackend {
 fn canned_event_page() -> EventPage {
     EventPage {
         events: vec![IdentifiedEvent {
-            tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from(EVENT_TX_HASH))),
+            tx_hash: TxHash(Base58(thruput_xdr::types::SHA256Hash::from(EVENT_TX_HASH))),
             block_height: BlockHeight::from(11),
             sequence_number: 3,
             event: EmittedEvent {
-                contract_address: Hex0x(thruput_xdr::types::ContractAddress::from(EVENT_CONTRACT)),
+                contract_address: Base58(thruput_xdr::types::ContractAddress::from(EVENT_CONTRACT)),
                 topics: vec![Topic(EVENT_TOPIC)],
                 data: HexBytes(EVENT_DATA.to_vec()),
             },
@@ -78,11 +79,11 @@ fn canned_ref_page() -> TransactionRefPage {
     TransactionRefPage {
         refs: vec![
             TransactionRef {
-                tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x51; 32]))),
+                tx_hash: TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x51; 32]))),
                 height: BlockHeight::from(5),
             },
             TransactionRef {
-                tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x52; 32]))),
+                tx_hash: TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x52; 32]))),
                 height: BlockHeight::from(6),
             },
         ],
@@ -94,18 +95,18 @@ fn canned_ref_page() -> TransactionRefPage {
 
 fn canned_block_info() -> BlockInfo {
     BlockInfo {
-        block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x71; 32])),
+        block_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x71; 32])),
         protocol: thruput_xdr::types::Protocol::from(4),
-        network_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x72; 32])),
-        config_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x79; 32])),
-        proposer: Hex0x(thruput_xdr::validator::ValidatorID::from([0x73; 32])),
+        network_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x72; 32])),
+        config_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x79; 32])),
+        proposer: Base58(thruput_xdr::validator::ValidatorID::from([0x73; 32])),
         block_timepoint: thruput_xdr::types::TimePoint::from(1_700_000_000),
         block_height: BlockHeight::from(33),
-        txs_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x74; 32])),
-        storage_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x75; 32])),
-        events_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x76; 32])),
-        prev_block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x77; 32])),
-        proposal_txs_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x78; 32])),
+        txs_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x74; 32])),
+        storage_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x75; 32])),
+        events_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x76; 32])),
+        prev_block_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x77; 32])),
+        proposal_txs_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x78; 32])),
         upgrades: vec![HexBytes(vec![0x01]), HexBytes(vec![0x02, 0x03])],
     }
 }
@@ -127,7 +128,7 @@ impl ChainPlane for PopulatedReadBackend {
         Ok(TipReading::new(
             ChainTip {
                 height: BlockHeight::from(42),
-                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from(TIP_HASH)),
+                block_hash: Base58(thruput_xdr::types::SHA256Hash::from(TIP_HASH)),
             },
             thruput_xdr::network_config::NetworkConfig::_0 {
                 v0: thruput_xdr::network_config::NetworkConfigV0 {
@@ -246,14 +247,14 @@ fn canned_auth_data() -> AddressAuthDataInfo {
             AuthSigner {
                 key_id: 0,
                 public_key: AuthPublicKey::Ed25519 {
-                    key: Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x31; 32])),
+                    key: Base58(thruput_xdr::types::Ed25519PublicKey::from([0x31; 32])),
                 },
                 max_weight: 1,
             },
             AuthSigner {
                 key_id: 4,
                 public_key: AuthPublicKey::Ed25519 {
-                    key: Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x32; 32])),
+                    key: Base58(thruput_xdr::types::Ed25519PublicKey::from([0x32; 32])),
                 },
                 max_weight: 2,
             },
@@ -294,7 +295,7 @@ async fn stop(handle: ServerHandle) {
 fn populated_event_query() -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
-            contract_addresses: ContractAddressList(VecM(vec![Hex0x(
+            contract_addresses: ContractAddressList(VecM(vec![Base58(
                 thruput_xdr::types::ContractAddress::from(EVENT_CONTRACT),
             )])),
             topics: EventTopicFilter {
@@ -351,7 +352,7 @@ async fn get_transactions_by_address_roundtrips_a_populated_page() {
     let queries = backend.address_queries.clone();
     let (client, handle) = start_server(backend).await;
     let query = AddressTransactionQuery {
-        address: Hex0x(thruput_xdr::types::ContractAddress::from([0x31; 32])),
+        address: Base58(thruput_xdr::types::ContractAddress::from([0x31; 32])),
         order: IterationOrder::Ascending,
         anchor: BlockAnchor::AtBeginning,
         cursor: PaginationCursor(vec![]),
@@ -382,7 +383,7 @@ async fn get_storage_at_roundtrips_a_bytestring_item() {
     let backend = PopulatedReadBackend::default();
     let reads = backend.storage_reads.clone();
     let (client, handle) = start_server(backend).await;
-    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([0x61; 32]));
+    let address: ContractAddress = Base58(thruput_xdr::types::ContractAddress::from([0x61; 32]));
     let key = [0x62u8; 32];
 
     let read = client
@@ -405,7 +406,7 @@ async fn get_storage_at_roundtrips_a_bytestring_item() {
 #[tokio::test]
 async fn get_balance_roundtrips_a_decimal_string_balance() {
     let (client, handle) = start_server(PopulatedReadBackend::default()).await;
-    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([0x64; 32]));
+    let address: ContractAddress = Base58(thruput_xdr::types::ContractAddress::from([0x64; 32]));
 
     let balance = client
         .get_balance(address)
@@ -423,7 +424,7 @@ async fn get_balance_roundtrips_a_decimal_string_balance() {
 #[tokio::test]
 async fn get_address_auth_data_roundtrips_signers_and_threshold() {
     let (client, handle) = start_server(PopulatedReadBackend::default()).await;
-    let address: ContractAddress = Hex0x(thruput_xdr::types::ContractAddress::from([0x65; 32]));
+    let address: ContractAddress = Base58(thruput_xdr::types::ContractAddress::from([0x65; 32]));
 
     let read = client
         .get_address_auth_data(address)

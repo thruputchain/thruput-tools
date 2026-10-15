@@ -1153,7 +1153,7 @@ pub enum ValidationError {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::base58::Base58;
     use thruput_json_rpc_types::runtime_manifest::RuntimeManifest;
     use thruput_signing::derive_dev_account_signer;
     use thruput_xdr::types::Ed25519PublicKey;
@@ -2408,12 +2408,12 @@ mod tests {
 
     fn runtime_manifest() -> RuntimeManifest {
         let signer = derive_dev_account_signer("seed", 0);
-        let public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
+        let public_key = Base58(Ed25519PublicKey::from(signer.verifying_key_bytes()));
         serde_json::from_value(json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "kind": "hosted-devnet-runtime",
             "chainState": "fresh",
-            "networkHash": "00".repeat(32),
+            "networkHash": "1".repeat(32),
             "protocol": "hogp/test00000000000",
             "producer": {
                 "binary": "hog-devnode",
@@ -2432,12 +2432,12 @@ mod tests {
                 "index": 0,
                 "role": "local_user",
                 "publicKey": public_key,
-                "walletAddress": prefixed_hex(0x22),
+                "walletAddress": identifier(0x22),
                 "initialStorageTokens": "1000000000"
             }],
             "bootstrap": {
                 "storageCostModel": {
-                    "hash": prefixed_hex(0x55),
+                    "hash": identifier(0x55),
                     "baseDataItemCost": "1",
                     "bytestringCostPerByte": "1",
                     "baseContractDeploymentCost": "1",
@@ -2452,7 +2452,7 @@ mod tests {
         .expect("runtime manifest fixture should parse")
     }
 
-    fn prefixed_hex(byte: u8) -> String {
-        format!("0x{}", hex::encode([byte; 32]))
+    fn identifier(byte: u8) -> String {
+        thruput_json_rpc_types::NetworkHashText::from([byte; 32]).to_string()
     }
 }

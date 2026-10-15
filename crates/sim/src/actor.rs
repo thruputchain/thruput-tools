@@ -408,7 +408,7 @@ pub enum ActorError {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::base58::Base58;
     use thruput_signing::derive_dev_account_signer;
     use thruput_xdr::types::ContractAddress;
 
@@ -684,7 +684,7 @@ mod tests {
         SimAccount {
             index,
             signer: derive_dev_account_signer("actor-test-seed", index as usize),
-            wallet_address: Hex0x(ContractAddress::from([address_byte; 32])).0,
+            wallet_address: Base58(ContractAddress::from([address_byte; 32])).0,
             network_hash: thruput_xdr::types::NetworkHash::new(
                 thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
             ),
@@ -692,6 +692,6 @@ mod tests {
     }
 
     fn tx_hash(byte: u8) -> TxHash {
-        TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([byte; 32])))
+        TxHash(Base58(thruput_xdr::types::SHA256Hash::from([byte; 32])))
     }
 }

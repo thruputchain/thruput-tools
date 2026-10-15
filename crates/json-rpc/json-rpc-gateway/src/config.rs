@@ -3,7 +3,7 @@ use std::{fmt, str::FromStr, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use thruput_json_rpc_types::{
-    NetworkHash, NetworkHashHex, SHA256Hash,
+    NetworkHash, NetworkHashText, SHA256Hash,
     network_info::NetworkInfo,
     runtime_manifest::{
         HOGD_DEV_RUNTIME_MANIFEST_KIND, HOSTED_DEVNET_RUNTIME_MANIFEST_KIND, RuntimeManifest,
@@ -256,7 +256,7 @@ pub struct GatewayConfig {
     pub network_id: Option<String>,
 
     /// Hash of the network name bound into transaction signatures.
-    pub network_hash: Option<NetworkHashHex>,
+    pub network_hash: Option<NetworkHashText>,
 
     /// Materialized genesis hash used only by the hosted faucet adapter.
     pub genesis_hash: Option<SHA256Hash>,
@@ -643,7 +643,9 @@ mod tests {
     use std::time::Duration;
 
     use serde_json::json;
-    use thruput_json_rpc_types::{NetworkHashHex, hex::Hex0x, runtime_manifest::RuntimeManifest};
+    use thruput_json_rpc_types::{
+        NetworkHashText, base58::Base58, runtime_manifest::RuntimeManifest,
+    };
     use thruput_xdr::types::SHA256Hash;
 
     use super::{GatewayConfig, NetworkIdentityConfigError, RuntimeManifestConfigError};
@@ -749,7 +751,7 @@ mod tests {
 
     #[test]
     fn gateway_network_identity_is_required_and_preserved() {
-        let expected_network_hash = NetworkHashHex::from([0x12; 32]);
+        let expected_network_hash = NetworkHashText::from([0x12; 32]);
         let config = GatewayConfig {
             network_hash: Some(expected_network_hash),
             ..GatewayConfig::default()
@@ -960,7 +962,7 @@ network_hash = "0x1234"
     #[test]
     fn runtime_manifest_allows_matching_config_value() {
         let mut config = GatewayConfig {
-            network_hash: Some(NetworkHashHex::from([0; 32])),
+            network_hash: Some(NetworkHashText::from([0; 32])),
             genesis_hash: Some(hash(0x42)),
             scheduler_address: "127.0.0.1:1010".into(),
             ..GatewayConfig::default()
@@ -984,7 +986,7 @@ network_hash = "0x1234"
             "schedulerGateway": "127.0.0.1:1010",
         }));
         let mut network_config = GatewayConfig {
-            network_hash: Some(NetworkHashHex::from([0x41; 32])),
+            network_hash: Some(NetworkHashText::from([0x41; 32])),
             ..GatewayConfig::default()
         };
         assert_eq!(
@@ -997,10 +999,10 @@ network_hash = "0x1234"
 
     fn manifest_with_endpoints(endpoints: &serde_json::Value) -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
-            "networkHash": "00".repeat(32),
+            "networkHash": "1".repeat(32),
             "protocol": "hogp/test00000000000",
             "producer": {
                 "binary": "hog-devnode",
@@ -1027,6 +1029,6 @@ network_hash = "0x1234"
     }
 
     fn hash(byte: u8) -> thruput_json_rpc_types::SHA256Hash {
-        Hex0x(SHA256Hash::from([byte; 32]))
+        Base58(SHA256Hash::from([byte; 32]))
     }
 }

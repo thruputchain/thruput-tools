@@ -143,10 +143,7 @@ fn generated_key_address_matches_shared_signing_crate() {
     let keys = thruput_cli::keys::load_key_summaries().unwrap();
 
     assert_eq!(keys.len(), 1);
-    assert_eq!(
-        keys[0].address,
-        format!("0x{}", hex::encode(expected.as_ref()))
-    );
+    assert_eq!(keys[0].address, thruput_encoding::encode(expected.as_ref()));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }

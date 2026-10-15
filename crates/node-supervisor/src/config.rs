@@ -10,7 +10,7 @@ use thruput_bundle_identity::BundleIdentity;
 use thruput_json_rpc_types::bootstrap_manifest::{
     BootstrapManifest, BootstrapManifestAllocation, BootstrapManifestStorageCostModel,
 };
-use thruput_json_rpc_types::{Ed25519PublicKey, NetworkHashHex};
+use thruput_json_rpc_types::{Ed25519PublicKey, NetworkHashText};
 use thruput_tx_validation::ConfigParamName;
 
 /// Default JSON-RPC listen address for `thruput node`.
@@ -414,7 +414,7 @@ pub struct HogdDevConfig {
     ///
     /// An initialized directory rejects this option, even if the value matches.
     /// Leave it unset on restart to load the persisted identity.
-    pub init_network_hash: Option<NetworkHashHex>,
+    pub init_network_hash: Option<NetworkHashText>,
     /// PID file used to detect and clean up orphaned hogd-dev children.
     pub pid_file: Option<PathBuf>,
 }
@@ -441,7 +441,7 @@ impl Default for HogdDevConfig {
 impl HogdDevConfig {
     /// Select a new chain's signing domain. Initialized directories reject this option.
     #[must_use]
-    pub fn with_init_network_hash(mut self, network_hash: NetworkHashHex) -> Self {
+    pub fn with_init_network_hash(mut self, network_hash: NetworkHashText) -> Self {
         self.init_network_hash = Some(network_hash);
         self
     }
@@ -537,7 +537,7 @@ impl HogdDevConfig {
     /// Build public intent using the supervisor-owned faucet's public key.
     pub fn to_bootstrap_manifest(
         &self,
-        network_hash: NetworkHashHex,
+        network_hash: NetworkHashText,
         faucet_public_key: Ed25519PublicKey,
     ) -> BootstrapManifest {
         BootstrapManifest::new(

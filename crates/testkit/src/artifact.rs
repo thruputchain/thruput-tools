@@ -199,7 +199,7 @@ fn validate_inferred_kind(path: &Path) -> Result<()> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use thruput_json_rpc_types::{hex::Hex0x, transaction::TxHash};
+    use thruput_json_rpc_types::{base58::Base58, transaction::TxHash};
     use thruput_xdr::contract::Contract;
     use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
@@ -257,8 +257,8 @@ mod tests {
         }])
         .expect("bug: in-memory artifact should load");
         let entry = registry.get("counter").expect("bug: artifact exists");
-        let pending_hash = TxHash(Hex0x(SHA256Hash::from([0x11; 32])));
-        let other_hash = TxHash(Hex0x(SHA256Hash::from([0x22; 32])));
+        let pending_hash = TxHash(Base58(SHA256Hash::from([0x11; 32])));
+        let other_hash = TxHash(Base58(SHA256Hash::from([0x22; 32])));
         *entry.registration_guard().await = Some(super::PendingRegistration {
             tx_hash: pending_hash,
             tx_hex: "0x01".to_owned(),

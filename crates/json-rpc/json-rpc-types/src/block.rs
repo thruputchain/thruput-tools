@@ -4,11 +4,11 @@ use sha2::{Digest, Sha256};
 
 use thruput_xdr::{header::ProposalHeader, types::ExtensionPoint};
 
-use crate::hex::{Hex0x, HexBytes};
 use crate::{
     BlockHash, BlockHeight, ConsensusValue, NetworkHash, Protocol, SHA256Hash, StorageHash,
     TimePoint, ValidatorID,
 };
+use crate::{base58::Base58, hex::HexBytes};
 
 /// Current chain tip. Returned by chainTip.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -105,16 +105,16 @@ impl TryFrom<ConsensusValue> for BlockInfo {
         Ok(Self {
             block_hash,
             protocol,
-            network_hash: Hex0x(network_hash.into_inner()),
-            config_hash: Hex0x(config_hash.into_inner()),
-            proposer: Hex0x(proposer),
+            network_hash: Base58(network_hash.into_inner()),
+            config_hash: Base58(config_hash.into_inner()),
+            proposer: Base58(proposer),
             block_timepoint,
             block_height,
-            txs_hash: Hex0x(txs_hash.into_inner()),
-            storage_hash: Hex0x(storage_hash.into_inner()),
-            events_hash: Hex0x(events_hash.into_inner()),
-            prev_block_hash: Hex0x(prev_hash.into_inner()),
-            proposal_txs_hash: Hex0x(proposal_txs_hash.into_inner()),
+            txs_hash: Base58(txs_hash.into_inner()),
+            storage_hash: Base58(storage_hash.into_inner()),
+            events_hash: Base58(events_hash.into_inner()),
+            prev_block_hash: Base58(prev_hash.into_inner()),
+            proposal_txs_hash: Base58(proposal_txs_hash.into_inner()),
             upgrades: upgrades
                 .0
                 .into_iter()
@@ -140,7 +140,7 @@ fn ensure_base_extension(
 /// Return the canonical hash of an XDR-encoded consensus value.
 pub fn consensus_value_hash(value: &ConsensusValue) -> Result<BlockHash, xdrs::WriteError> {
     xdrs::txs::encode(value).map(|encoded| {
-        Hex0x(thruput_xdr::types::SHA256Hash::from(<[u8; 32]>::from(
+        Base58(thruput_xdr::types::SHA256Hash::from(<[u8; 32]>::from(
             Sha256::digest(encoded),
         )))
     })

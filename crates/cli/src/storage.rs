@@ -31,7 +31,7 @@ pub fn run(
     let address = ContractAddress::from(resolve_contract_target(&resolved_profile, address)?);
     let key = parse_storage_key(key)?;
     let key_hex = prefixed_hex(&key);
-    let address_hex = prefixed_hex(address.0);
+    let address_text = address.to_string();
 
     let task = crate::print::progress::Task::start(print, "Reading storage", true);
 
@@ -54,7 +54,7 @@ pub fn run(
             },
             "Storage",
             &[
-                ("Address".into(), address_hex.clone()),
+                ("Address".into(), address_text.clone()),
                 ("Key".into(), key_hex.clone()),
                 ("Height".into(), read.block_height.to_string()),
                 ("Item".into(), item.unwrap_or_else(|| "Absent".into())),
@@ -62,14 +62,14 @@ pub fn run(
         );
     } else {
         print.success("Storage read complete");
-        print_storage_read(&address_hex, &key_hex, &read, print)?;
+        print_storage_read(&address_text, &key_hex, &read, print)?;
     }
     print.json(&CommandResult::new(
         cmd,
         json!({
             "schemaVersion": STORAGE_JSON_SCHEMA_VERSION,
             "rpcUrl": rpc_url,
-            "address": address_hex,
+            "address": address_text,
             "key": key_hex,
             "blockHeight": read.block_height.to_string(),
             "item": read.item,

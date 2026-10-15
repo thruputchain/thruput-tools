@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use thruput_json_rpc_types::{
     BlockHeight,
     airdrop::ClientNonce,
+    base58::Base58,
     block::ChainTip,
-    hex::{Hex0x, HexBytes},
+    hex::HexBytes,
     receipt::TransactionReceipt,
     transaction::{
         ConflictCode, ConflictDiagnostic, SchedulerTransactionErrorSource, TransactionStatus,
@@ -77,7 +78,7 @@ impl AirdropBackend for TestBackend {
         self.contexts.lock().unwrap().push(context);
         Ok(ChainTip {
             height: BlockHeight::from(7),
-            block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0x77; 32])),
+            block_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x77; 32])),
         })
     }
 
@@ -366,7 +367,7 @@ fn local_context_rejects_wrong_faucet_public_key() {
     let config = NodeSupervisorConfig::default();
     let mut manifest = runtime_manifest(&config);
     manifest.bootstrap_accounts[0].public_key =
-        Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x99; 32]));
+        Base58(thruput_xdr::types::Ed25519PublicKey::from([0x99; 32]));
 
     let error = LocalAirdropContext::from_validated_runtime(
         &manifest,
@@ -385,7 +386,7 @@ fn local_context_rejects_wrong_faucet_public_key() {
 fn local_context_rejects_non_native_faucet_address() {
     let config = NodeSupervisorConfig::default();
     let mut manifest = runtime_manifest(&config);
-    manifest.bootstrap_accounts[0].wallet_address = Hex0x([0; 32].into());
+    manifest.bootstrap_accounts[0].wallet_address = Base58([0; 32].into());
 
     let error = LocalAirdropContext::from_validated_runtime(
         &manifest,
@@ -610,7 +611,7 @@ async fn recent_failure_retry_resubmits_exact_signed_bytes() {
                 attempt_height: BlockHeight::from(8),
                 cause: thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
                     conflict: ConflictDiagnostic {
-                        address: Hex0x(thruput_xdr::types::ContractAddress::from([0x44; 32])),
+                        address: Base58(thruput_xdr::types::ContractAddress::from([0x44; 32])),
                         key: HexBytes(vec![0x01]),
                         code: ConflictCode::BoundsExceeded,
                     },
@@ -836,7 +837,7 @@ fn funding_request(raw_amount: &str) -> FundAccountRequest {
         recipient: request.recipient,
         client_nonce: request.client_nonce,
         raw_amount: raw_amount.into(),
-        faucet: Hex0x(
+        faucet: Base58(
             PubkeyAccount::from_public_key_bytes(fixture_signer().verifying_key_bytes(), 0)
                 .address(),
         ),
@@ -850,7 +851,7 @@ fn durable_rpc(dir: &std::path::Path, fresh: bool, backend: Arc<TestBackend>) ->
     let mut rpc = LocalAirdropRpc::with_parts(
         backend,
         Arc::new(NativeAirdropBuilder {
-            network_hash: thruput_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
+            network_hash: thruput_json_rpc_types::NetworkHashText::from([0; 32]).to_network_hash(),
             signer,
             next_nonce: AtomicU64::new(42),
         }),
@@ -890,7 +891,7 @@ async fn local_funding_admits_explicit_amount_before_production_and_retains_acro
         Err(RpcServerError::InvalidParam(_))
     ));
     let mut wrong_chain = request.clone();
-    wrong_chain.faucet = Hex0x([0; 32].into());
+    wrong_chain.faucet = Base58([0; 32].into());
     assert!(matches!(
         restarted.fund(wrong_chain).await,
         Err(RpcServerError::InvalidParam(_))
@@ -1125,7 +1126,7 @@ async fn expired_retained_funding_without_outcome_never_creates_another_transfer
         let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
         let request = funding_request("42");
         let signed = NativeAirdropBuilder {
-            network_hash: thruput_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
+            network_hash: thruput_json_rpc_types::NetworkHashText::from([0; 32]).to_network_hash(),
             signer: fixture_signer(),
             next_nonce: AtomicU64::new(7),
         }
@@ -1271,7 +1272,7 @@ async fn cancelled_persistence_holds_chain_lock_and_bounds_workers_until_complet
     let state = crate::local_state::LocalChainState::prepare(&config).unwrap();
     let intent = config.to_bootstrap_manifest([0; 32].into(), state.public_key());
     std::fs::write(dir.path().join("hog-devnode-data.json"), serde_json::to_vec(&serde_json::json!({
-            "schemaVersion":4, "kind":"hog-devnode-data", "bootstrapConfig": {
+            "schemaVersion":5, "kind":"hog-devnode-data", "bootstrapConfig": {
                 "bootstrapFaucet": intent.bootstrap_faucet, "bootstrapAccounts": intent.bootstrap_accounts
             }
         })).unwrap()).unwrap();
@@ -1283,7 +1284,7 @@ async fn cancelled_persistence_holds_chain_lock_and_bounds_workers_until_complet
     let mut rpc = test_rpc(backend.clone(), builder, 8, 1);
     rpc.journal = state.journal.clone();
     rpc.lock_lease = state.lock.clone();
-    rpc.faucet = Hex0x(
+    rpc.faucet = Base58(
         PubkeyAccount::from_public_key_bytes(state.signer.verifying_key_bytes(), 0).address(),
     );
     rpc.timeout = Duration::from_millis(20);
@@ -1368,35 +1369,35 @@ fn test_rpc_with_trigger(
 
 fn test_request(recipient: u8, nonce: u8) -> AirdropRequest {
     AirdropRequest {
-        recipient: Hex0x(thruput_xdr::types::ContractAddress::from([recipient; 32])),
+        recipient: Base58(thruput_xdr::types::ContractAddress::from([recipient; 32])),
         client_nonce: ClientNonce::new(vec![nonce]).expect("bug: one-byte nonce should validate"),
     }
 }
 
 fn test_tx_hash() -> TxHash {
-    TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0xaa; 32])))
+    TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0xaa; 32])))
 }
 
 fn runtime_manifest(_config: &NodeSupervisorConfig) -> RuntimeManifest {
     let signer = fixture_signer();
     serde_json::from_value(serde_json::json!({
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
-            "networkHash": "00".repeat(32),
+            "networkHash": "1".repeat(32),
             "protocol": "hogp/test00000000000",
-            "genesisHash": format!("0x{}", "42".repeat(32)),
+            "genesisHash": thruput_json_rpc_types::NetworkHashText::from([0x42; 32]),
             "producer": { "binary": "hogd-dev", "version": "0.1.0" },
             "endpoints": { "scheduler": "127.0.0.1:1000" },
             "bootstrapAccounts": [{
                 "role": "faucet",
-                "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
-                "walletAddress": format!("0x{}", hex::encode(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address().as_ref())),
+                "publicKey": Base58(thruput_xdr::types::Ed25519PublicKey::from(signer.verifying_key_bytes())),
+                "walletAddress": Base58(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()),
                 "initialStorageTokens": "100000000",
             }],
             "bootstrap": {
                 "storageCostModel": {
-                    "hash": format!("0x{}", "53".repeat(32)),
+                    "hash": thruput_json_rpc_types::NetworkHashText::from([0x53; 32]),
                     "baseDataItemCost": "12000",
                     "bytestringCostPerByte": "10",
                     "baseContractDeploymentCost": "12000",
@@ -1416,7 +1417,7 @@ fn fixture_signer() -> Arc<LocalSigner> {
 fn fixture_journal() -> Arc<std::sync::Mutex<FundingJournal>> {
     Arc::new(std::sync::Mutex::new(FundingJournal::memory(
         [0; 32].into(),
-        Hex0x(
+        Base58(
             PubkeyAccount::from_public_key_bytes(fixture_signer().verifying_key_bytes(), 0)
                 .address(),
         ),

@@ -259,7 +259,7 @@ where
     .map_err(|error| {
         ProvisionTxError::without_hash(format!("failed to build airdrop transaction: {error}"))
     })?;
-    let tx_hash = TxHash(thruput_json_rpc_types::hex::Hex0x(
+    let tx_hash = TxHash(thruput_json_rpc_types::base58::Base58(
         thruput_signing::transaction_hash(&tx)
             .map_err(|error| ProvisionTxError::without_hash(error.to_string()))?,
     ));
@@ -388,7 +388,7 @@ mod tests {
         ) -> Result<thruput_json_rpc_types::block::ChainTip, crate::rpc::SimRpcError> {
             Ok(thruput_json_rpc_types::block::ChainTip {
                 height: 42.into(),
-                block_hash: thruput_json_rpc_types::hex::Hex0x([0; 32].into()),
+                block_hash: thruput_json_rpc_types::base58::Base58([0; 32].into()),
             })
         }
         async fn send_raw_transaction(
@@ -405,9 +405,9 @@ mod tests {
                     source: jsonrpsee::core::client::Error::RequestTimeout,
                 }),
                 SubmissionOutcome::WrongSubmitHash => Ok(TxHash(
-                    thruput_json_rpc_types::hex::Hex0x([0xaa; 32].into()),
+                    thruput_json_rpc_types::base58::Base58([0xaa; 32].into()),
                 )),
-                _ => Ok(TxHash(thruput_json_rpc_types::hex::Hex0x(hash))),
+                _ => Ok(TxHash(thruput_json_rpc_types::base58::Base58(hash))),
             }
         }
         async fn transaction_receipt(
@@ -415,7 +415,7 @@ mod tests {
             tx_hash: TxHash,
         ) -> Result<Option<TransactionReceipt>, crate::rpc::SimRpcError> {
             let tx_hash = if matches!(self.1, SubmissionOutcome::WrongReceiptHash) {
-                TxHash(thruput_json_rpc_types::hex::Hex0x([0xaa; 32].into()))
+                TxHash(thruput_json_rpc_types::base58::Base58([0xaa; 32].into()))
             } else {
                 tx_hash
             };
@@ -460,7 +460,7 @@ mod tests {
                     .unwrap_err();
             let submitted = client.0.lock().unwrap();
             assert_eq!(submitted.len(), 1);
-            let local_hash = TxHash(thruput_json_rpc_types::hex::Hex0x(
+            let local_hash = TxHash(thruput_json_rpc_types::base58::Base58(
                 thruput_signing::transaction_hash(&submitted[0].tx).unwrap(),
             ));
             assert_eq!(error.tx_hash, Some(local_hash));

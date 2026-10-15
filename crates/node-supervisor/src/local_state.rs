@@ -10,7 +10,7 @@ use std::{
 
 use serde::Deserialize;
 use thruput_json_rpc_types::{
-    NetworkHashHex, bootstrap_manifest::BootstrapManifestAllocation, hex::Hex0x,
+    NetworkHashText, base58::Base58, bootstrap_manifest::BootstrapManifestAllocation,
 };
 use thruput_signing::LocalSigner;
 use thruput_tx_validation::ConfigParamName;
@@ -33,7 +33,7 @@ const MAX_METADATA_BYTES: usize = 256 * 1024;
 pub(crate) struct LocalChainState {
     pub(crate) signer: Arc<LocalSigner>,
     pub(crate) config: HogdDevConfig,
-    pub(crate) network_hash: NetworkHashHex,
+    pub(crate) network_hash: NetworkHashText,
     pub(crate) lock: Option<Arc<File>>,
     pub(crate) journal: Arc<Mutex<FundingJournal>>,
 }
@@ -89,7 +89,7 @@ impl LocalChainState {
                 .clone()
                 .unwrap_or_else(|| [0; 32].into());
             let signer = Arc::new(random_signer(Path::new("ephemeral faucet"))?);
-            let faucet = Hex0x(
+            let faucet = Base58(
                 thruput_signing::PubkeyAccount::from_public_key_bytes(
                     signer.verifying_key_bytes(),
                     0,
@@ -112,7 +112,7 @@ impl LocalChainState {
         }
         let key_path = dir.join(LOCAL_FAUCET_KEY_FILE);
         let signer = load_or_create_faucet(&key_path, metadata.is_none())?;
-        let faucet = Hex0x(
+        let faucet = Base58(
             thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
                 .address(),
         );
@@ -162,7 +162,7 @@ impl LocalChainState {
     }
 
     pub(crate) fn public_key(&self) -> thruput_json_rpc_types::Ed25519PublicKey {
-        Hex0x(thruput_xdr::types::Ed25519PublicKey::from(
+        Base58(thruput_xdr::types::Ed25519PublicKey::from(
             self.signer.verifying_key_bytes(),
         ))
     }
@@ -218,7 +218,7 @@ fn read_chain_metadata(dir: &Path) -> Result<Option<ChainMetadata>, NodeSupervis
         return Err(state_error(&path, "bootstrap metadata exceeds size limit"));
     }
     let envelope: Envelope = serde_json::from_slice(&bytes).map_err(|e| state_error(&path, e))?;
-    if envelope.schema_version != 4 {
+    if envelope.schema_version != 5 {
         return Err(state_error(
             &path,
             "old local state requires its previous runtime and tooling; choose a new data directory for this version",
@@ -226,7 +226,7 @@ fn read_chain_metadata(dir: &Path) -> Result<Option<ChainMetadata>, NodeSupervis
     }
     let metadata: ChainMetadata =
         serde_json::from_slice(&bytes).map_err(|e| state_error(&path, e))?;
-    if metadata.schema_version != 4 || metadata.kind != "hog-devnode-data" {
+    if metadata.schema_version != 5 || metadata.kind != "hog-devnode-data" {
         return Err(state_error(&path, "unexpected local state metadata family"));
     }
     Ok(Some(metadata))
@@ -443,7 +443,7 @@ mod tests {
         fs::write(
             dir.join(STATE_METADATA_FILE),
             serde_json::to_vec(&serde_json::json!({
-                "schemaVersion": 4, "kind": "hog-devnode-data", "bootstrapConfig": {
+                "schemaVersion": 5, "kind": "hog-devnode-data", "bootstrapConfig": {
                     "bootstrapFaucet": intent.bootstrap_faucet,
                     "bootstrapAccounts": intent.bootstrap_accounts,
                 }
@@ -624,7 +624,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let original =
             config(dir.path()).with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(
-                Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x11; 32])),
+                Base58(thruput_xdr::types::Ed25519PublicKey::from([0x11; 32])),
                 "1234",
             )]);
         let state = LocalChainState::prepare(&original).unwrap();

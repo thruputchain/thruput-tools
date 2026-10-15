@@ -25,13 +25,23 @@ fn stellar_zero_vectors_round_trip_without_deriving_addresses() {
 }
 
 #[test]
-fn legacy_hex_and_bad_checksums_are_handled_without_echoing_input() {
+fn base58_round_trips_and_legacy_hex_is_rejected() {
+    for bytes in [[0; 32], [0xab; 32], [255; 32]] {
+        let value = thruput_encoding::encode(&bytes);
+        assert_eq!(parse_contract_address(&value).unwrap(), bytes.into());
+        assert_eq!(parse_public_key(&value).unwrap(), bytes);
+        assert_eq!(*parse_secret_seed(&value).unwrap(), bytes);
+    }
     for prefix in ["", "0x", "0X"] {
         let value = format!("{prefix}{}", "ab".repeat(32));
-        assert_eq!(parse_contract_address(&value).unwrap(), [0xab; 32].into());
-        assert_eq!(parse_public_key(&value).unwrap(), [0xab; 32]);
-        assert_eq!(*parse_secret_seed(&value).unwrap(), [0xab; 32]);
+        assert!(parse_contract_address(&value).is_err());
+        assert!(parse_public_key(&value).is_err());
+        assert!(parse_secret_seed(&value).is_err());
     }
+}
+
+#[test]
+fn bad_checksums_are_handled_without_echoing_input() {
     let mut bad = format_secret_seed(&[42; 32]);
     corrupt_checksum(&mut bad);
     let error = parse_secret_seed(&bad).unwrap_err();

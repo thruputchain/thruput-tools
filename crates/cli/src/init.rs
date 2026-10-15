@@ -207,7 +207,7 @@ fn usable_default_key_for_init(
         thruput_signing::DEFAULT_PUBKEY_ACCOUNT_NONCE,
     )
     .address();
-    (thruput_json_rpc_types::hex::prefixed_hex(address.as_ref()) == key.address).then_some(key)
+    (thruput_encoding::encode(address.as_ref()) == key.address).then_some(key)
 }
 
 fn can_generate_initial_key(report: &crate::checks::StatusReport) -> bool {

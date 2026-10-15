@@ -89,7 +89,10 @@ pub fn create(
     let account = PubkeyAccount::from_public_key_bytes(owner, DEFAULT_PUBKEY_ACCOUNT_NONCE);
     let binding = SavedWalletBinding {
         address: format_contract_address(&account.address()),
-        owner_public_key: format!("0x{}", hex::encode(owner)),
+        owner_public_key: thruput_json_rpc_types::Ed25519PublicKey::from(
+            thruput_xdr::types::Ed25519PublicKey::from(owner),
+        )
+        .to_string(),
         kind: WalletKind::Native,
         account_nonce: Some(account.nonce),
     };
