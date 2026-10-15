@@ -7,6 +7,7 @@
 
 pub mod backend;
 pub mod batch;
+mod block_queries;
 pub mod config;
 pub mod error;
 pub mod server;

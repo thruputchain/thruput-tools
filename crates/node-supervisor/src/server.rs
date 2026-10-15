@@ -395,6 +395,7 @@ async fn start_rpc_server(
     )
     .await?;
     let view_status = view.plane_status();
+    let db_gateway = readiness.endpoints.db_gateway;
 
     // Prefer the full indexer-backed read plane when available. If hogd-dev
     // only advertises DbGateway, still serve latest-state storage reads.
@@ -404,7 +405,7 @@ async fn start_rpc_server(
         tracing::debug!(%indexer_addr, "connecting to hogd-dev IndexerBlockExplorer");
         let read = HogdDevReadBackend::connect(
             indexer_addr,
-            readiness.endpoints.db_gateway,
+            db_gateway,
             scheduler_backend.scheduler_gateway_client().clone(),
             protocol_version,
             readiness.protocol.as_deref(),
@@ -412,10 +413,12 @@ async fn start_rpc_server(
         .await?;
         start_rpc_server_with_read(
             listen_address,
-            scheduler_backend.with_db_gateway(
-                read.db_gateway_client().cloned(),
-                readiness.network_hash.clone(),
-            ),
+            scheduler_backend
+                .with_indexer(read.indexer_client().clone())
+                .with_db_gateway(
+                    read.db_gateway_client().cloned(),
+                    readiness.network_hash.clone(),
+                ),
             read,
             view,
             rpc_server_options(
@@ -423,16 +426,13 @@ async fn start_rpc_server(
                 network_info,
                 Some(local_airdrop),
                 BackendPlanes {
-                    chain: readiness
-                        .endpoints
-                        .db_gateway
-                        .map_or(PlaneStatus::Stub, |_| PlaneStatus::DbGateway),
+                    chain: db_gateway.map_or(PlaneStatus::Stub, |_| PlaneStatus::DbGateway),
                     ..BackendPlanes::hogd_dev_full(view_status)
                 },
             ),
         )
         .await
-    } else if let Some(db_gateway_addr) = readiness.endpoints.db_gateway {
+    } else if let Some(db_gateway_addr) = db_gateway {
         let read = HogdDevStorageReadBackend::connect(
             db_gateway_addr,
             protocol_version,

@@ -24,7 +24,8 @@ use thruput_json_rpc_types::{
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
     transaction::{
-        AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRef, TransactionRefPage,
+        TransactionStatus, TxHash,
     },
 };
 use tokio::sync::Mutex;
@@ -53,6 +54,7 @@ fn test_network_info() -> NetworkInfo {
 struct PopulatedReadBackend {
     event_queries: Arc<Mutex<Vec<EventQuery>>>,
     address_queries: Arc<Mutex<Vec<AddressTransactionQuery>>>,
+    block_queries: Arc<Mutex<Vec<BlockTransactionQuery>>>,
     storage_reads: Arc<Mutex<Vec<StorageRead>>>,
 }
 
@@ -146,7 +148,7 @@ impl ChainPlane for PopulatedReadBackend {
         _context: RpcRequestContext,
         height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
-        if *height == 33 {
+        if matches!(*height, 33 | 35) {
             Ok(Some(canned_block_info()))
         } else {
             Ok(None)
@@ -165,6 +167,23 @@ impl ChainPlane for PopulatedReadBackend {
 
 #[async_trait::async_trait]
 impl ReadPlane for PopulatedReadBackend {
+    async fn transactions_by_block(
+        &self,
+        _context: RpcRequestContext,
+        query: BlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        self.block_queries.lock().await.push(query.clone());
+        let mut page = canned_ref_page();
+        for item in &mut page.refs {
+            item.height = query.height.clone();
+        }
+        if !query.cursor.0.is_empty() {
+            page.refs.clear();
+            page.cursor.0.clear();
+            page.latest_block = 10.into();
+        }
+        Ok(page)
+    }
     async fn transaction_receipt(
         &self,
         _context: RpcRequestContext,
@@ -289,6 +308,81 @@ async fn start_server(backend: PopulatedReadBackend) -> (HttpClient, ServerHandl
 async fn stop(handle: ServerHandle) {
     handle.stop().expect("bug: test server should stop");
     handle.stopped().await;
+}
+
+#[tokio::test]
+async fn block_pages_preserve_cursors_and_reject_invalid_requests_before_dispatch() {
+    let backend = PopulatedReadBackend::default();
+    let recorded = backend.block_queries.clone();
+    let (client, handle) = start_server(backend).await;
+    let mut query = BlockTransactionQuery {
+        height: 5.into(),
+        order: IterationOrder::Ascending,
+        cursor: PaginationCursor(vec![]),
+        limit: 2,
+    };
+    let page = client
+        .get_transactions_by_block(query.clone())
+        .await
+        .unwrap();
+    assert_eq!(page.refs.len(), 2);
+    assert!(page.refs.iter().all(|item| item.height == query.height));
+    assert_eq!(recorded.lock().await[0], query);
+    query.cursor = page.cursor;
+    query.order = IterationOrder::Descending;
+    let last = client
+        .get_transactions_by_block(query.clone())
+        .await
+        .unwrap();
+    assert!(last.refs.is_empty());
+    assert!(last.cursor.0.is_empty());
+    assert_eq!(*last.latest_block, 10);
+    assert_eq!(recorded.lock().await[1], query);
+    query.height = (-1).into();
+    assert!(
+        client
+            .get_transactions_by_block(query.clone())
+            .await
+            .is_err()
+    );
+    query.height = 5.into();
+    query.limit = 201;
+    assert!(
+        client
+            .get_transactions_by_block(query.clone())
+            .await
+            .is_err()
+    );
+    query.limit = 2;
+    query.cursor.0.resize(257, 0);
+    assert!(client.get_transactions_by_block(query).await.is_err());
+    assert_eq!(recorded.lock().await.len(), 2);
+    stop(handle).await;
+}
+
+#[tokio::test]
+async fn block_lookup_rejects_negative_and_mismatched_heights() {
+    let (client, handle) = start_server(PopulatedReadBackend::default()).await;
+    assert!(
+        client
+            .get_block_by_number(BlockHeight::from(-1).into())
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .get_block_by_number(BlockHeight::from(35).into())
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .get_block_by_number(BlockHeight::from(i64::MAX).into())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    stop(handle).await;
 }
 
 fn populated_event_query() -> EventQuery {

@@ -1,10 +1,13 @@
 //! `groundhog_chainTip`, `groundhog_getBlockByNumber`, and
 //! `groundhog_pendingTransactionCount` handlers.
 
+use thruput_indexer::{BlockLookupOutcome, BlockLookupResult};
 use thruput_json_rpc_server::{RpcRequestContext, RpcServerError, TipReading};
 use thruput_json_rpc_types::BlockHeight;
 use thruput_json_rpc_types::block::BlockInfo;
 
+use super::{INDEXER, backend_deadline, timed_backend_call};
+use crate::config::HealthBackend;
 use crate::context::GatewayContext;
 
 /// Current chain tip (height + block hash) with the network config it
@@ -23,14 +26,36 @@ pub async fn chain_tip(
 
 /// Block data at a given height.
 ///
-/// **Deferred** — data source is an open question.
-/// See `docs/gateway/system-design.md`, "Views and reads".
-#[tracing::instrument(skip_all, fields(height))]
+/// Reads the indexer's committed consensus projection.
+#[tracing::instrument(skip_all, fields(?height))]
 pub async fn get_block_by_number(
-    _ctx: &GatewayContext,
-    _height: BlockHeight,
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    height: BlockHeight,
 ) -> Result<Option<BlockInfo>, RpcServerError> {
-    Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+    let client = ctx
+        .indexer
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
+    let result = timed_backend_call(
+        &ctx.metrics,
+        HealthBackend::Indexer,
+        "get_block_by_height",
+        INDEXER,
+        backend_deadline(context, ctx.config.backend_request_timeout())?,
+        client.get_block_by_height(&height),
+        |result| match result {
+            BlockLookupResult::BlockFound { .. } => true,
+            BlockLookupResult::Default { outcome } => {
+                *outcome == BlockLookupOutcome::BlockNotFound.0
+            }
+            _ => false,
+        },
+    )
+    .await?;
+    thruput_hogd_backend::indexer::block_lookup(INDEXER, &height, result)
 }
 
 /// Number of transactions in the mempool.

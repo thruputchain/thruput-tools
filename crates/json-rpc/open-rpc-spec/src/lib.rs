@@ -135,18 +135,12 @@ fn method_error_codes(method: &str) -> &'static [i32] {
             codes::OVERLOADED,
             codes::NOT_IMPLEMENTED,
         ],
-        "groundhog_getBlockByNumber" => &[
-            codes::INVALID_PARAMS,
-            codes::BLOCK_NOT_FOUND,
-            codes::BACKEND_UNAVAILABLE,
-            codes::BACKEND_TIMEOUT,
-            codes::OVERLOADED,
-            codes::NOT_IMPLEMENTED,
-        ],
-        "groundhog_getBalance"
+        "groundhog_getBlockByNumber"
+        | "groundhog_getBalance"
         | "groundhog_getAddressAuthData"
         | "groundhog_getEvents"
         | "groundhog_getTransactionsByAddress"
+        | "groundhog_getTransactionsByBlock"
         | "groundhog_getStorageAt" => &[
             codes::INVALID_PARAMS,
             codes::BACKEND_UNAVAILABLE,

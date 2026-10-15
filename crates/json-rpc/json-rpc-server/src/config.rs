@@ -61,8 +61,8 @@ pub struct RpcServerConfig {
     /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
 
-    /// Per-page cap on `getTransactionsByAddress` responses; requests
-    /// with `limit` above this are rejected as `InvalidParam`.
+    /// Per-page cap on transaction-reference queries. The effective maximum
+    /// is at most the indexer's 200; larger request limits are invalid params.
     pub max_transactions_per_page: u32,
 
     /// Maximum length of the opaque pagination cursor on paginated
