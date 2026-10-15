@@ -26,18 +26,30 @@ pub async fn get_transactions_by_block(
         .await
         .clone()
         .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
-    let wire_query: thruput_indexer::BlockTransactionQuery = query.into();
-    let result = timed_backend_call(
+    let wire_query: thruput_indexer::BlockTransactionQuery = query.clone().into();
+    timed_backend_call(
         &ctx.metrics,
         HealthBackend::Indexer,
         "get_transactions_by_block",
         INDEXER,
         backend_deadline(context, ctx.config.backend_request_timeout())?,
-        client.get_transactions_by_block(&wire_query),
-        |result| matches!(result, TransactionRefPageResult::IndexerQueryOk { .. }),
+        async {
+            client
+                .get_transactions_by_block(&wire_query)
+                .await
+                .map(|result| {
+                    let page = shared_indexer::transaction_ref_page(INDEXER, result)?.into();
+                    thruput_json_rpc_server::validate_block_transaction_page(
+                        &query,
+                        &page,
+                        ctx.config.max_cursor_bytes,
+                    )?;
+                    Ok(page)
+                })
+        },
+        Result::is_ok,
     )
-    .await?;
-    Ok(shared_indexer::transaction_ref_page(INDEXER, result)?.into())
+    .await?
 }
 
 /// Implementation of the `groundhog_getTransactionsByAddress` JSON-RPC

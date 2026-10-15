@@ -9,7 +9,7 @@ use thruput_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
     TransactionPageResult, TransactionQuery, TransactionRefPageResult, TxInfoResult,
 };
-use thruput_json_rpc_types::ConsensusValue;
+use thruput_json_rpc_types::{ConsensusValue, events::PaginationCursor};
 use thruput_x23_transport::try_connect;
 use thruput_xdr::{
     PROTOCOL_VERSION,
@@ -19,7 +19,7 @@ use thruput_xdr::{
     types::{ExtensionPoint, SHA256Hash},
 };
 use tokio::{net::TcpListener, sync::RwLock};
-use xdr_common::VecM;
+use xdr_common::{BytesM, VecM};
 
 use super::*;
 use crate::{config::GatewayConfig, context::BackendClient, metrics::GatewayMetrics};
@@ -91,14 +91,37 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
     }
     async fn get_transactions_by_block(
         &self,
-        _: BlockTransactionQuery,
+        query: BlockTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
-        unreachable!()
+        let height = *query.height;
+        if height == 5 {
+            return Ok(TransactionRefPageResult::Default {
+                outcome: thruput_indexer::IndexerQueryOutcome::IndexerQueryNotReady.0,
+            });
+        }
+        if height == 6 {
+            return Err(ProgramError::msg("indexer read failed"));
+        }
+        Ok(TransactionRefPageResult::IndexerQueryOk {
+            page: thruput_indexer::TransactionRefPage {
+                refs: VecM(if height == 3 {
+                    vec![]
+                } else {
+                    vec![thruput_indexer::TransactionRef {
+                        tx_hash: SHA256Hash::from([7; 32]),
+                        height: 1.into(),
+                    }]
+                }),
+                cursor: BytesM::default(),
+                latest_block: 4.into(),
+                oldest_block: if height == 4 { 0.into() } else { 1.into() },
+            },
+        })
     }
 }
 
 #[tokio::test]
-async fn block_metrics_count_rejected_values_as_errors_and_misses_as_successes() {
+async fn block_metrics_count_rejected_values_and_pages_as_errors() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let mut services = ServiceMap::new();
@@ -146,6 +169,24 @@ async fn block_metrics_count_rejected_values_as_errors_and_misses_as_successes()
             Err(RpcServerError::BackendUnavailable(_))
         ));
     }
+    for height in 1..=6 {
+        let result = crate::handlers::transactions::get_transactions_by_block(
+            &ctx,
+            context(),
+            thruput_json_rpc_types::transaction::BlockTransactionQuery {
+                height: height.into(),
+                order: thruput_json_rpc_types::events::IterationOrder::Ascending,
+                cursor: PaginationCursor::default(),
+                limit: 1,
+            },
+        )
+        .await;
+        if height == 1 || height == 3 {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
+        }
+    }
     let health = crate::health::GatewayHealth::new(
         &GatewayConfig::default(),
         thruput_build_info::BuildVersion::new("test", None),
@@ -155,6 +196,11 @@ async fn block_metrics_count_rejected_values_as_errors_and_misses_as_successes()
     for (outcome, count) in [("ok", 2), ("error", 3)] {
         assert!(metrics.contains(&format!(
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"get_block_by_height\",outcome=\"{outcome}\"}} {count}\n"
+        )), "{metrics}");
+    }
+    for (outcome, count) in [("ok", 2), ("error", 4)] {
+        assert!(metrics.contains(&format!(
+            "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"get_transactions_by_block\",outcome=\"{outcome}\"}} {count}\n"
         )), "{metrics}");
     }
     server.abort();

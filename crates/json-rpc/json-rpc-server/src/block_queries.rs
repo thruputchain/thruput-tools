@@ -42,16 +42,17 @@ pub(crate) fn validate_query(
     Ok(())
 }
 
-pub(crate) fn validate_page(
+/// Reject inconsistent block pages before they are served or counted as backend successes.
+pub fn validate_page(
     query: &BlockTransactionQuery,
     page: &TransactionRefPage,
-    config: &RpcServerConfig,
+    max_cursor_bytes: usize,
 ) -> Result<(), RpcServerError> {
     let invalid = || RpcServerError::BackendUnavailable("invalid block transaction page".into());
     if *page.oldest_block < 1
         || page.latest_block < page.oldest_block
         || page.refs.len() > query.limit as usize
-        || page.cursor.0.len() > config.max_cursor_bytes
+        || page.cursor.0.len() > max_cursor_bytes
         || (!page.cursor.0.is_empty() && (page.refs.is_empty() || page.cursor == query.cursor))
     {
         return Err(invalid());
@@ -151,26 +152,26 @@ mod tests {
     fn pages_require_exact_height_bounds_and_strict_hash_order() {
         let config = RpcServerConfig::default();
         let q = query();
-        validate_page(&q, &page(), &config).unwrap();
+        validate_page(&q, &page(), config.max_cursor_bytes).unwrap();
         let mut wrong = page();
         wrong.refs[0].height = 8.into();
-        assert!(validate_page(&q, &wrong, &config).is_err());
+        assert!(validate_page(&q, &wrong, config.max_cursor_bytes).is_err());
         wrong = page();
         wrong.latest_block = 8.into();
-        assert!(validate_page(&q, &wrong, &config).is_err());
+        assert!(validate_page(&q, &wrong, config.max_cursor_bytes).is_err());
         wrong = page();
         wrong.oldest_block = 0.into();
-        assert!(validate_page(&q, &wrong, &config).is_err());
+        assert!(validate_page(&q, &wrong, config.max_cursor_bytes).is_err());
         wrong = page();
         wrong.refs.reverse();
-        assert!(validate_page(&q, &wrong, &config).is_err());
+        assert!(validate_page(&q, &wrong, config.max_cursor_bytes).is_err());
         let mut descending = q.clone();
         descending.order = IterationOrder::Descending;
-        validate_page(&descending, &wrong, &config).unwrap();
+        validate_page(&descending, &wrong, config.max_cursor_bytes).unwrap();
         descending.cursor = PaginationCursor(vec![2]);
-        validate_page(&descending, &page(), &config).unwrap();
+        validate_page(&descending, &page(), config.max_cursor_bytes).unwrap();
         wrong.refs[1] = wrong.refs[0].clone();
-        assert!(validate_page(&descending, &wrong, &config).is_err());
+        assert!(validate_page(&descending, &wrong, config.max_cursor_bytes).is_err());
     }
 
     #[test]
@@ -179,16 +180,16 @@ mod tests {
         let q = query();
         let mut empty = page();
         empty.refs.clear();
-        assert!(validate_page(&q, &empty, &config).is_err());
+        assert!(validate_page(&q, &empty, config.max_cursor_bytes).is_err());
         empty.cursor.0.clear();
-        validate_page(&q, &empty, &config).unwrap();
+        validate_page(&q, &empty, config.max_cursor_bytes).unwrap();
         empty.latest_block = 8.into();
-        validate_page(&q, &empty, &config).unwrap();
+        validate_page(&q, &empty, config.max_cursor_bytes).unwrap();
         let mut resumed = q.clone();
         resumed.cursor = page().cursor;
-        assert!(validate_page(&resumed, &page(), &config).is_err());
+        assert!(validate_page(&resumed, &page(), config.max_cursor_bytes).is_err());
         let mut oversized = page();
         oversized.refs.push(oversized.refs[1].clone());
-        assert!(validate_page(&q, &oversized, &config).is_err());
+        assert!(validate_page(&q, &oversized, config.max_cursor_bytes).is_err());
     }
 }

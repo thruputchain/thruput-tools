@@ -20,6 +20,7 @@ pub use backend::{
     ChainPlane, ReadPlane, RpcRequestContext, SubmitPlane, TipReading, ValidatedTransaction,
     ViewPlane,
 };
+pub use block_queries::validate_page as validate_block_transaction_page;
 pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig, ViewBatchConfig};
 pub use error::RpcServerError;
 pub use server::{BuildInfo, GroundhogRpcServer};

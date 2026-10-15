@@ -463,7 +463,7 @@ where
                 .read
                 .transactions_by_block(context, query.clone())
                 .await?;
-            crate::block_queries::validate_page(&query, &page, &self.config)?;
+            crate::block_queries::validate_page(&query, &page, self.config.max_cursor_bytes)?;
             Ok(page)
         })
         .await
