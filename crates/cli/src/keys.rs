@@ -584,7 +584,7 @@ pub(crate) fn load_local_public_key(name: &str) -> Result<Option<PublicKey>, Cli
 pub(crate) fn public_key_scheme_and_bytes(public_key: &PublicKey) -> (&'static str, &[u8]) {
     match public_key {
         PublicKey::Ed25519 { ed25519 } => (ED25519_SCHEME, ed25519.as_ref()),
-        PublicKey::MlDsa65 { mldsa65 } => (MLDSA65_SCHEME, mldsa65.as_ref()),
+        PublicKey::MlDsa65 { mldsa65 } => (MLDSA65_SCHEME, mldsa65.as_ref().as_ref()),
         _ => unreachable!("bug: key files only hold supported schemes"),
     }
 }
@@ -605,7 +605,8 @@ fn keyfile_public_key(keyfile: &KeyFile) -> Result<PublicKey, CliError> {
             ed25519: Ed25519PublicKey::new(parse_stored_hex::<32>(pk_hex)?),
         }),
         (MLDSA65_SCHEME, Some(pk_hex)) => Ok(PublicKey::MlDsa65 {
-            mldsa65: MlDsa65PublicKey::new(parse_stored_hex::<MLDSA65_PUBLIC_KEY_LEN>(pk_hex)?),
+            mldsa65: MlDsa65PublicKey::new(parse_stored_hex::<MLDSA65_PUBLIC_KEY_LEN>(pk_hex)?)
+                .into(),
         }),
         // Without cached public metadata the secret must be loaded.
         _ => Ok(signer_from_keyfile(keyfile)?.public_key()),

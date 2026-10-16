@@ -63,7 +63,7 @@ impl MlDsa65Signer {
 impl crate::Signer for MlDsa65Signer {
     fn public_key(&self) -> PublicKey {
         PublicKey::MlDsa65 {
-            mldsa65: MlDsa65PublicKey::new(*self.public_key),
+            mldsa65: Box::new(MlDsa65PublicKey::new(*self.public_key)),
         }
     }
 
@@ -76,7 +76,7 @@ impl crate::Signer for MlDsa65Signer {
         let mut bytes = [0; MLDSA65_SIGNATURE_LEN];
         bytes.copy_from_slice(encoded.as_slice());
         Ok(Signature::MlDsa65 {
-            mldsa65: MlDsa65Signature::new(bytes),
+            mldsa65: Box::new(MlDsa65Signature::new(bytes)),
         })
     }
 }
