@@ -345,6 +345,39 @@ pub struct AddressTransactionQuery {
     pub limit: u32,
 }
 
+/// Transactions in one committed block, sorted by unsigned transaction-hash
+/// bytes, not execution order. Height is a canonical decimal string.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BlockTransactionQuery {
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+    pub height: BlockHeight,
+    pub order: IterationOrder,
+    /// `0x` starts a walk. Preserve returned bytes and the same height.
+    /// A continuation cursor supplies its original order. Invalid or stale
+    /// cursors return an empty terminal page; oversized cursors are rejected.
+    pub cursor: PaginationCursor,
+    /// Positive page size, at most 200 and subject to the endpoint cap.
+    /// Zero is invalid. Send 50 for a normal page.
+    #[schemars(range(min = 1, max = 200))]
+    pub limit: u32,
+}
+
+impl From<BlockTransactionQuery> for thruput_indexer::indexer::BlockTransactionQuery {
+    fn from(value: BlockTransactionQuery) -> Self {
+        Self {
+            height: value.height,
+            order: value.order.into(),
+            cursor: value.cursor.into(),
+            limit: value.limit,
+        }
+    }
+}
+
+#[cfg(test)]
+mod block_query_tests;
+
 /// Lightweight reference to a transaction: its hash plus the block it
 /// executed in.  Hydrate the full body via `getTransactionReceipt`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
@@ -356,8 +389,8 @@ pub struct TransactionRef {
     pub height: BlockHeight,
 }
 
-/// `getTransactionsByAddress` response: transaction refs in the
-/// requested order.
+/// Transaction references from an address-history or exact-block query.
+/// Block queries use hash order; address queries use their history order.
 ///
 /// Opaque cursors continue one historical walk; an empty cursor ends it.
 /// For restart rules, see the

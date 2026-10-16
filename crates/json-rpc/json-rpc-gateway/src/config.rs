@@ -365,7 +365,7 @@ pub struct GatewayConfig {
     /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
 
-    /// Per-page cap on `getTransactionsByAddress` responses; requests
+    /// Per-page cap on transaction-reference responses (at most 200); requests
     /// with `limit` above this are rejected as `InvalidParam`.
     pub max_transactions_per_page: u32,
 

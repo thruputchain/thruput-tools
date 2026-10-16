@@ -18,7 +18,10 @@ use thruput_json_rpc_types::{
     receipt::TransactionReceipt,
     server_limits::ServerLimits,
     state::{StorageItemInfo, StorageItemRead},
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
     version::VersionInfo,
     view::{ViewRequest, ViewResponse},
 };
@@ -329,7 +332,7 @@ where
             self.config.view_gas_limit,
             self.config.max_view_calldata_bytes as u64,
             self.config.max_events_per_page,
-            self.config.max_transactions_per_page,
+            self.config.transaction_page_cap(),
             self.config.max_cursor_bytes as u64,
         )
         .with_view_batch(
@@ -395,7 +398,21 @@ where
     ) -> RpcResult<Option<BlockInfo>> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            Ok(self.chain.get_block_by_number(context, height.0).await?)
+            crate::block_queries::validate_height(&height.0)?;
+            let block = self
+                .chain
+                .get_block_by_number(context, height.0.clone())
+                .await?;
+            if block
+                .as_ref()
+                .is_some_and(|block| block.block_height != height.0)
+            {
+                return Err(RpcServerError::BackendUnavailable(
+                    "block height disagrees with request".into(),
+                )
+                .into());
+            }
+            Ok(block)
         })
         .await
     }
@@ -430,6 +447,24 @@ where
         self.within_request_deadline(context, async {
             validate_address_transaction_query(&query, &self.config)?;
             Ok(self.read.transactions_by_address(context, query).await?)
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip_all, fields(?query.height, limit = query.limit))]
+    async fn get_transactions_by_block(
+        &self,
+        query: BlockTransactionQuery,
+    ) -> RpcResult<TransactionRefPage> {
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            crate::block_queries::validate_query(&query, &self.config)?;
+            let page = self
+                .read
+                .transactions_by_block(context, query.clone())
+                .await?;
+            crate::block_queries::validate_page(&query, &page, self.config.max_cursor_bytes)?;
+            Ok(page)
         })
         .await
     }
@@ -799,10 +834,11 @@ fn validate_address_transaction_query(
     query: &AddressTransactionQuery,
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
-    if query.limit > config.max_transactions_per_page {
+    if query.limit > config.transaction_page_cap() {
         return Err(RpcServerError::InvalidParam(format!(
             "limit {} exceeds maximum {}",
-            query.limit, config.max_transactions_per_page
+            query.limit,
+            config.transaction_page_cap()
         )));
     }
     if query.cursor.0.len() > config.max_cursor_bytes {

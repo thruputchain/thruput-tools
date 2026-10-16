@@ -164,11 +164,61 @@ previews as well as read-style contract calls. It is not a historical replay
 service or proof that a future submitted transaction will see the same state.
 
 Public declarations do not guarantee a backend exists in every deployment.
-For example, the standalone gateway's block lookup and pending-count adapters
-currently return `NotImplemented`; see
+For example, the standalone gateway's pending-count adapter
+currently returns `NotImplemented`; see
 [blocks.rs](../../crates/json-rpc/json-rpc-gateway/src/handlers/blocks.rs).
 Optional backend availability and registered extensions must be checked for the
 target being used.
+
+### Committed block reads
+
+Both the gateway and supervised local node read block metadata and transaction
+references from `IndexerBlockExplorer`. The local chain adapter shares the read
+adapter's validated indexer pool. Neither path uses the scheduler coordinator to
+reconstruct history. Both retain the normal request deadlines and cancellation.
+
+`getBlockByNumber` accepts a nonnegative decimal-string height. It hashes the
+complete canonical consensus value and checks that its height matches the request.
+It returns `null` outside indexed coverage, including genesis. An unavailable or
+corrupt index is a backend error, not a missing block.
+
+`getTransactionsByBlock` takes `height`, `order`, `cursor`, and `limit`. References
+are ordered by unsigned transaction-hash bytes, not execution order. The limit
+must be positive and no greater than the endpoint cap or 200. Zero is rejected
+before backend dispatch; send 50 for a normal page. The
+shared server checks page size, height membership, coverage, and strict ordering.
+It rejects invalid backend pages rather than dropping their rows.
+
+Start with cursor `0x`. Preserve returned cursors and the same height. A cursor
+supplies its original order, even if the next request changes `order`. Malformed,
+stale, or wrong-height cursors produce an empty terminal page under the internal
+protocol. Requests exceeding the advertised cursor byte limit are invalid params.
+An empty page does not prove a block exists: query its metadata too. Returned
+bounds describe indexed history and can lag behind `chainTip`.
+
+These reads require the node's block-query projection (hogd PR #4475). An old
+index must be rebuilt into a separate directory from compatible retained history
+before serving them. Deploying only the gateway cannot add that history.
+
+This additive contract uses wire format 12.1 with the current identifier encoding.
+The native API proposal (#555) remains a separate, unmerged contract; these methods
+must be mapped explicitly if that proposal is selected for the coordinated release.
+Do not publish a native method name or change encoding based on this addition alone.
+
+To qualify both adapters against a compatible runtime with the block-query index,
+build the gateway and run the persistent-node integration test:
+
+```sh
+cargo build -p thruput-json-rpc-gateway --locked
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
+THRUPUT_GATEWAY_BINARY="$PWD/target/debug/hog-gateway" \
+  cargo test -p thruput-node-supervisor --test real_block_queries --locked -- --ignored
+```
+
+The test funds known transactions, compares their receipts with both page walks,
+checks metadata and empty blocks, then repeats the reads after restart. A runtime
+from a source checkout can require `GROUNDHOG_DEVNODE_PROTOCOL` set to its actual
+intro token; this does not make incompatible XDR schemas compatible.
 
 ## Wire Format Conventions
 
