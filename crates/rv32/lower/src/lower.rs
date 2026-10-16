@@ -3,7 +3,7 @@
 //! ELF layout checks live here and in [`elf`]; output validation uses
 //! `thruput-rv32-artifact`. Since v4, dispatch lives in the guest (`_start`
 //! reads the method id seeded in registers), so the lowerer no longer scans the
-//! symbol table: the entry contract is `e_entry == 0` (enforced in [`elf::parse_elf`]) plus the
+//! symbol table for entrypoints: the entry contract is `e_entry == 0` (enforced in [`elf::parse_elf`]) plus the
 //! `.text` layout rules below. Stripped release builds are valid inputs.
 
 use std::collections::HashSet;
@@ -99,6 +99,8 @@ pub struct Lowered {
     pub initial_memory_start: usize,
     /// Total guest data address space, in bytes.
     pub memory_bytes: usize,
+    /// Capacity split from SDK linker symbols, absent when unavailable or inconsistent.
+    pub memory_layout: Option<crate::MemoryLayout>,
     /// Non-fatal findings about the input, for the caller to surface. Today:
     /// duplicate ids in the interface table, and a code section past the
     /// protocol-default code limit.
@@ -176,6 +178,7 @@ pub fn lower_with(elf_bytes: &[u8], options: &LowerOptions) -> Result<Lowered> {
         initial_memory,
         initial_memory_start,
         memory_bytes: options.memory_bytes,
+        memory_layout: crate::memory::memory_layout(elf_bytes, &sections, options.memory_bytes),
         warnings,
     })
 }

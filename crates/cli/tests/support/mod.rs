@@ -53,13 +53,13 @@ fn push_shdr(
 #[must_use]
 #[allow(dead_code)]
 pub fn minimal_rv32_elf() -> Vec<u8> {
-    minimal_rv32_elf_with_optional_section(None)
+    minimal_rv32_elf_with_optional_section(None, None)
 }
 
 #[must_use]
 #[allow(dead_code)]
 pub fn minimal_rv32_elf_with_section(section_name: &str, section_data: &[u8]) -> Vec<u8> {
-    minimal_rv32_elf_with_optional_section(Some((section_name, section_data)))
+    minimal_rv32_elf_with_optional_section(Some((section_name, section_data)), None)
 }
 
 /// Minimal raw contract spec with one anchored interface and one method.
@@ -128,8 +128,16 @@ pub fn contract_spec_raw_for_interface(interface_name: &str) -> Vec<u8> {
     bytes
 }
 
+#[allow(dead_code)]
+pub fn minimal_rv32_elf_with_memory_layout(stack: u32, heap: u32, memory: u32) -> Vec<u8> {
+    minimal_rv32_elf_with_optional_section(None, Some((stack, heap, memory)))
+}
+
 #[allow(clippy::too_many_lines)]
-fn minimal_rv32_elf_with_optional_section(extra: Option<(&str, &[u8])>) -> Vec<u8> {
+fn minimal_rv32_elf_with_optional_section(
+    extra: Option<(&str, &[u8])>,
+    layout: Option<(u32, u32, u32)>,
+) -> Vec<u8> {
     const SHT_PROGBITS: u32 = 1;
     const SHT_SYMTAB: u32 = 2;
     const SHT_STRTAB: u32 = 3;
@@ -162,6 +170,21 @@ fn minimal_rv32_elf_with_optional_section(extra: Option<(&str, &[u8])>) -> Vec<u
         symtab.extend_from_slice(&1u16.to_le_bytes()); // .text
     }
 
+    if let Some((stack, heap, memory)) = layout {
+        for (name, value) in [
+            ("__stack_bottom", 0),
+            ("__stack_top", stack),
+            ("__heap_base", heap),
+            ("__heap_end", memory),
+        ] {
+            let name = add_name(&mut strtab, name);
+            symtab.extend_from_slice(&name.to_le_bytes());
+            symtab.extend_from_slice(&value.to_le_bytes());
+            symtab.extend_from_slice(&0u32.to_le_bytes());
+            symtab.extend_from_slice(&[STB_GLOBAL << 4, 0]);
+            symtab.extend_from_slice(&0xfff1u16.to_le_bytes());
+        }
+    }
     let mut file = vec![0u8; 52];
     let text_off = as_u32(file.len());
     file.extend_from_slice(&text);

@@ -142,6 +142,16 @@ appended after the flags `thruput` sets, so a repeated flag overrides
 thruput test --integration -p my-contract --node-arg "--ramdb-bytes 4294967296"
 ```
 
+## Build memory report
+
+`thruput build` reports total guest memory and, when the linked ELF contains
+consistent SDK layout symbols, its stack reservation, static data plus
+alignment, and heap capacity. These are capacities, not measured usage. Code
+is reported separately. Build retains symbols in the local ELF; they are excluded
+from the deployed artifact. Stripped or unsupported layouts show an unknown split.
+`build --json` adds `memoryLayout` with decimal-string `stackBytes`,
+`staticDataBytes` and `heapBytes`, or `null` when the split is unknown.
+
 ## Contract call gas
 
 `thruput call --gas-limit 200000000` sets the total transaction gas budget

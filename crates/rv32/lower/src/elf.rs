@@ -2,8 +2,8 @@
 //!
 //! Just enough to drive the lowerer: the section table, with names resolved
 //! via the section-header string table. v4 dispatch lives in the guest, so the
-//! lowerer no longer reads the symbol table; the entry contract is `e_entry ==
-//! 0` plus the `.text` layout rules.
+//! symbols are optional and used only for memory reporting. The entry contract
+//! is `e_entry == 0` plus the `.text` layout rules.
 
 use crate::error::{Result, invalid};
 
@@ -51,14 +51,14 @@ impl Section {
     }
 }
 
-fn read_u16(data: &[u8], off: usize) -> Result<u16> {
+pub(crate) fn read_u16(data: &[u8], off: usize) -> Result<u16> {
     let bytes = data
         .get(off..off + 2)
         .ok_or_else(|| invalid(format!("read past end of file at offset {off}")))?;
     Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
 }
 
-fn read_u32(data: &[u8], off: usize) -> Result<u32> {
+pub(crate) fn read_u32(data: &[u8], off: usize) -> Result<u32> {
     let bytes = data
         .get(off..off + 4)
         .ok_or_else(|| invalid(format!("read past end of file at offset {off}")))?;

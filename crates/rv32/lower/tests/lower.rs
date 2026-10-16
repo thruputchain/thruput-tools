@@ -19,9 +19,7 @@ use thruput_rv32_lower::{
 // Minimal ELF32 little-endian RISC-V builder.
 // ---------------------------------------------------------------------------
 
-// Section/symbol constants (subset, mirrors elf.rs). A `.symtab` is still
-// assembled so the reader's generic section parse is exercised, but the lowerer
-// no longer interprets symbols, so only the structural shape matters here.
+// Section/symbol constants (subset, mirrors elf.rs).
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
 const SHT_STRTAB: u32 = 3;
@@ -1492,4 +1490,113 @@ fn cli_preserves_existing_artifact_when_metadata_cannot_be_opened() {
     std::fs::write(&out, b"previous artifact").unwrap();
     assert_cli_error(&run_cli(&elf, &out, Some(&metadata), true), true, "");
     assert_eq!(std::fs::read(&out).unwrap(), b"previous artifact");
+}
+
+fn memory_spec(stack: u32, heap_base: u32, memory: u32) -> ElfSpec {
+    let mut spec = happy_spec();
+    for (name, value) in [
+        ("__stack_bottom", 0),
+        ("__stack_top", stack),
+        ("__heap_base", heap_base),
+        ("__heap_end", memory),
+    ] {
+        spec.syms.push(SymSpec {
+            name,
+            value,
+            size: 0,
+            sym_type: 0,
+            bind: STB_GLOBAL,
+            shndx: 0xfff1,
+        });
+    }
+    spec
+}
+
+#[test]
+fn reports_linked_capacities_including_bss_and_alignment_without_changing_artifact() {
+    for (stack, memory) in [(30 * 1024, 64 * 1024), (64 * 1024, 128 * 1024)] {
+        let heap_base = stack + 32;
+        let mut spec = memory_spec(stack, heap_base, memory);
+        spec.extras = vec![
+            ExtraSection::progbits(".data", SHF_ALLOC, stack, vec![1, 2, 3]),
+            ExtraSection::nobits(".bss", stack + 8, 17),
+        ];
+        let options = thruput_rv32_lower::LowerOptions {
+            memory_bytes: memory as usize,
+        };
+        let lowered = thruput_rv32_lower::lower_with(&assemble(spec.clone()), &options).unwrap();
+        let layout = lowered.memory_layout.unwrap();
+        assert_eq!(layout.stack_bytes, stack);
+        assert_eq!(layout.static_data_bytes, 32);
+        assert_eq!(layout.heap_bytes, memory - heap_base);
+        assert_eq!(
+            layout.stack_bytes + layout.static_data_bytes + layout.heap_bytes,
+            memory
+        );
+        spec.strip = true;
+        let stripped = thruput_rv32_lower::lower_with(&assemble(spec), &options).unwrap();
+        assert_eq!(stripped.memory_layout, None);
+        assert_eq!(lowered.artifact, stripped.artifact);
+    }
+}
+
+#[test]
+fn unavailable_or_inconsistent_layout_is_unknown_without_rejecting_the_build() {
+    let valid = memory_spec(30720, 32768, 65536);
+    let mut cases = vec![
+        happy_spec(),
+        memory_spec(16, 8, 65536),
+        memory_spec(30720, 70000, 65536),
+        memory_spec(30720, 32768, 131_072),
+        memory_spec(17, 32768, 65536),
+    ];
+    let mut missing = valid.clone();
+    missing.syms.pop();
+    cases.push(missing);
+    let mut duplicate = valid.clone();
+    duplicate.syms.push(duplicate.syms.last().unwrap().clone());
+    cases.push(duplicate);
+    let mut undefined = valid.clone();
+    undefined.syms.last_mut().unwrap().shndx = 0;
+    cases.push(undefined);
+    let mut overlaps_stack = valid.clone();
+    overlaps_stack
+        .extras
+        .push(ExtraSection::nobits(".bss", 30000, 8));
+    cases.push(overlaps_stack);
+    let mut overlaps_heap = valid;
+    overlaps_heap
+        .extras
+        .push(ExtraSection::nobits(".bss", 32768, 8));
+    cases.push(overlaps_heap);
+    for spec in cases {
+        assert_eq!(lower(&assemble(spec)).unwrap().memory_layout, None);
+    }
+}
+
+#[test]
+fn zero_heap_capacity_is_known() {
+    let layout = lower(&assemble(memory_spec(30720, 65536, 65536)))
+        .unwrap()
+        .memory_layout
+        .unwrap();
+    assert_eq!(layout.heap_bytes, 0);
+}
+
+#[test]
+fn malformed_optional_symbol_tables_do_not_break_lowering() {
+    let original = assemble(memory_spec(30720, 32768, 65536));
+    let sections = thruput_rv32_lower::elf::parse_elf(&original).unwrap();
+    let table = sections.iter().find(|s| s.sh_type == SHT_SYMTAB).unwrap();
+    let shoff = u32::from_le_bytes(original[32..36].try_into().unwrap()) as usize;
+    for (offset, value) in [
+        (shoff + table.index * 40 + 36, 0),        // entry size
+        (shoff + table.index * 40 + 24, u32::MAX), // string table link
+        (shoff + table.index * 40 + 16, u32::MAX), // table file offset
+        (table.offset as usize + 16, u32::MAX),    // symbol name offset
+    ] {
+        let mut elf = original.clone();
+        elf[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        assert_eq!(lower(&elf).unwrap().memory_layout, None);
+    }
 }

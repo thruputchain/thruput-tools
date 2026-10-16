@@ -10,8 +10,8 @@
 //!   1. [`elf`] — parse the ELF32 section table.
 //!   2. [`lower::lower`] — validate the layout and materialize the code plus
 //!      the minimal nonzero initial-memory span and its load base. Dispatch
-//!      lives in the guest (since v4), so no symbol scanning is needed and
-//!      stripped builds are valid.
+//!      lives in the guest (since v4). Optional symbols report memory capacity;
+//!      stripped builds remain valid.
 //!   3. `thruput-rv32-artifact` — pack the v5 header + sections, then
 //!      self-verify.
 //!
@@ -20,7 +20,10 @@
 pub mod elf;
 pub mod error;
 pub mod lower;
+mod memory;
 pub mod metadata;
+
+pub use memory::MemoryLayout;
 
 pub use error::{LowerError, Result};
 pub use lower::{

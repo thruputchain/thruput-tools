@@ -2018,3 +2018,80 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
         "the build must reach cargo despite the unresolvable dependency graph"
     );
 }
+
+#[test]
+#[serial]
+fn build_reports_linked_memory_capacities_or_unknown_in_json_and_text() {
+    let tmp = TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let fake_bin =
+        write_demo_contract_rv32(&root, &encode_fragments(&counter_fragments("Counter")));
+    let cargo = fake_bin.join("cargo");
+    let script = fs::read_to_string(&cargo).unwrap().replace(
+        "/bin/mkdir",
+        "test \"$CARGO_PROFILE_RELEASE_STRIP\" = none || exit 1\n/bin/mkdir",
+    );
+    fs::write(cargo, script).unwrap();
+    for known in [true, false] {
+        let elf = if known {
+            support::minimal_rv32_elf_with_memory_layout(24576, 32768, 65536)
+        } else {
+            support::minimal_rv32_elf()
+        };
+        fs::write(root.join("fixture.elf"), elf).unwrap();
+        for json in [true, false] {
+            let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"));
+            command
+                .current_dir(&root)
+                .env("PATH", &fake_bin)
+                .env("XDG_CONFIG_HOME", root.join("config-home"))
+                .args(["--non-interactive", "build", "--stack-size", "16K"]);
+            if json {
+                command.arg("--json");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if json {
+                let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(payload["data"]["memoryBytes"], "65536");
+                assert_eq!(
+                    payload["data"]["memoryLayout"],
+                    if known {
+                        serde_json::json!({"stackBytes": "24576", "staticDataBytes": "8192", "heapBytes": "32768"})
+                    } else {
+                        serde_json::Value::Null
+                    }
+                );
+            } else {
+                let text = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                if known {
+                    assert!(
+                        text.contains("Stack reservation") && text.contains("24576 bytes"),
+                        "{text}"
+                    );
+                    assert!(
+                        text.contains("Static data + alignment") && text.contains("8192 bytes"),
+                        "{text}"
+                    );
+                    assert!(
+                        text.contains("Heap capacity") && text.contains("32768 bytes"),
+                        "{text}"
+                    );
+                } else {
+                    assert!(
+                        text.contains("Memory split") && text.contains("unknown"),
+                        "{text}"
+                    );
+                }
+            }
+        }
+    }
+}

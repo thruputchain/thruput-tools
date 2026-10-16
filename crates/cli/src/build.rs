@@ -13,6 +13,31 @@ pub(crate) const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
 /// Schema version of the `build --json` data payload.
 pub const BUILD_JSON_SCHEMA_VERSION: u32 = 2;
 
+/// Linked capacities in bytes; these do not measure runtime usage.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryLayoutReport {
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "String")]
+    pub stack_bytes: usize,
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "String")]
+    pub static_data_bytes: usize,
+    #[serde(with = "thruput_json_rpc_types::decimal")]
+    #[schemars(with = "String")]
+    pub heap_bytes: usize,
+}
+
+impl From<thruput_rv32_lower::MemoryLayout> for MemoryLayoutReport {
+    fn from(layout: thruput_rv32_lower::MemoryLayout) -> Self {
+        Self {
+            stack_bytes: layout.stack_bytes as usize,
+            static_data_bytes: layout.static_data_bytes as usize,
+            heap_bytes: layout.heap_bytes as usize,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {
     pub project_name: String,
@@ -40,6 +65,7 @@ pub struct BuildResult {
     /// header).
     #[serde(with = "thruput_json_rpc_types::decimal")]
     pub memory_bytes: usize,
+    pub memory_layout: Option<MemoryLayoutReport>,
     pub target: ArtifactKind,
     pub profile: crate::config::ResolvedProfile,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -116,6 +142,7 @@ pub fn run(
             "sizeBytes": result.size_bytes.to_string(),
             "codeBytes": result.code_bytes.to_string(),
             "memoryBytes": result.memory_bytes.to_string(),
+            "memoryLayout": result.memory_layout,
             "profile": result.profile,
             "cargoStdout": result.cargo_stdout,
             "cargoStderr": result.cargo_stderr,
@@ -153,6 +180,27 @@ fn build_summary(result: &BuildResult) -> Vec<(String, String)> {
             format!("{} bytes", result.memory_bytes),
         ),
     ];
+    if let Some(layout) = &result.memory_layout {
+        items.extend([
+            (
+                "Stack reservation".into(),
+                format!("{} bytes", layout.stack_bytes),
+            ),
+            (
+                "Static data + alignment".into(),
+                format!("{} bytes", layout.static_data_bytes),
+            ),
+            (
+                "Heap capacity".into(),
+                format!("{} bytes", layout.heap_bytes),
+            ),
+        ]);
+    } else {
+        items.push((
+            "Memory split".into(),
+            "unknown (ELF layout symbols unavailable or inconsistent)".into(),
+        ));
+    }
     for (label, path) in [
         ("Spec JSON", &result.spec_json),
         ("Spec XDR", &result.spec_xdr),
@@ -440,6 +488,8 @@ pub fn build_rv32_project(
     // linker script; `--config` joins rather than replaces, which is why the
     // contract.toml overlay below is safe but cannot carry rustflags.)
     let mut cmd = Command::new("cargo");
+    // Layout symbols stay in the local ELF; lowering excludes them from the artifact.
+    cmd.env("CARGO_PROFILE_RELEASE_STRIP", "none");
     cmd.current_dir(&metadata.workspace_root)
         .arg("--config")
         .arg(&contract_toml)
@@ -587,6 +637,7 @@ pub fn build_rv32_project(
         size_bytes: size,
         code_bytes: lowered.code.len(),
         memory_bytes: lowered.memory_bytes,
+        memory_layout: lowered.memory_layout.map(Into::into),
         target: ArtifactKind::Rv32,
         profile,
         cargo_stdout,
