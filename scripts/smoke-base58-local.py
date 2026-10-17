@@ -211,7 +211,7 @@ def main():
             )
             network = rpc("networkInfo", [])["result"]
             version = rpc("version", [])["result"]
-            assert version["wireFormat"] == "12.0.0", version
+            assert version["wireFormat"] == "13.0.0", version
             assert network["networkHash"] == manifest["networkHash"], network
             before = rpc("getBalance", [recipient["address"]])["result"]
             assert before["address"] == recipient["address"], before
