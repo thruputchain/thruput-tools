@@ -43,7 +43,7 @@
             },
             "TxHash": {
               "$ref": "#/$defs/Base58_SHA256Hash",
-              "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as `\"0x...\"` hex string (64 hex chars)."
+              "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as an unprefixed, case-sensitive base58 string encoding 32 bytes."
             }
           },
           "description": "Retained transaction evidence returned when local funding cannot resolve an outcome.\nThis does not prove admission or execution. Reconcile this hash and reuse the original request.",
@@ -2142,7 +2142,7 @@
       },
       "TxHash": {
         "$ref": "#/components/schemas/Base58_SHA256Hash",
-        "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as `\"0x...\"` hex string (64 hex chars)."
+        "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as an unprefixed, case-sensitive base58 string encoding 32 bytes."
       },
       "VersionInfo": {
         "description": "Runtime version information for a JSON-RPC server implementation.",
