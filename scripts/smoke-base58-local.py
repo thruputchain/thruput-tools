@@ -268,18 +268,13 @@ def main():
             }
             (work / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
             if args.sdk_root:
-                sdk_smoke = (args.sdk_root / "scripts/smoke-base58-node.mjs").resolve(
-                    strict=True
-                )
                 subprocess.run(
-                    [
-                        "node",
-                        str(sdk_smoke),
-                        url,
-                        recipient["address"],
-                        tx_hash,
-                        after["rawBalance"],
-                    ],
+                    ["npm", "run", "test:integration"],
+                    cwd=args.sdk_root.resolve(strict=True),
+                    env={
+                        **env,
+                        "THRUPUT_CLI_TRANSFER_RESULT": str(work / "result.json"),
+                    },
                     check=True,
                     timeout=args.timeout,
                 )
