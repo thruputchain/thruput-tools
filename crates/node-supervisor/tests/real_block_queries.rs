@@ -174,6 +174,7 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
         .with_hogd_dev(
             HogdDevConfig::default()
                 .with_binary_path(binary)
+                .with_startup_timeout(Duration::from_mins(1))
                 .with_data_dir(dir.path())
                 .with_ramdb_bytes(128 * 1024 * 1024),
         );
