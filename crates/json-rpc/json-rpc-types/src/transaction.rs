@@ -8,7 +8,7 @@ use crate::{BlockHeight, ContractAddress, SHA256Hash};
 /// Covers the inner Transaction body (not signatures), matching
 /// the scheduler's lookup key and the indexer's primary key.
 ///
-/// Serializes as `"0x..."` hex string (64 hex chars).
+/// Serializes as an unprefixed, case-sensitive base58 string encoding 32 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct TxHash(pub SHA256Hash);
 

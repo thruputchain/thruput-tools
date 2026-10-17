@@ -215,6 +215,7 @@ def main():
             assert network["networkHash"] == manifest["networkHash"], network
             before = rpc("getBalance", [recipient["address"]])["result"]
             assert before["address"] == recipient["address"], before
+            assert int(before["rawBalance"]) > 0, "recipient must have an existing balance item"
             balance = command("balance", recipient_c)
             assert balance["address"] == recipient["address"], balance
             prepared = command("transfer", recipient_c, "1", "--dry-run")
@@ -261,6 +262,8 @@ def main():
                 "sender": sender["address"],
                 "recipient": recipient["address"],
                 "txHash": tx_hash,
+                "rawAmount": "10000000",
+                "storageDepositRaw": "0",
                 "receipt": receipt,
                 "before": before,
                 "after": after,
