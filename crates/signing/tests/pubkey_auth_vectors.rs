@@ -121,7 +121,7 @@ fn signer(key: &VectorKey) -> SchemeSigner {
 fn raw_public_key(public_key: &PublicKey) -> &[u8] {
     match public_key {
         PublicKey::Ed25519 { ed25519 } => ed25519.as_ref(),
-        PublicKey::MlDsa65 { mldsa65 } => mldsa65.as_ref(),
+        PublicKey::MlDsa65 { mldsa65 } => mldsa65.as_ref().as_ref(),
         _ => panic!("bug: unexpected public key scheme"),
     }
 }
