@@ -18,7 +18,10 @@ use thruput_json_rpc_types::{
     receipt::TransactionReceipt,
     server_limits::ServerLimits,
     state::{StorageItemInfo, StorageItemRead},
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
     version::VersionInfo,
     view::{ViewRequest, ViewResponse},
 };
@@ -329,7 +332,7 @@ where
             self.config.view_gas_limit,
             self.config.max_view_calldata_bytes as u64,
             self.config.max_events_per_page,
-            self.config.max_transactions_per_page,
+            self.config.transaction_page_cap(),
             self.config.max_cursor_bytes as u64,
         )
         .with_view_batch(
@@ -395,7 +398,21 @@ where
     ) -> RpcResult<Option<BlockInfo>> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            Ok(self.chain.get_block_by_number(context, height.0).await?)
+            crate::block_queries::validate_height(&height.0)?;
+            let block = self
+                .chain
+                .get_block_by_number(context, height.0.clone())
+                .await?;
+            if block
+                .as_ref()
+                .is_some_and(|block| block.block_height != height.0)
+            {
+                return Err(RpcServerError::BackendUnavailable(
+                    "block height disagrees with request".into(),
+                )
+                .into());
+            }
+            Ok(block)
         })
         .await
     }
@@ -430,6 +447,24 @@ where
         self.within_request_deadline(context, async {
             validate_address_transaction_query(&query, &self.config)?;
             Ok(self.read.transactions_by_address(context, query).await?)
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip_all, fields(?query.height, limit = query.limit))]
+    async fn get_transactions_by_block(
+        &self,
+        query: BlockTransactionQuery,
+    ) -> RpcResult<TransactionRefPage> {
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            crate::block_queries::validate_query(&query, &self.config)?;
+            let page = self
+                .read
+                .transactions_by_block(context, query.clone())
+                .await?;
+            crate::block_queries::validate_page(&query, &page, self.config.max_cursor_bytes)?;
+            Ok(page)
         })
         .await
     }
@@ -799,10 +834,11 @@ fn validate_address_transaction_query(
     query: &AddressTransactionQuery,
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
-    if query.limit > config.max_transactions_per_page {
+    if query.limit > config.transaction_page_cap() {
         return Err(RpcServerError::InvalidParam(format!(
             "limit {} exceeds maximum {}",
-            query.limit, config.max_transactions_per_page
+            query.limit,
+            config.transaction_page_cap()
         )));
     }
     if query.cursor.0.len() > config.max_cursor_bytes {
@@ -837,11 +873,12 @@ mod tests {
     const CANONICAL_HASH_VECTOR_SIGNED_TX_XDR: &str = "\
 bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001\
-0000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a00000000000000\
-0000000001000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695031\
-c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
+13df30e7ceeb7c4c78ba6287e9d8830cabf5a744f3d6be3139f2428d7bb4f9e7000000000000000000000001\
+000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695031c9d3fe2554e5c\
+e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72dbafd4898c\
+5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a";
     const CANONICAL_HASH_VECTOR_TX_HASH_HEX: &str =
-        "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
+        "319674d13f52cc88935d86c37bb2c87710c24a3371e74fbc1480fc960aebb808";
 
     #[derive(Default)]
     struct MockBackend {

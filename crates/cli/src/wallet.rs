@@ -86,6 +86,15 @@ pub fn create(
     let inputs = resolve_wallet_create_inputs(&cwd, key_name, wallet_name, profile, overrides)?;
     let owner = load_local_public_key(&inputs.key_name)?
         .ok_or_else(|| CliError::KeyNotFound(inputs.key_name.clone()))?;
+    // Saved bindings record an Ed25519 owner; other keys use their default
+    // native account directly.
+    let owner = crate::keys::ed25519_public_key_bytes(&owner).ok_or_else(|| {
+        CliError::KeySchemeUnsupported {
+            key_name: inputs.key_name.clone(),
+            scheme: "mldsa65".into(),
+            operation: "saved wallet bindings".into(),
+        }
+    })?;
     let account = PubkeyAccount::from_public_key_bytes(owner, DEFAULT_PUBKEY_ACCOUNT_NONCE);
     let binding = SavedWalletBinding {
         address: format_contract_address(&account.address()),
@@ -365,7 +374,7 @@ pub fn use_wallet(
         resolve_default_key_for_profile(&resolved_profile)?.ok_or(CliError::MissingSigningKey)?;
     let public_key =
         load_local_public_key(&key_name)?.ok_or_else(|| CliError::KeyNotFound(key_name.clone()))?;
-    resolve_selected_wallet(&resolved_profile, &key_name, public_key, name)?;
+    resolve_selected_wallet(&resolved_profile, &key_name, &public_key, name)?;
     save_profile_default_wallet(&project_root, Some(&resolved_profile.name), name)?;
 
     print.group(crate::print::Outcome::Success, "Wallet selected", |print| {

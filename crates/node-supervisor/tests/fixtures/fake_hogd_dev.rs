@@ -1592,6 +1592,7 @@ impl FakeIndexer {
                     },
                 },
                 signatures: VecM(vec![]),
+                pubkey_claim_key: None,
             },
             nondeterministic_proposal_data: NondeterministicProposalData {
                 nondeterministic_bits: BytesM(vec![]),

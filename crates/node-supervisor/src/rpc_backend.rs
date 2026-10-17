@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use std::{fmt, net::SocketAddr};
 use thruput_db_gateway::DbGateway_DbGateway1_Client;
 use thruput_hogd_backend::{db_gateway as shared_db_gateway, intro};
+use thruput_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
 use thruput_json_rpc_server::{
     ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading, ValidatedTransaction,
 };
@@ -44,6 +45,7 @@ pub(crate) struct HogdDevSchedulerBackend {
     gateway: SchedGateway_SchedGateway1_Client,
     submitter: SubmitBatcher,
     db_gateway: Option<DbGateway_DbGateway1_Client>,
+    indexer: Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>,
     expected_network: Option<NetworkHashText>,
 }
 
@@ -55,6 +57,15 @@ impl fmt::Debug for HogdDevSchedulerBackend {
 }
 
 impl HogdDevSchedulerBackend {
+    /// Reuse the read adapter's validated indexer pool for historical blocks.
+    pub(crate) fn with_indexer(
+        mut self,
+        client: IndexerBlockExplorer_IndexerBlockExplorer1_Client,
+    ) -> Self {
+        self.indexer = Some(client);
+        self
+    }
+
     pub(crate) async fn connect(
         coordinator_endpoint: SocketAddr,
         gateway_endpoint: SocketAddr,
@@ -107,6 +118,7 @@ impl HogdDevSchedulerBackend {
             gateway,
             submitter,
             db_gateway: None,
+            indexer: None,
             expected_network: None,
         })
     }
@@ -230,10 +242,19 @@ impl ChainPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all)]
     async fn get_block_by_number(
         &self,
-        _context: RpcRequestContext,
-        _height: BlockHeight,
+        context: RpcRequestContext,
+        height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+        within_request_deadline(context, async {
+            let client = self.indexer.as_ref().ok_or_else(|| {
+                RpcServerError::BackendUnavailable("hogd-dev indexer is unavailable".into())
+            })?;
+            let result = client.get_block_by_height(&height).await.map_err(|error| {
+                RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {error}"))
+            })?;
+            thruput_hogd_backend::indexer::block_lookup("hogd-dev indexer", &height, result)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all)]

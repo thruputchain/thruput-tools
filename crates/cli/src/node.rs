@@ -59,7 +59,8 @@ pub fn run_with_options(
 }
 
 /// Select a stored key's public nonce-zero account for a fresh local chain.
-/// No key is generated. With no selected default, the node starts with only its faucet.
+/// No key is generated. With no selected default, or a default key that is not
+/// Ed25519, the node starts with only its faucet.
 pub fn stored_key_allocation(
     key: Option<&str>,
     raw_amount: u64,
@@ -83,6 +84,11 @@ pub fn stored_key_allocation(
     };
     let public_key = crate::keys::load_local_public_key(&key)?
         .ok_or_else(|| CliError::KeyNotFound(key.clone()))?;
+    // Genesis allocations name their recipient by Ed25519 key; other keys
+    // start unfunded and are funded through the faucet.
+    let Some(public_key) = crate::keys::ed25519_public_key_bytes(&public_key) else {
+        return Ok((None, Vec::new()));
+    };
     Ok((
         Some(key),
         vec![
@@ -222,6 +228,9 @@ pub struct LocalNodeOptions {
     /// Genesis parameter values to use in place of the ones stock genesis
     /// states. Whether hog-devnode's build accepts a value is its own call.
     pub network_config_overrides: Vec<(ConfigParamName, u32)>,
+    /// Raw arguments appended to the hog-devnode command line, after every
+    /// flag the CLI sets.
+    pub node_args: Vec<String>,
     /// Validated release identity supplied by an embedding client process.
     /// When absent, the `thruput` client identity is discovered while building the config.
     pub bundle_identity: Option<thruput_bundle_identity::BundleIdentity>,
@@ -600,7 +609,7 @@ fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, C
                 .ok_or_else(|| CliError::KeyNotFound(key.to_owned()))?;
             (
                 key.to_owned(),
-                thruput_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address(),
+                thruput_signing::PubkeyAccount::new(public_key, 0).address(),
             )
         }
         Err(error) => return Err(error),
@@ -1175,7 +1184,9 @@ fn local_node_config(
             });
         }
     }
-    let hogd = hogd.with_network_config_overrides(network_config_overrides);
+    let hogd = hogd
+        .with_network_config_overrides(network_config_overrides)
+        .with_extra_args(options.node_args);
     let hogd = match options.init_network_hash {
         Some(network_hash) => hogd.with_init_network_hash(network_hash),
         None => hogd,
@@ -1532,6 +1543,7 @@ mod tests {
             rpc_batch_concurrency: Some(17.try_into().unwrap()),
             ramdb_bytes: Some(2_147_483_648),
             network_config_overrides: vec![(ConfigParamName::MaxRv32MemoryBytes, 16_777_216)],
+            node_args: Vec::new(),
             bundle_identity: Some(supplied_identity.clone()),
         })
         .expect("bug: local node config should build");

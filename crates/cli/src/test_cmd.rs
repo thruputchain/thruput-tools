@@ -56,11 +56,19 @@ pub struct IntegrationTestOptions {
     /// Genesis network parameter overrides for the ephemeral node (mirrors
     /// `thruput node --network-config`). A parameter given twice is rejected.
     pub network_config_overrides: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
+    /// Raw arguments appended to the ephemeral hog-devnode command line.
+    pub node_args: Vec<String>,
     /// Forbid managed network acquisition for the ephemeral node.
     pub offline: bool,
     /// Show local-node supervisor and forwarded hog-devnode diagnostics while
     /// running the ephemeral integration node.
     pub verbose: bool,
+}
+
+/// Split one `--node-arg` value into hog-devnode arguments with shell quoting
+/// rules, so `"--ramdb-bytes 4294967296"` yields two arguments.
+pub fn parse_node_arg(value: &str) -> Result<Vec<String>, String> {
+    shlex::split(value).ok_or_else(|| format!("unbalanced quotes or escape in {value:?}"))
 }
 
 /// Environment fallback for the integration node's protocol override.
@@ -305,6 +313,7 @@ fn run_integration_with_dev_node(
         hogd_protocol,
         hogd_dev_version: integration.hog_devnode_version.clone(),
         network_config_overrides: integration.network_config_overrides.clone(),
+        node_args: integration.node_args.clone(),
         offline: integration.offline,
         ..crate::node::LocalNodeOptions::default()
     };

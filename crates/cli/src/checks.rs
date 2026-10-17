@@ -400,7 +400,9 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
             return;
         }
     };
-    if validated.owner_public_key.as_slice() != public_key.as_slice() {
+    if crate::keys::ed25519_public_key_bytes(&public_key)
+        .is_none_or(|owner| validated.owner_public_key.as_slice() != owner.as_slice())
+    {
         findings.push(Finding {
             level: FindingLevel::Warn,
             code: "default_wallet_owner_mismatch",
@@ -2173,6 +2175,7 @@ mod tests {
         // Generate a key, then clear the default selection.
         crate::keys::generate(
             &Some("orphan".into()),
+            crate::keys::KeyScheme::Ed25519,
             false,
             "keys.generate",
             &crate::Print::quiet(),

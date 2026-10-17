@@ -19,7 +19,7 @@
 //!
 //! - `SubmitPlane`                            → scheduler
 //! - `ChainPlane::chain_tip`                  → scheduler
-//! - `ChainPlane::get_block_by_number`        → coordinator (TBD)
+//! - `ChainPlane::get_block_by_number`        → indexer
 //! - `ChainPlane::pending_transaction_count`  → scheduler
 //! - `ReadPlane::transaction_receipt`         → indexer
 //! - `ReadPlane::transaction_status`          → **both** (scheduler for
@@ -275,6 +275,18 @@ pub trait ReadPlane: Send + Sync + 'static {
         context: RpcRequestContext,
         query: AddressTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError>;
+
+    /// Read hash-ordered transaction references for one committed height.
+    /// Backends without an indexer report unavailability, never an empty page.
+    async fn transactions_by_block(
+        &self,
+        _context: RpcRequestContext,
+        _query: thruput_json_rpc_types::transaction::BlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::BackendUnavailable(
+            "block query indexer is unavailable".into(),
+        ))
+    }
 
     /// Return the latest committed storage item at one (address, key).
     /// `key` is the 32-byte raw contract-data key that the wire form

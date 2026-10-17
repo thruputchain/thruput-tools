@@ -228,7 +228,7 @@ enum Command {
         command: ChainCommand,
     },
     /// Manage signing keys
-    #[command(long_about = "Ed25519 signing keys stored in \
+    #[command(long_about = "Ed25519 or ML-DSA-65 signing keys stored in \
                        ~/.config/thruput/keys/. Keys are \
                        global (not per-profile). Profiles can \
                        override the default key via default_key \
@@ -672,6 +672,17 @@ struct TestArgs {
     #[arg(long = "network-config", value_name = "NAME=VALUE", requires = "integration",
           value_parser = thruput_cli::node::parse_network_config_override)]
     network_config: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
+    /// Pass arguments to the integration hog-devnode (repeatable). Each value
+    /// is split with shell quoting rules: `--node-arg "--ramdb-bytes 4294967296"`.
+    /// Appended last, so they override flags thruput sets.
+    #[arg(
+        long = "node-arg",
+        value_name = "ARGS",
+        requires = "integration",
+        allow_hyphen_values = true,
+        value_parser = parse_node_arg
+    )]
+    node_arg: Vec<NodeArgWords>,
     /// Config profile to use
     #[arg(long = "profile")]
     profile: Option<String>,
@@ -680,6 +691,14 @@ struct TestArgs {
     /// Extra arguments forwarded to the test harness (after --)
     #[arg(last = true)]
     cargo_args: Vec<String>,
+}
+
+/// One `--node-arg` value after shell-style splitting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NodeArgWords(Vec<String>);
+
+fn parse_node_arg(value: &str) -> Result<NodeArgWords, String> {
+    thruput_cli::test_cmd::parse_node_arg(value).map(NodeArgWords)
 }
 
 impl TestArgs {
@@ -707,6 +726,11 @@ impl TestArgs {
                     hogd_protocol: self.hogd_protocol,
                     hog_devnode_version: self.hog_devnode_version,
                     network_config_overrides: self.network_config,
+                    node_args: self
+                        .node_arg
+                        .into_iter()
+                        .flat_map(|words| words.0)
+                        .collect(),
                     offline: ctx.offline,
                     verbose: self.verbose,
                 },
@@ -1173,6 +1197,9 @@ enum KeysCommand {
     Generate {
         /// Key name (default: "default")
         name: Option<String>,
+        /// Signature scheme of the new key
+        #[arg(long, value_enum, default_value_t = thruput_cli::keys::KeyScheme::Ed25519)]
+        scheme: thruput_cli::keys::KeyScheme,
         /// Fund from testnet faucet (not yet implemented)
         #[arg(long, hide = true)]
         fund: bool,
@@ -1187,7 +1214,7 @@ enum KeysCommand {
     Ls,
     /// Export a private key for client use
     #[command(
-        long_about = "Export a CLI-managed Ed25519 private key for use with a client signer.\n\nThe 32-byte private seed is written to stdout as unprefixed, case-sensitive base58 by default; --format strkey exports an S StrKey. Treat it as a secret: do not expose it in logs, CI output, or committed files."
+        long_about = "Export a CLI-managed private key for use with a client signer.\n\nThe 32-byte private seed (Ed25519 seed or ML-DSA-65 FIPS 204 seed) is written to stdout as unprefixed, case-sensitive base58 by default; --format strkey exports an S StrKey for Ed25519 keys. Treat it as a secret: do not expose it in logs, CI output, or committed files."
     )]
     Export {
         /// Key name to export
@@ -1227,7 +1254,9 @@ impl KeysCommand {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let (cmd, print) = (ctx.cmd_name, &ctx.print);
         match self {
-            Self::Generate { name, fund } => thruput_cli::keys::generate(&name, fund, cmd, print),
+            Self::Generate { name, scheme, fund } => {
+                thruput_cli::keys::generate(&name, scheme, fund, cmd, print)
+            }
             Self::Import { name } => thruput_cli::keys::import(&name, cmd, print),
             Self::Ls => thruput_cli::keys::list(cmd, print),
             Self::Export {
@@ -3026,6 +3055,49 @@ mod tests {
                 "max_rv32_memory_bytes=16M",
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn test_integration_node_arg_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "thruput",
+            "test",
+            "--integration",
+            "--node-arg",
+            "--ramdb-bytes 4294967296",
+            "--node-arg",
+            "--contract-artifacts-dir '/tmp/my contracts'",
+            "--",
+            "--nocapture",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Test(TestArgs {
+                node_arg,
+                cargo_args,
+                ..
+            }) => {
+                assert_eq!(
+                    node_arg,
+                    [
+                        NodeArgWords(vec!["--ramdb-bytes".into(), "4294967296".into()]),
+                        NodeArgWords(vec![
+                            "--contract-artifacts-dir".into(),
+                            "/tmp/my contracts".into()
+                        ]),
+                    ]
+                );
+                assert_eq!(cargo_args, ["--nocapture"]);
+            }
+            _ => panic!("expected test command"),
+        }
+        // The arguments only reach a node, so they need --integration.
+        assert!(Cli::try_parse_from(["thruput", "test", "--node-arg", "--ramdb-bytes"]).is_err());
+        // Unbalanced quotes are a parse error.
+        assert!(
+            Cli::try_parse_from(["thruput", "test", "--integration", "--node-arg", "'--x"])
+                .is_err()
         );
     }
 }

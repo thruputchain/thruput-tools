@@ -8,15 +8,25 @@ use crate::{ValidatedTransaction, error::RpcServerError};
 /// The `signatures` field of `SignedTransaction`, decoded for validation only.
 type SignaturesField = xdrs::VecM<thruput_xdr::transaction::DecoratedSignature>;
 
-/// Compile-time guard tying [`SignaturesField`] to the field it stands in for.
+/// The `pubkey_claim_key` field of `SignedTransaction`, decoded for validation only.
+type PubkeyClaimKeyField = Option<thruput_xdr::types::PublicKey>;
+
+/// Compile-time guard tying the hand-decoded field types to the fields they
+/// stand in for.
 ///
-/// [`validate_raw_transaction_bytes`] hand-decodes the two fields of
-/// `SignedTransaction` rather than decoding the struct, so a change to the
-/// signatures type — including a tighter `VecM` bound — must fail the build
-/// instead of silently letting the gateway accept what a whole-struct decode
-/// would reject.
+/// [`validate_raw_transaction_bytes`] hand-decodes the fields of
+/// `SignedTransaction` rather than decoding the struct, so a change to a
+/// field's type — including a tighter `VecM` bound — or a new field must fail
+/// the build instead of silently letting the gateway accept what a
+/// whole-struct decode would reject.
 const _: fn(thruput_xdr::transaction::SignedTransaction) = |signed| {
-    let _: SignaturesField = signed.signatures;
+    let thruput_xdr::transaction::SignedTransaction {
+        tx: _,
+        signatures,
+        pubkey_claim_key,
+    } = signed;
+    let _: SignaturesField = signatures;
+    let _: PubkeyClaimKeyField = pubkey_claim_key;
 };
 
 /// Decode, validate, and hash a raw signed transaction parameter.
@@ -38,12 +48,14 @@ pub fn validate_raw_transaction(
 /// Validate and hash raw signed transaction XDR bytes.
 ///
 /// The returned hash is SHA-256 over the inner `Transaction` only — the
-/// signatures are excluded, so re-signing a transaction does not change its
-/// hash. Signatures are decoded to reject malformed input, but are *not*
+/// signatures and the attached `pubkey_claim_key` are excluded, so re-signing
+/// a transaction does not change its hash. Signatures are decoded to reject malformed input, but are *not*
 /// cryptographically verified here; authorization is the node's job.
 ///
 /// Accepts exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
-/// accepts: trailing bytes after the signatures are rejected.
+/// accepts: trailing bytes after the envelope are rejected. A
+/// `pubkey_claim_key` must be present exactly when the auth claim is
+/// `kPubkeySignature`.
 ///
 /// A signed transaction that decodes completely but breaks an executor
 /// pre-execution bound (see [`check_transaction`]) is rejected with
@@ -58,7 +70,7 @@ pub fn validate_raw_transaction_bytes(
         return Err(RpcServerError::TxInvalid("transaction too large".into()));
     }
 
-    // `SignedTransaction` is `{ tx, signatures }`, so the inner `Transaction`
+    // `SignedTransaction` is `{ tx, signatures, pubkey_claim_key }`, so the inner `Transaction`
     // occupies a contiguous prefix of `tx_bytes`. Hash that prefix directly
     // instead of re-encoding the decoded value: it avoids an allocation on the
     // submit path, and it hashes exactly the bytes the client signed rather
@@ -75,16 +87,32 @@ pub fn validate_raw_transaction_bytes(
         .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
     let tx_end = reader.position();
 
-    // Decode the signatures too, and reject trailing bytes, so this accepts
-    // exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
-    // would have accepted. The type must stay in step with the field it
-    // stands in for; `signatures_field_type_is_pinned` enforces that.
+    // Decode the signatures and claim key too, and reject trailing bytes, so
+    // this accepts exactly what a whole-buffer
+    // `xdrs::txs::decode::<SignedTransaction>` would have accepted. The types
+    // must stay in step with the fields they stand in for; the compile-time
+    // guard above enforces that.
     let _signatures: SignaturesField = xdrs::read_xdr(&mut reader)
+        .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
+    let pubkey_claim_key: PubkeyClaimKeyField = xdrs::read_xdr(&mut reader)
         .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
     if reader.remaining() > 0 {
         return Err(RpcServerError::TxInvalid(
             "invalid XDR: trailing bytes after signed transaction".into(),
         ));
+    }
+    // The node also checks that the key hashes to the claimed one; presence
+    // is checked here so a client omitting or misplacing it learns why.
+    let pubkey_claim = matches!(
+        tx.auth_claim,
+        thruput_xdr::auth_claim::AuthClaim::kPubkeySignature { .. }
+    );
+    if pubkey_claim != pubkey_claim_key.is_some() {
+        return Err(RpcServerError::TxInvalid(if pubkey_claim {
+            "pubkey signature claim requires pubkey_claim_key".into()
+        } else {
+            "pubkey_claim_key is only allowed with a pubkey signature claim".into()
+        }));
     }
 
     check_transaction(&tx, params).map_err(RpcServerError::TxInvalidDetailed)?;
@@ -109,13 +137,14 @@ pub(crate) mod test_fixtures {
     pub(crate) const CANONICAL_HASH_VECTOR_SIGNED_TX_XDR: &str = "\
 bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001\
-0000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a000000000000\
-000000000001000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695\
-031c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
+13df30e7ceeb7c4c78ba6287e9d8830cabf5a744f3d6be3139f2428d7bb4f9e7000000000000000000000001\
+000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695031c9d3fe2554e5c\
+e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72dbafd4898c\
+5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a";
 
     /// Hash of the inner transaction of the canonical vector.
     pub(crate) const CANONICAL_HASH: &str =
-        "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
+        "319674d13f52cc88935d86c37bb2c87710c24a3371e74fbc1480fc960aebb808";
 
     /// The canonical vector, decoded.
     pub(crate) fn canonical_signed_transaction() -> SignedTransaction {
@@ -280,15 +309,52 @@ mod tests {
     }
 
     #[test]
-    fn truncated_signatures_are_rejected() {
-        // Drop 8 hex chars, i.e. 4 bytes off the trailing 64-byte signature, so
-        // the transaction prefix still decodes but the signature runs short.
+    fn truncated_envelope_is_rejected() {
+        // Drop 8 hex chars, i.e. 4 bytes off the trailing claim key, so the
+        // transaction prefix and signatures still decode but the key runs short.
         let truncated =
             &CANONICAL_HASH_VECTOR_SIGNED_TX_XDR[..CANONICAL_HASH_VECTOR_SIGNED_TX_XDR.len() - 8];
         let err = validate_raw_transaction(truncated, &NetworkConfigParams::default())
-            .expect_err("bug: truncated signatures should be rejected");
+            .expect_err("bug: a truncated envelope should be rejected");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
+    }
+
+    #[test]
+    fn pubkey_claim_requires_its_claim_key() {
+        let mut signed = canonical_signed_transaction();
+        signed.pubkey_claim_key = None;
+        let bytes = xdrs::txs::encode(&signed).unwrap();
+
+        let err = validate_raw_transaction_bytes(bytes, &NetworkConfigParams::default())
+            .expect_err("bug: a pubkey claim without its key should be rejected");
+
+        assert_eq!(
+            err,
+            RpcServerError::TxInvalid("pubkey signature claim requires pubkey_claim_key".into())
+        );
+    }
+
+    #[test]
+    fn claim_key_is_rejected_without_a_pubkey_claim() {
+        let mut signed = canonical_signed_transaction();
+        signed.tx.auth_claim = thruput_xdr::auth_claim::AuthClaim::kSourceAddressAuthData {
+            source_address_claim: thruput_xdr::auth_claim::AuthClaim_source_address_claim {
+                allowed_keys: 1,
+                required_weight: 1,
+            },
+        };
+        let bytes = xdrs::txs::encode(&signed).unwrap();
+
+        let err = validate_raw_transaction_bytes(bytes, &NetworkConfigParams::default())
+            .expect_err("bug: a claim key without a pubkey claim should be rejected");
+
+        assert_eq!(
+            err,
+            RpcServerError::TxInvalid(
+                "pubkey_claim_key is only allowed with a pubkey signature claim".into()
+            )
+        );
     }
 
     #[test]

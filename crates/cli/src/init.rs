@@ -202,8 +202,8 @@ fn usable_default_key_for_init(
     let key = report.effective_default_key_summary()?;
     // A public summary alone does not establish that the private key is usable.
     let signer = crate::keys::load_local_signer(&key.name).ok()?;
-    let address = thruput_signing::PubkeyAccount::from_public_key_bytes(
-        signer.verifying_key_bytes(),
+    let address = thruput_signing::PubkeyAccount::new(
+        thruput_signing::Signer::public_key(&signer),
         thruput_signing::DEFAULT_PUBKEY_ACCOUNT_NONCE,
     )
     .address();
@@ -237,7 +237,13 @@ fn handle_key_step(
         && (options.generate_key || ui.print.ask("Generate a local signing key now?", true)?)
     {
         // The enclosing init result owns JSON output, not the nested command.
-        crate::keys::generate(&None, false, "keys.generate", &Print::quiet())?;
+        crate::keys::generate(
+            &None,
+            crate::keys::KeyScheme::Ed25519,
+            false,
+            "keys.generate",
+            &Print::quiet(),
+        )?;
         ui.success("Generated local signing key");
         ui.finish_step(InitStep::SigningKey, StepState::Done);
         return Ok(true);

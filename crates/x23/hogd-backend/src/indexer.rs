@@ -1,25 +1,62 @@
 //! Decode `IndexerBlockExplorer` results into pages, lookups, and errors.
 //!
-//! Every fallible indexer result carries its failure as an outcome code
-//! rather than a transport error, so an undecoded `Default { outcome }` is
+//! Indexer pages and transaction lookups carry failure outcome codes as
+//! well as transport errors, so an undecoded `Default { outcome }` is
 //! easy to mistake for an empty answer. These helpers turn each one into
 //! either a value or an [`RpcServerError`], so a backend failure can never
 //! reach a client as an empty page or a missing receipt.
+//! Block lookup has no failure arm; adapters also preserve its system RPC errors.
 
 use thruput_indexer::{
-    EventPage, EventPageResult, IndexerQueryOutcome, TransactionRefPage, TransactionRefPageResult,
+    BlockLookupOutcome, BlockLookupResult, EventPage, EventPageResult, IndexerQueryOutcome,
+    TransactionRefPage, TransactionRefPageResult,
     indexer::{TxInfo, TxInfoOutcome, TxInfoResult},
 };
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::{
     BlockHeight,
     base58::Base58,
+    block::BlockInfo,
     events::{EventPage as PublicEventPage, IdentifiedEvent},
     transaction::{TransactionStatus, TxHash},
 };
 use thruput_trace::TxFailureDiagnostic;
 
 use crate::event::parse_emitted_event;
+
+/// Decode only a recognized block miss as absence. Canonical projection
+/// hashes the complete consensus value and rejects unsupported extensions.
+pub fn block_lookup(
+    service: &str,
+    height: &BlockHeight,
+    result: BlockLookupResult,
+) -> Result<Option<BlockInfo>, RpcServerError> {
+    match result {
+        BlockLookupResult::BlockFound { value } => {
+            if value.proposal_header.block_height != *height {
+                return Err(RpcServerError::BackendUnavailable(format!(
+                    "{service} returned a block at a different height"
+                )));
+            }
+            BlockInfo::try_from(value).map(Some).map_err(|error| {
+                RpcServerError::BackendUnavailable(format!(
+                    "{service} block projection failed: {error}"
+                ))
+            })
+        }
+        BlockLookupResult::Default { outcome }
+            if outcome == BlockLookupOutcome::BlockNotFound.0 =>
+        {
+            Ok(None)
+        }
+        _ => Err(RpcServerError::BackendUnavailable(format!(
+            "{service} returned an unknown block lookup result"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod block_tests;
 
 /// What the indexer knows about one transaction.
 ///

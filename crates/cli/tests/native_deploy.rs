@@ -231,7 +231,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
             Outcome::Reverted => { receipt["status"] = json!({"result":"reverted"}); receipt.as_object_mut().unwrap().remove("returnData"); },
             Outcome::FundingRejected | Outcome::InitializerRejected => {
                 let abort = if matches!(state.outcome, Outcome::FundingRejected) {
-                    xdrs::cxs::encode(&(<thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR, thruput_erc20_if::ERC20Error::TooLarge)).unwrap()
+                    xdrs::cxs::encode(&(<thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR, thruput_erc20_if::ERC20Error::TooLarge)).unwrap()
                 } else { xdrs::cxs::encode(&(42u64, 7u64)).unwrap() };
                 receipt["status"] = json!({"result":"reverted"});
                 receipt["abortData"] = json!(format!("0x{}", hex::encode(abort)));

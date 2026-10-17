@@ -43,7 +43,8 @@ pub struct ServerLimits {
     pub max_view_calldata_bytes: u64,
     /// Largest `limit` a `getEvents` page may ask for.
     pub max_events_per_page: u32,
-    /// Largest `limit` a `getTransactionsByAddress` page may ask for.
+    /// Largest `limit` an address-history or block-transaction page may ask
+    /// for, never greater than 200.
     pub max_transactions_per_page: u32,
     /// Longest opaque pagination cursor accepted, in bytes.
     #[serde(with = "crate::decimal")]

@@ -204,6 +204,26 @@ jobs:
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: thruput test --integration
 
+      # --node-arg must reach hog-devnode: an explicit valid capacity still
+      # passes, and a bad one fails startup with hog-devnode's own parse error
+      # (which a dropped argument could not produce).
+      - name: Integration node args (thruput test --integration --node-arg)
+        if: matrix.template == 'counter'
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
+        run: |
+          set -euo pipefail
+          thruput test --integration --node-arg "--ramdb-bytes 0x100000000"
+          if thruput test --integration -v --node-arg "--ramdb-bytes not-a-size" >node-arg.log 2>&1; then
+            echo "thruput test --integration unexpectedly succeeded with an invalid --ramdb-bytes"
+            cat node-arg.log
+            exit 1
+          fi
+          if ! grep -qF "Invalid --ramdb-bytes: not-a-size" node-arg.log; then
+            echo "integration startup failed for a reason other than the forwarded --ramdb-bytes"
+            cat node-arg.log
+            exit 1
+          fi
+
       # A user-level rustflags override makes cargo drop the project's
       # .cargo/config.toml target rustflags (linker script, codegen flags such
       # as -Z trap-unreachable=false), yielding artifacts that fail validation.

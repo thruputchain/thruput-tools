@@ -133,6 +133,15 @@ ephemeral node:
 thruput test --integration --network-config max_rv32_memory_bytes=16M
 ```
 
+To pass any other flags to the ephemeral `hog-devnode`, use repeatable
+`--node-arg`. Each value is split with shell quoting rules, and the result is
+appended after the flags `thruput` sets, so a repeated flag overrides
+`thruput`'s value:
+
+```bash
+thruput test --integration -p my-contract --node-arg "--ramdb-bytes 4294967296"
+```
+
 ## Contract call gas
 
 `thruput call --gas-limit 200000000` sets the total transaction gas budget
@@ -143,7 +152,7 @@ submitting a call; use `--gas-limit` to set a different budget.
 
 ## Using cargo directly
 
-Scaffolded projects build for the host with plain `cargo`: the `sdk`
+Scaffolded projects build for the host with plain `cargo`: the `thruput-sdk`
 dependency is declared with `std` for non-rv32 targets, and the self
 dev-dependency turns on `dev` (the native mock executor) for test builds:
 
@@ -156,7 +165,7 @@ dev-dependency turns on `dev` (the native mock executor) for test builds:
 | `thruput test --integration` | Start hog-devnode, deploy RV32, and run `tests/integration.rs` |
 
 `dev` is deliberately not a default feature: a crate depending on the
-contract would otherwise drag `sdk/dev` (and `std`) into its guest build
+contract would otherwise drag `thruput-sdk/dev` (and `std`) into its guest build
 through feature unification. The `.cargo/contract.toml` overlay supplies
 `build-std`;
 `panic=immediate-abort` lives in `.cargo/config.toml` alongside the rest of
@@ -361,11 +370,12 @@ THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode thruput test --integration
 
 ### `thruput keys`
 
-Manage Ed25519 signing keys. Keys are stored in
-`~/.config/thruput/keys/` with restricted file permissions.
+Manage Ed25519 and ML-DSA-65 signing keys. Keys are stored in
+`~/.config/thruput/keys/` as owner-only (`0600`) JSON files.
 
 ```bash
-thruput keys generate [name]   # generate a new keypair
+thruput keys generate [name]                    # generate an Ed25519 key
+thruput keys generate [name] --scheme mldsa65   # generate an ML-DSA-65 key
 thruput keys ls                # list stored keys
 thruput keys export <name>     # print a 32-byte private key for client use
 thruput keys use <name>        # set the default signing key
@@ -375,11 +385,44 @@ thruput keys rm <name>         # remove a stored key (with confirmation)
 The first generated key automatically becomes the default. `dev-N` names are
 ordinary stored key names; they have no implicit account or private key.
 
+Each key file records its `scheme`. Ed25519 files hold the 64-byte keypair;
+ML-DSA-65 files hold only the 32-byte FIPS 204 key-generation seed, never the
+expanded key, plus the public key as cached metadata. Every key's account is
+its nonce-zero pubkey account, whose address is derived from the key's
+`publicKeyHash` (which covers the scheme). `keys generate --json` reports the
+scheme, raw public key, public key hash and address. G and S StrKeys exist only
+for Ed25519 keys, so ML-DSA-65 keys show their key hash instead.
+
 `keys export` prints the 32-byte private seed as unprefixed, case-sensitive base58.
-Use `--format strkey` to export an S StrKey. `keys import` accepts either encoding
-through stdin or a hidden terminal prompt.
-With `--json`, read it from `data.key.privateKey`. Treat it as a secret. Do not
-expose it in logs or CI output, or commit it to a file.
+With `--json`, read it from `data.key.privateKey` and the scheme from
+`data.key.scheme`. `--format strkey` is Ed25519-only. Treat the seed as a
+secret. Do not expose it in logs or CI output, or commit it to a file.
+`keys import` accepts Ed25519 seeds as base58 or S StrKeys through stdin or a
+hidden terminal prompt.
+
+#### ML-DSA-65 accounts
+
+ML-DSA-65 keys sign pure ML-DSA (empty context) over the same network-bound
+transaction preimage as Ed25519 keys. The transaction's auth claim names the
+key by hash and the signed envelope carries the full public key, which the
+CLI attaches automatically. The flow is the same as for an Ed25519 key, except
+that a fresh `thruput node` gives only an Ed25519 default key its initial
+allocation, and saved wallet bindings (`thruput wallet create`) need an Ed25519
+owner; ML-DSA-65 keys always use their default native account:
+
+```bash
+thruput keys generate pq --scheme mldsa65   # prints the account address
+thruput keys use pq
+thruput node                                # in another terminal
+thruput airdrop pq --amount 25              # fund through the local faucet
+thruput balance pq
+thruput transfer <recipient> 1.5            # DefaultWallet execute, signed with ML-DSA-65
+thruput tx show <tx-hash>                   # committed status and receipt
+thruput tx list pq                          # address history
+thruput call my-counter increment 1         # contract calls work the same way
+```
+
+This needs a `hog-devnode` whose protocol includes ML-DSA-65 pubkey accounts.
 
 ### `thruput wallet`
 

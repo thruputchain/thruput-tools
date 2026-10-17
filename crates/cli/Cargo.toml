@@ -23,6 +23,7 @@ path = "src/main.rs"
 
 [dependencies]
 thruput-encoding = { workspace = true }
+shlex = { workspace = true }
 thruput-client = { workspace = true }
 clap = { workspace = true }
 thruput-build-info = { workspace = true }
@@ -55,7 +56,7 @@ thruput-rv32-artifact = { workspace = true }
 thruput-rv32-lower = { workspace = true }
 thruput-contract-spec = { workspace = true }
 thruput-erc20-if = { workspace = true }
-sdk = { workspace = true }
+thruput-sdk = { workspace = true }
 thruput-contract-util = { workspace = true }
 thruput-spec-tool = { workspace = true }
 thruput-json-rpc-client = { workspace = true }
@@ -79,6 +80,7 @@ tempfile = { workspace = true }
 signal-hook = { workspace = true }
 
 [dev-dependencies]
+thruput-domain-separator = { workspace = true }
 pretty_assertions = { workspace = true }
 thruput-erc20-permit-if = { workspace = true }
 serial_test = { workspace = true }

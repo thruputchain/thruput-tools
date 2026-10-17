@@ -6,7 +6,7 @@ use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::receipt::TransactionReceipt;
 use thruput_json_rpc_types::transaction::TxHash;
 use thruput_signing::{
-    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
+    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SchemeSigner, SignTransactionParams,
     build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
     source_address_auth_claim,
 };
@@ -126,7 +126,7 @@ struct DeployPlan {
     wallet_entrypoint_source: &'static str,
     package_name: Option<String>,
     transaction: Transaction,
-    signer: LocalSigner,
+    signer: SchemeSigner,
     network_hash: NetworkHash,
 }
 
@@ -688,7 +688,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         key_name: key_name.into(),
         wallet_name: None,
         wallet_address: account.address(),
-        signer,
+        signer: signer.into(),
         network_hash: crate::account_resolution::resolve_network_hash(&profile, key_name)?,
     };
     sign_deploy_plan(prepare_deploy_transaction_plan(
@@ -1353,7 +1353,7 @@ mod tests {
     #[test]
     fn native_hog_overdraft_is_actionable_deploy_failure() {
         let abort_data = xdrs::cxs::encode(&(
-            <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+            <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR,
             thruput_erc20_if::ERC20Error::TooLarge,
         ))
         .expect("bug: ERC20 exception should encode");

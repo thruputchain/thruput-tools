@@ -8,8 +8,8 @@ use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use thruput_signing::{
-    DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams, encode_signed_transaction_xdr,
-    sign_transaction, transaction_hash,
+    DEFAULT_TX_GAS_LIMIT, SchemeSigner, SignTransactionParams, Signer as _,
+    encode_signed_transaction_xdr, sign_transaction, transaction_hash,
 };
 use thruput_xdr::transaction::Transaction;
 use thruput_xdr::types::NetworkHash;
@@ -41,7 +41,7 @@ struct PreparedTransfer {
     rpc_url_cli_override: bool,
     sender: thruput_xdr::types::ContractAddress,
     sender_wallet: Option<String>,
-    signer_public_key: thruput_xdr::types::Ed25519PublicKey,
+    signer_public_key: thruput_xdr::types::PublicKey,
     recipient_input: String,
     recipient: thruput_xdr::types::ContractAddress,
     token_address: thruput_xdr::types::ContractAddress,
@@ -59,7 +59,7 @@ struct TransferPlan {
     rpc_url_cli_override: bool,
     sender: thruput_xdr::types::ContractAddress,
     sender_wallet: Option<String>,
-    signer_public_key: thruput_xdr::types::Ed25519PublicKey,
+    signer_public_key: thruput_xdr::types::PublicKey,
     recipient_input: String,
     recipient: thruput_xdr::types::ContractAddress,
     token_address: thruput_xdr::types::ContractAddress,
@@ -68,7 +68,7 @@ struct TransferPlan {
     tx_hash: TxHash,
     expiry_height: i64,
     transaction: Transaction,
-    signer: LocalSigner,
+    signer: SchemeSigner,
     network_hash: NetworkHash,
 }
 
@@ -199,9 +199,7 @@ fn prepare_plan(
         rpc_url_cli_override: profile.rpc_url_cli_override,
         sender,
         sender_wallet: resolved_sender.wallet_name,
-        signer_public_key: thruput_xdr::types::Ed25519PublicKey::from(
-            resolved_sender.signer.verifying_key_bytes(),
-        ),
+        signer_public_key: resolved_sender.signer.public_key(),
         recipient_input: recipient_input.to_owned(),
         recipient,
         token_address,
@@ -249,7 +247,9 @@ fn print_dry_run(
     print: &Print,
 ) -> Result<(), CliError> {
     let sender = format_contract_address(&prepared.sender);
-    let signer_public_key = thruput_encoding::encode(prepared.signer_public_key.as_ref());
+    let (signer_scheme, signer_public_key) =
+        crate::keys::public_key_scheme_and_bytes(&prepared.signer_public_key);
+    let signer_public_key = thruput_encoding::encode(signer_public_key);
     let recipient = format_contract_address(&prepared.recipient);
     let token_address = format_contract_address(&prepared.token_address);
     let tx_hash = format_tx_hash(&prepared.tx_hash);
@@ -261,6 +261,7 @@ fn print_dry_run(
             prepared.amount, recipient
         ));
         print.detail("sender", &sender);
+        print.detail("signer scheme", signer_scheme);
         print.detail("signer public key", &signer_public_key);
         print.detail("raw amount", prepared.raw_amount);
         print.detail("token", &token_address);
@@ -533,6 +534,8 @@ fn report_common(
     dry_run: bool,
     submitted: bool,
 ) -> TransferReportCommon {
+    let (signer_scheme, signer_public_key) =
+        crate::keys::public_key_scheme_and_bytes(&prepared.signer_public_key);
     TransferReportCommon {
         schema_version: TRANSFER_JSON_SCHEMA_VERSION,
         profile: prepared.profile.clone(),
@@ -541,7 +544,8 @@ fn report_common(
         submitted,
         sender: prepared.sender.into(),
         sender_wallet: prepared.sender_wallet.clone(),
-        signer_public_key: prepared.signer_public_key.into(),
+        signer_scheme: signer_scheme.to_owned(),
+        signer_public_key: thruput_encoding::encode(signer_public_key),
         recipient_input: prepared.recipient_input.clone(),
         recipient: prepared.recipient.into(),
         token_address: prepared.token_address.into(),

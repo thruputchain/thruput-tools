@@ -1038,7 +1038,7 @@ mod tests {
             field("signed", ContractType::I256),
         ]);
         let spec = validated(contract_spec);
-        let encoded = xdrs::cxs::encode(&(sdk::U256::MAX, sdk::I256::MIN)).unwrap();
+        let encoded = xdrs::cxs::encode(&(thruput_sdk::U256::MAX, thruput_sdk::I256::MIN)).unwrap();
 
         let item = spec
             .decode_events(vec![identified_event(0x11, 3, encoded)])
@@ -1047,7 +1047,10 @@ mod tests {
         assert_eq!(item.decode_status, EventDecodeStatus::Decoded);
         assert_eq!(
             item.decoded.unwrap().fields["value"],
-            serde_json::json!([sdk::U256::MAX.to_string(), sdk::I256::MIN.to_string()])
+            serde_json::json!([
+                thruput_sdk::U256::MAX.to_string(),
+                thruput_sdk::I256::MIN.to_string()
+            ])
         );
     }
 

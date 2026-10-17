@@ -35,16 +35,17 @@ fn address_derivation_known_answers_at_two_nonces() {
         PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE).address();
     let address_nonce1 = PubkeyAccount::new(signer.public_key(), 1).address();
 
-    // SHA256 of the literal CXS prefix 00 0d "PubkeyAccount", followed by
-    // 00, the 32-byte public key, and the single-byte nonce (0 or 1).
+    // SHA256 of the literal CXS prefix 00 0d "PubkeyAccount", followed by the
+    // 32-byte public key hash and the single-byte nonce (0 or 1). The key hash
+    // is SHA256 of 00 09 "PublicKey", 00 (the Ed25519 scheme), and the key.
     // This is the derivation used by hogd/crypto/domain_separators.h.
     assert_eq!(
         hex::encode(address_nonce0.as_ref()),
-        "aea3c931b977bf8ef933cc134e372d0efbf4bac0e576cc117d52108c80ea3d78"
+        "a883232ca9d3061da35558a7f435575d33a13374525e2168df77f46988c01f62"
     );
     assert_eq!(
         hex::encode(address_nonce1.as_ref()),
-        "564859b1c9b7afe948a57854d8c6b45425ca1225a2170799a5a03ecfd139daef"
+        "3bbc9340a960e8cbb33ff18d046d2386c8f8ffeadb4beab916a4c2329a7ece0a"
     );
     assert_ne!(address_nonce0, address_nonce1);
 }
@@ -103,7 +104,7 @@ fn transaction_hash_vector_matches_the_server_side_hash() {
     // inner-transaction hash preimage.
     assert_eq!(
         hex::encode(tx_hash.as_ref()),
-        "6887280975556ab9649f0565a13afb9587a39208972d14632bcf6c30bffebf6f"
+        "bb473d8d146ac91c288d1509bd40aaef0748094d7880ce4153ae47bf1e5d8b65"
     );
 
     // Cross-check against the gateway-side hash: the hash the server

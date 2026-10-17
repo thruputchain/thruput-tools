@@ -33,7 +33,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.29.2"
+version = "0.31.1"
 edition = "2024"
 # Keep in step with rust-toolchain.toml. Without this, `cargo install
 # thruput-cli` on an older stable fails deep in dependency resolution with
@@ -49,6 +49,7 @@ keywords = ["thruput"]
 categories = ["development-tools"]
 
 [workspace.dependencies]
+shlex = "2"
 reqwest = "0.12"
 fs2 = "0.4"
 flate2 = "1"
@@ -59,54 +60,54 @@ zstd = "0.13"
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
-thruput-client = { path = "crates/client", version = "=0.29.2", registry = "thruput" }
-thruput-build-info = { path = "crates/build-info", version = "=0.29.2", registry = "thruput" }
-thruput-bundle-identity = { path = "crates/bundle-identity", version = "=0.29.2", registry = "thruput" }
-thruput-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.29.2", registry = "thruput" }
-thruput-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.29.2", registry = "thruput" }
-thruput-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.29.2", registry = "thruput" }
-thruput-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.29.2", registry = "thruput" }
-thruput-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.29.2", registry = "thruput" }
-thruput-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.29.2", registry = "thruput" }
-thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.29.2", registry = "thruput" }
-thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.29.2", registry = "thruput" }
-groundhog-heap-profiling = { path = "crates/heap-profiling", version = "=0.29.2" }
-thruput-signing = { path = "crates/signing", version = "=0.29.2", registry = "thruput" }
-thruput-encoding = { path = "crates/encoding", version = "=0.29.2", registry = "thruput" }
-thruput-tx-validation = { path = "crates/tx-validation", version = "=0.29.2", registry = "thruput" }
-thruput-node-supervisor = { path = "crates/node-supervisor", version = "=0.29.2", registry = "thruput" }
-thruput-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.29.2", registry = "thruput" }
-thruput-rv32-lower = { path = "crates/rv32/lower", version = "=0.29.2", registry = "thruput" }
+thruput-encoding = { path = "crates/encoding", version = "=0.31.1", registry = "thruput" }
+thruput-client = { path = "crates/client", version = "=0.31.1", registry = "thruput" }
+thruput-build-info = { path = "crates/build-info", version = "=0.31.1", registry = "thruput" }
+thruput-bundle-identity = { path = "crates/bundle-identity", version = "=0.31.1", registry = "thruput" }
+thruput-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.31.1", registry = "thruput" }
+thruput-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.31.1", registry = "thruput" }
+thruput-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.31.1", registry = "thruput" }
+thruput-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.31.1", registry = "thruput" }
+thruput-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.31.1", registry = "thruput" }
+thruput-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.31.1", registry = "thruput" }
+thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.31.1", registry = "thruput" }
+thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.31.1", registry = "thruput" }
+groundhog-heap-profiling = { path = "crates/heap-profiling", version = "=0.31.1" }
+thruput-signing = { path = "crates/signing", version = "=0.31.1", registry = "thruput" }
+thruput-tx-validation = { path = "crates/tx-validation", version = "=0.31.1", registry = "thruput" }
+thruput-node-supervisor = { path = "crates/node-supervisor", version = "=0.31.1", registry = "thruput" }
+thruput-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.31.1", registry = "thruput" }
+thruput-rv32-lower = { path = "crates/rv32/lower", version = "=0.31.1", registry = "thruput" }
 
-thruput-toolchain = { path = "crates/toolchain", version = "=0.29.2", registry = "thruput" }
-thruput-cli-macros = { path = "crates/cli-macros", version = "=0.29.2", registry = "thruput" }
+thruput-toolchain = { path = "crates/toolchain", version = "=0.31.1", registry = "thruput" }
+thruput-cli-macros = { path = "crates/cli-macros", version = "=0.31.1", registry = "thruput" }
 
 # --- Thruput (private registry) ---
 # These crates define or encode the protocol schema. Keep them exact and update
 # them as one qualified release family so published binaries cannot float to an
 # incompatible patch release.
-thruput-xdr = { version = "=0.54.1", registry = "thruput", features = ["serde", "xdrs", "schema"] }
-thruput-indexer = { version = "=0.54.1", registry = "thruput", features = ["serde"] }
-thruput-scheduler = { version = "=0.54.1", registry = "thruput" }
-thruput-db-gateway = { version = "=0.54.1", registry = "thruput" }
-thruput-view = { version = "=0.54.1", registry = "thruput" }
-thruput-scp = { version = "=0.54.1", registry = "thruput" }
-thruput-coordinator = { version = "=0.54.1", registry = "thruput" }
-thruput-trace = { version = "=0.54.1", registry = "thruput" }
+thruput-xdr = { version = "=0.56.2", registry = "thruput", features = ["serde", "xdrs", "schema"] }
+thruput-indexer = { version = "=0.56.2", registry = "thruput", features = ["serde"] }
+thruput-scheduler = { version = "=0.56.2", registry = "thruput" }
+thruput-db-gateway = { version = "=0.56.2", registry = "thruput" }
+thruput-view = { version = "=0.56.2", registry = "thruput" }
+thruput-scp = { version = "=0.56.2", registry = "thruput" }
+thruput-coordinator = { version = "=0.56.2", registry = "thruput" }
+thruput-trace = { version = "=0.56.2", registry = "thruput" }
 # The XDR codec is the exception: caret, so an xdrs patch release reaches this
-# workspace without a release here.  Cargo still resolves one 0.10.x per graph.
-xdrs = { version = "0.10.4", registry = "thruput", features = ["alloc"] }
-xdr-common = { version = "0.10.3", registry = "thruput" }
-rpc_driver = { version = "=0.13.1", registry = "thruput" }
+# workspace without a release here. Cargo resolves the protocol's 0.12.x codec.
+xdrs = { version = "0.12.0", registry = "thruput", features = ["alloc"] }
+xdr-common = { version = "0.12.0", registry = "thruput" }
+rpc_driver = { version = "=0.15.0", registry = "thruput" }
 # from the sdk crate:
-thruput-spec-tool = { version = "=0.51.1", registry = "thruput" }
-thruput-contract-util = { version = "=0.51.1", registry = "thruput" }
-thruput-domain-separator = { version = "=0.51.1", registry = "thruput" }
-thruput-contract-spec = { version = "=0.51.1", registry = "thruput" }
-thruput-u256 = { version = "=0.51.1", registry = "thruput" }
-thruput-erc20-if = { version = "=0.1.56", registry = "thruput" }
-thruput-erc20-permit-if = { version = "=0.1.56", registry = "thruput" }
-sdk = { version = "=0.51.1", registry = "thruput" }
+thruput-spec-tool = { version = "=0.52.1", registry = "thruput" }
+thruput-contract-util = { version = "=0.52.1", registry = "thruput" }
+thruput-domain-separator = { version = "=0.52.1", registry = "thruput" }
+thruput-contract-spec = { version = "=0.52.1", registry = "thruput" }
+thruput-u256 = { version = "=0.52.1", registry = "thruput" }
+thruput-erc20-if = { version = "=0.1.60", registry = "thruput" }
+thruput-erc20-permit-if = { version = "=0.1.60", registry = "thruput" }
+thruput-sdk = { version = "=0.52.1", registry = "thruput" }
 
 # --- Async ---
 async-trait = "0.1"
@@ -199,6 +200,8 @@ proc-macro-crate = "3"
 sha2 = "0.11"
 ed25519-compact = { version = "2.2", default-features = false, features = ["opt_size"] }
 ed25519-dalek = { version = "3", features = ["zeroize"] }
+# Pure ML-DSA (FIPS 204). Keys are expanded from the stored 32-byte seed.
+ml-dsa = { version = "0.1.1", default-features = false, features = ["zeroize"] }
 zeroize = "1"
 stellar-strkey = "=0.0.18"
 rpassword = "7.4"

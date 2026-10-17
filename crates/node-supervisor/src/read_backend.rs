@@ -63,6 +63,11 @@ impl fmt::Debug for HogdDevReadBackend {
 }
 
 impl HogdDevReadBackend {
+    /// Share the validated indexer connection with the chain adapter.
+    pub(crate) fn indexer_client(&self) -> &IndexerBlockExplorer_IndexerBlockExplorer1_Client {
+        &self.indexer
+    }
+
     pub(crate) fn db_gateway_client(&self) -> Option<&DbGateway_DbGateway1_Client> {
         self.db_gateway.as_ref()
     }
@@ -279,6 +284,26 @@ impl ReadPlane for HogdDevStorageReadBackend {
 
 #[async_trait]
 impl ReadPlane for HogdDevReadBackend {
+    #[tracing::instrument(skip_all, fields(?query.height))]
+    async fn transactions_by_block(
+        &self,
+        context: RpcRequestContext,
+        query: thruput_json_rpc_types::transaction::BlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        within_request_deadline(context, async {
+            let wire_query: thruput_indexer::BlockTransactionQuery = query.into();
+            let result = self
+                .indexer
+                .get_transactions_by_block(&wire_query)
+                .await
+                .map_err(|source| {
+                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
+                })?;
+            Ok(shared_indexer::transaction_ref_page(INDEXER, result)?.into())
+        })
+        .await
+    }
+
     /// Return a committed transaction receipt from the indexer, or `None` if
     /// the transaction is not (yet) committed.
     #[tracing::instrument(skip_all, fields(?tx_hash))]

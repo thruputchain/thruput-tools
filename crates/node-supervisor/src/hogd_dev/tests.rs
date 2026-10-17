@@ -63,6 +63,25 @@ fn command_shape_matches_contract() {
 }
 
 #[test]
+fn extra_args_are_appended_after_supervisor_flags() {
+    let config = HogdDevConfig::default()
+        .with_ramdb_bytes(1024)
+        .with_extra_args(["--ramdb-bytes", "4096"]);
+    let spec =
+        build_hogd_dev_spec_with_bootstrap_manifest("/tmp/hog-devnode", &config, "/tmp/b.json");
+    let args = spec.program_args();
+    assert_eq!(
+        &args[args.len() - 4..],
+        &[
+            OsString::from("--ramdb-bytes"),
+            OsString::from("1024"),
+            OsString::from("--ramdb-bytes"),
+            OsString::from("4096"),
+        ]
+    );
+}
+
+#[test]
 fn network_config_overrides_are_forwarded_in_both_launch_paths() {
     let config = HogdDevConfig::default().with_network_config_overrides(
         [

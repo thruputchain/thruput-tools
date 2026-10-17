@@ -19,6 +19,12 @@ required-features = ["entrypoints"]
 test = false
 bench = false
 
+# Per-contract settings `thruput build` reads; uncomment to override a default.
+# [package.metadata.thruput]
+# Guest data memory to declare (default 64K); the target chain's
+# `max_rv32_memory_bytes` must allow it.
+# initial_memory_bytes = "128K"
+
 # Three of these feature names are contracts with the toolchain — do not
 # rename them:
 # - `entrypoints`: the #[contract] macro keys guest entrypoint codegen on
@@ -27,18 +33,18 @@ bench = false
 # - `thruput-integration-test`: `thruput test --integration` enables it.
 [features]
 entrypoints = []
-dev = ["sdk/dev"]
+dev = ["thruput-sdk/dev"]
 thruput-integration-test = ["dep:thruput-json-rpc-client", "dep:tokio"]
 
-# `sdk` is declared per target because it needs `std` on the host and forbids
+# `thruput-sdk` is declared per target because it needs `std` on the host and forbids
 # it on the guest. Cargo resolves features per platform, so host `cargo build`
 # / `cargo check` (and rust-analyzer) see a buildable crate without `dev`
 # being a default feature, and the rv32 build stays `no_std`.
 [target.'cfg(target_arch = "riscv32")'.dependencies]
-sdk = { version = "={{SDK_VERSION}}", registry = "thruput" }
+thruput-sdk = { version = "={{SDK_VERSION}}", registry = "thruput" }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
-sdk = { version = "={{SDK_VERSION}}", registry = "thruput", features = ["std"] }
+thruput-sdk = { version = "={{SDK_VERSION}}", registry = "thruput", features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies.thruput-json-rpc-client]
@@ -47,7 +53,7 @@ registry = "thruput"
 optional = true
 
 # The self-dependency is deliberate: it turns the `dev` feature (and so
-# `sdk/dev`, the native mock executor) on for `cargo test` builds only,
+# `thruput-sdk/dev`, the native mock executor) on for `cargo test` builds only,
 # keeping the library itself no_std for guest builds.
 [dev-dependencies]
 {{PROJECT_NAME}} = { path = ".", features = ["dev"] }

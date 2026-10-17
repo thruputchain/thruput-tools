@@ -303,6 +303,15 @@ pub enum CliError {
     #[error("key `{0}` not found")]
     #[hint("list available keys with `thruput keys ls`")]
     KeyNotFound(String),
+    /// The stored key's scheme cannot be used for the requested operation.
+    #[error("key `{key_name}` uses scheme `{scheme}`, which does not support {operation}")]
+    #[hint("`thruput keys ls` shows each key's scheme; select a key whose scheme supports this")]
+    #[details(key_name, scheme, operation)]
+    KeySchemeUnsupported {
+        key_name: String,
+        scheme: String,
+        operation: String,
+    },
     #[error("key name cannot be empty")]
     #[hint(text = KEY_NAME_HINT)]
     KeyNameEmpty,

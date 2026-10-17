@@ -34,7 +34,7 @@ relevant pages or section bundle. Reading these files does not need a server.
 ## Contract layout
 
 - `src/implementation.rs`: contract state, errors, and `#[contract]` logic.
-- `src/lib.rs`: the `no_std` gate, `sdk::declare_mock_contract!()`, and re-exports.
+- `src/lib.rs`: the `no_std` gate, `thruput_sdk::declare_mock_contract!()`, and re-exports.
 - `src/main.rs`: the RV32 bin wrapper. Keep contract logic in `implementation.rs`.
 - `tests/test.rs`: host mock-executor tests.
 - `tests/test_rv32.rs`: RV32-executor tests.
@@ -60,7 +60,7 @@ check as successful. Use the project's selected network for deployment.
 
 - Keep features `entrypoints`, `dev`, and `thruput-integration-test`; the
   compiler macros, CLI, and test harness use those names.
-- Do not make `dev` a default feature: feature unification would pull `sdk/dev`
+- Do not make `dev` a default feature: feature unification would pull `thruput-sdk/dev`
   and `std` into guest builds.
 - Keep the self-referential dev-dependency
   `{{PROJECT_NAME}} = { path = ".", features = ["dev"] }` for host tests.

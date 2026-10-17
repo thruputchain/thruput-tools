@@ -3510,6 +3510,7 @@ fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
 
     thruput_cli::keys::generate(
         &Some("alice".into()),
+        thruput_cli::keys::KeyScheme::Ed25519,
         false,
         "keys.generate",
         &thruput_cli::Print::quiet(),
@@ -6755,6 +6756,94 @@ fn funding_commands_refuse_without_force_before_reading_the_profile() {
 }
 
 #[test]
+fn transfer_dry_run_signs_with_an_mldsa65_key_and_attaches_the_claim_key() {
+    use thruput_signing::Signer as _;
+
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = project.join("fixture-config");
+    std::fs::create_dir_all(&project).unwrap();
+    let generate = thruput()
+        .args(["--json", "keys", "generate", "pq", "--scheme", "mldsa65"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(generate.status.success());
+    let keyfile: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(config_home.join("thruput/keys/pq.json")).unwrap())
+            .unwrap();
+    let seed: [u8; 32] = hex::decode(keyfile["seed_hex"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let signer = thruput_signing::MlDsa65Signer::from_seed(&seed);
+    let account = thruput_signing::PubkeyAccount::new(signer.public_key(), 0);
+    let sender = thruput_encoding::encode(account.address().as_ref());
+    let recipient = thruput_encoding::encode(&[0xab; 32]);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("thruput.toml"),
+        format!(
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\
+             network_hash = \"{TEST_NETWORK_HASH}\"\ndefault_key = \"pq\"\n"
+        ),
+    )
+    .unwrap();
+
+    let output = thruput()
+        .args(["--json", "transfer", &recipient, "1", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let data = &stdout["data"];
+    assert_eq!(data["sender"], sender);
+    assert_eq!(data["signerScheme"], "mldsa65");
+    assert_eq!(
+        data["signerPublicKey"],
+        thruput_encoding::encode(signer.public_key_bytes())
+    );
+
+    let signed_tx = decode_signed_tx(data["signedTransaction"].as_str().unwrap());
+    assert_eq!(signed_tx.tx.auth_claim, account.auth_claim());
+    assert_eq!(signed_tx.pubkey_claim_key, Some(signer.public_key()));
+    let [signature] = signed_tx.signatures.0.as_slice() else {
+        panic!("pubkey claims carry exactly one signature");
+    };
+    assert_eq!(signature.public_key_id, 0);
+    let thruput_xdr::types::Signature::MlDsa65 { mldsa65 } = &signature.signature else {
+        panic!("expected an ML-DSA-65 signature");
+    };
+    let network_hash = thruput_xdr::types::NetworkHash::new(thruput_xdr::types::SHA256Hash::new(
+        thruput_encoding::decode_fixed::<32>(TEST_NETWORK_HASH).unwrap(),
+    ));
+    let preimage =
+        thruput_domain_separator::transaction_signature_preimage(&network_hash, &signed_tx.tx)
+            .unwrap();
+    assert!(thruput_signing::verify_mldsa65(
+        signer.public_key_bytes(),
+        &preimage,
+        mldsa65
+    ));
+    assert_eq!(
+        data["txHash"],
+        thruput_encoding::encode(
+            thruput_signing::transaction_hash(&signed_tx.tx)
+                .unwrap()
+                .as_ref()
+        )
+    );
+}
+
+#[test]
 fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -6792,13 +6881,14 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "transfer");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(data["schemaVersion"], 3);
+    assert_eq!(data["schemaVersion"], 4);
     assert_eq!(data["profile"], "default");
     assert_eq!(data["rpcUrl"], rpc_url);
     assert_eq!(data["dryRun"], true);
     assert_eq!(data["submitted"], false);
     assert_eq!(data["sender"], sender);
     assert_eq!(data["senderWallet"], serde_json::Value::Null);
+    assert_eq!(data["signerScheme"], "ed25519");
     assert_eq!(
         data["signerPublicKey"],
         thruput_encoding::encode(
@@ -6896,6 +6986,7 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
         &thruput_signing::derive_default_dev_account_signer(0).verifying_key_bytes(),
     );
     assert!(stderr.contains(&format!("sender: {sender}")));
+    assert!(stderr.contains("signer scheme: ed25519"));
     assert!(stderr.contains(&format!("signer public key: {public_key}")));
     assert!(stderr.contains("signed transaction can be submitted until its expiry height"));
     assert!(stderr.contains("submitted: no (--dry-run)"));
@@ -7571,7 +7662,7 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
 #[test]
 fn transfer_live_decodes_standard_exception_abort() {
     let abort_data = xdrs::cxs::encode(&(
-        <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+        <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR,
         thruput_erc20_if::ERC20Error::TooLarge,
     ))
     .expect("bug: ERC20 exception should encode");
@@ -7986,7 +8077,7 @@ fn assert_transfer_live_common(
     local_hash: &str,
     sender_wallet: Option<&str>,
 ) {
-    assert_eq!(data["schemaVersion"], 3);
+    assert_eq!(data["schemaVersion"], 4);
     assert_eq!(data["profile"], "default");
     assert!(
         data["rpcUrl"]
@@ -10658,7 +10749,7 @@ fn call_live_json_decodes_library_abort() {
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["data"]["abortData"], abort_hex);
     assert_eq!(stdout["data"]["abortException"], "LibraryExn");
-    assert_eq!(stdout["data"]["abortExceptionCrate"], "sdk");
+    assert_eq!(stdout["data"]["abortExceptionCrate"], "thruput-sdk");
     assert_eq!(stdout["data"]["abortExceptionVersion"], "1");
     assert_eq!(
         stdout["data"]["abortValue"],
@@ -10676,7 +10767,7 @@ fn call_live_json_decodes_erc20_permit_abort() {
     // No local metadata declares the exception, so it resolves through the
     // same standard-exception registry an ERC20 abort does.
     let abort_data = xdrs::cxs::encode(&(
-        <thruput_erc20_permit_if::ERC20PermitError as sdk::exn::Exn>::SELECTOR,
+        <thruput_erc20_permit_if::ERC20PermitError as thruput_sdk::exn::Exn>::SELECTOR,
         thruput_erc20_permit_if::ERC20PermitError::ExceedsGrant,
     ))
     .expect("bug: ERC20 permit exception should encode");
@@ -10759,7 +10850,7 @@ fn call_live_human_prints_decoded_abort() {
     // return data.
     assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
     assert!(
-        stderr.contains("abort type: LibraryExn (sdk, v1)"),
+        stderr.contains("abort type: LibraryExn (thruput-sdk, v1)"),
         "stderr: {stderr}"
     );
     assert!(
@@ -11107,6 +11198,87 @@ fn keys_export_rejects_missing_and_invalid_names() {
     assert!(invalid.stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
     assert_eq!(error["error"]["code"], "key_name_invalid");
+}
+
+#[test]
+fn mldsa65_keys_store_a_scheme_tagged_seed_and_derive_the_account() {
+    use thruput_signing::Signer as _;
+
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let output = thruput()
+        .args(["--json", "keys", "generate", "pq", "--scheme", "mldsa65"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let key = &report["data"]["key"];
+    assert_eq!(report["command"], "keys.generate");
+    assert_eq!(key["scheme"], "mldsa65");
+    assert!(key.get("public_key_strkey").is_none());
+
+    // The file holds only the FIPS 204 seed and cached public key, owner-only.
+    let key_path = config_home.join("thruput/keys/pq.json");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&key_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let keyfile: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
+    assert_eq!(keyfile["scheme"], "mldsa65");
+    assert!(keyfile.get("keypair_hex").is_none());
+    let seed: [u8; 32] = hex::decode(keyfile["seed_hex"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let signer = thruput_signing::MlDsa65Signer::from_seed(&seed);
+    assert_eq!(
+        keyfile["public_key_hex"],
+        hex::encode(signer.public_key_bytes())
+    );
+    let account = thruput_signing::PubkeyAccount::new(signer.public_key(), 0);
+    assert_eq!(
+        key["address"],
+        thruput_encoding::encode(account.address().as_ref())
+    );
+    assert_eq!(
+        key["public_key_hash"],
+        thruput_encoding::encode(account.public_key_hash().as_ref())
+    );
+
+    let export = thruput()
+        .args(["--json", "keys", "export", "pq", "--force"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(export.status.success());
+    let export: serde_json::Value = serde_json::from_slice(&export.stdout).unwrap();
+    assert_eq!(export["data"]["key"]["scheme"], "mldsa65");
+    assert_eq!(
+        export["data"]["key"]["privateKey"],
+        thruput_encoding::encode(&seed)
+    );
+
+    // S StrKeys are Ed25519-only.
+    let strkey = thruput()
+        .args([
+            "--json", "keys", "export", "pq", "--force", "--format", "strkey",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!strkey.status.success());
+    assert!(strkey.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&strkey.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "key_scheme_unsupported");
+    assert_eq!(error["error"]["details"]["scheme"], "mldsa65");
 }
 
 #[test]
@@ -16016,7 +16188,7 @@ fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
 
 fn sample_insufficient_funding_deploy_receipt(height: i64) -> serde_json::Value {
     let abort_data = xdrs::cxs::encode(&(
-        <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+        <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR,
         thruput_erc20_if::ERC20Error::TooLarge,
     ))
     .expect("bug: ERC20 exception should encode");

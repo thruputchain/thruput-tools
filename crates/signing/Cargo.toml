@@ -30,9 +30,12 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
 ed25519-dalek = { workspace = true }
+ml-dsa = { workspace = true }
 zeroize = { workspace = true }
 stellar-strkey = { workspace = true }
 
 [dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
 thruput-json-rpc-server = { workspace = true }
 thruput-tx-validation = { workspace = true }

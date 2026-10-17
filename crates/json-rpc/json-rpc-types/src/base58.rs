@@ -40,6 +40,7 @@ macro_rules! fixed_identifier {
 fixed_identifier!(thruput_xdr::types::SHA256Hash, 32);
 fixed_identifier!(thruput_xdr::types::ContractAddress, 32);
 fixed_identifier!(thruput_xdr::types::Ed25519PublicKey, 32);
+fixed_identifier!(thruput_xdr::types::PublicKeyHash, 32);
 fixed_identifier!(thruput_xdr::types::Ed25519Signature, 64);
 fixed_identifier!(thruput_xdr::types::StorageLongHash, 2048);
 fixed_identifier!(thruput_xdr::validator::ValidatorID, 32);

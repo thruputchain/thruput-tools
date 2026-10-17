@@ -141,12 +141,6 @@ fn sign_transaction(
     network_hash: &NetworkHash,
     signer: &impl Signer,
 ) -> Result<(TxHash, String), SigningError> {
-    if let xdr::auth_claim::AuthClaim::kPubkeySignature { pubkey_preimage } =
-        &transaction.auth_claim
-        && pubkey_preimage.pubkey != signer.public_key()
-    {
-        return Err(SigningError::SignerMismatch);
-    }
     let tx_hash = TxHash(thruput_signing::transaction_hash(&transaction)?.into());
     let tx_hex = thruput_signing::sign_and_encode_transaction_hex(
         transaction,

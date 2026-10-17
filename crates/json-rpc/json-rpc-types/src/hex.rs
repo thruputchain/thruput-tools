@@ -187,6 +187,7 @@ macro_rules! impl_try_from_slice_for {
 impl_try_from_slice_for!(thruput_xdr::types::SHA256Hash, 32);
 impl_try_from_slice_for!(thruput_xdr::types::ContractAddress, 32);
 impl_try_from_slice_for!(thruput_xdr::types::Ed25519PublicKey, 32);
+impl_try_from_slice_for!(thruput_xdr::types::PublicKeyHash, 32);
 impl_try_from_slice_for!(thruput_xdr::types::StorageLongHash, 2048);
 impl_try_from_slice_for!(thruput_xdr::validator::ValidatorID, 32);
 

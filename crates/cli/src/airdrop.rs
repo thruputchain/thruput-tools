@@ -1686,7 +1686,7 @@ mod tests {
     }
 
     fn erc20_too_large_abort() -> Vec<u8> {
-        let selector = <thruput_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR;
+        let selector = <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR;
         let mut bytes = xdrs::cxs::encode(&selector).expect("bug: selector should encode");
         bytes.extend_from_slice(
             &xdrs::cxs::encode(&thruput_erc20_if::ERC20Error::TooLarge)

@@ -586,6 +586,13 @@
         "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
         "type": "string"
       },
+      "Base58_PublicKeyHash": {
+        "description": "Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 bytes. Encoded length and alphabet alone do not validate decoded length.",
+        "maxLength": 45,
+        "minLength": 32,
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+        "type": "string"
+      },
       "Base58_SHA256Hash": {
         "description": "Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 bytes. Encoded length and alphabet alone do not validate decoded length.",
         "maxLength": 45,
@@ -713,6 +720,36 @@
           "prevBlockHash",
           "proposalTxsHash",
           "upgrades"
+        ],
+        "type": "object"
+      },
+      "BlockTransactionQuery": {
+        "additionalProperties": false,
+        "description": "Transactions in one committed block, sorted by unsigned transaction-hash\nbytes, not execution order. Height is a canonical decimal string.",
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/PaginationCursor",
+            "description": "`0x` starts a walk. Preserve returned bytes and the same height.\nA continuation cursor supplies its original order. Invalid or stale\ncursors return an empty terminal page; oversized cursors are rejected."
+          },
+          "height": {
+            "$ref": "#/components/schemas/DecimalBlockHeight"
+          },
+          "limit": {
+            "description": "Positive page size, at most 200 and subject to the endpoint cap.\nZero is invalid. Send 50 for a normal page.",
+            "format": "uint32",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "order": {
+            "$ref": "#/components/schemas/IterationOrder"
+          }
+        },
+        "required": [
+          "height",
+          "order",
+          "cursor",
+          "limit"
         ],
         "type": "object"
       },
@@ -1555,7 +1592,7 @@
             "type": "integer"
           },
           "maxTransactionsPerPage": {
-            "description": "Largest `limit` a `getTransactionsByAddress` page may ask for.",
+            "description": "Largest `limit` an address-history or block-transaction page may ask\nfor, never greater than 200.",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
@@ -1937,7 +1974,7 @@
         "type": "object"
       },
       "TransactionRefPage": {
-        "description": "`getTransactionsByAddress` response: transaction refs in the\nrequested order.\n\nOpaque cursors continue one historical walk; an empty cursor ends it.\nFor restart rules, see the\n[pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).",
+        "description": "Transaction references from an address-history or exact-block query.\nBlock queries use hash order; address queries use their history order.\n\nOpaque cursors continue one historical walk; an empty cursor ends it.\nFor restart rules, see the\n[pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).",
         "properties": {
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
@@ -2193,14 +2230,14 @@
               "nonce": {
                 "$ref": "#/components/schemas/DecimalU64"
               },
-              "publicKey": {
-                "$ref": "#/components/schemas/Base58_Ed25519PublicKey",
-                "description": "Ed25519 public key (32 bytes). This is public information, not a signature."
+              "pubkeyHash": {
+                "$ref": "#/components/schemas/Base58_PublicKeyHash",
+                "description": "Hash naming the account's public key, scheme included:\n`sha256(cxs(DomainSeparator(\"PublicKey\")) || cxs(PublicKey))`."
               }
             },
             "required": [
               "kind",
-              "publicKey",
+              "pubkeyHash",
               "nonce"
             ],
             "type": "object"
@@ -2471,7 +2508,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "12.0.0"
+    "version": "13.0.0"
   },
   "methods": [
     {
@@ -2514,7 +2551,7 @@
           "$ref": "#/components/schemas/TxHash"
         }
       },
-      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash. Transactions whose `blockExpiryHeight` is at or below the current chain tip can never commit and are rejected with `TxRejected` when the tip is available. Transactions that break an executor pre-execution bound (too many attached contracts for the chain config, an oversized contract, an RV32 artifact declaring more guest memory or code than the chain admits, or a duplicate attachment) are rejected with `TxInvalid` carrying a `TxInvalidDetail` in the error `data`.",
+      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash. A `kPubkeySignature` claim names its key by hash, so the envelope must carry the full key as `pubkey_claim_key`; it is rejected with `TxInvalid` when that key is missing, or present for any other claim. Transactions whose `blockExpiryHeight` is at or below the current chain tip can never commit and are rejected with `TxRejected` when the tip is available. Transactions that break an executor pre-execution bound (too many attached contracts for the chain config, an oversized contract, an RV32 artifact declaring more guest memory or code than the chain admits, or a duplicate attachment) are rejected with `TxInvalid` carrying a `TxInvalidDetail` in the error `data`.",
       "tags": [
         {
           "name": "Core API"
@@ -2716,9 +2753,6 @@
           "$ref": "#/components/errors/InvalidParams"
         },
         {
-          "$ref": "#/components/errors/BlockNotFound"
-        },
-        {
           "$ref": "#/components/errors/BackendUnavailable"
         },
         {
@@ -2754,7 +2788,7 @@
           ]
         }
       },
-      "summary": "Block data at a given height.",
+      "summary": "Committed block data at a nonnegative height. Returns null outside indexed coverage (including genesis); unavailable or corrupt indexes return a backend error. The index can lag behind chainTip.",
       "tags": [
         {
           "name": "Core API"
@@ -2867,6 +2901,47 @@
         }
       },
       "summary": "Paginated transaction history for a single address: refs to transactions whose root invocation targets the address, walked in the requested order. Hydrate full bodies via `getTransactionReceipt`.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_getTransactionsByBlock",
+      "params": [
+        {
+          "name": "query",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/BlockTransactionQuery"
+          }
+        }
+      ],
+      "result": {
+        "name": "TransactionRefPage",
+        "schema": {
+          "$ref": "#/components/schemas/TransactionRefPage"
+        }
+      },
+      "summary": "Transactions in one committed block, in unsigned hash order, not execution order. Returns actual indexed bounds. An empty page does not prove the block exists: use getBlockByNumber for its metadata.",
       "tags": [
         {
           "name": "Core API"
