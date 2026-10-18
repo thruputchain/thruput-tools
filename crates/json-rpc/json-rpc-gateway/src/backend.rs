@@ -83,7 +83,7 @@ impl ChainPlane for GatewayBackend {
         let context = self.bounded_context(context);
         self.with_deadline(
             context,
-            handlers::blocks::get_block_by_number(&self.ctx, height),
+            handlers::blocks::get_block_by_number(&self.ctx, context, height),
         )
         .await
     }
@@ -104,6 +104,20 @@ impl ChainPlane for GatewayBackend {
 
 #[async_trait]
 impl ReadPlane for GatewayBackend {
+    #[tracing::instrument(skip_all, fields(?query.height))]
+    async fn transactions_by_block(
+        &self,
+        context: RpcRequestContext,
+        query: thruput_json_rpc_types::transaction::BlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::transactions::get_transactions_by_block(&self.ctx, context, query),
+        )
+        .await
+    }
+
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_receipt(
         &self,

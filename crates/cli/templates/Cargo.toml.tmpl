@@ -19,6 +19,12 @@ required-features = ["entrypoints"]
 test = false
 bench = false
 
+# Per-contract settings `thruput build` reads; uncomment to override a default.
+# [package.metadata.thruput]
+# Guest data memory to declare (default 64K); the target chain's
+# `max_rv32_memory_bytes` must allow it.
+# initial_memory_bytes = "128K"
+
 # Three of these feature names are contracts with the toolchain — do not
 # rename them:
 # - `entrypoints`: the #[contract] macro keys guest entrypoint codegen on

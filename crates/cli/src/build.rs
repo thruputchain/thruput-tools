@@ -1428,6 +1428,50 @@ mod tests {
         }
     }
 
+    /// The scaffold manifest carries a commented-out
+    /// `[package.metadata.thruput]` example; uncommented, it must be a table
+    /// `thruput build` reads and a size it accepts.
+    #[test]
+    fn scaffold_manifest_memory_example_parses_when_uncommented() {
+        #[derive(serde::Deserialize)]
+        struct Manifest {
+            package: Package,
+        }
+        #[derive(serde::Deserialize)]
+        struct Package {
+            metadata: Option<super::PackageMetadata>,
+        }
+
+        // Unbraced, the `{{NAME}}` placeholders read as plain TOML keys and
+        // strings.
+        let template = include_str!("../templates/Cargo.toml.tmpl")
+            .replace("{{", "")
+            .replace("}}", "");
+        let uncommented: String = template
+            .lines()
+            .map(|line| match line.strip_prefix("# ") {
+                Some(rest)
+                    if rest == "[package.metadata.thruput]"
+                        || rest.starts_with(super::INITIAL_MEMORY_BYTES_KEY) =>
+                {
+                    rest
+                }
+                _ => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(uncommented, template, "the template lost its example");
+
+        let manifest: Manifest = toml::from_str(&uncommented).unwrap();
+        let value = manifest
+            .package
+            .metadata
+            .and_then(|metadata| metadata.thruput)
+            .and_then(|thruput| thruput.initial_memory_bytes)
+            .expect("example sets initial_memory_bytes");
+        assert_eq!(parse_initial_memory_bytes(&value), Ok(128 * 1024));
+    }
+
     #[test]
     fn guest_layout_defaults_to_the_protocol_memory_and_no_defsym() {
         let layout = GuestLayout::default();

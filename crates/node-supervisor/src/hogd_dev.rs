@@ -777,6 +777,9 @@ pub fn build_hogd_dev_spec_with_bootstrap_manifest(
         ]);
     }
 
+    // Last, so hog-devnode's last-wins parsing lets these override the flags above.
+    spec = spec.args(config.extra_args.iter().cloned());
+
     #[cfg(unix)]
     let spec = spec.process_group(0);
 

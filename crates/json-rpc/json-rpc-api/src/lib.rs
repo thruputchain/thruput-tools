@@ -23,7 +23,10 @@ use thruput_json_rpc_types::{
     receipt::TransactionReceipt,
     server_limits::ServerLimits,
     state::StorageItemRead,
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
     version::VersionInfo,
     view::{ViewBatchRequest, ViewBatchResponse, ViewRequest, ViewResponse},
 };
@@ -32,7 +35,7 @@ use thruput_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "12.0.0";
+pub const WIRE_FORMAT_VERSION: &str = "12.1.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -119,7 +122,9 @@ pub trait GroundhogApi {
     #[method(name = "networkInfo")]
     async fn network_info(&self) -> RpcResult<NetworkInfo>;
 
-    /// Block data at a given height.
+    /// Committed block data at a nonnegative height. Returns null outside
+    /// indexed coverage (including genesis); unavailable or corrupt indexes
+    /// return a backend error. The index can lag behind chainTip.
     #[method(name = "getBlockByNumber")]
     async fn get_block_by_number(
         &self,
@@ -145,6 +150,15 @@ pub trait GroundhogApi {
     async fn get_transactions_by_address(
         &self,
         query: AddressTransactionQuery,
+    ) -> RpcResult<TransactionRefPage>;
+
+    /// Transactions in one committed block, in unsigned hash order, not
+    /// execution order. Returns actual indexed bounds. An empty page does not
+    /// prove the block exists: use getBlockByNumber for its metadata.
+    #[method(name = "getTransactionsByBlock")]
+    async fn get_transactions_by_block(
+        &self,
+        query: BlockTransactionQuery,
     ) -> RpcResult<TransactionRefPage>;
 
     /// Read the latest committed storage item at an address/key pair.

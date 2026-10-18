@@ -22,6 +22,7 @@ name = "thruput"
 path = "src/main.rs"
 
 [dependencies]
+shlex = { workspace = true }
 thruput-client = { workspace = true }
 clap = { workspace = true }
 thruput-build-info = { workspace = true }
