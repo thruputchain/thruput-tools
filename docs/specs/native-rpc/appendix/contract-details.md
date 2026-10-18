@@ -11,16 +11,18 @@ design notation, and angle-bracket examples are not executable fixtures.
 
 | Decision | Selection |
 | --- | --- |
-| Method surface | Bare core names; optional faucet_/dev_ services; separate status and receipt. |
+| Method surface | 17 bare core names, including getBlockByHeight and getTransactionsByBlock; optional faucet_/dev_ services; separate status and receipt. |
+| Wire version | Native API 14.0.0; wire 13 remains the separate Base58 migration. |
+| Block reads | Metadata by blockHeight; exact-block pages use order-only start or cursor, typed cursor failures and nullable nextCursor. |
 | Address naming | Simulation/event fields use address/addresses; history and its SDK helper use getTransactionsByRootAddress, including wallet accounts. |
 | Parameters | Strict named objects. Noarg canonical {}; accept omission/[] and transport-normalized null. |
 | Encoding | Canonical case-sensitive base58 identifiers; typed C/G human-input conversion; opaque bytes remain hex. |
 | Execution | Nested receipt execution with sibling events/gas; required return/abort bytes; gas meters work. |
 | Heights | Distinct commitment, state, freshness-floor and failed-attempt fields. |
-| Discovery | Configured registration determines methods; all 15 core methods required for announcement. |
+| Discovery | Configured registration determines methods; all 17 core methods required for announcement. |
 | Errors | Separate cause, attempt admission and recovery; optional evidence-backed reasons; raw-preserving readers. |
 | Commitment | Validate log identity/height first; error observation contains only hash/height; Rust and TS retain commitment. |
-| History | Start/cursor exclusivity, query binding and fixed watermark; fail closed; candidate cap/direct seek in scope. |
+| History | Exclusive start/cursor; ranges fix a watermark, block pages fix block identity; fail closed; candidate cap/direct seek in scope. |
 | Funding | One SDK faucet call, then read-only waiting for a pending hash. Durable recovery and richer outcomes follow. |
 
 Keep existing SDK assertTransactionSuccess, waitForExecution and prepareTransaction
@@ -420,7 +422,7 @@ The result contains transaction references, not bodies. Use `getTransactionsByRo
 
 ### History integrity
 
-The full announced application profile requires both history methods. Partial developer endpoints may omit them; the full application profile cannot.
+The full announced application profile requires event/root-address history and the block reads below. Partial developer endpoints may omit them; the full application profile cannot.
 
 1. Invalid/malformed/unsupported cursors and predicate mismatch are typed protocol/indexer outcomes, mapped to invalidCursor/-32602. Binding includes method and canonical decoded query, excludes page size, remains backend-owned and fits the 256-byte cap. It prevents accidental mismatch, not malicious token forgery. A gateway must not decode cursor internals.
 2. Check RocksDB iterator status, malformed in-range keys, every missing/unreadable/undecodable linked hydration row, out-of-range event position and malformed projection. Fail whole page with typed error and no successful cursor/exhaustion. Current atomic/no-pruning indexing gives no legitimate missing-linked-row exception. Cover events and root-address history, plus malformed receipt/single/batch simulation events.
@@ -439,6 +441,86 @@ SDK history walkers must freeze predicates and initial W, handle empty nontermin
 Incoming-native-transfer recipe: query the native-token address, canonical Transfer signature topic0 and destination address bytes as 32-byte hex topic2. Reuse generated typed topic helpers and test address-to-topic conversion. Generated signature leaves two indexed value positions. Transfer events are not full balance history. Freeze token event/error signature identity at 0.1 and `groundhog-erc20-if` for this release; a package 0.2/1 bump changes it even with the label pinned. Run the existing native/RV32 parity test with exact candidate pins. Independent event-version controls can follow. See [signature derivation](https://github.com/thruputchain/thruput-sdk-rs/blob/12337492533acfa45a475cabc5af88ffe456559d/crates/macros/src/derive_event.rs#L298-L313) and [native/RV32 parity coverage](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_exec/contract_tests/native_rv32_token_event_parity_test.cc#L371-L419).
 
 Sources: [indexer scan/cursor](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L2090-L2214), [cursor seeking](https://github.com/thruputchain/hogd/blob/15d536912ebe70dae5a9b4b471440b928a6f365c/hogd/hog_indexer/db.cc#L1861-L1885), [indexer protocol](https://github.com/thruputchain/thruput-protocol/blob/af043b5c1983c0c8b44683975a3c389369844e09/indexer.x#L229-L259), and [RocksDB iterator errors](https://github.com/facebook/rocksdb/wiki/Iterator).
+
+## Committed block reads
+
+Wire 14 includes both implemented block capabilities. `getBlockByHeight` replaces
+`groundhog_getBlockByNumber`; `getTransactionsByBlock` drops its old prefix.
+Both take one strict named object. Heights use `blockHeight` consistently.
+
+```ts
+type BlockQuery = { blockHeight: Height };
+type BlockInfo = {
+  blockHash: Hash;
+  protocol: U32;             // existing numeric consensus protocol identifier
+  networkHash: Hash;
+  configHash: Hash;
+  proposer: string;          // base58 validator public key, existing protocol width
+  blockTimepoint: string;    // canonical u64 decimal, Unix nanoseconds
+  blockHeight: Height;
+  txsHash: Hash;
+  storageHash: Hash;
+  eventsHash: Hash;
+  prevBlockHash: Hash;
+  proposalTxsHash: Hash;
+  upgrades: Hex[];           // opaque serialized protocol upgrades
+};
+type BlockResult = BlockInfo | null;
+type BlockPageRequest = { blockHeight: Height } & (
+  | { start: { order: "ascending" | "descending" }; cursor?: never; limit?: U32 }
+  | { cursor: Cursor; start?: never; limit?: U32 }
+);
+type BlockTransactionPage = TransactionRefPage;
+```
+
+Preserve the existing metadata projection and consensus hash meanings. Typed
+hashes and the proposer use canonical Base58; upgrades remain hex. `txsHash`
+and `proposalTxsHash` are distinct protocol commitments, not arrays of transaction
+hashes. `blockHash` is the hash of the complete canonical consensus value.
+Unsupported consensus extensions or inconsistent projections fail as
+`backendDataInvalid`; do not silently discard committed fields. The requested
+height must match the returned metadata.
+
+Block coverage begins at height 1. Genesis has no complete stored consensus
+value in this projection. A metadata request for height 0 or beyond authoritative
+coverage returns null; an initial page request returns an empty terminal page
+with authoritative block-query bounds. An empty block within coverage also has
+an empty terminal page, so page emptiness alone does not prove absence or
+existence. Unavailable, rebuilding or corrupt indexes return errors, not null or
+empty success. Preserve the current strict-index readiness checks.
+
+Require exactly one of start or nonempty cursor; reject null, empty cursors,
+unknown fields and an anchor inside start. Repeat blockHeight on continuation.
+Default limit is 50; require `1 <= limit <= maxTransactionsPerPage <= 200` and
+apply the advertised decoded-byte cursor cap. Page size may change on continuation.
+The cursor binds the method/version, blockHeight, canonical blockHash, direction
+and last hash position; the backend owns it. Different valid internal order
+placeholders cannot change continuation behavior. No gateway cursor decoding.
+
+Return strictly ordered, unique references for exactly the requested height,
+using decoded unsigned hash bytes. No execution-order promise. Keep membership,
+bounds, page-size and cursor-progress validation. Invalid storage or projections
+fail the whole page without a successful checkpoint. Map malformed/unsupported
+cursors and query/block-identity mismatch to `invalidCursor` (-32602), with an
+optional supported reason. Do not preserve the current terminal-empty fallback.
+A valid continuation against an indexer below the target height returns
+`historyUnavailable` (-32013, without inventing a new reason); authoritative pruning
+uses `outsideRetention`. An outage remains `backendUnavailable`.
+
+Unlike a range-history walk, the fixed target is this block, not the tip at the
+first request. Bounds report current block-query coverage and may differ from
+event-history bounds. Do not require a continuation server to reach an unrelated
+initial tip W when it already serves the target block. SDK walkers retain height,
+direction and the opaque cursor, enforce progress/order across pages, and complete
+only at nextCursor null. They must not emit a whole-chain completed-through
+checkpoint from one block's completion.
+
+Sources: [metadata projection](https://github.com/thruputchain/thruput-tools/blob/25c7f14733eea6428ce07a5d08530df1d90b4bda/crates/json-rpc/json-rpc-types/src/block.rs),
+[shared block validation](https://github.com/thruputchain/thruput-tools/blob/25c7f14733eea6428ce07a5d08530df1d90b4bda/crates/json-rpc/json-rpc-server/src/block_queries.rs),
+[backend block queries](https://github.com/thruputchain/hogd/blob/df49fbbe5600b388d200e8ac85ec588ef6897d17/hogd/hog_indexer/block_queries.cc),
+and [protocol outcomes](https://github.com/thruputchain/thruput-protocol/blob/b60a5a68d21a0e99d108f9e3e4db24f2f41c26a4/indexer.x#L204-L259).
+These sources implement the existing block capability; named requests and typed
+cursor failures above are target behavior, not a claim that they have shipped.
 
 ## Discovery and configuration
 
@@ -463,7 +545,7 @@ type NetworkInfo = { networkHash: Hash };
 type ChainTip = { blockHeight: Height; blockHash: Hash };
 ```
 
-Generate sorted, unique `supportedMethods` from actual configured registration, excluding stubs. Keep it stable through transient outages. A full-service endpoint advertises all 15 core methods; optional service methods appear only when configured. No backend fan-out is needed to answer discovery.
+Generate sorted, unique `supportedMethods` from actual configured registration, excluding stubs. Keep it stable through transient outages. A full-service endpoint advertises all 17 core methods; optional service methods appear only when configured. No backend fan-out is needed to answer discovery.
 
 | Configured source | Methods |
 | --- | --- |
@@ -473,6 +555,7 @@ Generate sorted, unique `supportedMethods` from actual configured registration, 
 | Indexer | getTransactionReceipt |
 | Indexer + scheduler | getTransactionStatus |
 | Qualified indexer history | getEvents, getTransactionsByRootAddress |
+| Qualified indexer block projection | getBlockByHeight, getTransactionsByBlock |
 | View backend | simulateInvocation, simulateInvocations |
 | Local scheduler | dev_getPendingTransactionCount |
 | Hosted faucet REST adapter | faucet_requestAirdrop |
@@ -488,7 +571,7 @@ Cache discovery per client/transport instance; validate new instances and expose
 
 App proxies expose getVersionInfo/getNetworkInfo, advertise upstream support intersected with policy, accept named objects, preserve bounded typed errors and return -32601 for filtered methods. HTTP authentication/rate limiting is separate. Static SDK capabilities express expectations; unavailable optional methods fail locally. Test [Counter](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/counter/server/http.ts), [swap](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/swap/server/http.ts) and [token-launchpad](https://github.com/thruputchain/thruput-examples/blob/c8ba8730d0d06e027dc939afb5974e32992f264f/apps/token-launchpad/server/http.ts) independently, preserving their write policies. Shared helpers are optional.
 
-New SDK versions target the native API only. New output variants are minor additions only after supported readers demonstrate safe raw/unsupported fallback; otherwise they require a major. The planning target is `>=13.0.0 <14.0.0`, conditional on the coordinated major and demonstrated minor-version reader compatibility. If that major already identifies a different published contract, choose the next coordinated major. Diagnostic implementation/release versions never select codecs. A new optional request field or enum variant is not automatically supported by an older server in the same major: gate it by observed wire minor or raise the SDK's minimum required minor. If the caller explicitly requests an unsupported feature, fail locally as unsupported; never silently drop that constraint. Test new-client/old-server and old-client/new-server directions, including strict unknown-field rejection; `supportedMethods` alone does not negotiate parameter support.
+New SDK versions target the native API only. New output variants are minor additions only after supported readers demonstrate safe raw/unsupported fallback; otherwise they require a major. The native contract is wire `14.0.0`; SDKs target `>=14.0.0 <15.0.0` after demonstrating minor-version reader compatibility. Wire 13 identifies the separate Base58 migration and must not be reused for this incompatible surface. Diagnostic implementation/release versions never select codecs. A new optional request field or enum variant is not automatically supported by an older server in the same major: gate it by observed wire minor or raise the SDK's minimum required minor. If the caller explicitly requests an unsupported feature, fail locally as unsupported; never silently drop that constraint. Test new-client/old-server and old-client/new-server directions, including strict unknown-field rejection; `supportedMethods` alone does not negotiate parameter support.
 
 The public `networkHash` binds signing identity. It does not currently prove a particular reset/instance or provide a genesis descriptor. Do not add invented `genesisHash`, `chainInstanceId`, protocol version or native network label. A required verified instance identifier would be useful, but needs a runtime/bootstrap contract and explicit reset behavior.
 
@@ -735,7 +818,7 @@ These are native error allocations, not EIP-1474 compatibility. Optional funding
 
 Standard `-32700`, `-32600`, `-32601` and `-32603` retain parse-error, invalid-request, method-not-found and internal-error meanings. These and framework/transport failures need not carry our typed data. Do not use internal-error as a substitute for an already identified backend-data failure.
 
-Retire `-32003` (old local funding unresolved) without reuse. Retire the application meanings of `-32002` (transaction not found), `-32010` (block not found) and `-32052` (registered stub). Do not reassign them to new application errors. Successful receipt absence remains null, status misses remain `unknown`, and unsupported methods are unregistered and return `-32601`. Required advertised methods with a temporary failed backend return a backend error. Deferred block methods need a separate contract before future delivery.
+Retire `-32003` (old local funding unresolved) without reuse. Retire the application meanings of `-32002` (transaction not found), `-32010` (block not found) and `-32052` (registered stub). Do not reassign them to new application errors. Successful receipt absence remains null, status misses remain `unknown`, and unsupported methods are unregistered and return `-32601`. Required advertised methods with a temporary failed backend return a backend error. Block metadata misses use null; exact-block pages follow the coverage rules below the block types. Do not restore the retired application block-not-found code.
 
 #### Why freshness needs a new code
 
@@ -803,7 +886,7 @@ Those existing bound quantities are u32 JSON numbers; new 64-bit-or-wider quanti
 }
 ```
 
-History bounds are optional and must come from authoritative observations for that query. A valid cursor can refer to history that has been pruned; that is unavailable history, not malformed input. An indexer outage remains backendUnavailable. An explicit anchor above the current serving tip still follows the proposed boundary rules: ascending exhausts, descending starts at the tip. Do not introduce a rangeNotIndexed error that changes those rules. None of these errors permits silent restart, gap skipping or checkpoint advancement.
+History bounds are optional and must come from authoritative observations for that query. A valid cursor can refer to history that has been pruned; that is unavailable history, not malformed input. An indexer outage remains backendUnavailable. For event/root-address range history, an explicit anchor above the current serving tip follows the boundary rules: ascending exhausts, descending starts at the tip. Do not introduce a rangeNotIndexed error that changes those rules. Exact-block reads use the separate coverage and continuation rules in [Committed block reads](#committed-block-reads). None of these errors permits silent restart, gap skipping or checkpoint advancement.
 
 #### Compatibility and implementation gates
 

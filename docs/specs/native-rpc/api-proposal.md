@@ -1,6 +1,6 @@
 # Native Thruput JSON-RPC API specification
 
-**Agreed target contract, 15 October 2026.** This specifies the API to implement,
+**Agreed target contract, updated 18 October 2026.** This specifies the API to implement,
 not current server behaviour. Implementation status is tracked in Linear.
 
 Read the method map and conventions here, then the
@@ -15,7 +15,8 @@ familiar names and calling patterns where they fit.
 
 Submission, commitment and execution are separate. Simulation discards writes
 and needs no footprint preparation. Gas meters work rather than burning tokens.
-The new surface requires a coordinated wire major and matching SDK.
+The native surface uses wire **14.0.0** and a matching SDK. Wire 13 is the
+separate Base58 migration of the existing API.
 
 ## Complete method map
 
@@ -41,16 +42,17 @@ wrapper. Types and defaults are defined in the [contract appendix](appendix/cont
 | `getAddressAuthData` | `getRegisteredAuth` | `{ address }` | `{ address, stateBlockHeight, configuration }`; configuration can be `null` |
 | `getEvents` | `getEvents` | `{ filters, start?, cursor?, limit? }` | Events, indexed bounds and nullable `nextCursor` |
 | `getTransactionsByAddress` | `getTransactionsByRootAddress` | `{ address, start?, cursor?, limit? }` | Root-target transaction references, indexed bounds and nullable `nextCursor` |
+| `getBlockByNumber` | `getBlockByHeight` | `{ blockHeight }` | Committed block metadata or `null` outside indexed coverage |
+| `getTransactionsByBlock` | `getTransactionsByBlock` | `{ blockHeight, start?, cursor?, limit? }` | Exact-block transaction references, indexed bounds and nullable `nextCursor` |
 | `requestAirdrop` | `faucet_requestAirdrop` | `{ recipient, clientNonce }` | Existing pending/succeeded funding-attempt semantics |
 | `fundAccount` | `dev_fundAccount` | `{ recipient, rawAmount, clientNonce, faucet }` | Retained transaction hash and signed submission evidence |
 | `pendingTransactionCount` | `dev_getPendingTransactionCount` | `{}` | `{ count }`; local implementation only |
-| `getBlockByNumber` | Deferred | None | Outside this native method set; current-wire block work is separate |
 
-The first 15 methods form the full application endpoint. Optional services and
+The first 17 methods form the full application endpoint. Optional services and
 partial developer endpoints advertise only configured, implemented methods.
 Temporary outages do not change getVersionInfo.supportedMethods.
 
-Block/detail reads, combined getTransaction, transaction preparation, fee
+Transaction body/envelope reads, combined getTransaction, transaction preparation, fee
 estimation, public health, account nonce and confirmation levels are out of
 scope. Firehose remains separate. Existing SDK prepareTransaction stays: it
 assembles a transaction, not a footprint or gas estimate.
@@ -199,7 +201,7 @@ wallet-wrapped root where relevant and leave headroom for work outside simulatio
 
 ## History and pagination
 
-Both history methods require exactly one of start or a nonempty cursor. Repeat
+Event and root-address history require exactly one of start or a nonempty cursor. Repeat
 predicates on continuation; page size may change within the advertised bound.
 Cursors bind the query and fix its upper watermark. Only nextCursor: null means
 exhaustion; empty pages can have a continuation. Event scans cap examined
@@ -224,6 +226,53 @@ It is not causal order or base58 string order.
 The SDK walker checkpoints the initial watermark W only after processing all
 pages through exhaustion. Data errors or serving height below W fail the walk.
 Cross-reset recovery and cancellation remain follow-ups.
+
+## Read a committed block
+
+`getBlockByHeight({ blockHeight })` returns committed metadata, including its
+canonical hash, parent hash, protocol, timestamp and consensus commitments.
+It does not return transaction bodies. Indexed coverage starts at height 1;
+height 0 and heights beyond coverage return `null`. Backend failures are errors.
+
+`getTransactionsByBlock` pages through one height in decoded transaction-hash
+order, not execution order. Repeat `blockHeight` on every call. Start with
+`start: { order: "ascending" }` (or `"descending"`); continue with a nonempty
+`cursor` and no `start`. There is no range anchor for an exact-block query.
+The default limit is 50; the maximum is the advertised transaction-page cap,
+which cannot exceed 200. Only `nextCursor: null` ends the walk.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "getTransactionsByBlock",
+  "params": {
+    "blockHeight": "812",
+    "start": { "order": "ascending" },
+    "limit": 50
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "result": {
+    "transactions": [{ "transactionHash": "<base58-body-hash>", "blockHeight": "812" }],
+    "nextCursor": null,
+    "oldestIndexedBlockHeight": "1",
+    "latestIndexedBlockHeight": "814"
+  }
+}
+```
+
+A cursor binds the height, committed block identity and direction. Malformed or
+mismatched cursors fail explicitly. A replacement indexer behind the requested
+block returns an availability error on continuation. An empty initial page does
+not prove that a block exists; use `getBlockByHeight`. See the
+[block contract](appendix/contract-details.md#committed-block-reads) for fields,
+coverage and integrity rules.
 
 ## Errors and recovery
 
