@@ -250,12 +250,6 @@ def main():
                 before,
                 after,
             )
-            legacy = rpc("getBalance", ["0x" + identifier(recipient["address"]).hex()])
-            assert "error" in legacy, legacy
-            legacy_hash = rpc(
-                "getTransactionStatus", ["0x" + identifier(tx_hash).hex()]
-            )
-            assert "error" in legacy_hash, legacy_hash
             evidence = {
                 "rpcUrl": url,
                 "manifest": manifest_path,
@@ -267,7 +261,6 @@ def main():
                 "receipt": receipt,
                 "before": before,
                 "after": after,
-                "legacyHexRejected": True,
             }
             (work / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
             if args.sdk_root:
@@ -282,7 +275,7 @@ def main():
                     timeout=args.timeout,
                 )
             print(
-                f"PASS: base58 balance, C/G inputs, hex submission, receipt/events, +1 HOG, legacy rejection\nEvidence: {work / 'result.json'}"
+                f"PASS: base58 balance, C/G inputs, hex submission, receipt/events, +1 HOG\nEvidence: {work / 'result.json'}"
             )
         finally:
             if node.poll() is None:

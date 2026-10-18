@@ -487,7 +487,7 @@ fn collect_archive_files(data_dir: &Path) -> Result<Vec<(String, PathBuf)>, CliE
         != Some(5)
     {
         return Err(archive_io(
-            "old local state requires the previous runtime and tooling".into(),
+            "unsupported local state schema; start a fresh node in a new data directory".into(),
         ));
     }
     let mut files = vec![(DATA_DIR_METADATA.to_owned(), metadata)];

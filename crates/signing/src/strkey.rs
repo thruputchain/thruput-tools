@@ -29,10 +29,7 @@ pub fn parse_contract_address(value: &str) -> Result<ContractAddress, Error> {
 pub fn format_contract_address(address: &ContractAddress) -> String {
     let mut bytes = [0; 32];
     bytes.copy_from_slice(address.as_ref());
-    stellar_strkey::Contract(bytes)
-        .to_string()
-        .as_str()
-        .to_owned()
+    thruput_encoding::address_strkey(&bytes)
 }
 
 /// Parse a G `StrKey` or base58 public key. Does not derive an account address.
@@ -42,10 +39,7 @@ pub fn parse_public_key(value: &str) -> Result<[u8; 32], Error> {
 
 /// Encode raw Ed25519 public key bytes as a G `StrKey`, not a wallet address.
 pub fn format_public_key(key: &[u8; 32]) -> String {
-    stellar_strkey::ed25519::PublicKey(*key)
-        .to_string()
-        .as_str()
-        .to_owned()
+    thruput_encoding::public_key_strkey(key)
 }
 
 /// Parse an S `StrKey` or base58 seed of exactly 32 bytes. Secret buffers are zeroed on drop.
@@ -56,8 +50,5 @@ pub fn parse_secret_seed(value: &str) -> Result<Zeroizing<[u8; 32]>, Error> {
 
 /// Explicitly export a private seed as an S `StrKey`. The returned buffer is zeroed on drop.
 pub fn format_secret_seed(seed: &[u8; 32]) -> Zeroizing<String> {
-    let key = stellar_strkey::ed25519::PrivateKey(*seed);
-    let mut encoded = Zeroizing::default();
-    key.as_unredacted().write_string(&mut encoded);
-    Zeroizing::new(encoded.as_str().to_owned())
+    thruput_encoding::secret_seed_strkey(seed)
 }

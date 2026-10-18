@@ -9646,7 +9646,7 @@ fn balance_json_rejects_malformed_address_target_before_rpc() {
     .unwrap();
 
     let output = thruput()
-        .args(["--json", "balance", "0xdeadbeef"])
+        .args(["--json", "balance", "Cinvalid"])
         .current_dir(&project)
         .output()
         .unwrap();
@@ -9656,7 +9656,7 @@ fn balance_json_rejects_malformed_address_target_before_rpc() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["command"], "balance");
     assert_eq!(stderr["error"]["code"], "invalid_address_target");
-    assert_eq!(stderr["error"]["details"]["target"], "0xdeadbeef");
+    assert_eq!(stderr["error"]["details"]["target"], "Cinvalid");
     assert!(
         stderr["error"]["hint"]
             .as_str()
@@ -9953,14 +9953,7 @@ fn contract_command_preserves_prefixed_address_validation_error() {
     let key = format!("0x{}", "42".repeat(32));
     let (rpc_url, rpc_server) = spawn_no_request_rpc();
     let output = thruput()
-        .args([
-            "--json",
-            "storage",
-            "0xdeadbeef",
-            &key,
-            "--rpc-url",
-            &rpc_url,
-        ])
+        .args(["--json", "storage", "Cinvalid", &key, "--rpc-url", &rpc_url])
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -9970,7 +9963,7 @@ fn contract_command_preserves_prefixed_address_validation_error() {
     assert!(output.stdout.is_empty());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["error"]["code"], "invalid_address_target");
-    assert_eq!(stderr["error"]["details"]["target"], "0xdeadbeef");
+    assert_eq!(stderr["error"]["details"]["target"], "Cinvalid");
     assert!(
         stderr["error"]["details"]["message"]
             .as_str()
@@ -12709,7 +12702,7 @@ fn tx_list_rejects_invalid_limit_and_cursor_before_rpc() {
 fn tx_list_rejects_address_resolution_failures_before_rpc() {
     for (target, expected_code) in [
         ("missing\n\u{1b}[31m", "unknown_address_target"),
-        ("0xdeadbeef", "invalid_address_target"),
+        ("Cinvalid", "invalid_address_target"),
     ] {
         let tmp = TempDir::new().unwrap();
         let (rpc_url, rpc_server) = spawn_no_request_rpc();

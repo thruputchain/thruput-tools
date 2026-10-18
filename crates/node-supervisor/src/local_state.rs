@@ -221,7 +221,7 @@ fn read_chain_metadata(dir: &Path) -> Result<Option<ChainMetadata>, NodeSupervis
     if envelope.schema_version != 5 {
         return Err(state_error(
             &path,
-            "old local state requires its previous runtime and tooling; choose a new data directory for this version",
+            "unsupported local state schema; choose a new data directory for this version",
         ));
     }
     let metadata: ChainMetadata =
@@ -689,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn unidentified_and_legacy_state_fail_before_credential_creation() {
+    fn unsupported_state_fails_before_credential_creation() {
         for version in [1, 2, 3] {
             let dir = tempfile::tempdir().unwrap();
             let config = config(dir.path());
@@ -699,7 +699,7 @@ mod tests {
             )
             .unwrap();
             let error = preflight_state_version(&config).unwrap_err();
-            assert!(error.to_string().contains("previous runtime and tooling"));
+            assert!(error.to_string().contains("unsupported local state schema"));
             assert!(!dir.path().join(LOCAL_FAUCET_KEY_FILE).exists());
         }
         let dir = tempfile::tempdir().unwrap();

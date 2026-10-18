@@ -659,7 +659,7 @@ pub enum CliError {
     },
     #[error("local runtime for `{key_name}` is unavailable: {message}")]
     #[hint(
-        "use a current local runtime manifest; old local state requires the previous runtime and tooling"
+        "use a current local runtime manifest; start a fresh node if local state uses an unsupported schema"
     )]
     LocalRuntimeUnavailable {
         /// Account role or key whose runtime metadata was requested.

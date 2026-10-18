@@ -328,12 +328,9 @@ fn saved_wallet_owner_public_key_invalid(key_name: &str, message: impl Into<Stri
     }
 }
 
-/// Recognize base58 addresses and explicit typed/legacy prefixes for useful errors.
+/// Recognize base58 addresses and explicitly typed contract addresses.
 pub(crate) fn looks_like_address_literal(value: &str) -> bool {
-    value.starts_with("0x")
-        || value.starts_with("0X")
-        || value.starts_with('C')
-        || codec::parse_contract_address(value).is_ok()
+    value.starts_with('C') || codec::parse_contract_address(value).is_ok()
 }
 
 /// Resolve a saved wallet, contract alias, direct address, or named key account.
@@ -356,9 +353,7 @@ fn resolve_address_target_with_keys(
     if let Some(address) = profile.contracts.get(target) {
         return parse_target_address(target, address);
     }
-    let literal_error = if looks_like_address_literal(target)
-        || (target.len() == 64 && target.bytes().all(|byte| byte.is_ascii_hexdigit()))
-    {
+    let literal_error = if looks_like_address_literal(target) {
         match parse_target_address(target, target) {
             Ok(address) => return Ok(address),
             Err(error) => Some(error),
@@ -450,7 +445,7 @@ pub(crate) fn resolve_local_bootstrap_account(
     {
         return Err(local_runtime_error(
             key_name,
-            "local funding requires a schema 5 local runtime; old state requires the previous runtime and tooling",
+            "local funding requires a schema 5 local runtime; start a fresh node with matching tooling",
         ));
     }
     let mut accounts = manifest
@@ -608,7 +603,7 @@ mod tests {
     #[test]
     fn address_target_rejects_malformed_prefixed_address() {
         let error =
-            resolve_address_target(&test_profile("alice", None, BTreeMap::new()), "0xdeadbeef")
+            resolve_address_target(&test_profile("alice", None, BTreeMap::new()), "Cinvalid")
                 .expect_err("bug: malformed direct address should fail");
 
         assert_eq!(error.code(), "invalid_address_target");
@@ -661,13 +656,13 @@ mod tests {
     fn contract_target_preserves_direct_address_validation() {
         let profile = test_profile("alice", None, BTreeMap::new());
 
-        let error = resolve_contract_target(&profile, "0xdeadbeef")
+        let error = resolve_contract_target(&profile, "Cinvalid")
             .expect_err("bug: malformed direct address should fail");
 
         assert_eq!(error.code(), "invalid_address_target");
         assert_eq!(
             error.details_json().expect("details expected")["target"],
-            "0xdeadbeef"
+            "Cinvalid"
         );
     }
 

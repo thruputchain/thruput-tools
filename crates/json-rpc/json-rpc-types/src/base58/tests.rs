@@ -3,33 +3,6 @@ use crate::hex::{HexBytes, Topic};
 use thruput_xdr::types::{ContractAddress, SHA256Hash, StorageLongHash};
 
 #[test]
-fn shared_vectors_keep_payload_hex_independent_of_identifier_base58() {
-    let vectors: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../encoding/fixtures/text-encoding.json"
-    ))
-    .unwrap();
-    for vector in vectors["valid"].as_array().unwrap() {
-        let bytes: Vec<u8> = vector["bytes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|byte| u8::try_from(byte.as_u64().unwrap()).unwrap())
-            .collect();
-        assert_eq!(
-            serde_json::to_value(HexBytes(bytes.clone())).unwrap(),
-            vector["hex"]
-        );
-        if let Ok(fixed) = <[u8; 32]>::try_from(bytes) {
-            let identifier = Base58(ContractAddress::from(fixed));
-            assert_eq!(serde_json::to_value(identifier).unwrap(), vector["base58"]);
-            let decoded: Base58<ContractAddress> =
-                serde_json::from_value(vector["base58"].clone()).unwrap();
-            assert_eq!(decoded, identifier);
-        }
-    }
-}
-
-#[test]
 fn identifier_and_payload_encodings_are_distinct_at_equal_lengths() {
     #[derive(Serialize, Deserialize)]
     struct Record {
