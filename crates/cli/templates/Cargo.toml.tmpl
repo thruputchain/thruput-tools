@@ -19,12 +19,10 @@ required-features = ["entrypoints"]
 test = false
 bench = false
 
-# Guest data memory (stack, statics and heap) the contract declares; 64K when
-# unset. `thruput build` links and stamps the artifact with this size. A chain
-# admits the contract only if its `max_rv32_memory_bytes` is at least this
-# large (64K unless the chain's configuration raises it). Takes an integer or
-# a string such as "128K" or "0x20000".
+# Per-contract settings `thruput build` reads; uncomment to override a default.
 # [package.metadata.thruput]
+# Guest data memory to declare (default 64K); the target chain's
+# `max_rv32_memory_bytes` must allow it.
 # initial_memory_bytes = "128K"
 
 # Three of these feature names are contracts with the toolchain — do not
