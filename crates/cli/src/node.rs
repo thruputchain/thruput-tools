@@ -594,6 +594,9 @@ struct StartupWallet {
     address: String,
     has_initial_allocation: bool,
     funding_hint: Option<String>,
+    /// Set when the profile still selects a saved wallet this key cannot sign
+    /// for; commands that use the default wallet keep resolving that wallet.
+    default_wallet_warning: Option<String>,
 }
 
 fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, CliError> {
@@ -609,8 +612,22 @@ fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, C
         )
     };
     // Saved wallets bind Ed25519 owners only, so a profile's default wallet
-    // never belongs to another scheme's key: report that key's own account.
+    // never belongs to another scheme's key: report that key's own account,
+    // and warn that the profile's default wallet still governs other commands.
+    let mut default_wallet_warning = None;
     let (name, address) = if crate::keys::ed25519_public_key_bytes(&public_key).is_none() {
+        match crate::config::resolve_profile(&std::env::current_dir()?, None) {
+            Ok(profile) => {
+                if let Some(wallet) = profile.default_wallet {
+                    default_wallet_warning = Some(format!(
+                        "Profile `{}` selects default wallet `{wallet}`, a saved Ed25519 wallet that key `{key}` cannot sign for, so commands that use the default wallet fail with saved_wallet_owner_mismatch. To use `{key}`'s own account, remove `default_wallet` from the profile or run `thruput wallet rm {wallet}`.",
+                        profile.name
+                    ));
+                }
+            }
+            Err(CliError::NoActiveProfile) => {}
+            Err(error) => return Err(error),
+        }
         default_account(public_key)
     } else {
         match crate::config::resolve_profile(&std::env::current_dir()?, None) {
@@ -647,6 +664,7 @@ fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, C
         address,
         has_initial_allocation,
         funding_hint,
+        default_wallet_warning,
     }))
 }
 
@@ -705,6 +723,9 @@ fn print_started_local_node(
                 );
                 if let Some(hint) = wallet.funding_hint {
                     print.note(hint);
+                }
+                if let Some(warning) = wallet.default_wallet_warning {
+                    print.warn(warning);
                 }
             }
             Ok(None) => {}

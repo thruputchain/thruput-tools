@@ -1983,6 +1983,21 @@ fn node_keeps_an_mldsa65_default_key_selected_and_explains_funding() {
                 .is_some_and(|hint| hint.contains("thruput airdrop")),
             "{wallet}"
         );
+        // The saved Ed25519 default wallet still governs later commands, so
+        // startup says it must be cleared before the ML-DSA key is usable.
+        let warning = &wallet["defaultWalletWarning"];
+        if with_saved_wallet {
+            let warning = warning.as_str().expect("bug: warning should be reported");
+            for expected in [
+                "`owned`",
+                "saved_wallet_owner_mismatch",
+                "thruput wallet rm owned",
+            ] {
+                assert!(warning.contains(expected), "{warning}");
+            }
+        } else {
+            assert_eq!(*warning, serde_json::Value::Null, "{wallet}");
+        }
     }
 }
 
@@ -14235,7 +14250,7 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["command"], "token.transfers");
-    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["schemaVersion"], 4);
     assert_eq!(stdout["data"]["tokenInput"], token);
     assert_eq!(stdout["data"]["tokenAddress"], token);
     assert!(stdout["data"]["participantFilter"].is_null());
@@ -14393,7 +14408,15 @@ fn token_transfers_maps_directional_filters_and_cursor_to_one_query() {
 
         assert!(output.status.success());
         let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(stdout["data"]["participantFilter"]["kind"], filter_kind);
+        let filter = &stdout["data"]["participantFilter"];
+        assert_eq!(filter["kind"], filter_kind);
+        if filter_kind == "fromTo" {
+            assert_eq!(filter["fromInput"], from);
+            assert_eq!(filter["from"], from);
+            assert_eq!(filter["toInput"], to);
+            assert_eq!(filter["to"], to);
+            assert!(filter.get("from_input").is_none(), "{filter}");
+        }
     }
 }
 
@@ -16422,7 +16445,7 @@ fn issuer_token_movements_count_clawback_once() {
     let records = report["data"]["records"].as_array().unwrap();
     assert_eq!(movements.len(), 4);
     assert_eq!(records.len(), movements.len());
-    assert_eq!(report["data"]["schemaVersion"], 3);
+    assert_eq!(report["data"]["schemaVersion"], 4);
     for ((record, original), amount) in records.iter().zip(&movements).zip(["100", "25", "5", "7"])
     {
         for field in ["contractAddress", "topics", "data"] {

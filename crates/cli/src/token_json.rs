@@ -5,11 +5,15 @@ use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 
 use crate::events_json::RawEventReport;
 
-pub const TOKEN_TRANSFERS_JSON_SCHEMA_VERSION: u32 = 3;
+pub const TOKEN_TRANSFERS_JSON_SCHEMA_VERSION: u32 = 4;
 
 /// Effective participant constraint for a token-transfer query.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum TokenParticipantFilter {
     From {
         input: String,

@@ -779,10 +779,10 @@ thruput node -v
 RUST_LOG=thruput_node_supervisor=debug,hogd_dev=debug thruput node
 ```
 
-`thruput node --json` emits the startup payload with a connectable `rpc_url`,
-the actual `rpc_listen_address`, hog-devnode backend planes, endpoint metadata,
+`thruput node --json` emits the startup payload with a connectable `rpcUrl`,
+the actual `rpcListenAddress`, hog-devnode backend planes, endpoint metadata,
 and the public allocations, selected wallet, and setup direction for scripting. When the listener uses a
-wildcard address, `rpc_url` uses loopback in the same address family. Stdout is
+wildcard address, `rpcUrl` uses loopback in the same address family. Stdout is
 reserved for this startup payload in JSON mode.
 Operational logs go to stderr, and `--verbose` is honored in JSON mode.
 `--rpc-max-connections` controls the public JSON-RPC simultaneous connection
