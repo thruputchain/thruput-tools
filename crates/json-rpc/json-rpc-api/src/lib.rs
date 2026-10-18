@@ -4,6 +4,7 @@
 //! `GroundhogApiServer`. The client crate uses `GroundhogApiClient`.
 
 pub use thruput_json_rpc_types as types;
+pub mod params;
 
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;

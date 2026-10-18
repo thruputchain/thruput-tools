@@ -22,8 +22,11 @@ use syn::{
 ///
 /// # Arguments
 ///
-/// - `namespace` (required) -- the method prefix, e.g. `"groundhog"`.
+/// - `namespace` (optional; omit for bare names) -- the method prefix, e.g. `"groundhog"`.
 /// - `tag` (optional) -- grouping label applied to every method.
+/// - `params = "object"` -- describe the fields of a single request DTO directly,
+///   with `paramStructure` and `x-params-schema`. This changes documentation only;
+///   use whole-object dispatch/client adapters instead of the generated transport.
 ///
 /// # Example
 ///
@@ -51,6 +54,28 @@ pub fn open_rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(e) => return e.into_compile_error().into(),
     };
 
+    if args.object_params {
+        for item in &item_trait.items {
+            if let TraitItem::Fn(method) = item
+                && extract_method_name(&method.attrs).is_some()
+                && method
+                    .sig
+                    .inputs
+                    .iter()
+                    .filter(|a| matches!(a, FnArg::Typed(_)))
+                    .count()
+                    != 1
+            {
+                return syn::Error::new_spanned(
+                    &method.sig,
+                    "object params require exactly one request DTO \
+                     (use an empty struct for noarg methods)",
+                )
+                .into_compile_error()
+                .into();
+            }
+        }
+    }
     let companion = generate_companion(&item_trait, &args, &open_rpc_path);
 
     let mut output = quote! { #item_trait };
@@ -65,11 +90,13 @@ pub fn open_rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
 struct OpenRpcArgs {
     namespace: String,
     tag: Option<String>,
+    object_params: bool,
 }
 
 fn parse_open_rpc_args(tokens: TokenStream2) -> syn::Result<OpenRpcArgs> {
     let mut namespace: Option<String> = None;
     let mut tag: Option<String> = None;
+    let mut object_params = false;
 
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("namespace") {
@@ -80,21 +107,25 @@ fn parse_open_rpc_args(tokens: TokenStream2) -> syn::Result<OpenRpcArgs> {
             let value: LitStr = meta.value()?.parse()?;
             tag = Some(value.value());
             Ok(())
+        } else if meta.path.is_ident("params") {
+            let value: LitStr = meta.value()?.parse()?;
+            if value.value() != "object" {
+                return Err(meta.error("expected params = \"object\""));
+            }
+            object_params = true;
+            Ok(())
         } else {
-            Err(meta.error("expected `namespace` or `tag`"))
+            Err(meta.error("expected `namespace`, `tag` or `params`"))
         }
     });
 
     syn::parse::Parser::parse2(parser, tokens)?;
 
-    let namespace = namespace.ok_or_else(|| {
-        syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "`namespace` argument is required",
-        )
-    })?;
-
-    Ok(OpenRpcArgs { namespace, tag })
+    Ok(OpenRpcArgs {
+        namespace: namespace.unwrap_or_default(),
+        tag,
+        object_params,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +152,11 @@ fn generate_companion(
         })
         .filter_map(|method| {
             let rpc_name = extract_method_name(&method.attrs)?;
-            let full_name = format!("{namespace}_{rpc_name}");
+            let full_name = if namespace.is_empty() {
+                rpc_name
+            } else {
+                format!("{namespace}_{rpc_name}")
+            };
             let summary = extract_doc_summary(&method.attrs);
             let open_rpc_path = open_rpc_path.clone();
             let tag_tokens = if let Some(t) = &args.tag {
@@ -132,27 +167,7 @@ fn generate_companion(
                 quote! { vec![] }
             };
 
-            // Build param descriptors (skip &self)
-            let param_pushes: Vec<TokenStream2> = method
-                .sig
-                .inputs
-                .iter()
-                .filter_map(|arg| {
-                    if let FnArg::Typed(pat_type) = arg {
-                        let name = pat_to_name(&pat_type.pat);
-                        let ty = &*pat_type.ty;
-                        let open_rpc_path = open_rpc_path.clone();
-                        Some(quote! {
-                            params.push({
-                            let generator = builder.generator();
-                            #open_rpc_path::param_descriptor::<#ty>(generator, #name)
-                            });
-                        })
-                    } else {
-                        None // skip self
-                    }
-                })
-                .collect();
+            let params_tokens = generate_params(&method.sig, args.object_params, &open_rpc_path);
 
             // Extract return type: unwrap RpcResult<T> -> T
             let result_type = extract_result_type(&method.sig.output);
@@ -166,8 +181,7 @@ fn generate_companion(
             let open_rpc_path = open_rpc_path.clone();
 
             Some(quote! {
-                let mut params = Vec::new();
-                #(#param_pushes)*
+                #params_tokens
                 let result = {
                     let generator = builder.generator();
                     #open_rpc_path::result_descriptor::<#result_type>(generator, #result_name)
@@ -177,6 +191,7 @@ fn generate_companion(
                     summary: #summary_tokens,
                     tags: #tag_tokens,
                     params,
+                    named_params,
                     result,
                 });
             })
@@ -195,6 +210,48 @@ fn generate_companion(
                 #(#method_stmts)*
             }
         }
+    }
+}
+
+fn generate_params(
+    signature: &syn::Signature,
+    object_params: bool,
+    open_rpc_path: &TokenStream2,
+) -> TokenStream2 {
+    if object_params {
+        let request = signature
+            .inputs
+            .iter()
+            .find_map(|arg| match arg {
+                FnArg::Typed(arg) => Some(&arg.ty),
+                FnArg::Receiver(_) => None,
+            })
+            .expect("bug: object request arity was checked");
+        return quote! {
+            let (params, named_params) =
+                #open_rpc_path::named_params::<#request>(builder.generator());
+            let named_params = Some(named_params);
+        };
+    }
+
+    let param_pushes = signature.inputs.iter().filter_map(|arg| {
+        if let FnArg::Typed(pat_type) = arg {
+            let name = pat_to_name(&pat_type.pat);
+            let ty = &*pat_type.ty;
+            Some(quote! {
+                params.push({
+                    let generator = builder.generator();
+                    #open_rpc_path::param_descriptor::<#ty>(generator, #name)
+                });
+            })
+        } else {
+            None // skip self
+        }
+    });
+    quote! {
+        let mut params = Vec::new();
+        #(#param_pushes)*
+        let named_params = None;
     }
 }
 
