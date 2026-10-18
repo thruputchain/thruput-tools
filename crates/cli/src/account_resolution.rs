@@ -284,15 +284,10 @@ fn resolve_saved_wallet_for_public_key(
     let expected_owner = crate::keys::ed25519_public_key_bytes(expected_public_key);
     let mut matches = Vec::new();
     for (wallet_name, wallet) in &profile.wallets {
-        match parse_owner_public_key(wallet_name, &wallet.owner_public_key) {
-            Ok(owner_public_key)
-                if expected_owner
-                    .is_some_and(|expected| owner_public_key.as_slice() == expected.as_slice()) =>
-            {
-                matches.push((wallet_name, wallet));
-            }
-            // Neither another owner nor invalid metadata establishes a match.
-            Ok(_) | Err(_) => {}
+        let owner_public_key = parse_owner_public_key(wallet_name, &wallet.owner_public_key)?;
+        if expected_owner.is_some_and(|expected| owner_public_key.as_slice() == expected.as_slice())
+        {
+            matches.push((wallet_name, wallet));
         }
     }
     let [(_, wallet)] = matches.as_slice() else {
@@ -733,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn non_dev_key_uses_owner_match_despite_unrelated_malformed_wallet() {
+    fn automatic_selection_rejects_unreadable_owner_even_with_a_valid_match() {
         let signer = thruput_signing::derive_default_dev_account_signer(0);
         let wallet_address = thruput_xdr::types::ContractAddress::from([0x84; 32]);
         let mut wallets = BTreeMap::new();
@@ -757,11 +752,50 @@ mod tests {
         );
         let profile = test_profile("alice", None, wallets);
 
-        let resolved = resolve_wallet_selection(&profile, "alice", &signer, None)
-            .expect("bug: unrelated malformed wallet should not hide owner match")
-            .1;
+        let error = resolve_wallet_selection(&profile, "alice", &signer, None)
+            .expect_err("unreadable owner must not hide a potential matching wallet");
+        assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
+        assert_eq!(error.details_json().unwrap()["keyName"], "broken");
+    }
 
-        assert_eq!(resolved, wallet_address);
+    #[test]
+    fn incompatible_saved_owner_cannot_fall_back_to_nonce_zero() {
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let owner = signer.verifying_key_bytes();
+        let native = thruput_signing::PubkeyAccount::from_public_key_bytes(owner, 17);
+        for (kind, account_nonce, address) in [
+            (
+                crate::config::WalletKind::DevWallet,
+                None,
+                thruput_xdr::types::ContractAddress::from([0x81; 32]),
+            ),
+            (
+                crate::config::WalletKind::Native,
+                Some(17),
+                native.address(),
+            ),
+        ] {
+            let binding = SavedWalletBinding {
+                kind,
+                account_nonce,
+                address: encode(address.as_ref()),
+                owner_public_key: encode(&owner),
+            };
+            let mut profile =
+                test_profile("alice", None, BTreeMap::from([("trading".into(), binding)]));
+            assert_eq!(
+                resolve_wallet_selection(&profile, "alice", &signer, None)
+                    .unwrap()
+                    .1,
+                address
+            );
+            profile.wallets.get_mut("trading").unwrap().owner_public_key =
+                format!("0x{}", hex::encode(owner));
+            let error = resolve_wallet_selection(&profile, "alice", &signer, None)
+                .expect_err("incompatible saved owner must require configuration repair");
+            assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
+            assert_eq!(error.details_json().unwrap()["keyName"], "trading");
+        }
     }
 
     #[test]
@@ -1048,7 +1082,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_selection_ignores_malformed_owner_public_key() {
+    fn automatic_selection_rejects_malformed_owner_public_key() {
         let signer = thruput_signing::derive_default_dev_account_signer(0);
         let wallet_address = thruput_xdr::types::ContractAddress::from([0x41; 32]);
         let mut profile = test_profile("alice", None, BTreeMap::new());
@@ -1062,9 +1096,9 @@ mod tests {
             },
         );
 
-        let (name, address) = resolve_wallet_selection(&profile, "alice", &signer, None).unwrap();
-        assert!(name.is_none());
-        assert_eq!(address, default_native_account(&signer).address());
+        let error = resolve_wallet_selection(&profile, "alice", &signer, None)
+            .expect_err("unreadable owner must not select a different sender");
+        assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
     }
 
     #[test]

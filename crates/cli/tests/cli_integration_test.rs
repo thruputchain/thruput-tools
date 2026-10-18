@@ -6181,9 +6181,9 @@ fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again(
             spawn_balance_then_chain_tip_rpc(&faucet_wallet, "100000000000", 42);
         let unrelated = if conflicting_name {
             format!(
-                "\n[profile.default.wallets.alice]\naddress = '0x{}'\nowner_public_key = '0x{}'\n",
-                "ab".repeat(32),
-                "cd".repeat(32)
+                "\n[profile.default.wallets.alice]\naddress = '{}'\nowner_public_key = '{}'\n",
+                thruput_encoding::encode(&[0xab; 32]),
+                thruput_encoding::encode(&[0xcd; 32])
             )
         } else {
             String::new()
@@ -6855,9 +6855,9 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     std::fs::write(
         project.join("thruput.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient}\"\nowner_public_key = \"0x{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient}\"\nowner_public_key = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy(),
-            "cd".repeat(32),
+            thruput_encoding::encode(&[0xcd; 32]),
         ),
     )
     .unwrap();
@@ -7367,7 +7367,11 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
         .unwrap();
     assert!(!invalid.status.success());
     let error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
-    assert_eq!(error["error"]["code"], "missing_network_hash");
+    assert_eq!(
+        error["error"]["code"],
+        "saved_wallet_owner_public_key_invalid"
+    );
+    assert_eq!(error["error"]["details"]["keyName"], "broken-wallet");
 
     std::fs::write(
         project.join("thruput.toml"),
