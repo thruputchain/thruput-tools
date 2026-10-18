@@ -517,8 +517,12 @@ fn every_scaffold_dependency_name_is_reserved() {
 
 fn assert_reserved_dependency(name: &str) {
     let tmp = TempDir::new().unwrap();
+    let project_name = name.replace('_', "-");
+    let error = thruput_cli::scaffold::generate(tmp.path(), &project_name, Some("counter"))
+        .expect_err("template dependencies must be reserved project names");
     assert!(
-        thruput_cli::scaffold::generate(tmp.path(), name, Some("counter")).is_err(),
-        "template dependency `{name}` is not a reserved project name"
+        error.to_string().contains("already a dependency"),
+        "{project_name}: {error}"
     );
+    assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 0);
 }

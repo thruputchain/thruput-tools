@@ -76,7 +76,12 @@ const RUST_KEYWORDS: &[&str] = &[
 /// A project named after one of these declares the same extern name twice.
 /// `every_scaffold_dependency_name_is_reserved` in `tests/scaffold_test.rs`
 /// keeps this in step with the template.
-const SCAFFOLD_DEPENDENCIES: &[&str] = &["thruput_json_rpc_client", "thruput_sdk", "tokio"];
+const SCAFFOLD_DEPENDENCIES: &[&str] = &[
+    "serde_json",
+    "thruput_json_rpc_client",
+    "thruput_sdk",
+    "tokio",
+];
 
 /// Subdirectories Cargo creates under `target/<triple>/<profile>`.
 ///
