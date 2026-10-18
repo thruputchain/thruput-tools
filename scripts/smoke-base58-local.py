@@ -272,7 +272,7 @@ def main():
             (work / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
             if args.sdk_root:
                 subprocess.run(
-                    ["npm", "run", "test:integration"],
+                    ["npm", "run", "test:integration:cli-transfer"],
                     cwd=args.sdk_root.resolve(strict=True),
                     env={
                         **env,
