@@ -377,7 +377,10 @@ mod tests {
                         }
                     };
                     assert_eq!(request["method"], "groundhog_getTransactionStatus");
-                    assert_eq!(request["params"][0].as_str().unwrap().len(), 66);
+                    serde_json::from_value::<thruput_json_rpc_types::transaction::TxHash>(
+                        request["params"][0].clone(),
+                    )
+                    .expect("lookup request must contain a valid transaction hash");
                     peak.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
                     let index = seen.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(45)).await;

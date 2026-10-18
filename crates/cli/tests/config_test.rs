@@ -1488,6 +1488,12 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
 
     let local = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(local.rpc_url.as_deref(), Some("http://127.0.0.1:9999"));
+    for name in ["local", "devnet"] {
+        let profile = thruput_cli::config::resolve_profile(tmp.path(), Some(name)).unwrap();
+        let address = thruput_signing::strkey::parse_contract_address(&profile.contracts["HOG"])
+            .expect("initialized HOG alias must resolve");
+        assert_eq!(address, thruput_signing::NATIVE_HOG_ADDRESS);
+    }
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains("plugin = \"keep\""));
 

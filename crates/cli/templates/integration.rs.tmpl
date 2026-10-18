@@ -71,13 +71,9 @@ mod live {
     }
 
     fn assert_contract_address(address: &str) {
-        let hex = address
-            .strip_prefix("0x")
-            .unwrap_or_else(|| panic!("contract address is missing its 0x prefix: {address}"));
-        assert_eq!(hex.len(), 64, "contract address must contain 32 bytes");
-        assert!(
-            hex.bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "contract address contains non-hex characters: {address}"
-        );
+        serde_json::from_value::<thruput_json_rpc_client::types::ContractAddress>(
+            serde_json::Value::String(address.to_owned()),
+        )
+        .expect("contract address must be base58 encoding of 32 bytes");
     }
 }

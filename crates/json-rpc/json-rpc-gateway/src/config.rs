@@ -478,7 +478,7 @@ impl GatewayConfig {
         manifest: &RuntimeManifest,
     ) -> Result<(), RuntimeManifestConfigError> {
         let expected_schema = match manifest.kind.as_str() {
-            HOSTED_DEVNET_RUNTIME_MANIFEST_KIND => 3,
+            HOSTED_DEVNET_RUNTIME_MANIFEST_KIND => 4,
             _ => thruput_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION,
         };
         if manifest.schema_version != expected_schema {
@@ -909,7 +909,7 @@ network_hash = "0x1234"
             "viewGateway": "127.0.0.1:1003",
         }));
         manifest.kind = "hosted-devnet-runtime".into();
-        manifest.schema_version = 3;
+        manifest.schema_version = 4;
         manifest.bootstrap_account_derivation = Some(
             serde_json::from_value(json!({
                 "scheme": "groundhog-bootstrap-account-v1", "seed": "hosted-test-fixtures"
@@ -917,6 +917,11 @@ network_hash = "0x1234"
             .expect("bug: hosted derivation fixture should parse"),
         );
         manifest.chain_state = None;
+
+        let manifest = thruput_json_rpc_types::runtime_manifest::parse_runtime_manifest(
+            &serde_json::to_vec(&manifest).unwrap(),
+        )
+        .expect("bug: hosted manifest should pass the startup parser");
 
         config
             .apply_runtime_manifest(&manifest)
