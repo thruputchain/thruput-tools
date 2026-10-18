@@ -2,7 +2,7 @@
 //! `chainConfig` read instead of fetching a tip each time, and the
 //! background task that keeps it current.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -63,7 +63,10 @@ pub(crate) struct TipCache {
 
 #[derive(Debug)]
 struct TipCacheInner {
-    state: tokio::sync::Mutex<TipCacheState>,
+    // Every submission reads this cache. Critical sections only inspect or
+    // replace a small snapshot and never await. A synchronous lock avoids
+    // handing each contended read through Tokio's FIFO task wakeup queue.
+    state: Mutex<TipCacheState>,
     /// Signalled when a probe finishes, whatever its outcome, so cold-cache
     /// waiters can re-read the state.
     probe_done: tokio::sync::watch::Sender<()>,
@@ -74,7 +77,7 @@ impl Default for TipCache {
         let (probe_done, _) = tokio::sync::watch::channel(());
         Self {
             inner: Arc::new(TipCacheInner {
-                state: tokio::sync::Mutex::default(),
+                state: Mutex::default(),
                 probe_done,
             }),
         }
@@ -127,10 +130,19 @@ pub(crate) struct TipRead {
 }
 
 impl TipCache {
+    fn lock_state(&self) -> MutexGuard<'_, TipCacheState> {
+        // This is advisory state: retaining the last snapshot after a panic
+        // is preferable to failing every subsequent transaction submission.
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Record a reading obtained by any path, restarting the reuse window
     /// when it is the newest.
-    pub(crate) async fn store(&self, reading: TipState) {
-        let mut state = self.inner.state.lock().await;
+    pub(crate) fn store(&self, reading: TipState) {
+        let mut state = self.lock_state();
         if state.record(reading) {
             state.last_attempt = Some(Instant::now());
         }
@@ -144,8 +156,8 @@ impl TipCache {
     /// never falls back to an older reading, and it ages the reading itself
     /// rather than the last attempt, so a backend that has been failing for
     /// an hour cannot present an hour-old price as current.
-    pub(crate) async fn fresh(&self, window: Duration) -> Option<TipState> {
-        let state = self.inner.state.lock().await;
+    pub(crate) fn fresh(&self, window: Duration) -> Option<TipState> {
+        let state = self.lock_state();
         let at = state.reading_at?;
         if Instant::now().duration_since(at) >= window {
             return None;
@@ -170,7 +182,7 @@ impl TipCache {
         // `None` when it claimed the window itself. Decided under the lock
         // and released before any await, since the probe locks again.
         let waiter = {
-            let mut state = self.inner.state.lock().await;
+            let mut state = self.lock_state();
             match state.last_attempt {
                 Some(at) if now.duration_since(at) < window => {
                     if state.reading.is_some() || !state.in_flight {
@@ -198,7 +210,7 @@ impl TipCache {
         // for itself, so it counts as probed.
         let _ = tokio::time::timeout(probe_timeout, probe_done.changed()).await;
         TipRead {
-            state: self.inner.state.lock().await.reading.clone(),
+            state: self.lock_state().reading.clone(),
             probed: true,
         }
     }
@@ -220,7 +232,7 @@ impl TipCache {
             None => None,
         };
         let state = {
-            let mut state = self.inner.state.lock().await;
+            let mut state = self.lock_state();
             match &outcome {
                 Some(Ok(Ok(reading))) => {
                     state.record(TipState::from_reading(reading));
@@ -322,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn an_overlapping_fetch_that_lands_late_does_not_lower_the_tip() {
         let cache = TipCache::default();
-        cache.store(TipState::from_reading(&tip_reading(10))).await;
+        cache.store(TipState::from_reading(&tip_reading(10)));
 
         let read = cache
             .reading(
@@ -335,24 +347,24 @@ mod tests {
 
         assert!(read.probed);
         assert_eq!(read.state.map(|tip| tip.height), Some(10));
-        cache.store(TipState::from_reading(&tip_reading(9))).await;
+        cache.store(TipState::from_reading(&tip_reading(9)));
         assert_eq!(
-            cache.fresh(Duration::from_mins(1)).await.map(|t| t.height),
+            cache.fresh(Duration::from_mins(1)).map(|t| t.height),
             Some(10)
         );
     }
 
-    #[tokio::test]
-    async fn fresh_declines_a_reading_that_has_lapsed() {
+    #[test]
+    fn fresh_declines_a_reading_that_has_lapsed() {
         let cache = TipCache::default();
-        cache.store(TipState::from_reading(&tip_reading(4))).await;
+        cache.store(TipState::from_reading(&tip_reading(4)));
 
         assert!(
-            cache.fresh(Duration::from_mins(1)).await.is_some(),
+            cache.fresh(Duration::from_mins(1)).is_some(),
             "a reading inside the window is served without a probe"
         );
         assert!(
-            cache.fresh(Duration::ZERO).await.is_none(),
+            cache.fresh(Duration::ZERO).is_none(),
             "a lapsed reading is withheld so the caller reads the tip itself"
         );
     }
@@ -363,7 +375,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_failing_probe_does_not_make_a_stale_reading_look_fresh() {
         let cache = TipCache::default();
-        cache.store(TipState::from_reading(&tip_reading(7))).await;
+        cache.store(TipState::from_reading(&tip_reading(7)));
 
         for _ in 0..4 {
             tokio::time::advance(Duration::from_secs(10)).await;
@@ -392,14 +404,93 @@ mod tests {
             "the advisory path still falls back to the last reading"
         );
         assert!(
-            cache.fresh(Duration::from_secs(30)).await.is_none(),
+            cache.fresh(Duration::from_secs(30)).is_none(),
             "but the reading is 40s old, and a recent failed attempt is not a recent reading"
         );
     }
 
-    #[tokio::test]
-    async fn fresh_is_none_until_a_reading_lands() {
+    #[test]
+    fn fresh_is_none_until_a_reading_lands() {
         let cache = TipCache::default();
-        assert!(cache.fresh(Duration::from_mins(1)).await.is_none());
+        assert!(cache.fresh(Duration::from_mins(1)).is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_cold_readers_share_one_probe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = TipCache::default();
+        let probes = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut readers = tokio::task::JoinSet::new();
+        for _ in 0..128 {
+            let cache = cache.clone();
+            let probes = probes.clone();
+            let release = release.clone();
+            readers.spawn(async move {
+                cache
+                    .reading(
+                        Duration::from_mins(1),
+                        Duration::from_secs(5),
+                        RpcRequestContext::unbounded(),
+                        |_| async {
+                            probes.fetch_add(1, Ordering::SeqCst);
+                            release.notified().await;
+                            Ok(tip_reading(42))
+                        },
+                    )
+                    .await
+            });
+        }
+        // A stored permit also works if the probe has not yet reached its
+        // await. All other readers either wait for it or reuse its result.
+        release.notify_one();
+        while let Some(read) = readers.join_next().await {
+            assert_eq!(read.unwrap().state.unwrap().height, 42);
+        }
+        assert_eq!(probes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_cold_probe_does_not_stall_later_refreshes() {
+        let cache = TipCache::default();
+        let probe_cache = cache.clone();
+        let (started, observed) = tokio::sync::oneshot::channel();
+        let probe = tokio::spawn(async move {
+            probe_cache
+                .reading(
+                    Duration::from_secs(10),
+                    Duration::from_secs(2),
+                    RpcRequestContext::unbounded(),
+                    |_| async {
+                        started.send(()).unwrap();
+                        std::future::pending().await
+                    },
+                )
+                .await
+        });
+        observed.await.unwrap();
+        probe.abort();
+        assert!(probe.await.unwrap_err().is_cancelled());
+        let read = cache
+            .reading(
+                Duration::from_secs(10),
+                Duration::from_secs(2),
+                RpcRequestContext::unbounded(),
+                |_| async { panic!("cancelled probe still owns the reuse window") },
+            )
+            .await;
+        assert!(read.state.is_none());
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let read = cache
+            .reading(
+                Duration::from_secs(10),
+                Duration::from_secs(2),
+                RpcRequestContext::unbounded(),
+                |_| async { Ok(tip_reading(43)) },
+            )
+            .await;
+        assert!(read.probed);
+        assert_eq!(read.state.unwrap().height, 43);
     }
 }

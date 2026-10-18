@@ -352,7 +352,7 @@ where
         self.within_request_deadline(context, async {
             let reading = self.chain.chain_tip(context).await?;
             // Every fetched tip refreshes the pre-check cache, config included.
-            self.tip_cache.store(TipState::from_reading(&reading)).await;
+            self.tip_cache.store(TipState::from_reading(&reading));
             Ok(reading.tip)
         })
         .await
@@ -367,7 +367,7 @@ where
             // funding decision needs. Anything else reads the tip now, so a
             // backend failure surfaces instead of a lapsed price being
             // served from the cache.
-            if let Some(state) = self.tip_cache.fresh(self.tip_reuse_window()).await
+            if let Some(state) = self.tip_cache.fresh(self.tip_reuse_window())
                 && let Some(stated) = state.params
                 && let Some(execution) = state.execution
             {
@@ -380,7 +380,7 @@ where
             let reading = self.chain.chain_tip(context).await?;
             let stated = NetworkConfigParams::from_network_config(&reading.network_config)
                 .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
-            self.tip_cache.store(TipState::from_reading(&reading)).await;
+            self.tip_cache.store(TipState::from_reading(&reading));
             let mut config = thruput_json_rpc_types::network_config::ChainConfig::from(stated);
             config.execution = reading.execution;
             Ok(config)
