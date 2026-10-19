@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import {
   createThruputClient,
-  hashFromHex,
+  addressFromBase58,
+  hashFromBase58,
   localnet,
 } from "@thruputchain/client";
 
@@ -24,9 +25,7 @@ export async function readDeployment() {
     !config ||
     typeof config !== "object" ||
     typeof config.contractAddress !== "string" ||
-    !/^0x[0-9a-f]{64}$/.test(config.contractAddress) ||
     typeof config.txHash !== "string" ||
-    !/^0x[0-9a-f]{64}$/.test(config.txHash) ||
     typeof config.rpcUrl !== "string" ||
     !URL.canParse(config.rpcUrl) ||
     !["http:", "https:"].includes(new URL(config.rpcUrl).protocol)
@@ -34,6 +33,14 @@ export async function readDeployment() {
     throw new Error(
       "Invalid saved deployment. Run npm run contract:deploy again.",
     );
+  try {
+    addressFromBase58(config.contractAddress);
+    hashFromBase58(config.txHash);
+  } catch {
+    throw new Error(
+      "Invalid saved deployment. Run npm run contract:deploy again.",
+    );
+  }
   return config;
 }
 
@@ -43,7 +50,7 @@ export async function checkDeployment(config) {
     const client = await createThruputClient({
       cluster: localnet({ rpcUrl: config.rpcUrl }),
     });
-    receipt = await client.getTransactionReceipt(hashFromHex(config.txHash));
+    receipt = await client.getTransactionReceipt(hashFromBase58(config.txHash));
   } catch (error) {
     throw new Error(
       `Could not check the saved deployment: ${error.message}. Run thruput node in another terminal and check the saved RPC endpoint.`,

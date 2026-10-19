@@ -175,7 +175,7 @@ try {
   );
   await writeFile(
     deploymentPath,
-    JSON.stringify({ ...deployment, txHash: `0x${"00".repeat(32)}` }),
+    JSON.stringify({ ...deployment, txHash: "1".repeat(32) }),
   );
   const staleDeployment = start(process.execPath, ["scripts/dev.mjs"]);
   assert.notEqual(await staleDeployment.closed, 0);

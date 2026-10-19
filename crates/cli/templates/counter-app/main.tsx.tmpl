@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   gasAmount,
-  toHex0x,
+  toBase58,
   TransactionObservationError,
 } from "@thruputchain/client";
 import { Counter } from "./generated/counter";
@@ -92,7 +92,7 @@ function App() {
       setMessage("");
       setError(
         cause instanceof TransactionObservationError
-          ? `Confirmation unknown for ${toHex0x(cause.txHash)}. Inspect this transaction before submitting again.`
+          ? `Confirmation unknown for ${toBase58(cause.txHash)}. Inspect this transaction before submitting again.`
           : cause instanceof Error
             ? cause.message
             : "The operation failed.",
@@ -141,7 +141,7 @@ function App() {
           <div>
             <dt>Temporary wallet</dt>
             <dd data-testid="wallet-address">
-              {toHex0x(session.wallet.account.address)}
+              {toBase58(session.wallet.account.address)}
             </dd>
           </div>
         </dl>
