@@ -1,3 +1,6 @@
+/// Additive native error contracts; serving wire-13 errors remain below.
+pub mod native;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
