@@ -39,18 +39,13 @@ impl GatewayBackend {
         context: RpcRequestContext,
         future: impl Future<Output = Result<T, RpcServerError>>,
     ) -> Result<T, RpcServerError> {
-        let remaining = context
-            .remaining()
-            .expect("bug: bounded gateway request context should have a deadline");
-        tokio::time::timeout(remaining, future)
-            .await
-            .map_err(|_| RpcServerError::BackendTimeout)?
+        context.within_deadline(future).await?
     }
 }
 
 #[async_trait]
 impl SubmitPlane for GatewayBackend {
-    #[tracing::instrument(skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
+    #[tracing::instrument(level = "debug", skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
     async fn submit_raw_transaction(
         &self,
         context: RpcRequestContext,
@@ -132,7 +127,7 @@ impl ReadPlane for GatewayBackend {
         .await
     }
 
-    #[tracing::instrument(skip_all, fields(?tx_hash))]
+    #[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,
         context: RpcRequestContext,

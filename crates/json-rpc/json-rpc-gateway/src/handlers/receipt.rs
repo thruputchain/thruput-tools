@@ -81,7 +81,7 @@ impl<T: Send + 'static> Drop for SchedulerLookupGuard<T> {
 /// 2. If not found, return `None`
 /// 3. Parse each `TxEmittedEvent.serialized_event` into topics + data
 /// 4. Build `TransactionReceipt`
-#[tracing::instrument(skip_all, fields(?tx_hash))]
+#[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
 pub async fn get_transaction_receipt(
     ctx: &GatewayContext,
     context: RpcRequestContext,
@@ -340,7 +340,7 @@ impl shared_status::StatusProbe for GatewayStatusProbe<'_> {
 /// slow indexer can consume the budget before the scheduler lookup is
 /// dispatched. Scheduler outcomes remain available if the indexer is
 /// disconnected.
-#[tracing::instrument(skip_all, fields(?tx_hash))]
+#[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
 pub async fn get_transaction_status(
     ctx: &GatewayContext,
     context: RpcRequestContext,

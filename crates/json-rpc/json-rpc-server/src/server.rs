@@ -172,12 +172,10 @@ impl<S, C, R, V> GroundhogRpcServer<S, C, R, V> {
         context: RpcRequestContext,
         future: impl Future<Output = RpcResult<T>>,
     ) -> RpcResult<T> {
-        let Some(deadline) = context.deadline() else {
-            return future.await;
-        };
-        tokio::time::timeout_at(deadline.into(), future)
+        context
+            .within_deadline(future)
             .await
-            .map_err(|_| ErrorObjectOwned::from(RpcServerError::BackendTimeout))?
+            .map_err(ErrorObjectOwned::from)?
     }
 }
 
@@ -259,7 +257,7 @@ where
     R: ReadPlane,
     V: ViewPlane,
 {
-    #[tracing::instrument(skip_all, fields(tx_hex_len = tx_hex.len()))]
+    #[tracing::instrument(level = "debug", skip_all, fields(tx_hex_len = tx_hex.len()))]
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
@@ -274,7 +272,7 @@ where
         .await
     }
 
-    #[tracing::instrument(skip_all, fields(?tx_hash))]
+    #[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
     async fn get_transaction_receipt(
         &self,
         tx_hash: TxHash,
@@ -286,7 +284,7 @@ where
         .await
     }
 
-    #[tracing::instrument(skip_all, fields(?tx_hash))]
+    #[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
