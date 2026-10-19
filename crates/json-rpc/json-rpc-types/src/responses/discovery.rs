@@ -33,6 +33,27 @@ VersionInfo {
 }
 }
 
+impl VersionInfo {
+    /// Describe wire compatibility and configured methods. Optional diagnostics
+    /// start absent and can be set through the public fields.
+    #[must_use]
+    pub fn new(
+        wire_format: impl Into<String>,
+        supported_methods: Vec<String>,
+        implementation: impl Into<String>,
+    ) -> Self {
+        Self {
+            wire_format: wire_format.into(),
+            supported_methods,
+            implementation: implementation.into(),
+            commit_hash: None,
+            platform_version: None,
+            release_version: None,
+            bundle_manifest_digest: None,
+        }
+    }
+}
+
 response_object! {
 /// Signing identity; this is not a chain-reset instance identifier.
 NetworkInfo { network_hash: NetworkHash }
@@ -87,6 +108,18 @@ ChainConfig {
     #[schemars(with = "ExecutionConfig")]
     execution: Option<ExecutionConfig>,
 }
+}
+
+impl ChainConfig {
+    /// Describe stated rules without claiming execution provenance. Set the
+    /// public `execution` field when an authoritative reading is available.
+    #[must_use]
+    pub const fn new(stated: ConfigLimits) -> Self {
+        Self {
+            stated,
+            execution: None,
+        }
+    }
 }
 
 response_object! {
@@ -185,6 +218,28 @@ ServerLimits {
     #[schemars(with = "SimulationBatchLimits")]
     simulation_batch: Option<SimulationBatchLimits>,
 }
+}
+
+impl ServerLimits {
+    /// Describe configured endpoint bounds. Set the public `simulation_batch`
+    /// field when shared-snapshot simulation is available.
+    #[must_use]
+    pub const fn new(
+        max_simulation_gas: u64,
+        max_simulation_calldata_bytes: u64,
+        max_events_per_page: u32,
+        max_transactions_per_page: u32,
+        max_cursor_bytes: u64,
+    ) -> Self {
+        Self {
+            max_simulation_gas,
+            max_simulation_calldata_bytes,
+            max_events_per_page,
+            max_transactions_per_page,
+            max_cursor_bytes,
+            simulation_batch: None,
+        }
+    }
 }
 
 response_object! {
