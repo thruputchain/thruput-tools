@@ -14,7 +14,7 @@ description = "Canonical base58 and typed Stellar text encodings for Thruput"
 workspace = true
 
 [dependencies]
-bs58.workspace = true
+thruput-xdr.workspace = true
 stellar-strkey.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
