@@ -4,8 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use jsonrpsee::{
     RpcModule,
-    core::{RpcResult, client::ClientT, traits::ToRpcParams},
-    proc_macros::rpc,
+    core::{client::ClientT, traits::ToRpcParams},
     server::Server,
     types::Params,
 };
@@ -31,18 +30,19 @@ use thruput_json_rpc_types::{
 use thruput_open_rpc::{Project, ProjectInfo};
 use thruput_open_rpc_macros::open_rpc;
 
-// Documentation generation uses the DTOs. Do not use the generated server's
-// argument decoding: it describes a Rust argument, not the whole params object.
+// Object-mode documentation emits only metadata. Explicit adapters below own
+// transport decoding; no jsonrpsee transport is generated from this declaration.
 #[open_rpc(params = "object")]
-#[rpc(server)]
-#[allow(dead_code)]
 trait NativeFixture {
     /// Network identity. Noarg also accepts omission, null and empty arrays.
     #[method(name = "getNetworkInfo")]
-    async fn network(&self, request: EmptyRequest) -> RpcResult<NetworkInfo>;
+    async fn network(&self, request: EmptyRequest) -> jsonrpsee::core::RpcResult<NetworkInfo>;
     #[method(name = "getBlockByHeight")]
-    async fn block(&self, request: BlockQuery) -> RpcResult<Option<BlockInfo>>;
+    async fn block(&self, request: BlockQuery) -> jsonrpsee::core::RpcResult<Option<BlockInfo>>;
 }
+
+#[path = "native_request_roundtrip/contracts.rs"]
+mod contracts;
 
 fn spec() -> Value {
     let mut project = Project::new(ProjectInfo {
@@ -212,8 +212,8 @@ fn block(height: BlockHeight) -> BlockInfo {
 }
 
 // Intentionally bypass the normal serializer to test malformed client requests.
-struct RawParams(Option<&'static str>);
-impl ToRpcParams for RawParams {
+struct RawParams<'a>(Option<&'a str>);
+impl ToRpcParams for RawParams<'_> {
     fn to_rpc_params(self) -> Result<Option<Box<RawValue>>, serde_json::Error> {
         self.0.map(|s| RawValue::from_string(s.into())).transpose()
     }
