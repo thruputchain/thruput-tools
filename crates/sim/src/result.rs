@@ -7,7 +7,7 @@ use crate::compare::ResultDiff;
 use crate::manifest::{ContractArtifactKind, WorkloadKind};
 use crate::target::{TargetOwnership, TargetProviderKind};
 
-pub const SIM_RESULT_SCHEMA_VERSION: u32 = 4;
+pub const SIM_RESULT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

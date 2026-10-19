@@ -10,7 +10,7 @@ use crate::result::{
 };
 use crate::target::TargetProviderKind;
 
-pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 4;
+pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug)]
 pub struct EventWriter {
@@ -484,7 +484,7 @@ mod tests {
                 rpc_method: "groundhog_sendRawTransaction",
                 chain_height: Some(77),
                 chain_block_hash: None,
-                tx_hash: Some(format!("0x{}", "6c".repeat(32))),
+                tx_hash: Some("8JEvTXJ6sD5U4n1p7GEERYMPN9ijjs9ZM4ysJ3qhgyqM".into()),
                 tx_nonce: Some("4294967296".into()),
                 receipt_present: Some(true),
                 receipt_status: Some("ok".into()),
@@ -495,7 +495,7 @@ mod tests {
                 view_abort_data: None,
                 view_event_count: None,
                 contract_call_name: Some("events-store-value".into()),
-                contract_call_contract: Some(format!("0x{}", "88".repeat(32))),
+                contract_call_contract: Some("AByCTxLPRZPoyK22KdMxa3xkCbcNbeNWzVeEvh6UcJs9".into()),
                 storage_read_name: None,
                 storage_contract: None,
                 storage_key: None,
@@ -533,13 +533,13 @@ mod tests {
                 "latencyMs": 10,
                 "rpcMethod": "groundhog_sendRawTransaction",
                 "chainHeight": 77,
-                "txHash": format!("0x{}", "6c".repeat(32)),
+                "txHash": "8JEvTXJ6sD5U4n1p7GEERYMPN9ijjs9ZM4ysJ3qhgyqM",
                 "txNonce": "4294967296",
                 "receiptPresent": true,
                 "receiptStatus": "ok",
                 "submitToReceiptLatencyMs": 8,
                 "contractCallName": "events-store-value",
-                "contractCallContract": format!("0x{}", "88".repeat(32))
+                "contractCallContract": "AByCTxLPRZPoyK22KdMxa3xkCbcNbeNWzVeEvh6UcJs9"
             })
         );
     }
@@ -702,11 +702,11 @@ mod tests {
                 artifact_kind: Some(ContractArtifactKind::Rv32),
                 artifact_path: Some("/tmp/fibonacci.rv32a".into()),
                 artifact_sha256: Some(format!("0x{}", "11".repeat(32))),
-                contract_hash: Some(format!("0x{}", "22".repeat(32))),
+                contract_hash: Some("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3".into()),
                 nonce: Some("123".into()),
                 deploy_address_nonce: Some(format!("0x{}", "33".repeat(32))),
-                tx_hash: Some(format!("0x{}", "44".repeat(32))),
-                address: Some(format!("0x{}", "55".repeat(32))),
+                tx_hash: Some("5bV6jUfhDHCQVA1WfKBUnXUsboJgoKgkzkKcxr3joew5".into()),
+                address: Some("6k78AbasGMFFrhG95Pj6jQbqkVt7FQMhVgemxJovWKR6".into()),
                 address_source: Some(DeployAddressSource::Derived),
                 height: Some(42),
                 error: None,
@@ -726,11 +726,11 @@ mod tests {
                 "artifactKind": "rv32",
                 "artifactPath": "/tmp/fibonacci.rv32a",
                 "artifactSha256": format!("0x{}", "11".repeat(32)),
-                "contractHash": format!("0x{}", "22".repeat(32)),
+                "contractHash": "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3",
                 "nonce": "123",
                 "deployAddressNonce": format!("0x{}", "33".repeat(32)),
-                "txHash": format!("0x{}", "44".repeat(32)),
-                "address": format!("0x{}", "55".repeat(32)),
+                "txHash": "5bV6jUfhDHCQVA1WfKBUnXUsboJgoKgkzkKcxr3joew5",
+                "address": "6k78AbasGMFFrhG95Pj6jQbqkVt7FQMhVgemxJovWKR6",
                 "addressSource": "derived",
                 "height": 42
             })
@@ -745,7 +745,7 @@ mod tests {
                 account_index: 3,
                 sponsor_account_index: 0,
                 airdrop_sponsor_account_index: Some(0),
-                wallet_address: format!("0x{}", "22".repeat(32)),
+                wallet_address: "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3".into(),
                 create_tx_hash: None,
                 create_height: None,
                 airdrop_tx_hash: None,
@@ -795,7 +795,7 @@ mod tests {
             contents,
             concat!(
                 "{\"kind\":\"existing\"}\n",
-                "{\"schemaVersion\":4,\"kind\":\"run-completed\",\"outcome\":\"passed\",",
+                "{\"schemaVersion\":5,\"kind\":\"run-completed\",\"outcome\":\"passed\",",
                 "\"scheduledWorkloads\":0,\"completedWorkloads\":0,",
                 "\"failedWorkloads\":0,\"skippedWorkloads\":0}\n"
             )

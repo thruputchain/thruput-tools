@@ -6,6 +6,10 @@ regardless of subscriber count. `hog-firehose-serve` owns WebSocket subscribers.
 The gateway remains a separate process with its existing surface. Experimental wire
 types and generated jsonrpsee client/server traits live in this unpublished crate.
 
+JSON records use `schemaVersion: 2`: `consensusHash` is an unprefixed base58
+identifier; `record` remains hex-encoded XDR. Consumers must use the matching
+record schema. Binary archives are unchanged.
+
 ```sh
 cargo build -p thruput-firehose
 hog-firehose-store discover localhost:9001 localhost:9002 localhost:9003

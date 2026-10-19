@@ -1,6 +1,10 @@
 //! Experimental standalone firehose wire types; independent of gateway methods.
 use serde::{Deserialize, Serialize};
-use thruput_json_rpc_types::hex::HexBytes;
+use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
+use thruput_xdr::types::SHA256Hash;
+
+/// Standalone record format; independent of binary archive and gateway versions.
+pub const RECORD_SCHEMA_VERSION: u32 = 2;
 
 /// Inclusive archive height, or the first publication after subscription registration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -17,10 +21,12 @@ pub enum Cursor {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Record {
+    /// Version of the standalone JSON record format.
+    pub schema_version: u32,
     /// Block height in the immutable archive.
     pub height: i64,
-    /// Consensus commitment, in canonical hexadecimal byte encoding.
-    pub consensus_hash: HexBytes,
+    /// Consensus commitment, in canonical base58 encoding.
+    pub consensus_hash: Base58<SHA256Hash>,
     /// Raw XDR length before hexadecimal transport encoding.
     pub byte_length: usize,
     /// Exact stored `EventIndexerPulledBlock` bytes, not a JSON projection.
