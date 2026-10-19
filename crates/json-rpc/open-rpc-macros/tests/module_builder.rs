@@ -48,3 +48,33 @@ fn generated_module_doc_compiles_with_reexported_project_imports() {
     assert_eq!(json["methods"][0]["name"], "alias_ping");
     assert_eq!(json["methods"][0]["result"]["schema"]["type"], "integer");
 }
+
+// Object mode consumes this declaration. Its request is documented directly,
+// without generating a jsonrpsee client or server wrapper.
+#[open_rpc(params = "object")]
+trait NativeApi {
+    #[method(name = "getEntries")]
+    async fn get_entries(
+        &self,
+        request: std::collections::BTreeMap<String, String>,
+    ) -> RpcResult<String>;
+}
+
+#[test]
+fn object_mode_emits_a_bare_method_with_a_whole_object_schema() {
+    let mut project = Project::new(ProjectInfo {
+        title: "Native".to_owned(),
+        version: "0.1.0".to_owned(),
+    });
+    project.module(NativeApiOpenRpc::module_doc);
+    let json = project.to_json();
+    let method = &json["methods"][0];
+    assert_eq!(method["name"], "getEntries");
+    assert_eq!(method["paramStructure"], "by-name");
+    assert_eq!(method["x-params-schema"]["type"], "object");
+    assert!(
+        method["x-params-schema"]["properties"]
+            .get("request")
+            .is_none()
+    );
+}
