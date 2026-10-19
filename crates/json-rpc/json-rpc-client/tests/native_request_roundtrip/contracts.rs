@@ -189,6 +189,27 @@ fn assert_case(method: &str, value: &Value, accepted: bool) {
 }
 
 #[test]
+fn all_core_methods_put_required_parameters_first() {
+    let document = request_spec();
+    let methods = document["methods"].as_array().unwrap();
+    assert_eq!(methods.len(), 17);
+    for method in methods {
+        let mut saw_optional = false;
+        for param in method["params"].as_array().unwrap() {
+            if param["required"].as_bool().unwrap_or(false) {
+                assert!(
+                    !saw_optional,
+                    "{}: required {} follows an optional parameter",
+                    method["name"], param["name"]
+                );
+            } else {
+                saw_optional = true;
+            }
+        }
+    }
+}
+
+#[test]
 fn all_core_request_schemas_match_strict_parsing() {
     let document = request_spec();
     assert_eq!(document["methods"].as_array().unwrap().len(), 17);
