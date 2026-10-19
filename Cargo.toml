@@ -152,6 +152,7 @@ nix = { version = "0.30", default-features = false, features = ["process"] }
 
 # --- Test support ---
 insta = "1"
+jsonschema = { version = "0.59", default-features = false }
 serial_test = "4"
 tempfile = "3"
 same-file = "1"

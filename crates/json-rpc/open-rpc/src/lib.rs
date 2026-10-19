@@ -45,8 +45,65 @@ pub struct MethodDoc {
     pub tags: Vec<Tag>,
     /// Ordered list of parameter descriptors.
     pub params: Vec<ContentDescriptor>,
+    /// Whole-object parameter contract, when this method takes named params.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub named_params: Option<NamedParamsDoc>,
     /// Return-value descriptor.
     pub result: ContentDescriptor,
+}
+
+/// Whole-object request schema and its `OpenRPC` parameter convention.
+#[derive(Debug, Clone, Serialize)]
+pub struct NamedParamsDoc {
+    #[serde(rename = "paramStructure")]
+    structure: ParamStructure,
+    #[serde(rename = "x-params-schema")]
+    schema: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+enum ParamStructure {
+    #[serde(rename = "by-name")]
+    ByName,
+}
+
+/// Generate field descriptors and the complete request schema from one DTO.
+///
+/// The DTO must have an object schema with explicit top-level properties.
+/// Cross-field constraints remain in `x-params-schema`; descriptors alone cannot
+/// express them. Non-object request types are a definition error.
+/// Required descriptors precede optional ones, with names sorted in each group.
+pub fn named_params<T: JsonSchema>(
+    generator: &mut SchemaGenerator,
+) -> (Vec<ContentDescriptor>, NamedParamsDoc) {
+    let schema = schema_to_value(&T::json_schema(generator));
+    assert_eq!(
+        schema["type"], "object",
+        "bug: named request must have an object schema"
+    );
+    let required = schema["required"].as_array();
+    let mut params: Vec<_> = schema["properties"]
+        .as_object()
+        .into_iter()
+        .flat_map(|fields| fields.iter())
+        .map(|(name, value)| ContentDescriptor {
+            name: name.clone(),
+            required: required.is_some_and(|names| names.iter().any(|n| n == name)),
+            schema: value.clone(),
+        })
+        .collect();
+    params.sort_by(|a, b| {
+        b.required
+            .cmp(&a.required)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    (
+        params,
+        NamedParamsDoc {
+            structure: ParamStructure::ByName,
+            schema,
+        },
+    )
 }
 
 /// Builder passed to generated `module_doc(...)` functions.
@@ -214,6 +271,40 @@ mod tests {
     }
 
     #[test]
+    fn named_params_order_required_before_optional() {
+        #[allow(dead_code)]
+        #[derive(JsonSchema)]
+        #[schemars(rename_all = "camelCase", deny_unknown_fields)]
+        struct MixedRequest {
+            transaction_hash: String,
+            limit: Option<u32>,
+            address: String,
+            cursor: Option<String>,
+        }
+
+        let mut generator = openrpc_schema_generator();
+        let (params, named) = named_params::<MixedRequest>(&mut generator);
+        let ordering: Vec<_> = params
+            .iter()
+            .map(|param| (param.name.as_str(), param.required))
+            .collect();
+        assert_eq!(
+            ordering,
+            [
+                ("address", true),
+                ("transactionHash", true),
+                ("cursor", false),
+                ("limit", false),
+            ]
+        );
+        let expected = schema_to_value(&MixedRequest::json_schema(&mut generator));
+        assert_eq!(named.schema, expected);
+        for param in params {
+            assert_eq!(param.schema, expected["properties"][&param.name]);
+        }
+    }
+
+    #[test]
     fn project_serializes_to_openrpc_126() {
         let mut project = Project::new(ProjectInfo {
             title: "Test API".to_owned(),
@@ -223,6 +314,7 @@ mod tests {
             let params = vec![param_descriptor::<String>(module.generator(), "input")];
             let result = result_descriptor::<u64>(module.generator(), "output");
             module.add_method(MethodDoc {
+                named_params: None,
                 name: "test_echo".to_owned(),
                 summary: Some("Echo a string back.".to_owned()),
                 tags: vec![Tag {
@@ -283,6 +375,7 @@ mod tests {
         project.module(|module| {
             let result = result_descriptor::<bool>(module.generator(), "ok");
             module.add_method(MethodDoc {
+                named_params: None,
                 name: "a".to_owned(),
                 summary: None,
                 tags: vec![],
@@ -293,6 +386,7 @@ mod tests {
         project.module(|module| {
             let result = result_descriptor::<bool>(module.generator(), "ok");
             module.add_method(MethodDoc {
+                named_params: None,
                 name: "b".to_owned(),
                 summary: None,
                 tags: vec![],
@@ -327,6 +421,7 @@ mod tests {
             let params = vec![param_descriptor::<SharedType>(module.generator(), "input")];
             let result = result_descriptor::<SharedType>(module.generator(), "output");
             module.add_method(MethodDoc {
+                named_params: None,
                 name: "a".to_owned(),
                 summary: None,
                 tags: vec![],
@@ -338,6 +433,7 @@ mod tests {
             let params = vec![param_descriptor::<SharedType>(module.generator(), "input")];
             let result = result_descriptor::<bool>(module.generator(), "ok");
             module.add_method(MethodDoc {
+                named_params: None,
                 name: "b".to_owned(),
                 summary: None,
                 tags: vec![],
@@ -379,6 +475,7 @@ mod tests {
         project.module(|module| {
             let result = result_descriptor::<u64>(module.generator(), "count");
             module.add_method(MethodDoc {
+                named_params: None,
                 name: "count".to_owned(),
                 summary: None,
                 tags: vec![],
@@ -401,6 +498,7 @@ mod tests {
         project.module(|module| {
             let first_result = result_descriptor::<first::Foo>(module.generator(), "first");
             module.add_method(MethodDoc {
+                named_params: None,
                 name: "first".to_owned(),
                 summary: None,
                 tags: vec![],
@@ -409,6 +507,7 @@ mod tests {
             });
             let second_result = result_descriptor::<second::Foo>(module.generator(), "second");
             module.add_method(MethodDoc {
+                named_params: None,
                 name: "second".to_owned(),
                 summary: None,
                 tags: vec![],
