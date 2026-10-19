@@ -15,6 +15,7 @@ pub mod network_info;
 pub mod protocol_token;
 pub mod receipt;
 pub mod requests;
+pub mod responses;
 pub mod runtime_manifest;
 pub mod server_limits;
 pub mod state;

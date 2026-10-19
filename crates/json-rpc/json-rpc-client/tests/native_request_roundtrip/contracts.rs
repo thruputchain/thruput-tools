@@ -108,56 +108,8 @@ fn valid_request(method: &str) -> Value {
     }
 }
 
-/// Shared decimal extensions are meaningful even where the JSON Schema string
-/// pattern cannot express the exact integer bound. Do not use floating point.
-struct IntegerBound {
-    value: i128,
-    minimum: bool,
-}
-impl<'i> jsonschema::Keyword<'i> for IntegerBound {
-    fn validate(&self, instance: &'i Value) -> Result<(), jsonschema::ValidationError<'i>> {
-        if self.is_valid(instance) {
-            Ok(())
-        } else {
-            Err(jsonschema::ValidationError::custom(
-                "decimal integer outside declared range",
-            ))
-        }
-    }
-    fn is_valid(&self, instance: &'i Value) -> bool {
-        instance
-            .as_str()
-            .and_then(|v| v.parse::<i128>().ok())
-            .is_some_and(|v| {
-                if self.minimum {
-                    v >= self.value
-                } else {
-                    v <= self.value
-                }
-            })
-    }
-}
-
 fn validator(document: &Value, index: usize) -> jsonschema::Validator {
-    // Keep the full document as the reference root; isolated property schemas
-    // cannot resolve #/components/schemas/... references.
-    let mut schema = document.clone();
-    schema["$ref"] = json!(format!("#/methods/{index}/x-params-schema"));
-    jsonschema::options()
-        .with_keyword("x-integer-minimum", |_, bound: &Value, _| {
-            Ok(Box::new(IntegerBound {
-                value: bound.as_str().unwrap().parse().unwrap(),
-                minimum: true,
-            }))
-        })
-        .with_keyword("x-integer-maximum", |_, bound: &Value, _| {
-            Ok(Box::new(IntegerBound {
-                value: bound.as_str().unwrap().parse().unwrap(),
-                minimum: false,
-            }))
-        })
-        .build(&schema)
-        .unwrap()
+    super::schema::at(document, &format!("/methods/{index}/x-params-schema"))
 }
 
 fn assert_case(method: &str, value: &Value, accepted: bool) {

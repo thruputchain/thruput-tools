@@ -13,7 +13,7 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
-pub(super) fn read_hex<'de, D: Deserializer<'de>>(deserializer: D) -> Result<HexBytes, D::Error> {
+pub(crate) fn read_hex<'de, D: Deserializer<'de>>(deserializer: D) -> Result<HexBytes, D::Error> {
     let text = String::deserialize(deserializer)?;
     let digits = text
         .strip_prefix("0x")
@@ -69,7 +69,7 @@ pub(super) fn read_optional_height<'de, D: Deserializer<'de>>(
     super::read_height(d).map(Some)
 }
 
-pub(super) fn hex_schema(_: &mut SchemaGenerator) -> Schema {
+pub(crate) fn hex_schema(_: &mut SchemaGenerator) -> Schema {
     json_schema!({"type": "string", "pattern": "^0x(?:[0-9a-f]{2})*(?![\\s\\S])"})
 }
 
@@ -86,7 +86,7 @@ pub(super) fn cursor_schema(g: &mut SchemaGenerator) -> Schema {
     schema
 }
 
-pub(super) fn u32_schema(g: &mut SchemaGenerator) -> Schema {
+pub(crate) fn u32_schema(g: &mut SchemaGenerator) -> Schema {
     let mut schema = u32::json_schema(g);
     schema.insert("maximum".into(), u32::MAX.into());
     schema
@@ -112,7 +112,7 @@ pub(super) fn gas_schema(g: &mut SchemaGenerator) -> Schema {
 }
 
 /// Forward only a map to serde's derived struct reader, never its sequence path.
-pub(super) fn map_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub(crate) fn map_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
