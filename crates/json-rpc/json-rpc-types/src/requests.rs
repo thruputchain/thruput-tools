@@ -7,7 +7,9 @@ use crate::{BlockHeight, ContractAddress, decimal::Decimal, hex::HexBytes, trans
 
 use fields::{hex_schema, read_hex};
 
-fn read_height<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BlockHeight, D::Error> {
+pub(crate) fn read_height<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BlockHeight, D::Error> {
     let height = Decimal::<BlockHeight>::deserialize(deserializer)?.0;
     if *height < 0 {
         return Err(serde::de::Error::custom("blockHeight must be nonnegative"));
@@ -15,7 +17,7 @@ fn read_height<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BlockHeight
     Ok(height)
 }
 
-fn height_schema(generator: &mut SchemaGenerator) -> Schema {
+pub(crate) fn height_schema(generator: &mut SchemaGenerator) -> Schema {
     let mut schema = Decimal::<BlockHeight>::json_schema(generator);
     schema.insert("pattern".into(), r"^(0|[1-9][0-9]*)(?![\s\S])".into());
     schema.insert("maxLength".into(), 19.into());
@@ -90,7 +92,7 @@ BlockQuery {
 }
 }
 
-mod fields;
+pub(crate) mod fields;
 mod history;
 mod simulation;
 pub use history::{

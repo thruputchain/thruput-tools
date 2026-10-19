@@ -41,6 +41,9 @@ trait NativeFixture {
     async fn block(&self, request: BlockQuery) -> jsonrpsee::core::RpcResult<Option<BlockInfo>>;
 }
 
+#[path = "support/schema.rs"]
+mod schema;
+
 #[path = "native_request_roundtrip/contracts.rs"]
 mod contracts;
 
