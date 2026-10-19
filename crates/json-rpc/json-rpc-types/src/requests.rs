@@ -93,8 +93,10 @@ BlockQuery {
 }
 
 pub(crate) mod fields;
+pub(crate) mod funding;
 mod history;
 mod simulation;
+pub use funding::{AirdropRequest, FundAccountRequest};
 pub use history::{
     AscendingAnchor, BlockPageRequest, BlockStart, DescendingAnchor, EventFilter, EventQuery,
     HistoryStart, RootAddressQuery, TopicFilter,

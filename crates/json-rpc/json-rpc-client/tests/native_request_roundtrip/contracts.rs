@@ -4,11 +4,7 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Serialize, de::DeserializeOwned};
-use thruput_json_rpc_types::requests::{
-    AddressQuery, BlockPageRequest, EventQuery as NativeEventQuery, RootAddressQuery,
-    SendTransactionRequest, SimulateInvocationRequest, SimulateInvocationsRequest, StorageQuery,
-    TransactionQuery,
-};
+use thruput_json_rpc_types::requests::AddressQuery;
 
 type Parse = fn(&Params<'_>) -> Result<Value, jsonrpsee::types::ErrorObjectOwned>;
 
@@ -22,56 +18,50 @@ fn empty(params: &Params<'_>) -> Result<Value, jsonrpsee::types::ErrorObjectOwne
     Ok(serde_json::to_value(parse_empty(params)?).unwrap())
 }
 
-// One fixture catalog drives documentation, serialization and dispatch tests.
+// Reuse the authoritative name/type map; this legacy request-only regression
+// suite filters optional methods. Real adapters are covered by native_transport.
+macro_rules! parser {
+    (empty, $request:ty) => {
+        empty
+    };
+    (named, $request:ty) => {
+        named::<$request>
+    };
+}
 macro_rules! core_requests {
-    ($($name:ident ($wire:literal): $request:ty => $parse:expr),+ $(,)?) => {
-        #[open_rpc(params = "object")]
-        trait CoreRequestFixture {
-            $(#[method(name = $wire)]
-            async fn $name(&self, request: $request) -> jsonrpsee::core::RpcResult<Value>;)+
-        }
-
+    ($( $(#[$doc:meta])* $name:ident($wire:literal, $parse:ident, $decorate:ident): $request:ty => $response:ty; )*) => {
         fn parsers() -> Vec<(&'static str, Parse)> {
-            vec![$(($wire, $parse)),+]
+            let all: Vec<(&'static str, Parse)> = vec![$(($wire, parser!($parse, $request))),*];
+            all.into_iter().filter(|(name, _)| is_core(name)).collect()
         }
 
         fn serialize_request(method: &str, value: Value) -> Box<RawValue> {
             match method {
                 $($wire => NamedParams(serde_json::from_value::<$request>(value).unwrap())
-                    .to_rpc_params().unwrap().unwrap(),)+
+                    .to_rpc_params().unwrap().unwrap(),)*
                 _ => panic!("unknown fixture method {method}"),
             }
         }
     };
 }
+thruput_json_rpc_api::native_methods!(core_requests);
 
-core_requests! {
-    getVersionInfo("getVersionInfo"): EmptyRequest => empty,
-    getNetworkInfo("getNetworkInfo"): EmptyRequest => empty,
-    getChainTip("getChainTip"): EmptyRequest => empty,
-    getChainConfig("getChainConfig"): EmptyRequest => empty,
-    getServerLimits("getServerLimits"): EmptyRequest => empty,
-    sendTransaction("sendTransaction"): SendTransactionRequest => named::<SendTransactionRequest>,
-    getTransactionStatus("getTransactionStatus"): TransactionQuery => named::<TransactionQuery>,
-    getTransactionReceipt("getTransactionReceipt"): TransactionQuery => named::<TransactionQuery>,
-    simulateInvocation("simulateInvocation"): SimulateInvocationRequest => named::<SimulateInvocationRequest>,
-    simulateInvocations("simulateInvocations"): SimulateInvocationsRequest => named::<SimulateInvocationsRequest>,
-    getStorage("getStorage"): StorageQuery => named::<StorageQuery>,
-    getBalance("getBalance"): AddressQuery => named::<AddressQuery>,
-    getRegisteredAuth("getRegisteredAuth"): AddressQuery => named::<AddressQuery>,
-    getEvents("getEvents"): NativeEventQuery => named::<NativeEventQuery>,
-    getTransactionsByRootAddress("getTransactionsByRootAddress"): RootAddressQuery => named::<RootAddressQuery>,
-    getBlockByHeight("getBlockByHeight"): BlockQuery => named::<BlockQuery>,
-    getTransactionsByBlock("getTransactionsByBlock"): BlockPageRequest => named::<BlockPageRequest>,
+fn is_core(name: &str) -> bool {
+    !name.starts_with("faucet_") && !name.starts_with("dev_")
 }
 
 fn request_spec() -> Value {
     let mut project = Project::new(ProjectInfo {
-        title: "Core request fixtures; responses are test echoes".into(),
+        title: "Native core request regression contract".into(),
         version: "14.0.0".into(),
     });
-    project.module(CoreRequestFixtureOpenRpc::module_doc);
-    project.to_json()
+    project.module(thruput_json_rpc_api::native::NativeApiOpenRpc::module_doc);
+    let mut document = project.to_json();
+    document["methods"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|method| is_core(method["name"].as_str().unwrap()));
+    document
 }
 
 fn address() -> String {

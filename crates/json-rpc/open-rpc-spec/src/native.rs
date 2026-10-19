@@ -1,9 +1,31 @@
-//! Explicit native error documentation. The canonical serving artifact still uses wire 13.
+//! Native candidate contract. The canonical serving artifact still uses wire 13.
 
 use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
-use thruput_json_rpc_api::types::error::native as errors;
+use thruput_json_rpc_api::{
+    native::{CANDIDATE_WIRE_FORMAT_VERSION, NativeApiOpenRpc},
+    types::error::native as errors,
+};
+use thruput_open_rpc::{Project, ProjectInfo};
+
+/// Build the complete candidate native contract without changing the serving API.
+///
+/// This artifact describes typed transport bindings, not available backend
+/// capabilities. Production discovery must use the methods actually registered
+/// by its configured adapters. [`crate::build_spec`] remains the wire-13 artifact.
+pub fn build_spec() -> Value {
+    let mut project = Project::new(ProjectInfo {
+        title: "Thruput native JSON-RPC candidate".to_owned(),
+        version: CANDIDATE_WIRE_FORMAT_VERSION.to_owned(),
+    });
+    project.module(NativeApiOpenRpc::module_doc);
+    let mut document = project.to_json();
+    // Error-data references contain method indices, so attach them only after
+    // the generated declaration has established the final method order.
+    add_error_docs(&mut document).expect("bug: native declarations must match the error catalogue");
+    crate::canonicalize(document)
+}
 
 /// A document cannot safely receive native application-error documentation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

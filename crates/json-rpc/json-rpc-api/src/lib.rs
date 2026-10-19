@@ -217,3 +217,6 @@ pub trait GroundhogApi {
     #[method(name = "version")]
     async fn version(&self) -> RpcResult<VersionInfo>;
 }
+
+/// Candidate native transport; production activation is separate.
+pub mod native;

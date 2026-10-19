@@ -20,6 +20,7 @@ exclude = [
 workspace = true
 
 [dependencies]
+serde_json = { workspace = true }
 thruput-json-rpc-api = { workspace = true }
 thruput-json-rpc-types = { workspace = true }
 jsonrpsee = { workspace = true, features = ["macros", "http-client"] }
@@ -36,5 +37,4 @@ async-trait = { workspace = true }
 thruput-json-rpc-server = { workspace = true }
 thruput-xdr = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server"] }
-serde_json = { workspace = true }
 xdr-common = { workspace = true }
