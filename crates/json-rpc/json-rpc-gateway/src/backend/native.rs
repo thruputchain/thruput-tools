@@ -1,11 +1,14 @@
 use super::{
     ContractAddress, GatewayBackend, RpcRequestContext, RpcServerError, async_trait, handlers,
 };
+use thruput_json_rpc_server::native::transaction::{
+    NativeReadError, NativeTransactionReadPlane, within_native_read_deadline,
+};
 use thruput_json_rpc_server::{
     ViewBatchConfig,
     native::read::{NativeSimulationPlane, NativeStatePlane, StateKey},
 };
-use thruput_json_rpc_types::{requests as input, responses as out};
+use thruput_json_rpc_types::{requests as input, responses as out, transaction::TxHash};
 
 #[async_trait]
 impl NativeStatePlane for GatewayBackend {
@@ -70,6 +73,58 @@ impl NativeSimulationPlane for GatewayBackend {
         self.with_deadline(
             context,
             handlers::view::native_simulate_batch(&self.ctx, context, request, gas_limit, limits),
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl NativeTransactionReadPlane for GatewayBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_receipt(
+        &self,
+        context: RpcRequestContext,
+        tx_hash: TxHash,
+    ) -> Result<Option<out::TransactionReceipt>, NativeReadError> {
+        let context = self.bounded_context(context);
+        within_native_read_deadline(
+            context,
+            handlers::receipt::native_transaction_receipt(&self.ctx, context, tx_hash),
+        )
+        .await
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn native_status(
+        &self,
+        context: RpcRequestContext,
+        tx_hash: TxHash,
+    ) -> Result<out::TransactionStatus, NativeReadError> {
+        let context = self.bounded_context(context);
+        within_native_read_deadline(
+            context,
+            handlers::receipt::native_transaction_status(&self.ctx, context, tx_hash),
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl thruput_json_rpc_server::native::transaction::NativeSubmitPlane for GatewayBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_submit(
+        &self,
+        context: RpcRequestContext,
+        tx: thruput_json_rpc_server::ValidatedTransaction,
+        attempt: thruput_json_rpc_server::native::transaction::SubmissionAttempt,
+    ) -> Result<(), RpcServerError> {
+        let context = self.bounded_context(context);
+        let _guard = attempt.guard();
+        self.with_deadline(
+            context,
+            self.ctx
+                .batch_submitter
+                .submit_native(context, tx.bytes, tx.hash, attempt),
         )
         .await
     }

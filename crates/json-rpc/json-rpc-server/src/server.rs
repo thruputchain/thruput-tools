@@ -1,3 +1,5 @@
+mod transaction;
+
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
 
@@ -32,7 +34,7 @@ use crate::tip_cache::{AbortOnDrop, TipCache, TipRead, TipState, spawn_tip_refre
 
 use crate::{
     BuildVersion, ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError,
-    SubmitPlane, ViewPlane, tx::validate_raw_transaction,
+    SubmitPlane, ViewPlane,
 };
 
 /// Generic implementation of the public Groundhog JSON-RPC API over
@@ -261,43 +263,10 @@ where
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            // The pre-checks are advisory mirrors of what the scheduler and
-            // executor enforce authoritatively: an unavailable tip reading
-            // skips the chain-dependent checks rather than blocking submission.
-            let mut tip = self.cached_tip_state(context).await;
-            let params = tip
-                .state
-                .as_ref()
-                .and_then(|tip| tip.params)
-                .unwrap_or_default();
-            let tx = match validate_raw_transaction(&tx_hex, &params) {
-                Ok(tx) => tx,
-                // A cached config can lag an upgrade that raised this
-                // bound, so re-read the tip before rejecting. One this
-                // request fetched itself is already current.
-                Err(RpcServerError::TxInvalidDetailed(_)) if !tip.probed => {
-                    tip = self.fresh_tip_state(context).await;
-                    let params = tip
-                        .state
-                        .as_ref()
-                        .and_then(|tip| tip.params)
-                        .unwrap_or(params);
-                    validate_raw_transaction(&tx_hex, &params)?
-                }
-                Err(error) => return Err(error.into()),
-            };
-            // A transaction can only be included at heights strictly above the
-            // current tip, so `expiry <= tip` can never commit.
-            if let Some(tip_height) = tip.state.as_ref().map(|tip| tip.height)
-                && *tx.block_expiry_height <= tip_height
-            {
-                return Err(RpcServerError::TxRejected(format!(
-                    "transaction expired: blockExpiryHeight {} is not past chain tip {}; \
-                     re-sign with a later expiry height",
-                    *tx.block_expiry_height, tip_height
-                ))
-                .into());
-            }
+            let mut hash = None;
+            let tx = self
+                .prepare_transaction(context, &tx_hex, &mut hash)
+                .await?;
             let tx_hash = tx.hash;
             self.submit.submit_raw_transaction(context, tx).await?;
             Ok(tx_hash)

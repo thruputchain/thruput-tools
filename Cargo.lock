@@ -4504,6 +4504,7 @@ dependencies = [
  "thruput-open-rpc-macros",
  "thruput-xdr",
  "tokio",
+ "tracing",
  "xdr-common",
 ]
 

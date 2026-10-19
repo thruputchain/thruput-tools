@@ -1,7 +1,9 @@
-//! Typed native calls without retry or receipt-polling policy.
+//! Typed native calls and opt-in read-only receipt waiting.
 //!
 //! These adapters do not select a wire version or replace legacy clients. The
 //! caller chooses an endpoint implementing the candidate native contract.
+
+pub mod receipt;
 
 use jsonrpsee::core::client::{ClientT, Error as TransportError};
 use jsonrpsee::types::ErrorObjectOwned;

@@ -281,3 +281,18 @@ impl ChainPlane for HogdDevSchedulerBackend {
         .await
     }
 }
+
+#[async_trait]
+impl thruput_json_rpc_server::native::transaction::NativeSubmitPlane for HogdDevSchedulerBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_submit(
+        &self,
+        context: RpcRequestContext,
+        tx: ValidatedTransaction,
+        attempt: thruput_json_rpc_server::native::transaction::SubmissionAttempt,
+    ) -> Result<(), RpcServerError> {
+        self.submitter
+            .submit_native(context, tx.bytes, attempt)
+            .await
+    }
+}

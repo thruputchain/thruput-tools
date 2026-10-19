@@ -9,7 +9,10 @@ use std::{
 use async_trait::async_trait;
 use thruput_hogd_backend::scheduler as shared_scheduler;
 use thruput_hogd_backend::submit::{self as shared_submit, SubmitBatch};
-use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
+use thruput_json_rpc_server::{
+    RpcRequestContext, RpcServerError, native::transaction::SubmissionAttempt,
+};
+use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
 use thruput_scheduler::{
     SchedGatewaySubmitOutcomeBatch, sched_gateway::SchedGateway_SchedGateway1_Client,
 };
@@ -62,6 +65,7 @@ impl SubmitSink for SchedulerSink {
 }
 
 struct Item {
+    attempt: Option<SubmissionAttempt>,
     tx_bytes: Vec<u8>,
     backend_deadline: Instant,
     reply: oneshot::Sender<Result<(), RpcServerError>>,
@@ -149,6 +153,26 @@ impl SubmitBatcher {
         context: RpcRequestContext,
         tx_bytes: Vec<u8>,
     ) -> Result<(), RpcServerError> {
+        self.submit_inner(context, tx_bytes, None).await
+    }
+
+    #[tracing::instrument(skip_all, fields(tx_bytes_len = tx_bytes.len()))]
+    pub(crate) async fn submit_native(
+        &self,
+        context: RpcRequestContext,
+        tx_bytes: Vec<u8>,
+        attempt: SubmissionAttempt,
+    ) -> Result<(), RpcServerError> {
+        let _guard = attempt.guard();
+        self.submit_inner(context, tx_bytes, Some(attempt)).await
+    }
+
+    async fn submit_inner(
+        &self,
+        context: RpcRequestContext,
+        tx_bytes: Vec<u8>,
+        attempt: Option<SubmissionAttempt>,
+    ) -> Result<(), RpcServerError> {
         if tx_bytes.len() > MAX_BATCH_BYTES {
             return Err(RpcServerError::TxInvalid("transaction too large".into()));
         }
@@ -175,6 +199,7 @@ impl SubmitBatcher {
         self.inner
             .ingress
             .try_send(Item {
+                attempt,
                 tx_bytes,
                 backend_deadline,
                 reply: reply_tx,
@@ -276,6 +301,14 @@ async fn run(
                 batch_size = cohort.len(),
                 "submitting dev-node transaction batch"
             );
+            cohort.retain(|item| {
+                item.attempt
+                    .as_ref()
+                    .is_none_or(SubmissionAttempt::begin_dispatch)
+            });
+            if cohort.is_empty() {
+                continue;
+            }
             // Move the bytes into the batch; the items keep their replies.
             let transactions = cohort
                 .iter_mut()
@@ -283,24 +316,16 @@ async fn run(
                 .collect();
             let result = match shared_submit::pack(transactions) {
                 Ok(batch) => submit_before(&sink, batch, deadline).await,
-                Err(error) => Err(error),
+                Err(error) => {
+                    for item in &cohort {
+                        if let Some(attempt) = &item.attempt {
+                            attempt.packing_failed();
+                        }
+                    }
+                    Err(error)
+                }
             };
-            let results = match result {
-                Ok(outcomes) if outcomes.0.len() == cohort.len() => outcomes
-                    .0
-                    .into_iter()
-                    .map(shared_scheduler::submit_result)
-                    .collect::<Vec<_>>(),
-                Ok(outcomes) => vec![
-                    Err(RpcServerError::BackendUnavailable(format!(
-                        "scheduler gateway returned {} admission outcomes for {} transactions",
-                        outcomes.0.len(),
-                        cohort.len()
-                    )));
-                    cohort.len()
-                ],
-                Err(error) => vec![Err(error); cohort.len()],
-            };
+            let results = submission_results(&cohort, result);
             if results.iter().any(Result::is_ok)
                 && let Some(trigger) = block_driver
                     .read()
@@ -313,6 +338,42 @@ async fn run(
                 let _ = item.reply.send(result);
             }
         }
+    }
+}
+
+fn submission_results(
+    cohort: &[Item],
+    result: Result<SchedGatewaySubmitOutcomeBatch, RpcServerError>,
+) -> Vec<Result<(), RpcServerError>> {
+    match result {
+        Ok(outcomes) if outcomes.0.len() == cohort.len() => outcomes
+            .0
+            .into_iter()
+            .zip(cohort)
+            .map(|(outcome, item)| match &item.attempt {
+                Some(attempt) => shared_scheduler::native_submit_result(outcome, attempt),
+                None => shared_scheduler::submit_result(outcome),
+            })
+            .collect(),
+        Ok(outcomes) => cohort
+            .iter()
+            .map(|item| {
+                let error = if item.attempt.is_some() {
+                    RpcServerError::invalid_data(
+                        BackendDataInvalidReason::InvalidCardinality,
+                        "scheduler admission outcome count mismatch",
+                    )
+                } else {
+                    RpcServerError::BackendUnavailable(format!(
+                        "scheduler gateway returned {} admission outcomes for {} transactions",
+                        outcomes.0.len(),
+                        cohort.len(),
+                    ))
+                };
+                Err(error)
+            })
+            .collect(),
+        Err(error) => vec![Err(error); cohort.len()],
     }
 }
 

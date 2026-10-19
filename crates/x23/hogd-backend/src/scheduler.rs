@@ -141,3 +141,70 @@ pub fn tip_answer(service: &str, result: ExpectedDBTip) -> Result<TipAnswer, Rpc
         ))),
     }
 }
+
+/// Preserve per-attempt refusal evidence before the legacy cause mapping loses it.
+/// Unknown outcomes do not establish either admission or rejection.
+pub fn native_submit_result(
+    outcome: SchedGatewaySubmitOutcome,
+    attempt: &thruput_json_rpc_server::native::transaction::SubmissionAttempt,
+) -> Result<(), RpcServerError> {
+    match outcome {
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted => Ok(()),
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected
+        | SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable
+        | SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError => {
+            attempt.rejected();
+            submit_result(outcome)
+        }
+        other => Err(RpcServerError::invalid_data(
+            thruput_json_rpc_types::error::native::BackendDataInvalidReason::UnsupportedValue,
+            format!("scheduler returned unknown submission outcome {}", other.0),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thruput_json_rpc_server::native::transaction::SubmissionAttempt;
+    use thruput_json_rpc_types::error::native::{AttemptAdmission, BackendDataInvalidReason};
+
+    #[test]
+    fn native_submit_outcomes_preserve_only_authoritative_refusal() {
+        for outcome in [
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError,
+            SchedGatewaySubmitOutcome(4242),
+        ] {
+            let attempt = SubmissionAttempt::default();
+            assert!(attempt.begin_dispatch());
+            let result = native_submit_result(outcome, &attempt);
+            let evidence = attempt.cancel();
+            match outcome {
+                SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted => {
+                    assert!(result.is_ok());
+                    // A caller that loses the success reply must not infer refusal.
+                    assert!(matches!(evidence, AttemptAdmission::Unknown));
+                }
+                SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected
+                | SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable
+                | SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError => {
+                    assert_eq!(result, submit_result(outcome));
+                    assert!(matches!(evidence, AttemptAdmission::Rejected));
+                }
+                _ => {
+                    assert!(matches!(
+                        result,
+                        Err(RpcServerError::BackendDataInvalid {
+                            reason: BackendDataInvalidReason::UnsupportedValue,
+                            ..
+                        })
+                    ));
+                    assert!(matches!(evidence, AttemptAdmission::Unknown));
+                }
+            }
+        }
+    }
+}

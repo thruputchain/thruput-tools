@@ -7,6 +7,7 @@
 
 mod simulation;
 mod state;
+pub mod transaction;
 pub use simulation::*;
 pub use state::*;
 

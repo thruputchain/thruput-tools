@@ -121,3 +121,6 @@ impl<S> FinalizedNativeModule<S> {
 
 /// Native read-only backend semantics; production activation is separate.
 pub mod read;
+
+/// Native transaction producers and evidence, not registered by production binaries.
+pub mod transaction;
