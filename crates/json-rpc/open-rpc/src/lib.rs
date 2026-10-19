@@ -72,6 +72,7 @@ enum ParamStructure {
 /// The DTO must have an object schema with explicit top-level properties.
 /// Cross-field constraints remain in `x-params-schema`; descriptors alone cannot
 /// express them. Non-object request types are a definition error.
+/// Required descriptors precede optional ones, with names sorted in each group.
 pub fn named_params<T: JsonSchema>(
     generator: &mut SchemaGenerator,
 ) -> (Vec<ContentDescriptor>, NamedParamsDoc) {
@@ -81,7 +82,7 @@ pub fn named_params<T: JsonSchema>(
         "bug: named request must have an object schema"
     );
     let required = schema["required"].as_array();
-    let params = schema["properties"]
+    let mut params: Vec<_> = schema["properties"]
         .as_object()
         .into_iter()
         .flat_map(|fields| fields.iter())
@@ -91,6 +92,11 @@ pub fn named_params<T: JsonSchema>(
             schema: value.clone(),
         })
         .collect();
+    params.sort_by(|a, b| {
+        b.required
+            .cmp(&a.required)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     (
         params,
         NamedParamsDoc {
@@ -261,6 +267,40 @@ mod tests {
         #[schemars(rename = "SecondFoo")]
         pub struct Foo {
             pub flag: bool,
+        }
+    }
+
+    #[test]
+    fn named_params_order_required_before_optional() {
+        #[allow(dead_code)]
+        #[derive(JsonSchema)]
+        #[schemars(rename_all = "camelCase", deny_unknown_fields)]
+        struct MixedRequest {
+            transaction_hash: String,
+            limit: Option<u32>,
+            address: String,
+            cursor: Option<String>,
+        }
+
+        let mut generator = openrpc_schema_generator();
+        let (params, named) = named_params::<MixedRequest>(&mut generator);
+        let ordering: Vec<_> = params
+            .iter()
+            .map(|param| (param.name.as_str(), param.required))
+            .collect();
+        assert_eq!(
+            ordering,
+            [
+                ("address", true),
+                ("transactionHash", true),
+                ("cursor", false),
+                ("limit", false),
+            ]
+        );
+        let expected = schema_to_value(&MixedRequest::json_schema(&mut generator));
+        assert_eq!(named.schema, expected);
+        for param in params {
+            assert_eq!(param.schema, expected["properties"][&param.name]);
         }
     }
 
