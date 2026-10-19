@@ -3,7 +3,7 @@ use thruput_json_rpc_types::view::{ViewBatchRequest, ViewRequest};
 
 fn call() -> serde_json::Value {
     json!({
-        "contract": format!("0x{}", "00".repeat(32)),
+        "contract": thruput_encoding::encode(&[0x00; 32]),
         "entrypoint": "0x0000000000000000", "calldata": "0x",
     })
 }

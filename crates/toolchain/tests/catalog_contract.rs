@@ -7,33 +7,33 @@ const PUBLIC_BASE_URL: &str =
 fn embedded_catalog_pins_the_published_default_matrix() {
     let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
 
-    assert_eq!(catalog.default_version(), "0.1.31-rc.9");
+    assert_eq!(catalog.default_version(), "0.1.31-rc.10");
     assert_eq!(
         catalog.resolve_version(None).expect("bug: default exists"),
-        "0.1.31-rc.9"
+        "0.1.31-rc.10"
     );
 
     let expected = [
         (
             HostTarget::LinuxX86_64,
-            "59e38a10ab0ab7edb64c0bdaf8cedcafaae2ec204f0623fb7eb4455db2aa76b4",
-            9_482_881,
+            "b96d34aeecd6b4caf8a45847b767ec4c2fd6d19aef72ab56811bce3cfaeec45e",
+            9_491_414,
         ),
         (
             HostTarget::LinuxAarch64,
-            "6c6d043a49dd1116e5af07b3fb10291a5269de5dfb7dbe214bff7da6dc5fd5db",
-            8_712_777,
+            "988c3e70869889b46ae8466ec05f07869d696d172e78254ae88f9595cd023f23",
+            8_720_128,
         ),
         (
             HostTarget::MacosAarch64,
-            "47fa6bb38c1f5aa73de8d443b5e27bdfc3474bf132ffdf5c0800c60fd498640c",
-            10_729_234,
+            "1c0132117baec1d94dc0fcd2abd5f5774c0f7f5346dc70ee0d286d63b3c1328b",
+            10_729_839,
         ),
     ];
 
     for (target, sha256, size) in expected {
         let artifact = catalog
-            .artifact("0.1.31-rc.9", target)
+            .artifact("0.1.31-rc.10", target)
             .expect("bug: default target should exist");
         assert_eq!(artifact.sha256(), sha256);
         assert_eq!(artifact.size(), size);
@@ -65,6 +65,7 @@ fn embedded_catalog_keeps_earlier_releases_selectable() {
         "0.1.31-rc.4",
         "0.1.31-rc.7",
         "0.1.31-rc.8",
+        "0.1.31-rc.9",
     ] {
         assert_eq!(
             catalog

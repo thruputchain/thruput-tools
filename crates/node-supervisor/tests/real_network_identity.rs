@@ -5,10 +5,10 @@ use std::time::Duration;
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use thruput_json_rpc_api::{GroundhogApiClient, LocalFundingApiClient};
 use thruput_json_rpc_types::{
-    ContractAddress, NetworkHashHex,
+    ContractAddress, NetworkHashText,
     airdrop::{ClientNonce, FundAccountRequest},
+    base58::Base58,
     bootstrap_manifest::BootstrapManifestAllocation,
-    hex::Hex0x,
     receipt::ExecStatus,
     runtime_manifest::RuntimeManifestChainState,
     transaction::TxHash,
@@ -24,7 +24,7 @@ use thruput_signing::{
 use thruput_xdr::transaction::Transaction;
 
 fn config(
-    hash: NetworkHashHex,
+    hash: NetworkHashText,
     accounts: Vec<BootstrapManifestAllocation>,
 ) -> NodeSupervisorConfig {
     let binary = std::env::var_os("THRUPUT_DEVNODE_BINARY").expect("runtime binary is required");
@@ -74,7 +74,7 @@ async fn receipt(client: &HttpClient, hash: TxHash) {
     assert!(matches!(receipt.status, ExecStatus::Ok), "{receipt:?}");
 }
 
-async fn check_identity(node: &NodeSupervisorHandle, expected: &NetworkHashHex) {
+async fn check_identity(node: &NodeSupervisorHandle, expected: &NetworkHashText) {
     let readiness = node.hogd_readiness();
     assert_eq!(&readiness.network_hash, expected);
     assert_eq!(
@@ -142,17 +142,17 @@ async fn distinct_domains_and_persistent_identity() {
     let accounts = [&sender, &recipient]
         .map(|signer| {
             BootstrapManifestAllocation::new(
-                Hex0x(signer.verifying_key_bytes().into()),
+                Base58(signer.verifying_key_bytes().into()),
                 "1000000000",
             )
         })
         .to_vec();
     let sender_address =
-        Hex0x(PubkeyAccount::from_public_key_bytes(sender.verifying_key_bytes(), 0).address());
+        Base58(PubkeyAccount::from_public_key_bytes(sender.verifying_key_bytes(), 0).address());
     let recipient_address =
-        Hex0x(PubkeyAccount::from_public_key_bytes(recipient.verifying_key_bytes(), 0).address());
-    let a_hash = NetworkHashHex::from([0xaa; 32]);
-    let b_hash = NetworkHashHex::from([0xbb; 32]);
+        Base58(PubkeyAccount::from_public_key_bytes(recipient.verifying_key_bytes(), 0).address());
+    let a_hash = NetworkHashText::from([0xaa; 32]);
+    let b_hash = NetworkHashText::from([0xbb; 32]);
     let a_config = config(a_hash.clone(), accounts.clone());
     let dir = tempfile::tempdir().unwrap();
     let mut b_config = config(b_hash.clone(), accounts);
@@ -166,7 +166,7 @@ async fn distinct_domains_and_persistent_identity() {
     let a_client = client(&a);
     let b_client = client(&b);
     let tx = transfer(&sender, recipient_address);
-    let hash = TxHash(Hex0x(transaction_hash(&tx).unwrap()));
+    let hash = TxHash(Base58(transaction_hash(&tx).unwrap()));
     let a_signed = sign_and_encode_transaction_hex(
         tx.clone(),
         &sender,

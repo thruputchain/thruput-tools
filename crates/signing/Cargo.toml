@@ -21,6 +21,7 @@ exclude = [
 workspace = true
 
 [dependencies]
+thruput-encoding = { workspace = true }
 thruput-xdr = { workspace = true }
 thruput-domain-separator = { workspace = true }
 xdrs = { workspace = true }
@@ -31,7 +32,6 @@ thiserror = { workspace = true }
 ed25519-dalek = { workspace = true }
 ml-dsa = { workspace = true }
 zeroize = { workspace = true }
-stellar-strkey = { workspace = true }
 
 [dev-dependencies]
 serde = { workspace = true }

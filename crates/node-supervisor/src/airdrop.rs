@@ -18,7 +18,7 @@ use thruput_json_rpc_types::{
         AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse,
         LocalFundingErrorData,
     },
-    hex::Hex0x,
+    base58::Base58,
     receipt::ExecStatus,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, RuntimeManifest},
     transaction::{SchedulerTransactionError, TransactionStatus, TxHash},
@@ -112,7 +112,7 @@ impl LocalAirdropRpc {
         S: SubmitPlane + ChainPlane,
         R: ReadPlane,
     {
-        let faucet = Hex0x(
+        let faucet = Base58(
             PubkeyAccount::from_public_key_bytes(context.signer.verifying_key_bytes(), 0).address(),
         );
         let builder = NativeAirdropBuilder {
@@ -156,10 +156,10 @@ impl LocalAirdropRpc {
             lock_lease: None,
             timeout: config.request_timeout,
             raw_amount: config.raw_amount,
-            faucet: Hex0x(thruput_xdr::types::ContractAddress::from([0; 32])),
+            faucet: Base58(thruput_xdr::types::ContractAddress::from([0; 32])),
             journal: Arc::new(Mutex::new(FundingJournal::memory(
                 [0; 32].into(),
-                Hex0x(thruput_xdr::types::ContractAddress::from([0; 32])),
+                Base58(thruput_xdr::types::ContractAddress::from([0; 32])),
             ))),
             block_driver,
         }
@@ -839,7 +839,7 @@ impl AirdropTransactionBuilder for NativeAirdropBuilder {
             let bytes = encode_signed_transaction_xdr(&signed)?;
             Ok::<_, thruput_signing::SigningError>(SignedAirdrop {
                 bytes,
-                tx_hash: TxHash(Hex0x(tx_hash)),
+                tx_hash: TxHash(Base58(tx_hash)),
             })
         };
         build().map_err(|error| {

@@ -4,20 +4,23 @@ use thruput_json_rpc_types::dev::{
     FrameOutputInfo, InvocationInfo, StorageDeltaInfo, SyscallInfo, TraceInfo, TransactionDetail,
 };
 use thruput_json_rpc_types::events::EmittedEvent;
-use thruput_json_rpc_types::hex::{Hex0x, HexBytes, Topic};
 use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use thruput_json_rpc_types::transaction::TxHash;
+use thruput_json_rpc_types::{
+    base58::Base58,
+    hex::{HexBytes, Topic},
+};
 
 #[test]
 fn transaction_detail_serializes_hex_and_camel_case() {
     let address = thruput_xdr::types::ContractAddress::from([0x11; 32]);
     let detail = TransactionDetail {
         receipt: TransactionReceipt {
-            tx_hash: TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x22; 32]))),
+            tx_hash: TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x22; 32]))),
             height: BlockHeight::from(7),
             status: ExecStatus::Ok,
             events: vec![EmittedEvent {
-                contract_address: Hex0x(address),
+                contract_address: Base58(address),
                 topics: vec![Topic([0x33; 32])],
                 data: HexBytes(vec![0x44]),
             }],
@@ -28,7 +31,7 @@ fn transaction_detail_serializes_hex_and_camel_case() {
         gas_consumed: 12,
         gas_limit: Some(99),
         storage_deltas: vec![StorageDeltaInfo {
-            address: Hex0x(address),
+            address: Base58(address),
             key: HexBytes(vec![0x66]),
             kind: "bytestringSet".into(),
             summary: "BytestringSet -> 0x77".into(),
@@ -37,7 +40,7 @@ fn transaction_detail_serializes_hex_and_camel_case() {
         }],
         trace: Some(TraceInfo {
             invocation: InvocationInfo {
-                address: Hex0x(address),
+                address: Base58(address),
                 entrypoint: HexBytes(vec![0x88; 8]),
                 gas_limit: Some(99),
                 calldata: HexBytes(vec![0x99]),

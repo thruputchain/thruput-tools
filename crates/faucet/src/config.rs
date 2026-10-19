@@ -13,7 +13,9 @@ use thruput_json_rpc_types::network_descriptor::{
     AirdropDescriptor, FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor,
     NetworkDescriptorEndpoints,
 };
-use thruput_json_rpc_types::{ContractAddress, NetworkHash, NetworkHashHex, SHA256Hash};
+use thruput_json_rpc_types::{
+    ContractAddress, Ed25519PublicKey, NetworkHash, NetworkHashText, SHA256Hash,
+};
 use thruput_signing::{LocalSigner, PubkeyAccount};
 
 pub(crate) const MIN_AIRDROP_TERMINAL_RETENTION_SECS: u64 = 12 * 60 * 60;
@@ -82,17 +84,7 @@ impl FaucetConfigFile {
             "policy.airdrop.ip_quota_window_secs",
             self.policy.airdrop.ip_quota_window_secs,
         )?;
-        validate_faucet_public_key_shape(&self.network.faucet.public_key)?;
-        let public_key: [u8; 32] = self
-            .network
-            .faucet
-            .public_key
-            .0
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                FaucetConfigError::InvalidFaucetPublicKey(self.network.faucet.public_key.0.len())
-            })?;
+        let public_key = self.network.faucet.public_key.0.into_inner();
         if PubkeyAccount::from_public_key_bytes(public_key, 0).address()
             != self.network.faucet.wallet_address.0
         {
@@ -249,9 +241,6 @@ pub enum FaucetConfigError {
     /// A configured CORS origin was invalid.
     #[error("invalid CORS origin `{origin}`: {message}")]
     InvalidCorsOrigin { origin: String, message: String },
-    /// The expected faucet public key was not 32 bytes.
-    #[error("network faucet public key must be 32 bytes, got {0}")]
-    InvalidFaucetPublicKey(usize),
     /// The configured address must be the public key's nonce-zero native account.
     #[error(
         "network.faucet.wallet_address does not match the public key nonce-zero pubkey account"
@@ -339,7 +328,7 @@ pub struct NetworkConfig {
     /// Hash of the materialized genesis state.
     pub genesis_hash: SHA256Hash,
     /// Network hash the faucet signs against and advertises publicly.
-    pub network_hash: NetworkHashHex,
+    pub network_hash: NetworkHashText,
     /// Public endpoint configuration.
     pub endpoints: EndpointConfig,
     /// Native HOG token configuration.
@@ -405,26 +394,15 @@ pub struct FaucetAccountConfig {
     /// Faucet wallet address used as the public sponsor account.
     pub wallet_address: ContractAddress,
     /// Ed25519 public key expected for the loaded faucet signing secret.
-    pub public_key: HexBytes,
-}
-
-fn validate_faucet_public_key_shape(
-    expected_public_key: &HexBytes,
-) -> Result<(), FaucetConfigError> {
-    if expected_public_key.0.len() == 32 {
-        return Ok(());
-    }
-    Err(FaucetConfigError::InvalidFaucetPublicKey(
-        expected_public_key.0.len(),
-    ))
+    pub public_key: Ed25519PublicKey,
 }
 
 fn validate_faucet_public_key_match(
-    expected_public_key: &HexBytes,
+    expected_public_key: &Ed25519PublicKey,
     faucet_secret_key: &[u8; 32],
 ) -> Result<(), FaucetConfigError> {
     let actual_public_key = LocalSigner::from_secret_key(*faucet_secret_key).verifying_key_bytes();
-    if expected_public_key.0.as_slice() != actual_public_key {
+    if expected_public_key.0.as_ref() != actual_public_key {
         return Err(FaucetConfigError::FaucetPublicKeyMismatch);
     }
     Ok(())
@@ -453,7 +431,7 @@ impl AirdropConfig {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use thruput_json_rpc_types::hex::HexBytes;
+    use thruput_json_rpc_types::Ed25519PublicKey;
     use thruput_signing::{LocalSigner, PubkeyAccount};
     use zeroize::Zeroizing;
 
@@ -756,8 +734,9 @@ mod tests {
     #[tokio::test]
     async fn config_rejects_secret_that_does_not_match_faucet_public_key() {
         let mut config: FaucetConfigFile = toml::from_str(&test_config()).unwrap();
-        config.network.faucet.public_key = HexBytes(vec![0xaa; 32]);
-        config.network.faucet.wallet_address = thruput_json_rpc_types::hex::Hex0x(
+        config.network.faucet.public_key =
+            Ed25519PublicKey::from(thruput_xdr::types::Ed25519PublicKey::from([0xaa; 32]));
+        config.network.faucet.wallet_address = thruput_json_rpc_types::base58::Base58(
             PubkeyAccount::from_public_key_bytes([0xaa; 32], 0).address(),
         );
         let error = config
@@ -768,24 +747,19 @@ mod tests {
         assert!(!error.to_string().contains(&"aa".repeat(32)));
     }
 
-    #[tokio::test]
-    async fn config_rejects_malformed_public_key_before_loading_secret() {
-        let mut config: FaucetConfigFile = toml::from_str(&test_config()).unwrap();
-        config.network.faucet.public_key = HexBytes(vec![0xaa]);
-        let error = config
-            .into_parts_with_key_loader(&FailIfCalledKeyLoader)
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            FaucetConfigError::InvalidFaucetPublicKey(1)
-        ));
+    #[test]
+    fn config_rejects_malformed_public_key_before_loading_secret() {
+        let mut config: toml::Value = toml::from_str(&test_config()).unwrap();
+        for key in ["1", "0xdeadbeef", "not-a-key"] {
+            config["network"]["faucet"]["public_key"] = toml::Value::String(key.into());
+            assert!(config.clone().try_into::<FaucetConfigFile>().is_err());
+        }
     }
 
     #[tokio::test]
     async fn config_rejects_wrong_native_address_before_loading_secret() {
         let mut config: FaucetConfigFile = toml::from_str(&test_config()).unwrap();
-        config.network.faucet.wallet_address = thruput_json_rpc_types::hex::Hex0x(
+        config.network.faucet.wallet_address = thruput_json_rpc_types::base58::Base58(
             PubkeyAccount::from_public_key_bytes(
                 LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes(),
                 1,
@@ -845,16 +819,18 @@ mod tests {
     }
 
     fn test_config() -> String {
-        let public_key =
-            hex::encode(LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes());
-        let address = hex::encode(
+        let public_key = Ed25519PublicKey::from(thruput_xdr::types::Ed25519PublicKey::from(
+            LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes(),
+        ))
+        .to_string();
+        let address = thruput_json_rpc_types::ContractAddress::from(
             PubkeyAccount::from_public_key_bytes(
                 LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes(),
                 0,
             )
-            .address()
-            .as_ref(),
-        );
+            .address(),
+        )
+        .to_string();
         TEST_CONFIG
             .replace("__FAUCET_PUBLIC_KEY__", &public_key)
             .replace("__FAUCET_ADDRESS__", &address)
@@ -867,20 +843,20 @@ mod tests {
         [network]
         network_id = "devnet-preview"
         protocol = "x23"
-        genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
-        network_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+        genesis_hash = "11111111111111111111111111111111"
+        network_hash = "11111111111111111111111111111111"
 
         [network.endpoints]
         rpc_url = "https://rpc.devnet.example"
 
         [network.native_hog]
-        token_address = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        token_address = "11111111111111111111111111111112"
         decimals = 7
         transfer_entrypoint = "0x63285b3523f9dc3f"
 
         [network.faucet]
-        wallet_address = "0x__FAUCET_ADDRESS__"
-        public_key = "0x__FAUCET_PUBLIC_KEY__"
+        wallet_address = "__FAUCET_ADDRESS__"
+        public_key = "__FAUCET_PUBLIC_KEY__"
 
         [airdrop]
         raw_amount = "100000000"

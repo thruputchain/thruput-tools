@@ -3,8 +3,8 @@ use std::path::Path;
 
 use thruput_json_rpc_client::GroundhogApiClient;
 use thruput_json_rpc_types::ContractAddress;
+use thruput_json_rpc_types::base58::FixedIdentifier;
 use thruput_json_rpc_types::events::{BlockAnchor, IterationOrder, PaginationCursor};
-use thruput_json_rpc_types::hex::decode_fixed_hex;
 use thruput_json_rpc_types::receipt::TransactionReceipt;
 use thruput_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash,
@@ -177,13 +177,14 @@ async fn fetch_transaction_page(
 }
 
 fn parse_tx_hash(input: &str) -> Result<TxHash, CliError> {
-    let bytes =
-        decode_fixed_hex::<32>(input).map_err(|error| CliError::InvalidTransactionHash {
+    let bytes = thruput_xdr::types::SHA256Hash::decode_base58(input).map_err(|error| {
+        CliError::InvalidTransactionHash {
             input: input.to_owned(),
             display_input: terminal_safe(input),
             message: error.to_string(),
-        })?;
-    Ok(TxHash(thruput_xdr::types::SHA256Hash::from(bytes).into()))
+        }
+    })?;
+    Ok(TxHash(bytes.into()))
 }
 
 async fn fetch_transaction(
@@ -358,15 +359,14 @@ mod tests {
     use thruput_json_rpc_types::events::PaginationCursor;
 
     #[test]
-    fn transaction_hash_parser_accepts_shared_hex_forms() {
+    fn transaction_hash_parser_accepts_canonical_base58() {
         for input in [
-            format!("0x{}", "ab".repeat(32)),
-            format!("0X{}", "AB".repeat(32)),
-            "aB".repeat(32),
+            thruput_json_rpc_types::NetworkHashText::from([0xab; 32]).to_string(),
+            "1".repeat(32),
         ] {
             let parsed =
                 parse_tx_hash(&input).expect("bug: shared transaction hash form should parse");
-            assert_eq!(format_tx_hash(&parsed), format!("0x{}", "ab".repeat(32)));
+            assert_eq!(format_tx_hash(&parsed), input);
         }
     }
 
@@ -376,6 +376,8 @@ mod tests {
             "0xdeadbeef".to_owned(),
             format!("0x{}", "ab".repeat(33)),
             "not-hex".to_owned(),
+            format!("0x{}", "ab".repeat(32)),
+            "ab".repeat(32),
         ] {
             let error =
                 parse_tx_hash(&input).expect_err("bug: invalid transaction hash should fail");

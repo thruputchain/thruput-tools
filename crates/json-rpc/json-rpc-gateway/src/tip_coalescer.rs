@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use thruput_db_gateway::DbGatewayConfigResult;
 use thruput_hogd_backend::db_gateway as shared_db_gateway;
 use thruput_json_rpc_server::{RpcRequestContext, TipReading};
-use thruput_json_rpc_types::NetworkHashHex;
+use thruput_json_rpc_types::NetworkHashText;
 #[cfg(test)]
 use thruput_json_rpc_types::block::ChainTip;
 use tokio::sync::{RwLock, mpsc, oneshot};
@@ -44,7 +44,7 @@ pub struct DbTipSink {
     db_gateway: Arc<RwLock<Option<DbGatewayClient>>>,
     metrics: GatewayMetrics,
     timeout: Duration,
-    expected_network: Option<NetworkHashHex>,
+    expected_network: Option<NetworkHashText>,
 }
 
 impl DbTipSink {
@@ -52,7 +52,7 @@ impl DbTipSink {
         db_gateway: Arc<RwLock<Option<DbGatewayClient>>>,
         metrics: GatewayMetrics,
         timeout: Duration,
-        expected_network: Option<NetworkHashHex>,
+        expected_network: Option<NetworkHashText>,
     ) -> Self {
         Self {
             db_gateway,
@@ -356,7 +356,7 @@ mod tests {
     };
     use std::time::Duration;
     use thruput_json_rpc_types::BlockHeight;
-    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::base58::Base58;
     use tokio::sync::Notify;
 
     /// Scripted mock sink.  Each `get_tip()` call pops the next gated
@@ -413,7 +413,7 @@ mod tests {
         TipReading::new(
             ChainTip {
                 height: BlockHeight::new(height),
-                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from(bytes)),
+                block_hash: Base58(thruput_xdr::types::SHA256Hash::from(bytes)),
             },
             thruput_xdr::network_config::NetworkConfig::_0 {
                 v0: thruput_xdr::network_config::NetworkConfigV0 {

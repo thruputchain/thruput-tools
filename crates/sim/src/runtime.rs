@@ -3,7 +3,7 @@ use std::{future::Future, path::Path, time::Duration};
 use sha2::{Digest, Sha256};
 use thruput_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use thruput_json_rpc_types::{
-    NetworkHashHex,
+    NetworkHashText,
     protocol_token::protocol_text,
     runtime_manifest::{
         BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, BootstrapAccount,
@@ -119,7 +119,7 @@ pub(crate) async fn preflight_chain_identity(
     })?;
     let mut observed_bytes = [0_u8; 32];
     observed_bytes.copy_from_slice(info.network_hash.into_inner().as_ref());
-    let observed = NetworkHashHex::from(observed_bytes);
+    let observed = NetworkHashText::from(observed_bytes);
     if manifest.network_hash != observed {
         return Err(RuntimeManifestError::NetworkHashMismatch {
             expected: manifest.network_hash.clone(),
@@ -309,8 +309,8 @@ pub enum RuntimeManifestError {
         "runtime network hash mismatch: manifest expected {expected}, public RPC reported {observed}"
     )]
     NetworkHashMismatch {
-        expected: NetworkHashHex,
-        observed: NetworkHashHex,
+        expected: NetworkHashText,
+        observed: NetworkHashText,
     },
     #[error("public groundhog_networkInfo failed at {rpc_url}: {error}")]
     PublicNetworkInfo { rpc_url: String, error: String },
@@ -327,7 +327,7 @@ pub enum RuntimeManifestError {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::base58::Base58;
     use thruput_json_rpc_types::runtime_manifest::RuntimeManifest;
     use thruput_signing::derive_dev_account_signer;
     use thruput_xdr::types::Ed25519PublicKey;
@@ -364,8 +364,8 @@ mod tests {
         let mut local_user = manifest.bootstrap_accounts[0].clone();
         local_user.index = Some(3);
         local_user.role = BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER.into();
-        local_user.public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
-        local_user.wallet_address = Hex0x(
+        local_user.public_key = Base58(Ed25519PublicKey::from(signer.verifying_key_bytes()));
+        local_user.wallet_address = Base58(
             thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
                 .address(),
         );
@@ -416,8 +416,8 @@ mod tests {
             .parse()
             .expect("endpoint");
         let (url, server) = public_server(
-            json!({"networkHash":prefixed_hex(0)}),
-            json!({"height":"1","blockHash":prefixed_hex(1)}),
+            json!({"networkHash":identifier(0)}),
+            json!({"height":"1","blockHash":identifier(1)}),
         )
         .await;
         preflight_chain_identity(&manifest, &url, Duration::from_secs(1))
@@ -434,8 +434,8 @@ mod tests {
     #[tokio::test]
     async fn runtime_preflight_rejects_public_network_mismatch() {
         let (url, server) = public_server(
-            json!({"networkHash":prefixed_hex(0xff)}),
-            json!({"height":"1","blockHash":prefixed_hex(1)}),
+            json!({"networkHash":identifier(0xff)}),
+            json!({"height":"1","blockHash":identifier(1)}),
         )
         .await;
         let error =
@@ -451,8 +451,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_preflight_rejects_malformed_public_tip() {
-        let (url, server) =
-            public_server(json!({"networkHash":prefixed_hex(0)}), json!(null)).await;
+        let (url, server) = public_server(json!({"networkHash":identifier(0)}), json!(null)).await;
         let error =
             preflight_chain_identity(&runtime_manifest(false), &url, Duration::from_secs(1))
                 .await
@@ -557,15 +556,15 @@ mod tests {
     fn runtime_manifest(mismatch: bool) -> RuntimeManifest {
         let signer = derive_dev_account_signer("seed", 0);
         let public_key = if mismatch {
-            Hex0x(Ed25519PublicKey::from([0xff; 32]))
+            Base58(Ed25519PublicKey::from([0xff; 32]))
         } else {
-            Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()))
+            Base58(Ed25519PublicKey::from(signer.verifying_key_bytes()))
         };
         serde_json::from_value(json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "kind": "hosted-devnet-runtime",
             "chainState": "fresh",
-            "networkHash": "00".repeat(32),
+            "networkHash": "1".repeat(32),
             "protocol": protocol_text(&thruput_xdr::PROTOCOL_VERSION),
             "producer": {
                 "binary": "hog-devnode",
@@ -583,12 +582,12 @@ mod tests {
                 "index": 0,
                 "role": "local_user",
                 "publicKey": public_key,
-                "walletAddress": format!("0x{}", hex::encode(thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address().as_ref())),
+                "walletAddress": Base58(thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()),
                 "initialStorageTokens": "1000000000"
             }],
             "bootstrap": {
                 "storageCostModel": {
-                    "hash": prefixed_hex(0x55),
+                    "hash": identifier(0x55),
                     "baseDataItemCost": "1",
                     "bytestringCostPerByte": "1",
                     "baseContractDeploymentCost": "1",
@@ -603,7 +602,7 @@ mod tests {
         .expect("runtime manifest fixture should parse")
     }
 
-    fn prefixed_hex(byte: u8) -> String {
-        format!("0x{}", hex::encode([byte; 32]))
+    fn identifier(byte: u8) -> String {
+        thruput_json_rpc_types::NetworkHashText::from([byte; 32]).to_string()
     }
 }

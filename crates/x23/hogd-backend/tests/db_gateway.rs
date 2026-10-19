@@ -4,7 +4,7 @@ use thruput_db_gateway::DbGatewayResult;
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::ContractAddress;
 use thruput_json_rpc_types::address_auth::{AuthPublicKey, AuthSigner};
-use thruput_json_rpc_types::hex::Hex0x;
+use thruput_json_rpc_types::base58::Base58;
 use thruput_scheduler::RPCError;
 use thruput_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
 use thruput_xdr::storage_item::WireStorageItem;
@@ -102,7 +102,7 @@ fn auth_data_with_slots(slots: &[(usize, u8, u32)], required_weight: u32) -> Add
 }
 
 fn address(byte: u8) -> ContractAddress {
-    Hex0x(thruput_xdr::types::ContractAddress::from([byte; 32]))
+    Base58(thruput_xdr::types::ContractAddress::from([byte; 32]))
 }
 
 #[test]
@@ -129,14 +129,14 @@ fn registered_auth_data_projects_occupied_slots_with_their_key_ids() {
             AuthSigner {
                 key_id: 0,
                 public_key: AuthPublicKey::Ed25519 {
-                    key: Hex0x(Ed25519PublicKey::from([0xaa; 32])),
+                    key: Base58(Ed25519PublicKey::from([0xaa; 32])),
                 },
                 max_weight: 1,
             },
             AuthSigner {
                 key_id: 5,
                 public_key: AuthPublicKey::Ed25519 {
-                    key: Hex0x(Ed25519PublicKey::from([0xbb; 32])),
+                    key: Base58(Ed25519PublicKey::from([0xbb; 32])),
                 },
                 max_weight: 3,
             },

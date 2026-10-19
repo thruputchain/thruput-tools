@@ -27,7 +27,7 @@ use crate::context::GatewayContext;
 use thruput_bundle_identity::{BundleIdentity, BundleSubject};
 use thruput_json_rpc_api::GroundhogApiServer;
 use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-use thruput_json_rpc_types::{NetworkHashHex, SHA256Hash};
+use thruput_json_rpc_types::{NetworkHashText, SHA256Hash};
 
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 const BUILD_VERSION: thruput_build_info::BuildVersion = thruput_build_info::build_version!();
@@ -54,7 +54,7 @@ struct Cli {
 
     /// Canonical unprefixed network hash (overrides config file)
     #[arg(long, value_parser = parse_network_hash)]
-    network_hash: Option<NetworkHashHex>,
+    network_hash: Option<NetworkHashText>,
 
     /// Hosted-faucet genesis hash (overrides config file)
     #[arg(long, value_parser = parse_sha256_hash)]
@@ -350,13 +350,13 @@ fn apply_identity_cli_overrides(config: &mut GatewayConfig, cli: &Cli) {
     }
 }
 
-fn parse_network_hash(value: &str) -> Result<NetworkHashHex, String> {
-    NetworkHashHex::try_from(value).map_err(|error| error.to_string())
+fn parse_network_hash(value: &str) -> Result<NetworkHashText, String> {
+    NetworkHashText::try_from(value).map_err(|error| error.to_string())
 }
 
 fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, String> {
-    thruput_json_rpc_types::hex::decode_fixed_hex(value)
-        .map(|bytes| SHA256Hash::from(thruput_xdr::types::SHA256Hash::from(bytes)))
+    <thruput_xdr::types::SHA256Hash as thruput_json_rpc_types::base58::FixedIdentifier>::decode_base58(value)
+        .map(SHA256Hash::from)
         .map_err(|error| error.to_string())
 }
 
@@ -638,9 +638,9 @@ mod tests {
             "--network-id",
             "devnet-preview",
             "--network-hash",
-            &"12".repeat(32),
+            NetworkHashText::from([0x12; 32]).as_str(),
             "--genesis-hash",
-            &format!("0x{}", "42".repeat(32)),
+            NetworkHashText::from([0x42; 32]).as_str(),
         ])
         .expect("bug: valid network identity flags should parse");
         let mut config = GatewayConfig::default();

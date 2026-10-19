@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use thruput_json_rpc_client::GroundhogApiClient;
 use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
-use thruput_testkit::rpc_types::hex::Hex0x;
+use thruput_testkit::rpc_types::base58::Base58;
 use thruput_testkit::{Agent, NetworkConfig, Scenario};
 
 #[tokio::test]
@@ -43,7 +43,7 @@ async fn repeated_existing_scenarios_fund_the_same_native_account() {
                     .network()
                     .client()
                     .unwrap()
-                    .get_balance(Hex0x(ctx.address()))
+                    .get_balance(Base58(ctx.address()))
                     .await
                     .unwrap();
                 observations.lock().unwrap().push((

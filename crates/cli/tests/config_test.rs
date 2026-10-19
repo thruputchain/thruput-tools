@@ -160,7 +160,7 @@ fn global_config_rewrite_replaces_permissive_file_with_private_permissions() {
 #[serial]
 fn resolve_profile_loads_default_project_profile() {
     let tmp = TempDir::new().unwrap();
-    let direct_addr = format!("0x{}", "bb".repeat(32));
+    let direct_addr = thruput_encoding::encode(&[0xbb; 32]);
     fs::write(
         tmp.path().join("thruput.toml"),
         r#"
@@ -355,12 +355,12 @@ default_key = "alice"
 fn resolve_profile_merges_global_and_project_profile_fields() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
-    let global_hog = format!("0x{}", "11".repeat(32));
-    let project_hog = format!("0x{}", "22".repeat(32));
-    let counter = format!("0x{}", "33".repeat(32));
-    let global_alice = format!("0x{}", "44".repeat(32));
-    let project_alice = format!("0x{}", "55".repeat(32));
-    let bob = format!("0x{}", "66".repeat(32));
+    let global_hog = thruput_encoding::encode(&[0x11; 32]);
+    let project_hog = thruput_encoding::encode(&[0x22; 32]);
+    let counter = thruput_encoding::encode(&[0x33; 32]);
+    let global_alice = thruput_encoding::encode(&[0x44; 32]);
+    let project_alice = thruput_encoding::encode(&[0x55; 32]);
+    let bob = thruput_encoding::encode(&[0x66; 32]);
     let artifacts_dir = tmp.path().join("global-artifacts");
     fs::create_dir(&project).unwrap();
     fs::create_dir(&artifacts_dir).unwrap();
@@ -486,8 +486,8 @@ fn save_wallet_and_default_uses_one_profile_update() {
         "default_profile = \"default\"\n\n[profile.default]\n",
     )
     .unwrap();
-    let address = format!("0x{}", "aa".repeat(32));
-    let owner = format!("0x{}", "bb".repeat(32));
+    let address = thruput_encoding::encode(&[0xaa; 32]);
+    let owner = thruput_encoding::encode(&[0xbb; 32]);
 
     thruput_cli::config::save_profile_wallet_address_with_default(
         tmp.path(),
@@ -528,7 +528,7 @@ counter = "0x1111" # alias comment
     #[cfg(unix)]
     fs::set_permissions(&config_path, fs::Permissions::from_mode(0o640)).unwrap();
 
-    let addr = format!("0x{}", "22".repeat(32));
+    let addr = thruput_encoding::encode(&[0x22; 32]);
     let written =
         thruput_cli::config::save_profile_contract_alias(tmp.path(), None, "counter", &addr)
             .unwrap();
@@ -558,7 +558,7 @@ fn save_profile_contract_alias_creates_selected_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    let addr = format!("0x{}", "be".repeat(32));
+    let addr = thruput_encoding::encode(&[0xbe; 32]);
     let written = thruput_cli::config::save_profile_contract_alias(
         tmp.path(),
         Some("testnet"),
@@ -604,8 +604,8 @@ owner_public_key = "0x2222"
     )
     .unwrap();
 
-    let addr = format!("0x{}", "22".repeat(32));
-    let owner = format!("0x{}", "33".repeat(32));
+    let addr = thruput_encoding::encode(&[0x22; 32]);
+    let owner = thruput_encoding::encode(&[0x33; 32]);
     let written =
         thruput_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr, &owner)
             .unwrap();
@@ -640,8 +640,8 @@ fn save_profile_wallet_address_creates_selected_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    let addr = format!("0x{}", "be".repeat(32));
-    let owner = format!("0x{}", "cd".repeat(32));
+    let addr = thruput_encoding::encode(&[0xbe; 32]);
+    let owner = thruput_encoding::encode(&[0xcd; 32]);
     let written = thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("testnet"),
@@ -1139,7 +1139,7 @@ network = "devnet"
 #[serial]
 fn save_alias_rejects_empty_alias() {
     let tmp = TempDir::new().unwrap();
-    let addr = format!("0x{}", "ab".repeat(32));
+    let addr = thruput_encoding::encode(&[0xab; 32]);
     let result = thruput_cli::config::save_profile_contract_alias(tmp.path(), None, "", &addr);
     assert!(result.is_err());
 }
@@ -1166,7 +1166,7 @@ fn save_alias_rejects_malformed_address() {
 fn save_alias_accepts_valid_hex_address() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let addr = format!("0x{}", "ab".repeat(32));
+    let addr = thruput_encoding::encode(&[0xab; 32]);
     let result = thruput_cli::config::save_profile_contract_alias(
         tmp.path(),
         Some("default"),
@@ -1183,8 +1183,8 @@ fn save_alias_accepts_valid_hex_address() {
 #[serial]
 fn save_wallet_rejects_empty_name() {
     let tmp = TempDir::new().unwrap();
-    let addr = format!("0x{}", "ab".repeat(32));
-    let owner = format!("0x{}", "cd".repeat(32));
+    let addr = thruput_encoding::encode(&[0xab; 32]);
+    let owner = thruput_encoding::encode(&[0xcd; 32]);
     let result =
         thruput_cli::config::save_profile_wallet_address(tmp.path(), None, "", &addr, &owner);
     assert!(result.is_err());
@@ -1194,7 +1194,7 @@ fn save_wallet_rejects_empty_name() {
 #[serial]
 fn save_wallet_rejects_empty_address() {
     let tmp = TempDir::new().unwrap();
-    let owner = format!("0x{}", "cd".repeat(32));
+    let owner = thruput_encoding::encode(&[0xcd; 32]);
     let result =
         thruput_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", "", &owner);
     assert!(result.is_err());
@@ -1204,7 +1204,7 @@ fn save_wallet_rejects_empty_address() {
 #[serial]
 fn save_wallet_rejects_malformed_address() {
     let tmp = TempDir::new().unwrap();
-    let owner = format!("0x{}", "cd".repeat(32));
+    let owner = thruput_encoding::encode(&[0xcd; 32]);
     let result = thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
@@ -1220,8 +1220,8 @@ fn save_wallet_rejects_malformed_address() {
 fn save_wallet_accepts_valid_hex_address() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let addr = format!("0x{}", "ab".repeat(32));
-    let owner = format!("0x{}", "cd".repeat(32));
+    let addr = thruput_encoding::encode(&[0xab; 32]);
+    let owner = thruput_encoding::encode(&[0xcd; 32]);
     let result = thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("default"),
@@ -1292,8 +1292,8 @@ address = "0x{}"
 fn save_second_alias_preserves_first() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let addr_a = format!("0x{}", "aa".repeat(32));
-    let addr_b = format!("0x{}", "bb".repeat(32));
+    let addr_a = thruput_encoding::encode(&[0xaa; 32]);
+    let addr_b = thruput_encoding::encode(&[0xbb; 32]);
 
     thruput_cli::config::save_profile_contract_alias(
         tmp.path(),
@@ -1328,10 +1328,10 @@ fn save_second_alias_preserves_first() {
 fn save_second_wallet_preserves_first() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let addr_a = format!("0x{}", "aa".repeat(32));
-    let addr_b = format!("0x{}", "bb".repeat(32));
-    let owner_a = format!("0x{}", "cc".repeat(32));
-    let owner_b = format!("0x{}", "dd".repeat(32));
+    let addr_a = thruput_encoding::encode(&[0xaa; 32]);
+    let addr_b = thruput_encoding::encode(&[0xbb; 32]);
+    let owner_a = thruput_encoding::encode(&[0xcc; 32]);
+    let owner_b = thruput_encoding::encode(&[0xdd; 32]);
 
     thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
@@ -1374,10 +1374,10 @@ fn save_second_wallet_preserves_first() {
 fn remove_wallet_deletes_saved_entry() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let addr_a = format!("0x{}", "aa".repeat(32));
-    let addr_b = format!("0x{}", "bb".repeat(32));
-    let owner_a = format!("0x{}", "cc".repeat(32));
-    let owner_b = format!("0x{}", "dd".repeat(32));
+    let addr_a = thruput_encoding::encode(&[0xaa; 32]);
+    let addr_b = thruput_encoding::encode(&[0xbb; 32]);
+    let owner_a = thruput_encoding::encode(&[0xcc; 32]);
+    let owner_b = thruput_encoding::encode(&[0xdd; 32]);
 
     thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
@@ -1422,8 +1422,8 @@ fn remove_wallet_deletes_saved_entry() {
 fn remove_wallet_clears_matching_default_in_same_write() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let address = format!("0x{}", "aa".repeat(32));
-    let owner = format!("0x{}", "bb".repeat(32));
+    let address = thruput_encoding::encode(&[0xaa; 32]);
+    let owner = thruput_encoding::encode(&[0xbb; 32]);
     fs::write(tmp.path().join("thruput.toml"), "").unwrap();
 
     thruput_cli::config::save_profile_wallet_address(
@@ -1452,8 +1452,8 @@ fn remove_wallet_clears_matching_default_in_same_write() {
 fn remove_wallet_rejects_missing_entry() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let addr = format!("0x{}", "aa".repeat(32));
-    let owner = format!("0x{}", "bb".repeat(32));
+    let addr = thruput_encoding::encode(&[0xaa; 32]);
+    let owner = thruput_encoding::encode(&[0xbb; 32]);
 
     thruput_cli::config::save_profile_wallet_address(
         tmp.path(),
@@ -1488,6 +1488,12 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
 
     let local = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(local.rpc_url.as_deref(), Some("http://127.0.0.1:9999"));
+    for name in ["local", "devnet"] {
+        let profile = thruput_cli::config::resolve_profile(tmp.path(), Some(name)).unwrap();
+        let address = thruput_signing::strkey::parse_contract_address(&profile.contracts["HOG"])
+            .expect("initialized HOG alias must resolve");
+        assert_eq!(address, thruput_signing::NATIVE_HOG_ADDRESS);
+    }
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains("plugin = \"keep\""));
 
@@ -1546,9 +1552,9 @@ fn concurrent_project_writers_preserve_independent_updates() {
     fs::write(&path, "[profile.default]\nplugin = true\n").unwrap();
     let lock = lock_config(&path);
     let (started_tx, started_rx) = std::sync::mpsc::channel();
-    let alias_address = format!("0x{}", "aa".repeat(32));
-    let wallet_address = format!("0x{}", "bb".repeat(32));
-    let owner = format!("0x{}", "cc".repeat(32));
+    let alias_address = thruput_encoding::encode(&[0xaa; 32]);
+    let wallet_address = thruput_encoding::encode(&[0xbb; 32]);
+    let owner = thruput_encoding::encode(&[0xcc; 32]);
 
     let project = tmp.path().to_path_buf();
     let alias_started = started_tx.clone();
@@ -2156,7 +2162,7 @@ fn config_set_network_hash_parses_its_field_name_and_persists() {
         "[profile.devnet]\nnetwork = 'devnet'\n",
     )
     .unwrap();
-    let hash = "3".repeat(64);
+    let hash = thruput_encoding::encode(&[0x33; 32]);
 
     // Parse the field name the way the CLI does, so a variant wired everywhere
     // except `FromStr` cannot pass this.
@@ -2174,7 +2180,49 @@ fn config_set_network_hash_parses_its_field_name_and_persists() {
 }
 
 #[test]
-fn config_set_network_hash_accepts_the_0x_prefix_rpc_reports() {
+fn saved_strkey_identifiers_are_persisted_as_base58() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("thruput.toml"),
+        "[profile.devnet]\nnetwork = 'devnet'\n",
+    )
+    .unwrap();
+    let address = thruput_encoding::address_strkey(&[0xab; 32]);
+    let owner = thruput_encoding::public_key_strkey(&[0xcd; 32]);
+    thruput_cli::config::save_profile_contract_alias(
+        tmp.path(),
+        Some("devnet"),
+        "counter",
+        &address,
+    )
+    .unwrap();
+    thruput_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        Some("devnet"),
+        "alice",
+        &address,
+        &owner,
+    )
+    .unwrap();
+    let document: toml::Value =
+        toml::from_str(&fs::read_to_string(tmp.path().join("thruput.toml")).unwrap()).unwrap();
+    let profile = &document["profile"]["devnet"];
+    assert_eq!(
+        profile["contracts"]["counter"].as_str(),
+        Some(thruput_encoding::encode(&[0xab; 32]).as_str())
+    );
+    assert_eq!(
+        profile["wallets"]["alice"]["address"].as_str(),
+        Some(thruput_encoding::encode(&[0xab; 32]).as_str())
+    );
+    assert_eq!(
+        profile["wallets"]["alice"]["owner_public_key"].as_str(),
+        Some(thruput_encoding::encode(&[0xcd; 32]).as_str())
+    );
+}
+
+#[test]
+fn config_set_network_hash_rejects_legacy_hex_without_writing() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("thruput.toml"),
@@ -2184,9 +2232,8 @@ fn config_set_network_hash_accepts_the_0x_prefix_rpc_reports() {
     let hash = "ab".repeat(32);
     let field: thruput_cli::config::ConfigField = "network-hash".parse().unwrap();
 
-    // `groundhog_networkInfo` reports the hash 0x-prefixed; pasting it back
-    // must work and persist the unprefixed form the manifest uses.
-    let report = thruput_cli::config::set_profile_field(
+    let original = fs::read_to_string(tmp.path().join("thruput.toml")).unwrap();
+    let error = thruput_cli::config::set_profile_field(
         tmp.path(),
         "devnet",
         field,
@@ -2194,13 +2241,12 @@ fn config_set_network_hash_accepts_the_0x_prefix_rpc_reports() {
         false,
         true,
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert!(report.changed);
-    assert!(
-        fs::read_to_string(tmp.path().join("thruput.toml"))
-            .unwrap()
-            .contains(&format!("network_hash = \"{hash}\""))
+    assert_eq!(error.code(), "config_value_invalid");
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("thruput.toml")).unwrap(),
+        original
     );
 }
 
@@ -2214,8 +2260,7 @@ fn config_set_network_hash_rejects_a_non_canonical_value() {
     .unwrap();
     let field: thruput_cli::config::ConfigField = "network-hash".parse().unwrap();
 
-    // Uppercase is a valid hex string but not the canonical form the manifest
-    // and the signing path agree on.
+    // A legacy 64-digit hex value is not a fixed-width base58 network hash.
     let error = thruput_cli::config::set_profile_field(
         tmp.path(),
         "devnet",

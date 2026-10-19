@@ -832,7 +832,7 @@ impl DeployArgs {
 
 #[derive(Args)]
 struct CallArgs {
-    /// Contract alias, C StrKey, or direct 0x-prefixed address
+    /// Contract alias, C StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     contract: String,
     /// Method name or 0x-prefixed 8-byte entrypoint ID
@@ -981,7 +981,7 @@ impl BalanceArgs {
 
 #[derive(Args)]
 struct ViewArgs {
-    /// Contract alias, C StrKey, or direct 0x-prefixed address
+    /// Contract alias, C StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     contract: String,
     /// Method name or 0x-prefixed 8-byte entrypoint ID
@@ -1028,7 +1028,7 @@ impl ViewArgs {
 
 #[derive(Args)]
 struct StorageArgs {
-    /// Contract alias, C StrKey, or direct 0x-prefixed address
+    /// Contract alias, C StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     address: String,
     /// 32-byte storage key as 0x-prefixed hex
@@ -1089,10 +1089,10 @@ struct NodeArgs {
     /// Override the hog-devnode handshake protocol token
     #[arg(long)]
     hogd_protocol: Option<String>,
-    /// Initialize a new chain: 64 lowercase hex digits, optionally 0x-prefixed
+    /// Initialize a new chain: base58 encoding of exactly 32 bytes
     /// (default: all zeros for new chains). Omit on restart; initialized directories reject it.
-    #[arg(long, value_name = "HEX64", value_parser = thruput_cli::config::parse_network_hash)]
-    init_network_hash: Option<thruput_json_rpc_types::NetworkHashHex>,
+    #[arg(long, value_name = "BASE58", value_parser = thruput_cli::config::parse_network_hash)]
+    init_network_hash: Option<thruput_json_rpc_types::NetworkHashText>,
     /// Override hog-devnode readiness timeout for smoke tests
     #[arg(long, hide = true)]
     startup_timeout_secs: Option<u64>,
@@ -1204,7 +1204,7 @@ enum KeysCommand {
         #[arg(long, hide = true)]
         fund: bool,
     },
-    /// Import a secret seed from hidden terminal input or piped stdin (S StrKey or 32-byte hex)
+    /// Import a secret seed from hidden terminal input or piped stdin (S StrKey or base58)
     #[allow(clippy::doc_markdown)]
     Import {
         /// New key name; existing keys are never overwritten
@@ -1214,13 +1214,13 @@ enum KeysCommand {
     Ls,
     /// Export a private key for client use
     #[command(
-        long_about = "Export a CLI-managed private key for use with a client signer.\n\nThe 32-byte private seed (Ed25519 seed or ML-DSA-65 FIPS 204 seed) is written to stdout as lowercase, 0x-prefixed hex by default; --format strkey exports an S StrKey for Ed25519 keys. Treat it as a secret: do not expose it in logs, CI output, or committed files."
+        long_about = "Export a CLI-managed private key for use with a client signer.\n\nThe 32-byte private seed (Ed25519 seed or ML-DSA-65 FIPS 204 seed) is written to stdout as unprefixed, case-sensitive base58 by default; --format strkey exports an S StrKey for Ed25519 keys. Treat it as a secret: do not expose it in logs, CI output, or committed files."
     )]
     Export {
         /// Key name to export
         name: String,
         /// Private seed encoding
-        #[arg(long, value_enum, default_value_t = thruput_cli::keys::KeyExportFormat::Hex)]
+        #[arg(long, value_enum, default_value_t = thruput_cli::keys::KeyExportFormat::Base58)]
         format: thruput_cli::keys::KeyExportFormat,
         #[command(flatten)]
         confirmation: ConfirmationArgs,
@@ -1305,7 +1305,7 @@ enum ConfigCommand {
         /// Absolute HTTP(S) RPC URL
         #[arg(long)]
         rpc_url: Option<String>,
-        /// Network hash the RPC endpoint serves, as 64 lowercase hex digits
+        /// Network hash the RPC endpoint serves, as base58 encoding of exactly 32 bytes
         #[arg(long)]
         network_hash: Option<String>,
         /// Absolute HTTP(S) faucet URL
@@ -2299,21 +2299,17 @@ mod tests {
     }
 
     #[test]
-    fn node_init_network_hash_parses_and_normalizes() {
+    fn node_init_network_hash_preserves_canonical_base58() {
         for input in [
-            "ab".repeat(32),
-            format!("0x{}", "ab".repeat(32)),
-            "00".repeat(32),
+            thruput_json_rpc_types::NetworkHashText::from([0xab; 32]).to_string(),
+            "1".repeat(32),
         ] {
             let cli =
                 Cli::try_parse_from(["thruput", "node", "--init-network-hash", &input]).unwrap();
             let Command::Node(args) = cli.command else {
                 panic!("expected node")
             };
-            assert_eq!(
-                args.init_network_hash.unwrap().as_str(),
-                input.strip_prefix("0x").unwrap_or(&input)
-            );
+            assert_eq!(args.init_network_hash.unwrap().as_str(), input);
         }
         let cli = Cli::try_parse_from(["thruput", "node"]).unwrap();
         let Command::Node(args) = cli.command else {
@@ -2345,7 +2341,7 @@ mod tests {
             assert!(
                 error
                     .to_string()
-                    .contains("64 lowercase hexadecimal digits")
+                    .contains("base58 encoding of exactly 32 bytes")
             );
         }
     }

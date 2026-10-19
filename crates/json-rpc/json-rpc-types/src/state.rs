@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thruput_xdr::storage_item::WireStorageItem;
 
-use crate::hex::{Hex0x, HexBytes};
 use crate::{BlockHeight, SHA256Hash};
+use crate::{base58::Base58, hex::HexBytes};
 
 /// Outcome of reading one storage location at the latest committed
 /// snapshot.  `block_height` is always set to the snapshot the read
@@ -98,7 +98,7 @@ impl From<&WireStorageItem> for StorageItemInfo {
             WireStorageItem::kItemTypeDeployedContractHash {
                 deployed_contract_hash,
             } => Self::DeployedContract {
-                hash: Hex0x(deployed_contract_hash.hash),
+                hash: Base58(deployed_contract_hash.hash),
                 size: deployed_contract_hash.contract_size,
                 contract_type: deployed_contract_hash.contract_type.0,
             },

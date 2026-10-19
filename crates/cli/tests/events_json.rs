@@ -6,11 +6,7 @@ use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 use thruput_cli::events_json::{EventDecodeStatus, EventListItemReport};
 
 fn tx_hash(byte: u8) -> TxHash {
-    serde_json::from_value(serde_json::Value::String(format!(
-        "0x{}",
-        hex::encode([byte; 32])
-    )))
-    .expect("bug: transaction hash fixture should parse")
+    TxHash(thruput_xdr::types::SHA256Hash::from([byte; 32]).into())
 }
 
 fn contract_address(byte: u8) -> ContractAddress {

@@ -93,7 +93,7 @@ pub fn stored_key_allocation(
         Some(key),
         vec![
             thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-                thruput_json_rpc_types::hex::Hex0x(public_key.into()),
+                thruput_json_rpc_types::base58::Base58(public_key.into()),
                 raw_amount.to_string(),
             ),
         ],
@@ -205,7 +205,7 @@ pub struct LocalNodeOptions {
     pub hogd_protocol: Option<String>,
     /// Signing domain for a new chain. Omission initializes zero for fresh starts.
     /// Initialized directories reject this option and load their persisted identity instead.
-    pub init_network_hash: Option<thruput_json_rpc_types::NetworkHashHex>,
+    pub init_network_hash: Option<thruput_json_rpc_types::NetworkHashText>,
     /// Override readiness timeout while waiting for hogd-dev.
     pub startup_timeout: Option<Duration>,
     /// PID-file behavior for orphan detection.
@@ -1443,7 +1443,9 @@ mod tests {
     #[test]
     fn public_allocation_file_rejects_duplicates_and_unknown_fields() {
         let file = tempfile::NamedTempFile::new().unwrap();
-        let public_key = format!("0x{}", "11".repeat(32));
+        let public_key = thruput_json_rpc_types::Ed25519PublicKey::from(
+            thruput_xdr::types::Ed25519PublicKey::from([0x11; 32]),
+        );
         let allocation = serde_json::json!({"publicKey":public_key,"initialStorageTokens":"12345"});
         fs::write(
             file.path(),
@@ -1531,7 +1533,7 @@ mod tests {
             pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hog-devnode-test.pid")),
             bootstrap_accounts: vec![
                 thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-                    thruput_json_rpc_types::hex::Hex0x([7; 32].into()),
+                    thruput_json_rpc_types::base58::Base58([7; 32].into()),
                     "12345678",
                 ),
             ],
@@ -1950,7 +1952,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348","dev_control":"127.0.0.1:12349"}}"#,
+            r#"{"status":"ready","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348","dev_control":"127.0.0.1:12349"}}"#,
         )
         .expect("bug: readiness should parse");
 
@@ -1964,7 +1966,7 @@ mod tests {
         );
         assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
         assert_eq!(payload["rpc_listen_address"], "127.0.0.1:9545");
-        assert_eq!(payload["chain"], "00".repeat(32));
+        assert_eq!(payload["chain"], "1".repeat(32));
         assert!(payload["chain_state"].is_null());
         assert_eq!(payload["backend"]["kind"], "hogd_dev");
         let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_scheduler_only())
@@ -2022,18 +2024,18 @@ mod tests {
         }
         let manifest_path = temp.path().join("runtime-manifest.json");
         let manifest = br#"{
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "kind": "hogd-dev-runtime",
           "chainState": "fresh",
-          "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "networkHash": "11111111111111111111111111111111",
           "protocol": "hogp/test00000000000",
-          "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
+          "genesisHash": "5TeWSsjg2gbxCyWVniXeCmwM7UtHTCK7svzJr5xYJzHf",
           "producer": {"binary": "hog-devnode", "version": "0.1.0", "commitHash": "abcdef0"},
           "endpoints": {"scheduler": "127.0.0.1:12345", "schedulerGateway": "127.0.0.1:12346"},
           "bootstrapAccounts": [],
           "bootstrap": {
             "storageCostModel": {
-              "hash": "0x5353535353535353535353535353535353535353535353535353535353535353",
+              "hash": "6cGXszer5keoaWm8Co5G9f4KGBThuGz4NsKTqYij1emg",
               "baseDataItemCost": "12000",
               "bytestringCostPerByte": "10",
               "baseContractDeploymentCost": "12000",
@@ -2052,9 +2054,9 @@ mod tests {
             fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600))
                 .expect("bug: manifest permissions should be set");
         }
-        let hash = format!("0x{}", hex::encode(Sha256::digest(manifest)));
+        let hash = thruput_encoding::encode(&Sha256::digest(manifest));
         let pointer = serde_json::json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "status": "ready",
             "manifestPath": manifest_path,
             "manifestHash": hash,
@@ -2072,7 +2074,10 @@ mod tests {
 
         assert_eq!(payload["schemaVersion"], NODE_STARTUP_SCHEMA_VERSION);
         assert_eq!(payload["chain_state"], "fresh");
-        assert_eq!(payload["runtime_manifest"]["schemaVersion"], 4);
+        assert_eq!(
+            payload["runtime_manifest"]["schemaVersion"],
+            thruput_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION
+        );
         assert_eq!(
             payload["runtime_manifest"]["path"],
             manifest_path.display().to_string()
@@ -2085,7 +2090,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#,
+            r#"{"status":"ready","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#,
         )
         .expect("bug: v1 readiness should parse");
 
@@ -2120,7 +2125,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346"}}"#,
+            r#"{"status":"ready","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346"}}"#,
         )
         .expect("bug: readiness should parse");
 

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/encoding",
     "crates/heap-profiling",
     "crates/build-info",
     "crates/client",
@@ -59,6 +60,7 @@ zstd = "0.13"
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
+thruput-encoding = { path = "crates/encoding", version = "=0.31.1", registry = "thruput" }
 thruput-client = { path = "crates/client", version = "=0.31.1", registry = "thruput" }
 thruput-build-info = { path = "crates/build-info", version = "=0.31.1", registry = "thruput" }
 thruput-bundle-identity = { path = "crates/bundle-identity", version = "=0.31.1", registry = "thruput" }
@@ -139,6 +141,7 @@ serde_json = "1"
 url = "2"
 bytes = "1"
 hex = "0.4"
+bs58 = "0.5.1"
 base64 = "0.22"
 semver = "1"
 libc = "0.2"

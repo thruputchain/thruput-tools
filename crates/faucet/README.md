@@ -101,7 +101,13 @@ from the environment, shared AWS config, or EC2 instance metadata. Do not put
 static AWS credentials in faucet config.
 
 Set `network.faucet.public_key` and `network.faucet.wallet_address` from the
-non-secret hosted-bootstrap faucet metadata. Only the secret ID/ARN and region
+non-secret hosted-bootstrap faucet metadata, using unprefixed, case-sensitive
+base58. Network and genesis hashes and the native token address also use base58.
+The transfer selector, client nonces and serialized transaction envelopes retain
+hex. Public keys must decode to exactly 32 bytes; malformed keys are rejected
+while parsing configuration, before loading any signing secret.
+
+Only the secret ID/ARN and region
 belong in the hosted runtime config; the secret payload remains in Secrets
 Manager.
 

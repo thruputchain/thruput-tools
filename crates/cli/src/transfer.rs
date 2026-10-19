@@ -249,7 +249,7 @@ fn print_dry_run(
     let sender = format_contract_address(&prepared.sender);
     let (signer_scheme, signer_public_key) =
         crate::keys::public_key_scheme_and_bytes(&prepared.signer_public_key);
-    let signer_public_key = format!("0x{}", hex::encode(signer_public_key));
+    let signer_public_key = thruput_encoding::encode(signer_public_key);
     let recipient = format_contract_address(&prepared.recipient);
     let token_address = format_contract_address(&prepared.token_address);
     let tx_hash = format_tx_hash(&prepared.tx_hash);
@@ -545,7 +545,7 @@ fn report_common(
         sender: prepared.sender.into(),
         sender_wallet: prepared.sender_wallet.clone(),
         signer_scheme: signer_scheme.to_owned(),
-        signer_public_key: HexBytes(signer_public_key.to_vec()),
+        signer_public_key: thruput_encoding::encode(signer_public_key),
         recipient_input: prepared.recipient_input.clone(),
         recipient: prepared.recipient.into(),
         token_address: prepared.token_address.into(),

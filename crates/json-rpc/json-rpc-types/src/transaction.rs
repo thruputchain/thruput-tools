@@ -8,7 +8,7 @@ use crate::{BlockHeight, ContractAddress, SHA256Hash};
 /// Covers the inner Transaction body (not signatures), matching
 /// the scheduler's lookup key and the indexer's primary key.
 ///
-/// Serializes as `"0x..."` hex string (64 hex chars).
+/// Serializes as an unprefixed, case-sensitive base58 string encoding 32 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct TxHash(pub SHA256Hash);
 
@@ -307,7 +307,7 @@ impl From<&thruput_trace::DbConflictDiagnostic> for ConflictDiagnostic {
         let key_bytes = xdrs::txs::encode(&diagnostic.addrkey.key)
             .expect("bug: generated StorageKey should encode");
         Self {
-            address: crate::hex::Hex0x(diagnostic.addrkey.address),
+            address: crate::base58::Base58(diagnostic.addrkey.address),
             key: crate::hex::HexBytes(key_bytes),
             code: diagnostic.code.into(),
         }
@@ -434,7 +434,7 @@ impl From<AddressTransactionQuery> for thruput_indexer::indexer::AddressTransact
 impl From<thruput_indexer::indexer::TransactionRef> for TransactionRef {
     fn from(value: thruput_indexer::indexer::TransactionRef) -> Self {
         Self {
-            tx_hash: TxHash(crate::hex::Hex0x(thruput_xdr::types::SHA256Hash::from(
+            tx_hash: TxHash(crate::base58::Base58(thruput_xdr::types::SHA256Hash::from(
                 value.tx_hash.into_inner(),
             ))),
             height: value.height,

@@ -38,7 +38,7 @@ and writes never commit. Omission supplies the existing zero-key, zero-weight
 source-address claim. `caller` separately identifies an optional parent contract.
 
 Claims use `kind: "sourceAddress"` with uint32 `allowedKeys` / `requiredWeight`,
-or `kind: "pubkeySignature"` with an Ed25519 `publicKey` (32-byte hex) and a
+or `kind: "pubkeySignature"` with an Ed25519 `publicKey` (base58 encoding of 32 bytes) and a
 decimal-string uint64 `nonce`. No private key or signature is accepted.
 
 Single `groundhog_view` calls also accept `minHeight`. The shared RPC server
@@ -223,7 +223,13 @@ intro token; this does not make incompatible XDR schemas compatible.
 ## Wire Format Conventions
 
 The public API projects binary XDR into JSON-friendly types: `camelCase` fields,
-tagged unions, decimal quantities, and `0x`-prefixed lowercase hex bytes.
+tagged unions, decimal quantities, and semantically typed byte strings.
+Addresses, public keys, validator IDs, hashes and standalone signatures use
+unprefixed, case-sensitive Bitcoin/Solana-alphabet base58. Legacy hex identifiers
+are rejected. Serialized transactions, code, calldata, return/abort data,
+storage bytes, raw event topics, storage keys, selectors and cursors retain
+`0x`-prefixed lowercase hex. A raw topic stays hex even when its schema-decoded
+value is an address or hash. Choose encoding by declared meaning, never length.
 All 64-bit-or-wider integers use canonical decimal strings, even for small
 values. Smaller bounded integers remain JSON numbers. Requests reject numeric
 JSON for wide fields, leading zeros, `+` prefixes, negative zero, whitespace,

@@ -278,6 +278,9 @@ jobs:
           fi
 
   scaffold-app:
+    # TODO(GH-502): Restore after publishing the base58 SDK (sdk-ts #108)
+    # and updating the counter-app SDK pin and identifier parsing.
+    if: ${{ vars.ENABLE_BASE58_COUNTER_APP_CI == 'true' }}
     needs: dependency-policy
     name: Counter app (generated project + real-node browser smoke)
     runs-on: namespace-profile-hogd-linux-2604

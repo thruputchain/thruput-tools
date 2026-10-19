@@ -8,7 +8,7 @@ use std::{
 };
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::{
-    ContractAddress, NetworkHashHex, airdrop::FundAccountRequest, hex::HexBytes,
+    ContractAddress, NetworkHashText, airdrop::FundAccountRequest, hex::HexBytes,
     transaction::TxHash,
 };
 
@@ -37,7 +37,7 @@ pub(crate) struct FundingRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct JournalData {
     schema_version: u32,
-    network_hash: NetworkHashHex,
+    network_hash: NetworkHashText,
     faucet: ContractAddress,
     records: Vec<FundingRecord>,
 }
@@ -51,7 +51,7 @@ pub(crate) struct FundingJournal {
 }
 
 impl FundingJournal {
-    pub(crate) fn memory(network_hash: NetworkHashHex, faucet: ContractAddress) -> Self {
+    pub(crate) fn memory(network_hash: NetworkHashText, faucet: ContractAddress) -> Self {
         Self {
             path: None,
             dirty: false,
@@ -67,7 +67,7 @@ impl FundingJournal {
 
     pub(crate) fn open(
         dir: &Path,
-        init_network_hash: Option<NetworkHashHex>,
+        init_network_hash: Option<NetworkHashText>,
         faucet: ContractAddress,
         fresh: bool,
         signer: &std::sync::Arc<thruput_signing::LocalSigner>,
@@ -140,7 +140,7 @@ impl FundingJournal {
         }
     }
 
-    pub(crate) fn network_hash(&self) -> &NetworkHashHex {
+    pub(crate) fn network_hash(&self) -> &NetworkHashText {
         &self.data.network_hash
     }
 
@@ -267,16 +267,16 @@ impl FundingJournal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thruput_json_rpc_types::{airdrop::ClientNonce, hex::Hex0x};
+    use thruput_json_rpc_types::{airdrop::ClientNonce, base58::Base58};
 
     #[test]
     fn size_rejection_preserves_prior_records_and_dirty_state() {
         let dir = tempfile::tempdir().unwrap();
-        let mut journal = FundingJournal::memory([0; 32].into(), Hex0x([0; 32].into()));
+        let mut journal = FundingJournal::memory([0; 32].into(), Base58([0; 32].into()));
         journal.path = Some(dir.path().join("journal.json"));
         let request = FundAccountRequest {
-            recipient: Hex0x([1; 32].into()),
-            faucet: Hex0x([0; 32].into()),
+            recipient: Base58([1; 32].into()),
+            faucet: Base58([0; 32].into()),
             raw_amount: "42".into(),
             client_nonce: ClientNonce::new(vec![1]).unwrap(),
         };
@@ -297,7 +297,7 @@ mod tests {
             journal.retain_signed(
                 &request,
                 RetainedFundingTransaction {
-                    tx_hash: TxHash(Hex0x([2; 32].into())),
+                    tx_hash: TxHash(Base58([2; 32].into())),
                     signed_transaction: HexBytes(vec![3; 100]),
                 }
             ),

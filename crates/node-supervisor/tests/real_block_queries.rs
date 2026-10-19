@@ -7,8 +7,8 @@ use thruput_json_rpc_api::{GroundhogApiClient, LocalFundingApiClient};
 use thruput_json_rpc_types::{
     BlockHeight,
     airdrop::{ClientNonce, FundAccountRequest},
+    base58::Base58,
     events::{IterationOrder, PaginationCursor},
-    hex::Hex0x,
     transaction::{BlockTransactionQuery, TxHash},
 };
 use thruput_node_supervisor::{
@@ -193,7 +193,7 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
         .wallet_address;
     let signer = LocalSigner::from_secret_key([0x79; 32]);
     let recipient =
-        Hex0x(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address());
+        Base58(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address());
     let mut hashes = Vec::new();
     for nonce in 1..=3 {
         let result = client

@@ -7,8 +7,9 @@
 //! 1024 bytes.
 
 use thruput_json_rpc_types::{
+    base58::Base58,
     events::EmittedEvent,
-    hex::{Hex0x, HexBytes, Topic},
+    hex::{HexBytes, Topic},
 };
 use thruput_xdr::event::TxEmittedEvent;
 use xdr_common::VecM;
@@ -68,7 +69,7 @@ pub fn parse_emitted_event(raw: TxEmittedEvent) -> Option<EmittedEvent> {
     bytes.drain(..topics_len);
 
     Some(EmittedEvent {
-        contract_address: Hex0x(raw.contract_address),
+        contract_address: Base58(raw.contract_address),
         topics,
         data: HexBytes(bytes),
     })

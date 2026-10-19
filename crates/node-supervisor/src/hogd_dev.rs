@@ -1,5 +1,6 @@
 //! hog-devnode process adapter.
 
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     env,
@@ -11,12 +12,12 @@ use std::{
     process::ExitStatus,
     time::Duration,
 };
-use thruput_json_rpc_types::hex::sha256_prefixed_hex;
+use thruput_json_rpc_types::base58::FixedIdentifier;
 
 use serde::{Deserialize, de::DeserializeOwned};
 use tempfile::TempDir;
 use thruput_json_rpc_types::{
-    ContractAddress, NetworkHashHex,
+    ContractAddress, NetworkHashText,
     hex::HexBytes,
     runtime_manifest::{
         BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER,
@@ -123,7 +124,7 @@ pub struct HogdDevReadiness {
     #[serde(default)]
     pub chain_state: Option<RuntimeManifestChainState>,
     /// Unprefixed 32-byte local chain network hash.
-    pub network_hash: NetworkHashHex,
+    pub network_hash: NetworkHashText,
     /// x23 protocol token expected by hogd-dev services.
     #[serde(default)]
     pub protocol: Option<String>,
@@ -174,7 +175,7 @@ struct HogdDevReadinessEnvelope {
 pub(crate) fn validate_bootstrap_accounts(
     readiness: &HogdDevReadiness,
     config: &HogdDevConfig,
-    network_hash: &NetworkHashHex,
+    network_hash: &NetworkHashText,
     faucet_public_key: thruput_json_rpc_types::Ed25519PublicKey,
 ) -> Result<(), NodeSupervisorError> {
     let fail = |reason: String| NodeSupervisorError::InvalidRuntimeManifest {
@@ -226,7 +227,7 @@ pub(crate) fn validate_bootstrap_accounts(
 pub(crate) fn validate_runtime_identity(
     readiness: &HogdDevReadiness,
     expected_protocol: &str,
-    expected_network_hash: &NetworkHashHex,
+    expected_network_hash: &NetworkHashText,
 ) -> Result<(), NodeSupervisorError> {
     if readiness.network_hash != *expected_network_hash {
         return Err(NodeSupervisorError::RuntimeNetworkHashMismatch {
@@ -419,7 +420,7 @@ impl HogdDevProcess {
     }
 
     /// Identity selected from initialization input or persisted state before spawning.
-    pub(crate) fn expected_network_hash(&self) -> &NetworkHashHex {
+    pub(crate) fn expected_network_hash(&self) -> &NetworkHashText {
         &self
             .local_state
             .as_ref()
@@ -713,7 +714,7 @@ impl BootstrapManifestFile {
 
 fn write_bootstrap_manifest(
     config: &HogdDevConfig,
-    network_hash: &NetworkHashHex,
+    network_hash: &NetworkHashText,
     faucet_public_key: thruput_json_rpc_types::Ed25519PublicKey,
 ) -> Result<BootstrapManifestFile, NodeSupervisorError> {
     let manifest = config.to_bootstrap_manifest(network_hash.clone(), faucet_public_key);
@@ -877,10 +878,10 @@ pub fn parse_readiness_line(
     if has_manifest_pointer_fields(&value) {
         let envelope: HogdDevReadinessEnvelope =
             parse_readiness_value(program, value.clone(), line)?;
-        if envelope.schema_version != 3 {
+        if envelope.schema_version != 4 {
             return Err(NodeSupervisorError::InvalidReadinessSchemaVersion {
                 program: program.to_string(),
-                expected: 3,
+                expected: 4,
                 actual: envelope.schema_version,
             });
         }
@@ -931,7 +932,7 @@ fn parse_manifest_readiness_pointer(
     program: &str,
     pointer: HogdDevReadinessPointer,
 ) -> Result<HogdDevReadiness, NodeSupervisorError> {
-    debug_assert_eq!(pointer.schema_version, 3);
+    debug_assert_eq!(pointer.schema_version, 4);
     if pointer.status != "ready" {
         return Err(NodeSupervisorError::InvalidReadinessStatus {
             program: program.to_string(),
@@ -942,10 +943,9 @@ fn parse_manifest_readiness_pointer(
     validate_manifest_hash_format(program, &pointer.manifest_hash)?;
     let manifest_path = pointer.manifest_path;
     let advertised_manifest_hash = pointer.manifest_hash;
-    let manifest_hash = advertised_manifest_hash.to_ascii_lowercase();
     let manifest_bytes = read_runtime_manifest_bytes(program, &manifest_path)?;
-    let actual_hash = sha256_prefixed_hex(&manifest_bytes);
-    if actual_hash != manifest_hash {
+    let actual_hash = runtime_manifest_hash(&manifest_bytes);
+    if actual_hash != advertised_manifest_hash {
         return Err(NodeSupervisorError::RuntimeManifestHashMismatch {
             program: program.to_string(),
             path: manifest_path.display().to_string(),
@@ -1228,14 +1228,15 @@ fn readiness_from_runtime_manifest(
     })
 }
 
+fn runtime_manifest_hash(bytes: &[u8]) -> String {
+    thruput_json_rpc_types::SHA256Hash::from(thruput_xdr::types::SHA256Hash::from(
+        <[u8; 32]>::from(Sha256::digest(bytes)),
+    ))
+    .to_string()
+}
+
 fn validate_manifest_hash_format(program: &str, hash: &str) -> Result<(), NodeSupervisorError> {
-    let Some(hex) = hash.strip_prefix("0x") else {
-        return Err(NodeSupervisorError::InvalidRuntimeManifestHash {
-            program: program.to_string(),
-            hash: hash.to_string(),
-        });
-    };
-    if hex.len() == 64 && hex.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+    if thruput_xdr::types::SHA256Hash::decode_base58(hash).is_ok() {
         return Ok(());
     }
     Err(NodeSupervisorError::InvalidRuntimeManifestHash {

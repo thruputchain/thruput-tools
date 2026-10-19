@@ -113,7 +113,7 @@ fn missing_local_endpoint_explains_the_selected_profile_and_node_startup() {
     let temp = TempDir::new().unwrap();
     let config = temp.path().join("config");
     std::fs::write(temp.path().join("thruput.toml"), "default_profile = \"sandbox\"\n[profile.sandbox]\nnetwork = \"local\"\n[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
-    let address = format!("0x{}", "11".repeat(32));
+    let address = thruput_encoding::encode(&[0x11; 32]);
     for args in [
         vec!["balance", &address],
         vec!["tx", "list", &address],
@@ -176,7 +176,7 @@ fn local_node_registration_and_rpc_overrides_are_used_before_missing_endpoint_er
             "default_profile = \"local\"\n[profile.local]\nnetwork = \"local\"\n",
         )
         .unwrap();
-        let address = format!("0x{}", "11".repeat(32));
+        let address = thruput_encoding::encode(&[0x11; 32]);
         let (rpc, server) = spawn_balance_rpc(&address, "0");
         let mut command = thruput();
         command
@@ -284,7 +284,7 @@ fn live_call_and_deploy_results_cover_success_and_execution_failure() {
             } else {
                 command.args([
                     "call",
-                    &format!("0x{}", "11".repeat(32)),
+                    &thruput_encoding::encode(&[0x11; 32]),
                     "0x0123456789abcdef",
                     "0x0102",
                 ]);
@@ -314,7 +314,7 @@ fn remote_funding_dry_runs_are_explicit_and_do_not_contact_services() {
     std::fs::write(temp.path().join("thruput.toml"), "default_profile = \"devnet\"\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:9\"\nfaucet_url = \"http://127.0.0.1:9\"\n").unwrap();
     let args = [
         "airdrop",
-        "0x1111111111111111111111111111111111111111111111111111111111111111",
+        &thruput_encoding::encode(&[0x11; 32]),
         "--dry-run",
     ];
     let mut command = thruput();
@@ -399,7 +399,7 @@ fn transfer_cards_distinguish_commitment_rejection_and_uncertainty() {
         command
             .args([
                 "transfer",
-                &format!("0x{}", "ab".repeat(32)),
+                &thruput_encoding::encode(&[0xab; 32]),
                 "1.5",
                 "--force",
             ])

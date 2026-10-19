@@ -3954,6 +3954,7 @@ dependencies = [
  "thruput-contract-spec",
  "thruput-contract-util",
  "thruput-domain-separator",
+ "thruput-encoding",
  "thruput-erc20-if",
  "thruput-erc20-permit-if",
  "thruput-json-rpc-client",
@@ -4003,6 +4004,7 @@ dependencies = [
  "thiserror 2.0.21",
  "thruput-contract-spec",
  "thruput-contract-util",
+ "thruput-encoding",
  "thruput-json-rpc-client",
  "thruput-json-rpc-types",
  "thruput-signing",
@@ -4094,6 +4096,17 @@ dependencies = [
  "tokio",
  "xdr-common",
  "xdrs",
+]
+
+[[package]]
+name = "thruput-encoding"
+version = "0.31.1"
+dependencies = [
+ "bs58",
+ "serde_json",
+ "stellar-strkey",
+ "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -4360,6 +4373,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.21",
+ "thruput-encoding",
  "thruput-indexer",
  "thruput-scheduler",
  "thruput-trace",
@@ -4555,9 +4569,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "stellar-strkey",
  "thiserror 2.0.21",
  "thruput-domain-separator",
+ "thruput-encoding",
  "thruput-json-rpc-server",
  "thruput-tx-validation",
  "thruput-xdr",

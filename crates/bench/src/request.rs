@@ -300,7 +300,7 @@ mod tests {
     }
     #[test]
     fn confirmed_results_reject_missing_wrong_height_and_wrong_hash() {
-        let hash: TxHash = serde_json::from_value(json!(format!("0x{}", "aa".repeat(32)))).unwrap();
+        let hash = TxHash(thruput_xdr::types::SHA256Hash::from([0xaa; 32]).into());
         let status = ExpectedResult::Committed { height: 7 };
         for value in [
             json!(null),
@@ -321,7 +321,9 @@ mod tests {
         receipt["height"] = json!("8");
         assert!(!expected.validate(&receipt));
         receipt["height"] = json!("7");
-        receipt["txHash"] = json!(format!("0x{}", "bb".repeat(32)));
+        receipt["txHash"] = json!(TxHash(
+            thruput_xdr::types::SHA256Hash::from([0xbb; 32]).into()
+        ));
         assert!(!expected.validate(&receipt));
     }
 }

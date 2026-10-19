@@ -758,7 +758,7 @@ mod tests {
     }
 
     fn test_hash() -> TxHash {
-        TxHash(thruput_json_rpc_types::hex::Hex0x(SHA256Hash::from(
+        TxHash(thruput_json_rpc_types::base58::Base58(SHA256Hash::from(
             [7u8; 32],
         )))
     }

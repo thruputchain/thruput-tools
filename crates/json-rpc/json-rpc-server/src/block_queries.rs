@@ -91,8 +91,8 @@ pub fn validate_page(
 mod tests {
     use super::*;
     use thruput_json_rpc_types::{
+        base58::Base58,
         events::PaginationCursor,
-        hex::Hex0x,
         transaction::{TransactionRef, TxHash},
     };
 
@@ -110,7 +110,7 @@ mod tests {
             refs: [0x7F, 0x80]
                 .into_iter()
                 .map(|byte| TransactionRef {
-                    tx_hash: TxHash(Hex0x([byte; 32].into())),
+                    tx_hash: TxHash(Base58([byte; 32].into())),
                     height: 9.into(),
                 })
                 .collect(),

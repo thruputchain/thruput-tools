@@ -6,7 +6,8 @@ use std::sync::{
 };
 use thruput_json_rpc_types::{
     airdrop::{FundAccountRequest, FundAccountResponse},
-    hex::{Hex0x, HexBytes},
+    base58::Base58,
+    hex::HexBytes,
     transaction::TxHash,
 };
 use thruput_signing::{
@@ -154,7 +155,7 @@ async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
             let signed: thruput_xdr::transaction::SignedTransaction =
                 xdrs::txs::decode(&hex::decode(bytes.strip_prefix("0x").unwrap()).unwrap())
                     .unwrap();
-            let hash = TxHash(Hex0x(transaction_hash(&signed.tx).unwrap()));
+            let hash = TxHash(Base58(transaction_hash(&signed.tx).unwrap()));
             *submitted.lock().unwrap() = Some(hash);
             Ok::<_, ErrorObjectOwned>(hash)
         })
@@ -237,7 +238,7 @@ fn funding_response(request: FundAccountRequest, faucet: &LocalSigner) -> FundAc
         },
     )
     .unwrap();
-    let hash = TxHash(Hex0x(transaction_hash(&tx).unwrap()));
+    let hash = TxHash(Base58(transaction_hash(&tx).unwrap()));
     let signed = sign_and_encode_transaction_hex(
         tx,
         faucet,
@@ -261,14 +262,14 @@ fn local_manifest(
     let mut document: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/hosted-runtime.json")).unwrap();
     document["kind"] = "hogd-dev-runtime".into();
-    document["schemaVersion"] = 4.into();
+    document["schemaVersion"] = 5.into();
     document
         .as_object_mut()
         .unwrap()
         .remove("bootstrapAccountDerivation");
     document["bootstrapAccounts"] = serde_json::json!([{
-        "role":"faucet", "publicKey":format!("0x{}",hex::encode(faucet_public_key)),
-        "walletAddress":format!("0x{}",hex::encode(faucet_address.as_ref())), "initialStorageTokens":"10000000000000"
+        "role":"faucet", "publicKey":thruput_json_rpc_types::Ed25519PublicKey::from(thruput_xdr::types::Ed25519PublicKey::from(faucet_public_key)),
+        "walletAddress":thruput_json_rpc_types::ContractAddress::from(faucet_address), "initialStorageTokens":"10000000000000"
     }]);
     std::fs::write(manifest.path(), serde_json::to_vec(&document).unwrap()).unwrap();
     manifest

@@ -110,14 +110,14 @@ fn is_method_not_found(error: &ClientError) -> bool {
 fn format_storage_delta(delta: &StorageDeltaInfo) -> String {
     format!(
         "{}:{}  {}",
-        prefixed_hex(delta.address.0),
+        delta.address,
         prefixed_hex(&delta.key),
         delta.summary,
     )
 }
 
 pub(crate) fn format_event(event: &EmittedEvent) -> String {
-    let mut parts = vec![prefixed_hex(event.contract_address.0)];
+    let mut parts = vec![event.contract_address.to_string()];
     parts.extend(
         event
             .topics

@@ -190,7 +190,7 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
         "NetworkInfo should require only the signing-domain identity"
     );
     assert_eq!(
-        schemas["Hex0x_SHA256Hash"]["pattern"], "^0x[0-9a-f]{64}$",
+        schemas["Base58_SHA256Hash"]["pattern"], "^[1-9A-HJ-NP-Za-km-z]+$",
         "SHA-256 hashes should expose their exact canonical wire length"
     );
     assert_eq!(

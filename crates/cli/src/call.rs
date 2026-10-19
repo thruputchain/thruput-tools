@@ -1314,7 +1314,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_fixed_hex_argument_keeps_invalid_argument_error() {
+    fn invalid_base58_hash_argument_keeps_invalid_argument_error() {
         let metadata = ContractMetadata {
             interface_name: "Counter".into(),
             version: "0.1.0".into(),
@@ -1330,7 +1330,7 @@ mod tests {
         match err {
             CliError::InvalidArgument { argument, message } => {
                 assert_eq!(argument, "sha256 hash");
-                assert_eq!(message, "must be 32 bytes, got 2");
+                assert_eq!(message, "invalid base58 encoding");
             }
             other => panic!("bug: expected CliError::InvalidArgument, got {other:?}"),
         }
@@ -1653,7 +1653,7 @@ mod tests {
 
     #[test]
     fn encodes_and_decodes_embedded_spec_addresses() {
-        let address = format!("0x{}", "11".repeat(32));
+        let address = thruput_encoding::encode(&[0x11; 32]);
         let metadata = sample_single_arg_spec_metadata(ContractType::Address);
         let encoded = encode_calldata(
             std::slice::from_ref(&address),
@@ -1947,7 +1947,7 @@ mod tests {
         let _cwd = CurrentDirGuard::enter(&project_root);
         let resolved = resolve_call(&project_root, "mint", None, &artifacts)
             .expect("bug: mint should resolve from the rv32 spec sidecar");
-        let receiver_hex = format!("0x{}", "04".repeat(32));
+        let receiver_hex = thruput_encoding::encode(&[4; 32]);
         let encoded = encode_calldata(
             &[receiver_hex.clone(), "55".into()],
             resolved.metadata.as_ref(),

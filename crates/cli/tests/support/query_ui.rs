@@ -142,7 +142,7 @@ impl Query {
 }
 
 fn address() -> String {
-    format!("0x{}", "11".repeat(32))
+    thruput_encoding::encode(&[0x11; 32])
 }
 
 fn balance(raw: &str) -> Value {
@@ -271,9 +271,10 @@ fn docs_shutdown_is_a_short_message_on_its_own_line() {
 #[test]
 fn inspection_commands_render_complete_empty_and_pending_results() {
     let hash = address();
+    let storage_key = format!("0x{}", "11".repeat(32));
     for (args, result, method, title) in [
         (
-            vec!["storage", "counter", &hash],
+            vec!["storage", "counter", &storage_key],
             json!({"item":null,"blockHeight":"12"}),
             "groundhog_getStorageAt",
             "Storage",

@@ -3,7 +3,7 @@
 use std::{fmt, io, path::PathBuf, process::ExitStatus, time::Duration};
 
 use thruput_hogd_backend::IntroOutcome;
-use thruput_json_rpc_types::NetworkHashHex;
+use thruput_json_rpc_types::NetworkHashText;
 use thruput_x23_transport::ConnectError;
 
 /// Unix child-process signal used by the supervisor.
@@ -285,9 +285,9 @@ pub enum NodeSupervisorError {
     )]
     RuntimeNetworkHashMismatch {
         /// Network hash requested in the bootstrap manifest.
-        expected: NetworkHashHex,
+        expected: NetworkHashText,
         /// Network hash advertised by the runtime manifest.
-        observed: NetworkHashHex,
+        observed: NetworkHashText,
     },
 
     /// The runtime manifest advertised a different protocol token than requested.
@@ -417,9 +417,9 @@ pub enum NodeSupervisorError {
     )]
     SchedulerNetworkHashMismatch {
         /// Network hash advertised by the runtime manifest.
-        expected: NetworkHashHex,
+        expected: NetworkHashText,
         /// Network hash observed in the scheduler tip proposal header.
-        observed: NetworkHashHex,
+        observed: NetworkHashText,
     },
 
     /// The coordinator and public scheduler gateway advertised different startup tips.

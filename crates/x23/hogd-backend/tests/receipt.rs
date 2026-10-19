@@ -1,4 +1,4 @@
-use thruput_json_rpc_types::hex::Hex0x;
+use thruput_json_rpc_types::base58::Base58;
 use thruput_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT;
 use thruput_json_rpc_types::receipt::ExecStatus;
 use thruput_json_rpc_types::transaction::TxHash;
@@ -61,7 +61,7 @@ fn root_output_yields_at_most_one_buffer() {
 
 #[test]
 fn a_committed_record_becomes_a_receipt_with_its_malformed_events_counted() {
-    let tx_hash = TxHash(Hex0x([0x22; 32].into()));
+    let tx_hash = TxHash(Base58([0x22; 32].into()));
     let good = TxEmittedEvent {
         contract_address: [7; 32].into(),
         num_topics: 1,

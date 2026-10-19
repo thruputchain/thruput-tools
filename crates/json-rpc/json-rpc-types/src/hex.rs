@@ -1,8 +1,8 @@
 //! Hex-encoded byte types for the JSON-RPC wire format.
 //!
-//! All byte values in the Groundhog RPC API are serialized as
-//! `0x`-prefixed lowercase hex strings, following the Ethereum
-//! convention (e.g., `"0xa1b2c3"`).
+//! Opaque payloads, raw topics, storage keys and cursors use `0x`-prefixed
+//! lowercase hex strings (e.g., `"0xa1b2c3"`). Typed identifiers and
+//! cryptographic values use the wrappers in [`crate::base58`].
 //!
 //! See `docs/gateway/system-design.md` "Wire Format Conventions" for the full
 //! serialization table.
@@ -15,115 +15,6 @@ use std::ops::{Deref, DerefMut};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
-use thruput_xdr::types::{NetworkHash, SHA256Hash};
-
-/// A canonical lowercase, unprefixed 32-byte network hash.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NetworkHashHex(String);
-
-impl NetworkHashHex {
-    /// Construct a network hash from its raw bytes.
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(hex::encode(bytes))
-    }
-
-    /// Borrow the canonical wire representation.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// The protocol network hash this wire value encodes.
-    ///
-    /// Callers signing transactions need this: the network hash is part of
-    /// every signature preimage.
-    pub fn to_network_hash(&self) -> NetworkHash {
-        let mut bytes = [0u8; 32];
-        hex::decode_to_slice(&self.0, &mut bytes)
-            .expect("bug: NetworkHashHex is validated as 64 lowercase hex digits on construction");
-        NetworkHash::new(SHA256Hash::new(bytes))
-    }
-}
-
-impl TryFrom<String> for NetworkHashHex {
-    type Error = NetworkHashHexError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.len() == 64
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Ok(Self(value));
-        }
-        Err(NetworkHashHexError)
-    }
-}
-
-impl TryFrom<&str> for NetworkHashHex {
-    type Error = NetworkHashHexError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::try_from(value.to_owned())
-    }
-}
-
-impl From<[u8; 32]> for NetworkHashHex {
-    fn from(value: [u8; 32]) -> Self {
-        Self::from_bytes(value)
-    }
-}
-
-impl AsRef<str> for NetworkHashHex {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl fmt::Display for NetworkHashHex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl fmt::Debug for NetworkHashHex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("NetworkHashHex").field(&self.0).finish()
-    }
-}
-
-impl Serialize for NetworkHashHex {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for NetworkHashHex {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
-
-impl JsonSchema for NetworkHashHex {
-    fn schema_name() -> Cow<'static, str> {
-        "NetworkHashHex".into()
-    }
-
-    fn schema_id() -> Cow<'static, str> {
-        concat!(module_path!(), "::NetworkHashHex").into()
-    }
-
-    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
-        json_schema!({
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-        })
-    }
-}
-
-/// Error returned for a non-canonical network hash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("networkHash must be exactly 64 lowercase hexadecimal characters without a 0x prefix")]
-pub struct NetworkHashHexError;
 
 /// Formats bytes as `0x`-prefixed lowercase hex without an intermediate
 /// `String`.

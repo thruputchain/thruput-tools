@@ -11,7 +11,7 @@ use crate::hex::HexBytes;
 use crate::{ContractAddress, NetworkHash, SHA256Hash};
 
 /// Current public network descriptor schema version.
-pub const NETWORK_DESCRIPTOR_SCHEMA_VERSION: u32 = 5;
+pub const NETWORK_DESCRIPTOR_SCHEMA_VERSION: u32 = 6;
 /// Descriptor family for public hosted-network metadata.
 pub const NETWORK_DESCRIPTOR_KIND: &str = "groundhog-network";
 

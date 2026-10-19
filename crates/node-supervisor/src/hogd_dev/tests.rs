@@ -22,8 +22,8 @@ use crate::{
     test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
 };
 
-const V1_READY: &str = r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#;
-const COMPACT_READY: &str = r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","view":"127.0.0.1:12348"}}"#;
+const V1_READY: &str = r#"{"status":"ready","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#;
+const COMPACT_READY: &str = r#"{"status":"ready","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","view":"127.0.0.1:12348"}}"#;
 const MANIFEST_SCHEDULER_ENDPOINTS: &str =
     r#"{"scheduler":"127.0.0.1:12345","schedulerGateway":"127.0.0.1:12349"}"#;
 const GRACEFUL_SHUTDOWN_FILE_ENV: &str = "GROUNDHOG_FAKE_GRACEFUL_SHUTDOWN_FILE";
@@ -196,13 +196,10 @@ fn bootstrap_manifest_file_serializes_config() {
     .expect("bug: bootstrap manifest should parse");
 
     assert_eq!(value["kind"], "groundhog-bootstrap");
-    assert_eq!(
-        value["networkHash"],
-        "0000000000000000000000000000000000000000000000000000000000000000"
-    );
+    assert_eq!(value["networkHash"], "11111111111111111111111111111111");
     assert_eq!(value["profile"], "local-dev");
     assert!(value.get("devWallet").is_none());
-    assert_eq!(value["schemaVersion"], 4);
+    assert_eq!(value["schemaVersion"], 5);
     assert!(value["bootstrapFaucet"].get("index").is_none());
     assert_eq!(
         value["bootstrapFaucet"]["initialStorageTokens"],
@@ -225,22 +222,22 @@ fn runtime_identity_rejects_non_bootstrap_network() {
     let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
     let mut readiness =
         parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
-    readiness.network_hash = thruput_json_rpc_types::NetworkHashHex::from([0xff; 32]);
+    readiness.network_hash = thruput_json_rpc_types::NetworkHashText::from([0xff; 32]);
 
     let err = validate_runtime_identity(&readiness, "hogp/test00000000000", &[0; 32].into())
         .expect_err("bug: a non-bootstrap network should fail closed");
     assert!(matches!(
         err,
         NodeSupervisorError::RuntimeNetworkHashMismatch { expected, observed }
-            if expected == thruput_json_rpc_types::NetworkHashHex::from([0; 32])
-                && observed == thruput_json_rpc_types::NetworkHashHex::from([0xff; 32])
+            if expected == thruput_json_rpc_types::NetworkHashText::from([0; 32])
+                && observed == thruput_json_rpc_types::NetworkHashText::from([0xff; 32])
     ));
 }
 
 #[test]
 fn configured_network_hash_reaches_bootstrap_and_readiness_validation() {
     for hash in [[0; 32], [0xab; 32]] {
-        let network_hash = thruput_json_rpc_types::NetworkHashHex::from(hash);
+        let network_hash = thruput_json_rpc_types::NetworkHashText::from(hash);
         let config = HogdDevConfig::default().with_init_network_hash(network_hash.clone());
         let file = write_bootstrap_manifest(&config, &network_hash, fixture_public_key(0)).unwrap();
         let value: serde_json::Value =
@@ -397,7 +394,7 @@ fn readiness_line_parses_endpoint_addresses() {
         readiness.chain_state,
         Some(RuntimeManifestChainState::Fresh)
     );
-    assert_eq!(readiness.network_hash.as_str(), "00".repeat(32));
+    assert_eq!(readiness.network_hash.as_str(), "1".repeat(32));
     assert_eq!(readiness.protocol.as_deref(), Some("hogp/test00000000000"));
     assert_eq!(
         readiness.manifest_hash,
@@ -462,7 +459,7 @@ fn readiness_line_carries_recovered_chain_state() {
     manifest["chainState"] = serde_json::json!("recovered");
     let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
     fs::write(&path, &bytes).expect("bug: manifest should be writable");
-    pointer["manifestHash"] = serde_json::json!(super::sha256_prefixed_hex(&bytes));
+    pointer["manifestHash"] = serde_json::json!(super::runtime_manifest_hash(&bytes));
 
     let readiness = parse_readiness_line("hogd-dev", &pointer.to_string())
         .expect("bug: recovered readiness should parse");
@@ -492,7 +489,7 @@ fn manifest_readiness_requires_chain_state() {
         .remove("chainState");
     let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
     fs::write(&path, &bytes).expect("bug: manifest should be writable");
-    pointer["manifestHash"] = serde_json::json!(super::sha256_prefixed_hex(&bytes));
+    pointer["manifestHash"] = serde_json::json!(super::runtime_manifest_hash(&bytes));
 
     let error = parse_readiness_line("hogd-dev", &pointer.to_string())
         .expect_err("manifest readiness without chainState should fail");
@@ -523,7 +520,7 @@ fn manifest_readiness_requires_scheduler_gateway() {
         .remove("schedulerGateway");
     let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
     fs::write(&path, &bytes).expect("bug: manifest should be writable");
-    pointer["manifestHash"] = serde_json::json!(super::sha256_prefixed_hex(&bytes));
+    pointer["manifestHash"] = serde_json::json!(super::runtime_manifest_hash(&bytes));
 
     let error = parse_readiness_line("hogd-dev", &pointer.to_string())
         .expect_err("manifest readiness without schedulerGateway should fail");
@@ -551,7 +548,7 @@ fn manifest_readiness_requires_hogd_dev_runtime_kind() {
     manifest["kind"] = serde_json::json!("hog-devnode-runtime");
     let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
     fs::write(&path, &bytes).expect("bug: manifest should be writable");
-    pointer["manifestHash"] = serde_json::json!(super::sha256_prefixed_hex(&bytes));
+    pointer["manifestHash"] = serde_json::json!(super::runtime_manifest_hash(&bytes));
 
     let error = parse_readiness_line("hog-devnode", &pointer.to_string())
         .expect_err("unexpected runtime manifest kind should fail");
@@ -570,7 +567,7 @@ fn readiness_line_accepts_scheduler_endpoints_without_optional_read_endpoints() 
         .expect("bug: minimal current readiness payload should parse");
 
     assert_eq!(readiness.status, "ready");
-    assert_eq!(readiness.network_hash.as_str(), "00".repeat(32));
+    assert_eq!(readiness.network_hash.as_str(), "1".repeat(32));
     assert_eq!(
         readiness.endpoints.scheduler_coord,
         "127.0.0.1:12345"
@@ -639,7 +636,7 @@ fn readiness_manifest_hash_mismatch_is_rejected() {
             .expect("bug: pointer has manifest path"),
     );
     fs::write(&path, b"tampered").expect("bug: manifest should be writable");
-    pointer["manifestHash"] = serde_json::Value::String(super::sha256_prefixed_hex(b"original"));
+    pointer["manifestHash"] = serde_json::Value::String(super::runtime_manifest_hash(b"original"));
     let line = serde_json::to_string(&pointer).expect("bug: pointer serializes");
 
     let err = parse_readiness_line("hogd-dev", &line)
@@ -652,7 +649,7 @@ fn readiness_manifest_hash_mismatch_is_rejected() {
 }
 
 #[test]
-fn readiness_manifest_hash_accepts_uppercase_hex_digits() {
+fn readiness_manifest_hash_rejects_changed_case() {
     let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
     let mut pointer: serde_json::Value =
         serde_json::from_str(&line).expect("bug: pointer line should parse");
@@ -660,13 +657,10 @@ fn readiness_manifest_hash_accepts_uppercase_hex_digits() {
         .as_str()
         .expect("bug: pointer has manifest hash")
         .to_owned();
-    pointer["manifestHash"] = serde_json::Value::String(format!("0x{}", hash[2..].to_uppercase()));
+    pointer["manifestHash"] = serde_json::Value::String(hash.to_uppercase());
     let line = serde_json::to_string(&pointer).expect("bug: pointer serializes");
 
-    let readiness =
-        parse_readiness_line("hogd-dev", &line).expect("bug: uppercase manifest hash should parse");
-
-    assert_eq!(readiness.manifest_hash, Some(hash));
+    assert!(parse_readiness_line("hogd-dev", &line).is_err());
 }
 
 #[test]
@@ -735,8 +729,8 @@ fn readiness_manifest_rejects_relative_path() {
 #[test]
 fn manifest_pointer_fields_do_not_fall_back_to_legacy_readiness() {
     let line = format!(
-        r#"{{"schemaVersion":3,"status":"ready","manifestPath":"/tmp/missing","manifestHash":"{}","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}}}}"#,
-        super::sha256_prefixed_hex(b"missing"),
+        r#"{{"schemaVersion":4,"status":"ready","manifestPath":"/tmp/missing","manifestHash":"{}","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}}}}"#,
+        super::runtime_manifest_hash(b"missing"),
     );
 
     let err = parse_readiness_line("hogd-dev", &line)
@@ -759,7 +753,7 @@ fn manifest_pointer_rejects_future_schema_before_decoding_body() {
     assert!(matches!(
         err,
         NodeSupervisorError::InvalidReadinessSchemaVersion {
-            expected: 3,
+            expected: 4,
             actual: 99,
             ..
         }
@@ -806,7 +800,7 @@ fn full_runtime_manifest_uses_canonical_endpoint_names() {
 }
 
 fn fixture_public_key(index: u8) -> thruput_json_rpc_types::Ed25519PublicKey {
-    thruput_json_rpc_types::hex::Hex0x(thruput_xdr::types::Ed25519PublicKey::from(
+    thruput_json_rpc_types::base58::Base58(thruput_xdr::types::Ed25519PublicKey::from(
         thruput_signing::LocalSigner::from_secret_key([index; 32]).verifying_key_bytes(),
     ))
 }
@@ -826,7 +820,7 @@ fn explicit_allocations_validate_native_identity_roles_and_amounts() {
                 serde_json::json!({
                     "role": if position == 0 { "faucet" } else { "local_user" },
                     "publicKey": allocation.public_key,
-                    "walletAddress": thruput_json_rpc_types::hex::Hex0x(thruput_signing::PubkeyAccount::from_public_key_bytes(key, 0).address()),
+                    "walletAddress": thruput_json_rpc_types::base58::Base58(thruput_signing::PubkeyAccount::from_public_key_bytes(key, 0).address()),
                     "initialStorageTokens": allocation.initial_storage_tokens,
                 })
             }).collect();
@@ -899,7 +893,7 @@ fn legacy_readiness_without_manifest_is_rejected_by_supervisor_validation() {
 fn non_ready_status_is_rejected() {
     let err = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"starting","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","dev_control":"127.0.0.1:12347"}}"#,
+            r#"{"status":"starting","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","dev_control":"127.0.0.1:12347"}}"#,
         )
         .expect_err("bug: non-ready status should fail");
 
@@ -1047,7 +1041,7 @@ async fn fake_child_reports_readiness_and_stops_cleanly() {
     .await
     .expect("bug: fake hogd-dev should start");
 
-    assert_eq!(process.readiness().network_hash.as_str(), "00".repeat(32));
+    assert_eq!(process.readiness().network_hash.as_str(), "1".repeat(32));
     assert!(process.readiness().manifest_path.is_some());
     assert!(process.readiness().manifest_hash.is_some());
     assert!(process.readiness().runtime_manifest.is_some());
@@ -1431,17 +1425,17 @@ fn manifest_readiness_line(endpoints: &str, accounts: &str) -> String {
     let manifest_path = manifest_dir.join("runtime-manifest.json");
     let manifest = format!(
         r#"{{
-              "schemaVersion":4,
+              "schemaVersion":5,
               "kind":"hogd-dev-runtime",
               "chainState":"fresh",
-              "networkHash":"0000000000000000000000000000000000000000000000000000000000000000",
+              "networkHash":"11111111111111111111111111111111",
               "protocol":"hogp/test00000000000",
               "producer":{{"binary":"hog-devnode","version":"0.1.0","commitHash":"abcdef0"}},
               "endpoints":{endpoints},
               "bootstrapAccounts":{accounts},
               "bootstrap":{{
                 "storageCostModel":{{
-                  "hash":"0x{}",
+                  "hash":"{}",
                   "baseDataItemCost":"12000",
                   "bytestringCostPerByte":"10",
                   "baseContractDeploymentCost":"12000",
@@ -1453,15 +1447,15 @@ fn manifest_readiness_line(endpoints: &str, accounts: &str) -> String {
                 }}
               }}
             }}"#,
-        "51".repeat(32),
+        thruput_json_rpc_types::NetworkHashText::from([0x51; 32]),
     );
     fs::write(&manifest_path, manifest.as_bytes()).expect("bug: manifest should be written");
     fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600))
         .expect("bug: manifest permissions should be set");
     format!(
-        r#"{{"schemaVersion":3,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
+        r#"{{"schemaVersion":4,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
         manifest_path.display(),
-        super::sha256_prefixed_hex(manifest.as_bytes()),
+        super::runtime_manifest_hash(manifest.as_bytes()),
     )
 }
 

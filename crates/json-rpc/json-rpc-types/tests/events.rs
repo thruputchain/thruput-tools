@@ -1,7 +1,7 @@
 use thruput_json_rpc_types::events::*;
 
 fn address_json() -> serde_json::Value {
-    serde_json::Value::String(format!("0x{}", "11".repeat(32)))
+    serde_json::Value::String(thruput_encoding::encode(&[0x11; 32]))
 }
 
 fn topic_json() -> serde_json::Value {

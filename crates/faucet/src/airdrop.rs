@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use thruput_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
+use thruput_json_rpc_types::base58::FixedIdentifier;
 
 use crate::telemetry::submit_transaction;
 use axum::{
@@ -94,8 +94,8 @@ impl AirdropService {
         }
         let key = AirdropAttemptKey {
             network_id: request.network_id.clone(),
-            genesis_hash: prefixed_hex(request.genesis_hash.0),
-            recipient: prefixed_hex(request.recipient.0),
+            genesis_hash: request.genesis_hash.to_string(),
+            recipient: request.recipient.to_string(),
             client_nonce: hex::encode(request.client_nonce.as_bytes()),
         };
         let now = SystemTime::now();
@@ -131,7 +131,7 @@ impl AirdropService {
         };
         let quota_checks = [
             QuotaCheck {
-                key: QuotaKey::AirdropRecipient(prefixed_hex(request.recipient.0)),
+                key: QuotaKey::AirdropRecipient(request.recipient.to_string()),
                 max: 1,
                 window: Duration::from_secs(self.policy_config.airdrop.recipient_cooldown_secs),
             },
@@ -397,7 +397,7 @@ impl AirdropService {
         };
         let amount_matches =
             prepared.raw_amount.parse::<u128>().ok() == Some(self.submitter.raw_amount());
-        attempt.tx_hash = Some(prefixed_hex(prepared.tx_hash.0.0));
+        attempt.tx_hash = Some(prepared.tx_hash.0.to_string());
         attempt.transaction = Some(prepared.clone());
         attempt.error_code = None;
         attempt.expires_at = None;
@@ -845,10 +845,8 @@ fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
 }
 
 pub(crate) fn parse_tx_hash(value: &str) -> Option<TxHash> {
-    let bytes = decode_fixed_hex(value).ok()?;
-    Some(TxHash(SHA256Hash::from(
-        thruput_xdr::types::SHA256Hash::from(bytes),
-    )))
+    let hash = thruput_xdr::types::SHA256Hash::decode_base58(value).ok()?;
+    Some(TxHash(SHA256Hash::from(hash)))
 }
 
 pub(crate) async fn request_airdrop(
@@ -1212,11 +1210,11 @@ mod tests {
     #[test]
     fn airdrop_request_accepts_future_optional_fields() {
         let request: HostedAirdropRequest = serde_json::from_value(json!({
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x11; 32])),
             "clientNonce": "0x99",
             "networkId": "future-network",
-            "networkHash": format!("0x{}", "33".repeat(32)),
-            "genesisHash": format!("0x{}", "22".repeat(32)),
+            "networkHash": thruput_json_rpc_types::NetworkHashText::from([0x33; 32]),
+            "genesisHash": thruput_json_rpc_types::SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22; 32])),
             "futureField": true,
         }))
         .expect("bug: public API requests should ignore unknown future fields");
@@ -1227,11 +1225,11 @@ mod tests {
     #[test]
     fn airdrop_request_accepts_32_byte_client_nonce() {
         let request: HostedAirdropRequest = serde_json::from_value(json!({
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x11; 32])),
             "clientNonce": format!("0x{}", "99".repeat(32)),
             "networkId": "future-network",
-            "networkHash": format!("0x{}", "33".repeat(32)),
-            "genesisHash": format!("0x{}", "22".repeat(32)),
+            "networkHash": thruput_json_rpc_types::NetworkHashText::from([0x33; 32]),
+            "genesisHash": thruput_json_rpc_types::SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22; 32])),
         }))
         .expect("bug: 32-byte client nonce should be valid");
 

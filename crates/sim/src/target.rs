@@ -723,7 +723,7 @@ fn local_public_allocations(
         .map(|index| {
             let signer = thruput_signing::derive_dev_account_signer(&spec.seed, index);
             thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
-                thruput_json_rpc_types::hex::Hex0x(signer.verifying_key_bytes().into()),
+                thruput_json_rpc_types::base58::Base58(signer.verifying_key_bytes().into()),
                 amount.to_owned(),
             )
         })
@@ -1658,7 +1658,7 @@ mod tests {
             let expected = thruput_signing::derive_dev_account_signer(&seed, index);
             assert_eq!(
                 allocation.public_key,
-                thruput_json_rpc_types::hex::Hex0x(expected.verifying_key_bytes().into())
+                thruput_json_rpc_types::base58::Base58(expected.verifying_key_bytes().into())
             );
             assert_eq!(allocation.initial_storage_tokens, "123456789");
         }

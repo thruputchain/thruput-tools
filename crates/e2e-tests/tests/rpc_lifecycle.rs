@@ -17,9 +17,9 @@ use thruput_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventQuery, EventTopicFilter,
     IterationOrder, PaginationCursor, TopicList,
 };
-use thruput_json_rpc_types::hex::{Hex0x, HexBytes};
 use thruput_json_rpc_types::state::StorageItemInfo;
 use thruput_json_rpc_types::transaction::TransactionStatus;
+use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
 use xdr_common::VecM;
 
 fn rpc_url() -> String {
@@ -33,13 +33,13 @@ fn client() -> impl GroundhogApiClient {
 }
 
 fn zero_hash() -> thruput_json_rpc_types::transaction::TxHash {
-    thruput_json_rpc_types::transaction::TxHash(thruput_json_rpc_types::hex::Hex0x(
+    thruput_json_rpc_types::transaction::TxHash(thruput_json_rpc_types::base58::Base58(
         thruput_xdr::types::SHA256Hash::from([0u8; 32]),
     ))
 }
 
 fn zero_address() -> ContractAddress {
-    Hex0x(thruput_xdr::types::ContractAddress::from([0u8; 32]))
+    Base58(thruput_xdr::types::ContractAddress::from([0u8; 32]))
 }
 
 #[tokio::test]
@@ -155,7 +155,7 @@ fn events_for_address(
 ) -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
-            contract_addresses: ContractAddressList(VecM(vec![Hex0x(
+            contract_addresses: ContractAddressList(VecM(vec![Base58(
                 thruput_xdr::types::ContractAddress::from(addr),
             )])),
             topics: EventTopicFilter {
