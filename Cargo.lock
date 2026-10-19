@@ -4679,10 +4679,12 @@ dependencies = [
 name = "thruput-open-rpc-spec"
 version = "0.32.2"
 dependencies = [
+ "jsonschema",
  "pretty_assertions",
  "schemars",
  "semver",
  "serde_json",
+ "thiserror 2.0.21",
  "thruput-json-rpc-api",
  "thruput-open-rpc",
 ]
