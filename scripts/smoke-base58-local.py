@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise wire-12 identifiers against a matching local hog-devnode (Python 3.11+).
+"""Exercise wire-13 identifiers against a matching local hog-devnode (Python 3.11+).
 
 Run after building thruput-cli and hog-devnode:
   python3 scripts/smoke-base58-local.py --devnode /absolute/path/to/hog-devnode
