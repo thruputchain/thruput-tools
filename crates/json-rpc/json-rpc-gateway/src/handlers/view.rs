@@ -25,6 +25,17 @@ pub async fn view_batch(
     gas_limit: u64,
     limits: thruput_json_rpc_server::ViewBatchConfig,
 ) -> Result<thruput_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+    let (query, result) = batch_result(ctx, context, request, gas_limit, limits).await?;
+    shared_view::view_batch_response(VIEW_GATEWAY, &query, result)
+}
+
+async fn batch_result(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    request: thruput_json_rpc_types::view::ViewBatchRequest,
+    gas_limit: u64,
+    limits: thruput_json_rpc_server::ViewBatchConfig,
+) -> Result<(thruput_view::ViewGatewayBatchQuery, ViewGatewayBatchResult), RpcServerError> {
     let timeout =
         Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
     let deadline = backend_deadline(context, timeout)?;
@@ -64,7 +75,7 @@ pub async fn view_batch(
     if matches!(result, Err(RpcServerError::BackendTimeout)) {
         ctx.metrics.observe_view_timeout();
     }
-    shared_view::view_batch_response(VIEW_GATEWAY, &query, result?)
+    Ok((query, result?))
 }
 
 /// Execute a sandboxed contract simulation through hogd `ViewGateway`.
@@ -107,6 +118,18 @@ async fn view_response_from_client(
     query: &TransactionViewQuery,
     deadline: Instant,
 ) -> Result<ViewResponse, RpcServerError> {
+    view_response_from_gateway_result(
+        view_result_from_client(client, metrics, query, deadline).await?,
+        metrics,
+    )
+}
+
+async fn view_result_from_client(
+    client: &thruput_view::ViewGateway_ViewGateway1_Client,
+    metrics: &GatewayMetrics,
+    query: &TransactionViewQuery,
+    deadline: Instant,
+) -> Result<ViewGatewayResult, RpcServerError> {
     let result = timed_backend_call(
         metrics,
         HealthBackend::ViewGateway,
@@ -128,7 +151,7 @@ async fn view_response_from_client(
     if matches!(result, Err(RpcServerError::BackendTimeout)) {
         metrics.observe_view_timeout();
     }
-    view_response_from_gateway_result(result?, metrics)
+    result
 }
 
 /// Decode the `ViewGateway` result and meter any events dropped as malformed.
@@ -139,6 +162,58 @@ fn view_response_from_gateway_result(
     let outcome = shared_view::view_outcome(VIEW_GATEWAY, result)?;
     metrics.observe_malformed_events_dropped(REASON_PARSE_FAILED, outcome.dropped_events);
     Ok(outcome.response)
+}
+
+/// Native simulation uses the raw backend result, before legacy event filtering.
+#[tracing::instrument(skip_all)]
+pub async fn native_simulate(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    request: thruput_json_rpc_types::requests::SimulateInvocationRequest,
+    gas_limit: u64,
+) -> Result<thruput_json_rpc_types::responses::SimulationResult, RpcServerError> {
+    let client = ctx.view_gateway.read().await.clone().ok_or_else(|| {
+        if ctx.config.view_gateway_address.is_some() {
+            RpcServerError::BackendUnavailable("view_gateway not connected".into())
+        } else {
+            RpcServerError::NotImplemented("simulateInvocation".into())
+        }
+    })?;
+    let min = request.min_state_block_height.clone();
+    let query = shared_view::view_query(
+        thruput_hogd_backend::native::simulation_request(request)?,
+        gas_limit,
+    )?;
+    let timeout =
+        Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
+    let result = view_result_from_client(
+        &client,
+        &ctx.metrics,
+        &query,
+        backend_deadline(context, timeout)?,
+    )
+    .await?;
+    thruput_hogd_backend::native::simulation(result, min)
+}
+
+/// Native batches reuse transport policy and retain typed decoder failures.
+#[tracing::instrument(skip_all)]
+pub async fn native_simulate_batch(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    request: thruput_json_rpc_types::requests::SimulateInvocationsRequest,
+    gas_limit: u64,
+    limits: thruput_json_rpc_server::ViewBatchConfig,
+) -> Result<thruput_json_rpc_types::responses::SimulationResults, RpcServerError> {
+    let (query, result) = batch_result(
+        ctx,
+        context,
+        thruput_hogd_backend::native::simulations_request(request)?,
+        gas_limit,
+        limits,
+    )
+    .await?;
+    thruput_hogd_backend::native::simulations(&query, result)
 }
 
 #[cfg(test)]
@@ -603,5 +678,77 @@ mod tests {
             matches!(result, Err(RpcServerError::BackendTimeout)),
             "ViewGateway timeout should surface BackendTimeout, got {result:?}"
         );
+    }
+    #[tokio::test]
+    async fn native_gateway_batch_uses_existing_transport_and_preserves_freshness() {
+        use crate::{backend::GatewayBackend, config::GatewayConfig, context::BackendClient};
+        use std::sync::Arc;
+        use thruput_json_rpc_server::{ViewBatchConfig, native::read::NativeSimulationPlane};
+        use thruput_json_rpc_types::requests as input;
+        use tokio::sync::RwLock;
+        let (addr, fake) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
+        let socket = FixedSerialPool::connect(&addr, 1).await.unwrap();
+        let client = ViewGateway_ViewGateway1_Client::new(Arc::new(socket));
+        let context = Arc::new(GatewayContext::assemble(
+            thruput_xdr::PROTOCOL_VERSION,
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(Some(BackendClient::new(
+                client.clone(),
+                client,
+            )))),
+            Arc::new(RwLock::new(None)),
+            Arc::new(GatewayConfig {
+                view_timeout_ms: 60_000,
+                request_timeout_ms: 90_000,
+                ..Default::default()
+            }),
+            GatewayMetrics::for_tests(),
+        ));
+        let backend = GatewayBackend::new(context);
+        for floor in [42, 43] {
+            let request = input::SimulateInvocationsRequest {
+                min_state_block_height: Some(floor.into()),
+                invocations: [3, 4]
+                    .into_iter()
+                    .map(|weight| input::Invocation {
+                        address: thruput_json_rpc_types::base58::Base58(
+                            thruput_xdr::types::ContractAddress::from([7; 32]),
+                        ),
+                        entrypoint: HexBytes(vec![8; 8]),
+                        calldata: HexBytes(vec![u8::try_from(weight).unwrap()]),
+                        caller: None,
+                        assumed_auth: Some(input::AssumedAuth::SourceAddress {
+                            allowed_keys: 5,
+                            required_weight: weight,
+                        }),
+                        gas_limit: Some(123),
+                    })
+                    .collect(),
+            };
+            let result = backend
+                .simulate_batch(
+                    RpcRequestContext::unbounded(),
+                    request,
+                    1000,
+                    ViewBatchConfig {
+                        max_response_bytes: 256,
+                        ..Default::default()
+                    },
+                )
+                .await;
+            if floor == 42 {
+                let result = result.unwrap();
+                assert_eq!(result.results.len(), 2);
+                assert_eq!(*result.state_block_height, 42);
+                assert_eq!(result.results[0].gas_used, 123);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(RpcServerError::ViewHeightUnavailable(_))
+                ));
+            }
+        }
+        fake.abort();
     }
 }

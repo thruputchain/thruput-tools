@@ -118,3 +118,6 @@ impl<S> FinalizedNativeModule<S> {
         self.module
     }
 }
+
+/// Native read-only backend semantics; production activation is separate.
+pub mod read;
