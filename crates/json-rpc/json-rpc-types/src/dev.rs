@@ -257,10 +257,7 @@ fn storage_delta_summary(delta: &FlaggedStorageDelta) -> String {
         }
         StorageDelta::kDeltaTypeDeployContract {
             deployed_contract_hash,
-        } => format!(
-            "DeployContract -> 0x{}",
-            hex::encode(deployed_contract_hash.hash.as_ref())
-        ),
+        } => format!("DeployContract -> {}", Base58(deployed_contract_hash.hash)),
         StorageDelta::kDeltaTypeConsumeUniquifier {
             consume_uniquifier_args,
         } => format!(

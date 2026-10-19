@@ -22,7 +22,7 @@ use jsonrpsee::{
 };
 use serde::Serialize;
 use thruput_indexer::EventIndexerPulledBlock;
-use thruput_json_rpc_types::hex::HexBytes;
+use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
 use tokio::sync::Notify;
 
 /// Bounds apply independently of the upstream protocol's much larger ceiling.
@@ -107,8 +107,9 @@ impl Config {
 
 pub(crate) fn record_from_bytes(block: &EventIndexerPulledBlock, bytes: Vec<u8>) -> Record {
     Record {
+        schema_version: crate::types::RECORD_SCHEMA_VERSION,
         height: crate::block_height(block),
-        consensus_hash: HexBytes::from(block.block.identity.consensus_hash.as_ref().to_vec()),
+        consensus_hash: Base58(block.block.identity.consensus_hash.clone().into_inner()),
         byte_length: bytes.len(),
         record: HexBytes::from(bytes),
         ingested_at_unix_micros: None,

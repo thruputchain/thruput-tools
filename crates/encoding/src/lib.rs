@@ -3,7 +3,10 @@
 //! Machine interfaces use base58 only. The typed human-input helpers also accept
 //! Stellar `StrKeys`. No function guesses that an arbitrary byte array is an address.
 
+use thruput_xdr::base58;
 use zeroize::Zeroizing;
+
+pub use base58::max_encoded_len;
 
 /// Invalid text or a violated byte-length limit. Never contains the supplied text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -33,41 +36,23 @@ pub enum Error {
     },
 }
 
-/// Conservative maximum base58 text length for a decoded byte limit.
-///
-/// Saturates rather than wrapping for limits near `usize::MAX`; empty bytes have
-/// exactly one representation, the empty string.
-pub const fn max_encoded_len(max_bytes: usize) -> usize {
-    if max_bytes == 0 {
-        return 0;
-    }
-    // Decompose multiplication so valid bounds do not overflow unnecessarily.
-    (max_bytes / 100)
-        .saturating_mul(138)
-        .saturating_add((max_bytes % 100) * 138 / 100)
-        .saturating_add(1)
-}
-
 /// Encode using the case-sensitive Bitcoin/Solana alphabet, preserving leading zeros.
 pub fn encode(bytes: &[u8]) -> String {
-    bs58::encode(bytes).into_string()
+    let mut output = vec![0; max_encoded_len(bytes.len())];
+    let len = base58::encode_into(bytes, &mut output)
+        .expect("bug: base58 encoded length exceeds its bound");
+    output.truncate(len);
+    String::from_utf8(output).expect("bug: base58 encoding is not ASCII")
 }
 
-fn check_length(text: &str, max_bytes: usize) -> Result<(), Error> {
-    if text.len() > max_encoded_len(max_bytes) {
-        return Err(Error::TooLong { max_bytes });
+fn decode_error(error: base58::Error, max_bytes: usize) -> Error {
+    match error {
+        base58::Error::BufferTooSmall => Error::TooLong { max_bytes },
+        base58::Error::InvalidLength { expected, actual } => {
+            Error::InvalidLength { expected, actual }
+        }
+        _ => Error::InvalidBase58,
     }
-    Ok(())
-}
-
-fn decode_into(text: &str, output: &mut [u8]) -> Result<usize, Error> {
-    let max_bytes = output.len();
-    bs58::decode(text)
-        .onto(output)
-        .map_err(|error| match error {
-            bs58::decode::Error::BufferTooSmall => Error::TooLong { max_bytes },
-            _ => Error::InvalidBase58,
-        })
 }
 
 /// Decode a machine value with a required maximum byte length.
@@ -76,24 +61,25 @@ fn decode_into(text: &str, output: &mut [u8]) -> Result<usize, Error> {
 /// decoded limit, and rejects excess decoded bytes. Whitespace is not trimmed.
 /// The caller must select a field-appropriate limit; this is not a CPU time limit.
 pub fn decode(text: &str, max_bytes: usize) -> Result<Vec<u8>, Error> {
-    check_length(text, max_bytes)?;
+    if text.len() > max_encoded_len(max_bytes) {
+        return Err(Error::TooLong { max_bytes });
+    }
     // A base58 character contributes at most one decoded byte (including zeros).
     let mut output = vec![0; text.len().min(max_bytes)];
-    let len = decode_into(text, &mut output)?;
+    let len =
+        base58::decode_into(text, &mut output).map_err(|error| decode_error(error, max_bytes))?;
     output.truncate(len);
     Ok(output)
 }
 
 /// Decode exactly N bytes without a heap-allocated intermediate byte buffer.
 pub fn decode_fixed<const N: usize>(text: &str) -> Result<[u8; N], Error> {
-    let mut output = [0; N];
-    decode_fixed_into(text, &mut output)?;
-    Ok(output)
+    base58::decode_fixed(text).map_err(|error| decode_error(error, N))
 }
 
 fn decode_fixed_into(text: &str, output: &mut [u8]) -> Result<(), Error> {
-    check_length(text, output.len())?;
-    let actual = decode_into(text, output)?;
+    let actual =
+        base58::decode_into(text, output).map_err(|error| decode_error(error, output.len()))?;
     if actual != output.len() {
         return Err(Error::InvalidLength {
             expected: output.len(),

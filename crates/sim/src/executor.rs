@@ -3238,7 +3238,7 @@ fn contract_call_workload_event(
         view_abort_data: None,
         view_event_count: None,
         contract_call_name: Some(call.name.clone()),
-        contract_call_contract: Some(format!("0x{}", hex::encode(call.contract.as_ref()))),
+        contract_call_contract: Some(Base58(call.contract).to_string()),
         storage_read_name: None,
         storage_contract: None,
         storage_key: None,
@@ -3417,7 +3417,7 @@ fn storage_read_workload_event(
         contract_call_name: None,
         contract_call_contract: None,
         storage_read_name: Some(read.name.clone()),
-        storage_contract: Some(format!("0x{}", hex::encode(read.contract.as_ref()))),
+        storage_contract: Some(Base58(read.contract).to_string()),
         storage_key: Some(format!("0x{}", hex::encode(&read.key))),
         storage_item_present: None,
         storage_item_kind: None,
@@ -3630,7 +3630,7 @@ fn events_query_workload_event(
         storage_item_present: None,
         storage_item_kind: None,
         event_query_name: Some(query.name.clone()),
-        event_contract: Some(format!("0x{}", hex::encode(query.contract.as_ref()))),
+        event_contract: Some(Base58(query.contract).to_string()),
         event_count: None,
         event_cursor: None,
         event_latest_block: None,
@@ -5343,7 +5343,10 @@ mod tests {
         let completed = find_event(&events, "workload-completed");
         assert_eq!(completed["workload"], "contract-call");
         assert_eq!(completed["contractCallName"], "events-store-value");
-        assert_eq!(completed["contractCallContract"], prefixed_hex(0x88));
+        assert_eq!(
+            completed["contractCallContract"],
+            Base58(ContractAddress::from([0x88; 32])).to_string()
+        );
         assert_eq!(completed["receiptPresent"], true);
         assert_eq!(completed["receiptStatus"], "ok");
     }
@@ -5627,7 +5630,11 @@ mod tests {
                 assert_eq!(event.storage_read_name.as_deref(), Some("fib-zero-key"));
                 assert_eq!(
                     event.storage_contract.as_deref(),
-                    Some(prefixed_hex(0x88).as_str())
+                    Some(
+                        Base58(ContractAddress::from([0x88; 32]))
+                            .to_string()
+                            .as_str()
+                    )
                 );
                 assert_eq!(
                     event.storage_key.as_deref(),
@@ -5789,7 +5796,11 @@ mod tests {
                 assert_eq!(event.event_query_name.as_deref(), Some("fib-events"));
                 assert_eq!(
                     event.event_contract.as_deref(),
-                    Some(prefixed_hex(0x88).as_str())
+                    Some(
+                        Base58(ContractAddress::from([0x88; 32]))
+                            .to_string()
+                            .as_str()
+                    )
                 );
                 assert_eq!(event.event_count, Some(0));
                 assert_eq!(event.event_cursor.as_deref(), Some("0xab"));

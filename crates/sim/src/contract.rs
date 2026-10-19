@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use thruput_json_rpc_client::poll_receipt;
 use thruput_json_rpc_types::{
+    base58::FixedIdentifier,
     receipt::{ExecStatus, TransactionReceipt},
     transaction::TxHash,
 };
@@ -254,7 +255,7 @@ where
     record.deploy_address_nonce = Some(prepared.deploy_address_nonce.clone());
     record.tx_hash = Some(json_string(&prepared.tx_hash, "deployment txHash")?);
     record.collateral = Some(crate::result::NativeDeploymentCollateral {
-        recipient: format!("0x{}", hex::encode(prepared.predicted_address.as_ref())),
+        recipient: thruput_json_rpc_types::base58::Base58(prepared.predicted_address).to_string(),
         raw_amount: prepared.deployment_amount.to_string(),
     });
     event_writer
@@ -418,7 +419,7 @@ fn prepare_deploy(
         tx_nonce,
         predicted_address,
         artifact_sha256,
-        contract_hash: format!("0x{}", hex::encode(contract_hash.as_ref())),
+        contract_hash: thruput_json_rpc_types::base58::Base58(contract_hash).to_string(),
         deploy_address_nonce: format!("0x{}", hex::encode(deploy_address_nonce.as_ref())),
     })
 }
@@ -495,9 +496,8 @@ where
         return DeployAttempt {
             progress,
             result: Err(SimError::Executor(format!(
-                "native deployment returned transaction hash 0x{}, expected 0x{}",
-                hex::encode(tx_hash.0.0.as_ref()),
-                hex::encode(prepared.tx_hash.0.0.as_ref())
+                "native deployment returned transaction hash {}, expected {}",
+                tx_hash.0, prepared.tx_hash.0
             ))
             .into()),
         };
@@ -562,7 +562,7 @@ fn resolve_deploy_receipt(
         )
         .into());
     }
-    progress.address = Some(format!("0x{}", hex::encode(predicted_address.as_ref())));
+    progress.address = Some(thruput_json_rpc_types::base58::Base58(*predicted_address).to_string());
     progress.address_source = Some(DeployAddressSource::Receipt);
     Ok(())
 }
@@ -723,11 +723,7 @@ fn resolve_entrypoint(entrypoint: &EntrypointSpec) -> Result<Vec<u8>, SimError> 
 }
 
 fn parse_contract_address(value: &str) -> Result<ContractAddress, SimError> {
-    let bytes = parse_hex(value)?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| SimError::Executor("contract address must be 32 bytes".into()))?;
-    Ok(ContractAddress::from(bytes))
+    ContractAddress::decode_base58(value).map_err(|error| SimError::Executor(error.to_string()))
 }
 
 fn exec_status_name(status: &ExecStatus) -> &'static str {
@@ -1203,7 +1199,7 @@ mod tests {
                         .error
                         .as_ref()
                         .expect("error")
-                        .contains(&"07".repeat(32))
+                        .contains(&Base58(SHA256Hash::from([7; 32])).to_string())
                 );
             }
             let events = std::fs::read_to_string(file.path()).expect("events");
@@ -1263,13 +1259,10 @@ mod tests {
             let record = &setup.records[0];
             let collateral = record.collateral.as_ref().expect("funding effects");
             assert_eq!(collateral.raw_amount, "10000000");
-            assert_eq!(
-                collateral.recipient,
-                format!("0x{}", hex::encode(predicted.as_ref()))
-            );
+            assert_eq!(collateral.recipient, Base58(predicted).to_string());
             assert_eq!(
                 record.contract_hash.as_deref(),
-                Some(format!("0x{}", hex::encode(code_hash.as_ref())).as_str())
+                Some(Base58(code_hash).to_string().as_str())
             );
             assert_eq!(actors[0].next_nonce_sequence, 1);
             if outcome == NativeDeployOutcome::Success {
@@ -1305,7 +1298,7 @@ mod tests {
 
         assert_eq!(
             prepared.contract_hash,
-            format!("0x{}", hex::encode(contract_hash_bytes))
+            Base58(SHA256Hash::from(contract_hash_bytes)).to_string()
         );
         assert_eq!(signed_tx.tx.invocation.entrypoint, deploy_entrypoint);
     }

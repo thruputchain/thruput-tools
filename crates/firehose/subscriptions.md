@@ -45,7 +45,7 @@ The response result is jsonrpsee's subscription ID. It is used with
 in acknowledgements and metrics. Each `firehose_block` notification contains:
 
 ```json
-{"jsonrpc":"2.0","method":"firehose_block","params":{"subscription":123,"result":{"type":"block","subscriberId":1,"block":{"height":42,"consensusHash":"0x...","byteLength":27600,"record":"0x...","ingestedAtUnixMicros":1789720800000000}}}}
+{"jsonrpc":"2.0","method":"firehose_block","params":{"subscription":123,"result":{"type":"block","subscriberId":1,"block":{"schemaVersion":2,"height":42,"consensusHash":"11111111111111111111111111111111","byteLength":27600,"record":"0x...","ingestedAtUnixMicros":1789720800000000}}}}
 ```
 
 `record` is the **exact complete stored `EventIndexerPulledBlock` XDR**, transported

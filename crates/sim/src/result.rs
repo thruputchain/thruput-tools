@@ -7,7 +7,7 @@ use crate::compare::ResultDiff;
 use crate::manifest::{ContractArtifactKind, WorkloadKind};
 use crate::target::{TargetOwnership, TargetProviderKind};
 
-pub const SIM_RESULT_SCHEMA_VERSION: u32 = 4;
+pub const SIM_RESULT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -484,7 +484,7 @@ pub struct ContractDeploymentRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeDeploymentCollateral {
-    /// Predicted deployment address receiving collateral, encoded as `0x` hex.
+    /// Predicted deployment address receiving collateral, encoded as unprefixed base58.
     pub recipient: String,
     /// Raw HOG amount to transfer, encoded as a decimal string.
     pub raw_amount: String,
