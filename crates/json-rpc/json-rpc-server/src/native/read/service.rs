@@ -6,8 +6,8 @@ use thruput_bundle_identity::BundleIdentity;
 use thruput_json_rpc_api::native::CANDIDATE_WIRE_FORMAT_VERSION;
 use thruput_json_rpc_types::{BlockHeight, NetworkHash, requests as input, responses as out};
 
-/// Configured sources, independent of their current health. This slice has no
-/// submit, indexer or funding handlers and cannot advertise those methods.
+/// Configured state and simulation sources, independent of their health.
+/// `NativeService` owns indexer and submission registration separately.
 #[derive(Debug, Clone, Copy)]
 pub struct NativeReadCapabilities {
     db: bool,
@@ -157,6 +157,38 @@ impl<C, R, V> NativeReadService<C, R, V> {
             });
         }
         Ok(result)
+    }
+}
+impl<C, R: super::NativeBlockPlane, V> NativeReadService<C, R, V> {
+    /// Read committed metadata from the configured indexer. `NativeService` owns
+    /// the indexer capability gate; this producer does not register a method.
+    #[tracing::instrument(skip_all)]
+    pub async fn get_block_by_height(
+        &self,
+        request: input::BlockQuery,
+    ) -> RpcResult<out::BlockResult> {
+        let context = self.context();
+        self.within(context, async {
+            if *request.block_height < 0 {
+                return Err(RpcServerError::InvalidParam(
+                    "blockHeight must be nonnegative".into(),
+                ));
+            }
+            let result = self
+                .state
+                .native_block(context, request.block_height.clone())
+                .await?;
+            if let Some(block) = &result {
+                if *block.block_height <= 0 || block.block_height != request.block_height {
+                    return Err(invalid("block metadata has an unexpected height"));
+                }
+                if block.network_hash != self.network_hash {
+                    return Err(invalid("block metadata has a different network hash"));
+                }
+            }
+            Ok(result)
+        })
+        .await
     }
 }
 impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadService<C, R, V> {

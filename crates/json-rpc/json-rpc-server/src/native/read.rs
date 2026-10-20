@@ -18,6 +18,17 @@ pub enum StateKey {
     FreeNativeTokenBalance,
 }
 
+/// Committed indexer metadata. Implementations must distinguish authoritative
+/// absence from unavailable, rebuilding or invalid index data.
+#[async_trait]
+pub trait NativeBlockPlane: Send + Sync + 'static {
+    async fn native_block(
+        &self,
+        context: RpcRequestContext,
+        height: thruput_json_rpc_types::BlockHeight,
+    ) -> Result<out::BlockResult, RpcServerError>;
+}
+
 /// State answers validated before transport demultiplexing loses evidence.
 #[async_trait]
 pub trait NativeStatePlane: Send + Sync + 'static {

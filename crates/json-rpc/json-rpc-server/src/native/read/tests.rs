@@ -18,6 +18,7 @@ struct Backend {
     height: Option<i64>,
     balance_item: Option<out::StorageItem>,
     wrong_auth_address: bool,
+    wrong_block_network: bool,
 }
 impl Backend {
     async fn check(&self) -> Result<(), RpcServerError> {
@@ -383,7 +384,7 @@ async fn assembly_registers_each_configured_plane_independently() {
             expected.push("sendTransaction");
         }
         if indexer {
-            expected.push("getTransactionReceipt");
+            expected.extend(["getTransactionReceipt", "getBlockByHeight"]);
         }
         if scheduler && indexer {
             expected.push("getTransactionStatus");
@@ -492,11 +493,12 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
         if db {
             expected.extend([
                 "sendTransaction",
+                "getBlockByHeight",
                 "getTransactionStatus",
                 "getTransactionReceipt",
             ]);
             expected.sort_unstable();
-            assert_eq!(expected.len(), 13);
+            assert_eq!(expected.len(), 14);
         }
         let module = assembled_service(
             backend.clone(),
@@ -773,4 +775,151 @@ async fn bundle_identity_keeps_diagnostics_from_the_same_build() {
     assert_eq!(version.platform_version.as_deref(), Some("new-platform"));
     assert!(version.release_version.is_none());
     assert!(version.bundle_manifest_digest.is_none());
+}
+
+#[async_trait]
+impl NativeBlockPlane for Backend {
+    async fn native_block(
+        &self,
+        _: RpcRequestContext,
+        height: BlockHeight,
+    ) -> Result<out::BlockResult, RpcServerError> {
+        self.check().await?;
+        if *height == 0 || *height > 42 {
+            return Ok(None);
+        }
+        let hash = thruput_xdr::types::SHA256Hash::from([9; 32]);
+        Ok(Some(out::BlockInfo {
+            block_hash: hash.into(),
+            protocol: 1.into(),
+            network_hash: if self.wrong_block_network {
+                thruput_xdr::types::SHA256Hash::from([7; 32]).into()
+            } else {
+                hash.into()
+            },
+            config_hash: hash.into(),
+            proposer: thruput_json_rpc_types::base58::Base58([2; 32].into()),
+            block_timepoint: 123.into(),
+            block_height: self.height.unwrap_or(*height).into(),
+            txs_hash: hash.into(),
+            storage_hash: hash.into(),
+            events_hash: hash.into(),
+            prev_block_hash: hash.into(),
+            proposal_txs_hash: hash.into(),
+            upgrades: vec![],
+        }))
+    }
+}
+
+#[tokio::test]
+async fn block_metadata_strict_params_indexer_only_and_outages() {
+    use crate::native::service::NativeCapabilities;
+    let backend = Backend::default();
+    let module = assembled_service(
+        backend.clone(),
+        NativeCapabilities::new(false, true, false, false),
+    )
+    .into_module()
+    .unwrap()
+    .into_rpc();
+    for params in [
+        serde_json::json!({"blockHeight":1}),
+        serde_json::json!({"blockHeight":"01"}),
+        serde_json::json!({"blockHeight":"-1"}),
+        serde_json::json!({"blockHeight":"1","extra":true}),
+        serde_json::json!(["1"]),
+        serde_json::json!({"height":"1"}),
+    ] {
+        let request =
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"getBlockByHeight","params":params});
+        let (response, _) = module
+            .raw_json_request(&request.to_string(), 1)
+            .await
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
+        assert_eq!(response["error"]["code"], -32602, "{params}");
+    }
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+    for height in [0, 1, 43] {
+        let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"getBlockByHeight","params":{"blockHeight":height.to_string()}});
+        let (response, _) = module
+            .raw_json_request(&request.to_string(), 1)
+            .await
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
+        if height == 1 {
+            assert_eq!(response["result"]["blockHeight"], "1");
+            assert_eq!(response["result"]["blockTimepoint"], "123");
+        } else {
+            assert!(response.get("result").unwrap().is_null());
+        }
+    }
+    backend.unavailable.store(true, Ordering::SeqCst);
+    let (response, _) = module
+        .raw_json_request(
+            r#"{"jsonrpc":"2.0","id":1,"method":"getBlockByHeight","params":{"blockHeight":"0"}}"#,
+            1,
+        )
+        .await
+        .unwrap();
+    let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
+    assert_eq!(response["error"]["code"], codes::BACKEND_UNAVAILABLE);
+    assert!(response["error"]["data"].get("admission").is_none());
+}
+
+#[tokio::test]
+async fn block_metadata_rejects_inconsistent_values_and_deadlines() {
+    for (backend, expected) in [
+        (
+            Backend {
+                wrong_block_network: true,
+                ..Backend::default()
+            },
+            codes::BACKEND_DATA_INVALID,
+        ),
+        (
+            Backend {
+                height: Some(2),
+                ..Backend::default()
+            },
+            codes::BACKEND_DATA_INVALID,
+        ),
+        (
+            Backend {
+                slow: true,
+                ..Backend::default()
+            },
+            codes::BACKEND_TIMEOUT,
+        ),
+    ] {
+        let service = service(
+            backend,
+            RpcServerConfig::default().with_request_timeout_ms(5),
+            NativeReadCapabilities::new(false, false),
+        );
+        let error = service
+            .get_block_by_height(input::BlockQuery {
+                block_height: 1.into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), expected);
+    }
+    let backend = Backend::default();
+    let service = service(
+        backend.clone(),
+        RpcServerConfig::default(),
+        NativeReadCapabilities::new(false, false),
+    );
+    assert_eq!(
+        service
+            .get_block_by_height(input::BlockQuery {
+                block_height: (-1).into()
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        codes::INVALID_PARAMS
+    );
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
 }

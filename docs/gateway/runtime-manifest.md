@@ -119,7 +119,8 @@ THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
 
 Both URLs use loopback and operating-system assigned ports. The candidate uses
 the node's validated manifest and existing block driver. Query `getVersionInfo`
-for its implemented methods; history, blocks and funding are not registered yet.
+for its implemented methods, including committed block metadata through
+`getBlockByHeight`. Paginated history and funding are not registered yet.
 The normal node and gateway still serve wire 13. Ctrl-C stops both listeners and
 the ephemeral runtime. The example does not use an existing data directory.
 It checks API behavior, not production capacity or batch scheduling. If the

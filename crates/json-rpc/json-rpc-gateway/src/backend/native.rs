@@ -129,3 +129,20 @@ impl thruput_json_rpc_server::native::transaction::NativeSubmitPlane for Gateway
         .await
     }
 }
+
+#[async_trait]
+impl thruput_json_rpc_server::native::read::NativeBlockPlane for GatewayBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_block(
+        &self,
+        context: RpcRequestContext,
+        height: thruput_json_rpc_types::BlockHeight,
+    ) -> Result<out::BlockResult, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::blocks::native_block_by_height(&self.ctx, context, height),
+        )
+        .await
+    }
+}

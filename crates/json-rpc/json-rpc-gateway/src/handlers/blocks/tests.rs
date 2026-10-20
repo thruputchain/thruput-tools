@@ -67,6 +67,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
                 outcome: BlockLookupOutcome::BlockNotFound.0,
             }),
             4 => Ok(BlockLookupResult::Default { outcome: 999 }),
+            6 => std::future::pending().await,
             _ => Err(ProgramError::msg("indexer read failed")),
         }
     }
@@ -138,7 +139,7 @@ async fn block_metrics_count_rejected_values_and_pages_as_errors() {
     .await
     .unwrap()
     .unwrap();
-    let ctx = GatewayContext::assemble(
+    let ctx = Arc::new(GatewayContext::assemble(
         PROTOCOL_VERSION,
         Arc::new(RwLock::new(None)),
         Arc::new(RwLock::new(Some(BackendClient::new(
@@ -149,7 +150,7 @@ async fn block_metrics_count_rejected_values_and_pages_as_errors() {
         Arc::new(RwLock::new(None)),
         Arc::new(GatewayConfig::default()),
         GatewayMetrics::for_tests(),
-    );
+    ));
     let context = || RpcRequestContext::new(Some(std::time::Duration::from_secs(5)));
     assert!(
         get_block_by_number(&ctx, context(), 1.into())
@@ -203,5 +204,47 @@ async fn block_metrics_count_rejected_values_and_pages_as_errors() {
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"get_transactions_by_block\",outcome=\"{outcome}\"}} {count}\n"
         )), "{metrics}");
     }
+    check_native_blocks(&ctx, &health).await;
     server.abort();
+}
+
+async fn check_native_blocks(ctx: &Arc<GatewayContext>, health: &crate::health::GatewayHealth) {
+    use thruput_json_rpc_server::native::read::NativeBlockPlane;
+    let context = || RpcRequestContext::new(Some(std::time::Duration::from_secs(5)));
+    let backend = crate::backend::GatewayBackend::new(ctx.clone());
+    assert!(
+        backend
+            .native_block(context(), 1.into())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        backend
+            .native_block(context(), 3.into())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    for height in [2, 4] {
+        assert!(matches!(
+            backend.native_block(context(), height.into()).await,
+            Err(RpcServerError::BackendDataInvalid { .. })
+        ));
+    }
+    assert!(matches!(
+        backend.native_block(context(), 5.into()).await,
+        Err(RpcServerError::BackendUnavailable(_))
+    ));
+    let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
+    for (outcome, count) in [("ok", 4), ("error", 6)] {
+        assert!(metrics.contains(&format!(
+            "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"get_block_by_height\",outcome=\"{outcome}\"}} {count}\n"
+        )), "{metrics}");
+    }
+    let deadline = RpcRequestContext::new(Some(std::time::Duration::from_millis(20)));
+    assert!(matches!(
+        backend.native_block(deadline, 6.into()).await,
+        Err(RpcServerError::BackendTimeout)
+    ));
 }

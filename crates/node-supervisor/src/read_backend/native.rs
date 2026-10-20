@@ -158,3 +158,25 @@ impl NativeTransactionReadPlane for HogdDevStorageReadBackend {
         Err(RpcServerError::NotImplemented("getTransactionStatus".into()).into())
     }
 }
+
+#[async_trait]
+impl thruput_json_rpc_server::native::read::NativeBlockPlane for HogdDevReadBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_block(
+        &self,
+        context: RpcRequestContext,
+        height: thruput_json_rpc_types::BlockHeight,
+    ) -> Result<out::BlockResult, RpcServerError> {
+        within_request_deadline(context, async {
+            let result = self
+                .indexer
+                .get_block_by_height(&height)
+                .await
+                .map_err(|error| {
+                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {error}"))
+                })?;
+            decode::block_lookup(&height, result)
+        })
+        .await
+    }
+}

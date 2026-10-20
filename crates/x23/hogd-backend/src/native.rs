@@ -5,6 +5,8 @@
 //! adapters cannot classify those failures as invalid data. Preserving that
 //! distinction requires a generated-client change; do not infer it from text.
 
+mod block;
+pub use block::block_lookup;
 mod simulation;
 mod state;
 pub mod transaction;

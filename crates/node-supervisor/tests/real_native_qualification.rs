@@ -151,6 +151,7 @@ async fn exercise(
         "transfer receipt omitted its token event",
     )?;
     require(receipt.gas_used > 0, "receipt omitted metering")?;
+    check_block(&native, &legacy, &receipt.block_height, &network).await?;
     let funded = known(
         native
             .get_balance(input::AddressQuery { address: recipient })
@@ -257,6 +258,7 @@ async fn check_discovery(native: &NativeClient<HttpClient>) -> TestResult {
         "sendTransaction",
         "getTransactionStatus",
         "getTransactionReceipt",
+        "getBlockByHeight",
     ];
     expected_methods.sort_unstable();
     require(
@@ -317,4 +319,52 @@ async fn check_simulation(
             && after.state_block_height == before.state_block_height,
         "simulation mutated committed recipient balance",
     )
+}
+
+async fn check_block(
+    native: &NativeClient<HttpClient>,
+    legacy: &HttpClient,
+    height: &thruput_json_rpc_types::BlockHeight,
+    network: &thruput_json_rpc_types::NetworkHash,
+) -> TestResult {
+    let block = known(
+        native
+            .get_block_by_height(input::BlockQuery {
+                block_height: height.clone(),
+            })
+            .await?,
+    )?
+    .ok_or_else(|| std::io::Error::other("committed receipt block is missing"))?;
+    let legacy_block = legacy
+        .get_block_by_number(height.clone().into())
+        .await?
+        .ok_or_else(|| std::io::Error::other("legacy receipt block is missing"))?;
+    require(
+        block.block_height == *height && block.network_hash == *network,
+        "block metadata does not match receipt height and signing network",
+    )?;
+    require(
+        serde_json::to_value(&block)? == serde_json::to_value(&legacy_block)?,
+        "native block changed the canonical consensus metadata",
+    )?;
+    let committed_tip = known(native.get_chain_tip(input::EmptyRequest {}).await?)?;
+    require(
+        block.block_height == committed_tip.block_height
+            && block.block_hash == committed_tip.block_hash,
+        "indexer block hash differs from the independently read DB tip",
+    )?;
+    for height in [0, **height + 100] {
+        require(
+            known(
+                native
+                    .get_block_by_height(input::BlockQuery {
+                        block_height: height.into(),
+                    })
+                    .await?,
+            )?
+            .is_none(),
+            "block outside authoritative coverage was not null",
+        )?;
+    }
+    Ok(())
 }

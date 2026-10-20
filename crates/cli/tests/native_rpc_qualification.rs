@@ -12,7 +12,7 @@ use thruput_json_rpc_types::{
     ContractAddress,
     base58::Base58,
     bootstrap_manifest::BootstrapManifestAllocation,
-    requests::{AddressQuery, EmptyRequest},
+    requests::{AddressQuery, BlockQuery, EmptyRequest},
     responses as output,
 };
 use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
@@ -182,6 +182,7 @@ async fn exercise(
         receipt.gas_used > 0 && !receipt.events.is_empty(),
         "CLI receipt omitted metering or events",
     )?;
+    check_block(&native, &legacy, &receipt.block_height).await?;
     require(
         call["data"]["blockHeight"].is_string() && call["data"]["gasUsed"].is_string(),
         "CLI receipt wide integers must be decimal strings",
@@ -263,4 +264,29 @@ async fn expected_free_balance(
         .execution
         .ok_or_else(|| std::io::Error::other("missing authoritative storage costs"))?;
     Ok(i128::try_from(AMOUNT)? - i128::from(execution.storage_costs.balance_cost))
+}
+
+async fn check_block(
+    native: &NativeClient<jsonrpsee::http_client::HttpClient>,
+    legacy: &jsonrpsee::http_client::HttpClient,
+    height: &thruput_json_rpc_types::BlockHeight,
+) -> TestResult {
+    let output::DecodedResponse::Known(Some(block)) = native
+        .get_block_by_height(BlockQuery {
+            block_height: height.clone(),
+        })
+        .await?
+    else {
+        return Err(std::io::Error::other("CLI receipt block is missing or invalid").into());
+    };
+    let legacy_block = legacy
+        .get_block_by_number(height.clone().into())
+        .await?
+        .ok_or_else(|| std::io::Error::other("legacy receipt block is missing"))?;
+    require(
+        block.block_height == *height
+            && serde_json::to_value(&block)? == serde_json::to_value(&legacy_block)?,
+        "native CLI receipt did not resolve to the canonical committed block",
+    )?;
+    Ok(())
 }
