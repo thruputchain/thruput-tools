@@ -257,8 +257,22 @@ pub(crate) async fn install_interrupt_listener() -> Pin<Box<dyn Future<Output = 
 #[serde(rename_all = "camelCase")]
 pub(crate) enum SubmissionPhase {
     NotSent,
+    /// Dispatched once, with authoritative evidence that this attempt was refused.
+    NotAdmitted,
     Uncertain,
     Acknowledged,
+}
+
+impl SubmissionPhase {
+    fn from_submit_error(error: &SubmitCallError) -> Self {
+        if matches!(error, SubmitCallError::Encoding { .. }) {
+            Self::NotSent
+        } else if error.proves_first_send_not_admitted() {
+            Self::NotAdmitted
+        } else {
+            Self::Uncertain
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -353,11 +367,7 @@ where
     let submitted = match submission {
         Some(result) => result.map_err(|error| {
             with_phase(
-                if matches!(error, SubmitCallError::Encoding { .. }) {
-                    SubmissionPhase::NotSent
-                } else {
-                    SubmissionPhase::Uncertain
-                },
+                SubmissionPhase::from_submit_error(&error),
                 submit_error(&error),
             )
         })?,
@@ -386,6 +396,7 @@ pub(crate) fn failure_observations(
 ) -> Vec<(&'static str, String)> {
     let phase = match phase {
         SubmissionPhase::NotSent => "not sent",
+        SubmissionPhase::NotAdmitted => "not admitted",
         SubmissionPhase::Uncertain => "outcome uncertain",
         SubmissionPhase::Acknowledged => "admission acknowledged",
     };

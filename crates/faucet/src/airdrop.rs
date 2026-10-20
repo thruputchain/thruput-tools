@@ -974,63 +974,14 @@ pub enum AirdropSubmitError {
 impl AirdropSubmitError {
     // Only called for the first send, never after a dispatched/uncertain attempt.
     fn proves_first_send_not_admitted(&self, expected_hash: TxHash) -> bool {
-        use thruput_json_rpc_types::error::native::{AttemptAdmission, DecodedError, ErrorData};
         if matches!(
             self,
             Self::RpcConnect(_) | Self::Preflight(_) | Self::Encoding(_)
         ) {
             return true;
         }
-        let Self::Rpc {
-            method: "sendTransaction",
-            source,
-        } = self
-        else {
-            return false;
-        };
-        let NativeClientError::Application { data, .. } = source.as_ref() else {
-            return false;
-        };
-        let DecodedError::Known { data, .. } = data.as_ref() else {
-            return false;
-        };
-        let (ErrorData::TransactionInvalid {
-            admission,
-            transaction_hash: hash,
-            ..
-        }
-        | ErrorData::TransactionRejected {
-            admission,
-            transaction_hash: hash,
-            ..
-        }
-        | ErrorData::BackendUnavailable {
-            admission: Some(admission),
-            transaction_hash: hash,
-            ..
-        }
-        | ErrorData::BackendTimeout {
-            admission: Some(admission),
-            transaction_hash: hash,
-            ..
-        }
-        | ErrorData::Overloaded {
-            admission: Some(admission),
-            transaction_hash: hash,
-            ..
-        }
-        | ErrorData::BackendDataInvalid {
-            admission: Some(admission),
-            transaction_hash: hash,
-            ..
-        }) = data.as_ref()
-        else {
-            return false;
-        };
-        matches!(
-            admission,
-            AttemptAdmission::NotAttempted | AttemptAdmission::Rejected
-        ) && hash.is_none_or(|hash| hash == expected_hash)
+        matches!(self, Self::Rpc { method: "sendTransaction", source }
+            if thruput_client::first_submission_not_admitted(source, expected_hash))
     }
 
     fn into_response(self) -> Response {
@@ -1177,12 +1128,10 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
         recipient: ContractAddress,
     ) -> Result<PreparedAirdrop, AirdropSubmitError> {
         let client = self.client().await?;
-        let block_expiry_height = thruput_client::resolve_block_expiry_height(
-            &client,
-            DEFAULT_BLOCK_EXPIRY_OFFSET,
-        )
-        .await
-        .map_err(|error| AirdropSubmitError::Preflight(Box::new(error)))?;
+        let block_expiry_height =
+            thruput_client::resolve_block_expiry_height(&client, DEFAULT_BLOCK_EXPIRY_OFFSET)
+                .await
+                .map_err(|error| AirdropSubmitError::Preflight(Box::new(error)))?;
         let transfer_calldata = encode_transfer_calldata(&recipient.0, self.raw_amount)?;
         let nonce = next_nonce()
             .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;

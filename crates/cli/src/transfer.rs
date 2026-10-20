@@ -128,7 +128,11 @@ pub fn run(
             for (label, value) in crate::native_rpc::failure_observations(phase, &evidence) {
                 print.detail(label, value);
             }
-            if phase != crate::native_rpc::SubmissionPhase::NotSent {
+            if matches!(
+                phase,
+                crate::native_rpc::SubmissionPhase::Uncertain
+                    | crate::native_rpc::SubmissionPhase::Acknowledged
+            ) {
                 print.note("The transaction may still commit. Inspect its status and receipt before resubmitting.");
             }
             print.json(&CommandResult::failure_with_error(
@@ -141,6 +145,7 @@ pub fn run(
                     ),
                     network_hash: prepared.network_hash.clone().into_inner().into(),
                     submission: phase,
+                    signed_transaction: HexBytes(prepared.signed_transaction.clone()),
                     evidence,
                 },
                 CommandError::from_cli_error(&error),

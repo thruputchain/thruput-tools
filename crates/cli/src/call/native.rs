@@ -140,6 +140,14 @@ pub(super) fn execute(
     print: &Print,
 ) -> Result<(), CliError> {
     let common = NativeCallCommon::new(prepared)?;
+    let signed_transaction = HexBytes(
+        hex::decode(prepared.signed.tx_hex().trim_start_matches("0x")).map_err(|error| {
+            native_rpc::failure(
+                error.to_string(),
+                json!({"transactionHash":prepared.signed.tx_hash()}),
+            )
+        })?,
+    );
     let runtime =
         tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let client = NativeClient::new(crate::http_client::rpc_client(&prepared.rpc_url)?);
@@ -179,6 +187,7 @@ pub(super) fn execute(
                     common,
                     transaction_hash: prepared.signed.tx_hash(),
                     submission: phase,
+                    signed_transaction,
                     evidence,
                 },
                 CommandError::from_cli_error(&error),
@@ -347,6 +356,7 @@ struct NativeCallFailure {
     common: NativeCallCommon,
     transaction_hash: thruput_json_rpc_types::transaction::TxHash,
     submission: SubmissionPhase,
+    signed_transaction: HexBytes,
     evidence: Value,
 }
 

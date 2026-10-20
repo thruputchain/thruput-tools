@@ -419,7 +419,7 @@ fn transfer_results_distinguish_commitment_and_unconfirmed_evidence() {
             .chars()
             .filter(|c| !c.is_whitespace() && *c != '│')
             .collect();
-        assert!(compact.contains(&hashes.recv().unwrap()), "{text}");
+        assert!(compact.contains(&hashes.recv().unwrap().hash), "{text}");
         server.join().unwrap();
     }
 }

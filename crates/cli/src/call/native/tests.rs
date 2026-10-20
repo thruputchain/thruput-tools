@@ -492,6 +492,9 @@ async fn cancellation_before_preflight_is_not_sent_and_makes_no_rpc_call() {
         common: NativeCallCommon::new(&prepared).unwrap(),
         transaction_hash: prepared.signed.tx_hash(),
         submission: failure.phase,
+        signed_transaction: HexBytes(
+            hex::decode(prepared.signed.tx_hex().trim_start_matches("0x")).unwrap(),
+        ),
         evidence,
     };
     assert_eq!(
@@ -601,6 +604,9 @@ async fn cancellation_during_preflight_send_or_receipt_preserves_phase_without_r
             common: NativeCallCommon::new(&prepared).unwrap(),
             transaction_hash: hash,
             submission: failure.phase,
+            signed_transaction: HexBytes(
+                hex::decode(prepared.signed.tx_hex().trim_start_matches("0x")).unwrap(),
+            ),
             evidence,
         };
         assert_eq!(
@@ -664,4 +670,58 @@ fn native_rpc_accepts_contract_wallets_without_reinterpreting_their_address() {
             .all(|(method, _)| !method.starts_with("groundhog_"))
     );
     handle.stop().unwrap();
+}
+
+#[tokio::test]
+async fn authoritative_refusal_is_not_admitted_and_retains_the_signed_envelope() {
+    let prepared = prepared();
+    let hash = prepared.signed.tx_hash();
+    for (admission, returned_hash, phase) in [
+        ("rejected", hash, SubmissionPhase::NotAdmitted),
+        ("notAttempted", hash, SubmissionPhase::NotAdmitted),
+        (
+            "rejected",
+            thruput_json_rpc_types::transaction::TxHash(SHA256Hash::from([99; 32]).into()),
+            SubmissionPhase::Uncertain,
+        ),
+    ] {
+        let original = json!({"kind":"backendUnavailable","admission":admission,"transactionHash":returned_hash});
+        let (client, _, handle, calls) = endpoint(vec![
+            ("getVersionInfo", Ok(discovery())),
+            ("getNetworkInfo", Ok(network_result())),
+            (
+                "sendTransaction",
+                Err(ErrorObjectOwned::owned(
+                    -32050,
+                    "refused",
+                    Some(original.clone()),
+                )),
+            ),
+        ])
+        .await;
+        let failure = submit_and_wait(
+            &client,
+            &prepared,
+            ReceiptPollConfig::default(),
+            std::future::pending(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.phase, phase);
+        let report = NativeCallFailure {
+            common: NativeCallCommon::new(&prepared).unwrap(),
+            transaction_hash: hash,
+            submission: failure.phase,
+            signed_transaction: HexBytes(
+                hex::decode(prepared.signed.tx_hex().trim_start_matches("0x")).unwrap(),
+            ),
+            evidence: failure.error.details_json().unwrap(),
+        };
+        let report = serde_json::to_value(report).unwrap();
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(report["signedTransaction"], calls[2].1["signedTransaction"]);
+        assert_eq!(report["evidence"]["cause"]["rpcError"]["data"], original);
+        handle.stop().unwrap();
+    }
 }

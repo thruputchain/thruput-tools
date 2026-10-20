@@ -219,6 +219,69 @@ pub enum SubmitCallError {
     },
 }
 
+/// Whether the first dispatch received authoritative proof of non-admission.
+/// This says nothing about earlier submissions of the same transaction and never
+/// grants permission to retry. Missing admission, unfamiliar data or a conflicting
+/// supplied hash is false; request-scoped refusal may omit the optional hash.
+pub fn first_submission_not_admitted(error: &NativeClientError, expected_hash: TxHash) -> bool {
+    use thruput_json_rpc_types::error::native::{AttemptAdmission, DecodedError, ErrorData};
+    let NativeClientError::Application { data, .. } = error else {
+        return false;
+    };
+    let DecodedError::Known { data, .. } = data.as_ref() else {
+        return false;
+    };
+    let (ErrorData::TransactionInvalid {
+        admission,
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::TransactionRejected {
+        admission,
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::BackendUnavailable {
+        admission: Some(admission),
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::BackendTimeout {
+        admission: Some(admission),
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::Overloaded {
+        admission: Some(admission),
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::BackendDataInvalid {
+        admission: Some(admission),
+        transaction_hash: hash,
+        ..
+    }) = data.as_ref()
+    else {
+        return false;
+    };
+    matches!(
+        admission,
+        AttemptAdmission::NotAttempted | AttemptAdmission::Rejected
+    ) && hash.is_none_or(|hash| hash == expected_hash)
+}
+
+impl SubmitCallError {
+    /// The first dispatch was refused; this does not prove that an earlier
+    /// submission of the same bytes was refused or permit automatic retries.
+    pub fn proves_first_send_not_admitted(&self) -> bool {
+        match self {
+            Self::Rpc { tx_hash, source } => first_submission_not_admitted(source, *tx_hash),
+            Self::Encoding { .. } => true,
+            _ => false,
+        }
+    }
+}
+
 impl SignedCall {
     /// Submit these signed bytes exactly once through the native RPC contract.
     /// The caller must verify compatibility and network identity before signing.

@@ -42,7 +42,11 @@ pub fn show(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let task = crate::print::progress::Task::start(print, "Reading transaction", true);
-    let (status, receipt) = rt.block_on(fetch_transaction(&rpc_url, tx_hash))?;
+    let TransactionObservation {
+        status,
+        receipt,
+        status_error,
+    } = rt.block_on(fetch_transaction(&rpc_url, tx_hash))?;
     let _ = task.finish();
     let decoded_abort = receipt
         .as_ref()
@@ -59,6 +63,7 @@ pub fn show(
                 &tx_hash,
                 &status,
                 receipt.as_ref(),
+                status_error.as_ref(),
                 decoded_abort.as_ref(),
                 print,
             );
@@ -73,6 +78,7 @@ pub fn show(
             tx_hash,
             status,
             receipt,
+            status_error,
             abort: crate::abort_json::AbortReport::from_decode(decoded_abort.as_ref()),
         },
     ))
@@ -181,10 +187,16 @@ fn parse_tx_hash(input: &str) -> Result<TxHash, CliError> {
     Ok(TxHash(bytes.into()))
 }
 
+struct TransactionObservation {
+    status: TransactionStatus,
+    receipt: Option<TransactionReceipt>,
+    status_error: Option<serde_json::Value>,
+}
+
 async fn fetch_transaction(
     rpc_url: &str,
     tx_hash: TxHash,
-) -> Result<(TransactionStatus, Option<TransactionReceipt>), CliError> {
+) -> Result<TransactionObservation, CliError> {
     let client = NativeClient::new(crate::http_client::rpc_client(rpc_url)?);
     thruput_client::check_endpoint(&client, &["getTransactionStatus", "getTransactionReceipt"])
         .await
@@ -196,7 +208,8 @@ async fn fetch_transaction(
                 transaction_hash: tx_hash,
             })
             .await,
-    )?;
+    );
+    // Status is advisory. A failed status read must not hide an authoritative receipt.
     let receipt = crate::native_rpc::known(
         "getTransactionReceipt",
         client
@@ -204,29 +217,79 @@ async fn fetch_transaction(
                 transaction_hash: tx_hash,
             })
             .await,
-    )?;
-    if let Some(receipt) = &receipt {
-        let inconsistent_height = matches!(&status, TransactionStatus::Committed { block_height } if block_height != &receipt.block_height);
+    )
+    .map_err(|error| {
+        let mut evidence = error
+            .details_json()
+            .unwrap_or_else(|| serde_json::json!({}));
+        evidence["transactionHash"] = serde_json::json!(tx_hash);
+        if let Ok(status) = &status {
+            evidence["status"] = serde_json::json!(status);
+        } else if let Err(status_error) = &status {
+            evidence["statusError"] = serde_json::json!({
+                "message": status_error.to_string(), "evidence": status_error.details_json(),
+            });
+        }
+        let message = match &error {
+            CliError::NativeRpcFailure { message, .. } => message.clone(),
+            _ => error.to_string(),
+        };
+        crate::native_rpc::failure(message, evidence)
+    })?;
+    if let Some(receipt) = receipt {
+        let inconsistent_height = matches!(&status, Ok(TransactionStatus::Committed { block_height }) if block_height != &receipt.block_height);
         if receipt.transaction_hash != tx_hash || inconsistent_height {
             return Err(crate::native_rpc::failure(
                 "inconsistent transaction receipt",
-                serde_json::json!({"transactionHash":tx_hash,"status":status,"receipt":receipt}),
+                serde_json::json!({"transactionHash":tx_hash,"status":status.as_ref().ok(),"receipt":receipt}),
             ));
         }
+        let (status, status_error) = match status {
+            Ok(status) => (status, None),
+            Err(error) => (
+                TransactionStatus::Committed {
+                    block_height: receipt.block_height.clone(),
+                },
+                Some(serde_json::json!({
+                    "message": error.to_string(), "evidence": error.details_json(),
+                })),
+            ),
+        };
+        return Ok(TransactionObservation {
+            status,
+            receipt: Some(receipt),
+            status_error,
+        });
     }
-    Ok((status, receipt))
+    Ok(TransactionObservation {
+        status: status?,
+        receipt: None,
+        status_error: None,
+    })
 }
 
 fn print_show(
     tx_hash: &TxHash,
     status: &TransactionStatus,
     receipt: Option<&TransactionReceipt>,
+    status_error: Option<&serde_json::Value>,
     decoded_abort: Option<&Result<crate::codec::DecodedAbort, crate::codec::AbortDecodeError>>,
     print: &Print,
 ) {
     print.detail("hash", format_tx_hash(tx_hash));
+    if let Some(error) = status_error {
+        let message = error["message"].as_str().unwrap_or("status lookup failed");
+        print.detail("status lookup error", terminal_safe(message));
+    }
     if let Ok(value) = serde_json::to_string(status) {
-        print.detail("status", terminal_safe(&value));
+        print.detail(
+            if status_error.is_some() {
+                "status (from receipt)"
+            } else {
+                "status"
+            },
+            terminal_safe(&value),
+        );
     }
     if let Some(receipt) = receipt {
         print.detail("receipt block height", *receipt.block_height);

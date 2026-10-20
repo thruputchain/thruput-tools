@@ -8,8 +8,8 @@ pub mod codec;
 mod deploy;
 mod native;
 pub use native::{
-    NativeRpcError, SubmitCallError, SubmittedCall, check_endpoint, resolve_block_expiry_height,
-    submit_signed_transaction, validate_network,
+    NativeRpcError, SubmitCallError, SubmittedCall, check_endpoint, first_submission_not_admitted,
+    resolve_block_expiry_height, submit_signed_transaction, validate_network,
 };
 pub use thruput_json_rpc_client::native::NativeClient;
 pub use thruput_json_rpc_client::native::receipt::{ReceiptPollConfig, ReceiptPollError};

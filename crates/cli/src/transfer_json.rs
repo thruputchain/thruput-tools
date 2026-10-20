@@ -16,6 +16,7 @@ pub struct TransferReportCommon {
     pub profile: String,
     pub rpc_url: String,
     pub dry_run: bool,
+    /// Whether bytes were dispatched; this does not establish admission.
     pub submitted: bool,
     pub sender: ContractAddress,
     pub sender_wallet: Option<String>,
@@ -39,6 +40,7 @@ pub(crate) struct TransferFailureReport {
     pub common: TransferReportCommon,
     pub network_hash: thruput_json_rpc_types::NetworkHash,
     pub submission: crate::native_rpc::SubmissionPhase,
+    pub signed_transaction: HexBytes,
     pub evidence: serde_json::Value,
 }
 

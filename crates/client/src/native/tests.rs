@@ -458,3 +458,75 @@ async fn timed_out_wait_retains_canonical_hash_and_network_without_resubmitting(
     );
     handle.stop().unwrap();
 }
+
+#[test]
+fn first_dispatch_refusal_requires_known_evidence_for_the_expected_hash() {
+    use thruput_json_rpc_types::error::native::codes;
+    let expected = signed().tx_hash();
+    let other = TxHash(SHA256Hash::from([99; 32]).into());
+    for (code, kind) in [
+        (codes::TRANSACTION_INVALID, "transactionInvalid"),
+        (codes::TRANSACTION_REJECTED, "transactionRejected"),
+        (codes::BACKEND_UNAVAILABLE, "backendUnavailable"),
+        (codes::BACKEND_TIMEOUT, "backendTimeout"),
+        (codes::OVERLOADED, "overloaded"),
+        (codes::BACKEND_DATA_INVALID, "backendDataInvalid"),
+    ] {
+        for (admission, refused) in [
+            ("notAttempted", true),
+            ("rejected", true),
+            ("unknown", false),
+        ] {
+            for (hash, matches) in [(Some(expected), true), (None, true), (Some(other), false)] {
+                let mut data = json!({"kind":kind,"admission":admission});
+                if let Some(hash) = hash {
+                    data["transactionHash"] = json!(hash);
+                }
+                let raw = json!({"code":code,"message":"refused","data":data});
+                let decoded = thruput_json_rpc_types::error::native::DecodedError::decode(
+                    "sendTransaction",
+                    raw.clone(),
+                );
+                // transactionInvalid is valid only before an admission attempt.
+                let valid = kind != "transactionInvalid" || admission == "notAttempted";
+                let source = NativeClientError::Application {
+                    source: serde_json::from_value(raw).unwrap(),
+                    data: Box::new(decoded),
+                };
+                assert_eq!(
+                    first_submission_not_admitted(&source, expected),
+                    refused && matches && valid,
+                    "{kind}/{admission}/{hash:?}"
+                );
+            }
+        }
+    }
+    for (raw, expected_refusal) in [
+        (json!({"code":-32001,"message":"refused"}), false),
+        (
+            json!({"code":-32001,"message":"refused","data":{"kind":"future","admission":"rejected"}}),
+            false,
+        ),
+        (
+            json!({"code":-32001,"message":"refused","data":{"kind":"transactionRejected","admission":"rejected","transactionHash":expected,"reason":"futureReason"}}),
+            true,
+        ),
+    ] {
+        let source = NativeClientError::Application {
+            source: serde_json::from_value(raw.clone()).unwrap(),
+            data: Box::new(thruput_json_rpc_types::error::native::DecodedError::decode(
+                "sendTransaction",
+                raw,
+            )),
+        };
+        // Unknown optional reasons do not invalidate the known admission contract.
+        assert_eq!(
+            first_submission_not_admitted(&source, expected),
+            expected_refusal
+        );
+    }
+    assert!(!first_submission_not_admitted(
+        &NativeClientError::Transport(jsonrpsee::core::client::Error::RequestTimeout),
+        expected
+    ));
+}

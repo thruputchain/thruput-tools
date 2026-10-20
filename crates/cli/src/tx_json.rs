@@ -17,6 +17,9 @@ pub struct TxShowReport {
     pub tx_hash: TxHash,
     pub status: TransactionStatus,
     pub receipt: Option<TransactionReceipt>,
+    /// Failed advisory lookup retained alongside an authoritative receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_error: Option<serde_json::Value>,
     #[serde(flatten)]
     pub abort: crate::abort_json::AbortReport,
 }

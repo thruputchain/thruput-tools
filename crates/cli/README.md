@@ -516,11 +516,11 @@ thruput tx list alice --limit 25
 thruput tx list alice --cursor 0x0123...
 ```
 
-`tx show` performs one status lookup and fetches a receipt only for a committed
-transaction; it does not wait. A scheduler-confirmed committed status includes the
-committed block height before the indexer supplies a receipt. Every committed
-status requires a height. A receipt always includes its actual height, which must
-match the status height when both are available.
+`tx show` reads status and receipt once; it does not wait. It keeps the observed
+status alongside any receipt. If the status lookup fails but a receipt is available,
+it derives committed status from the receipt and retains the failure in `statusError`.
+A scheduler-confirmed committed status can precede the indexed receipt. Both include
+their block height, which must match when both are available.
 Scheduler `retry` outcomes mean the transaction
 may be resubmitted; the mempool will not retry it automatically. `dropped`
 outcomes require modifying the transaction before resubmission. Both retain

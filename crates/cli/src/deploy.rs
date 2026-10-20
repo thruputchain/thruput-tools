@@ -980,12 +980,16 @@ fn report_unverified_native_deploy(
     );
     let not_sent = crate::native_rpc::submission_phase(error)
         == Some(crate::native_rpc::SubmissionPhase::NotSent);
+    let not_admitted = crate::native_rpc::submission_phase(error)
+        == Some(crate::native_rpc::SubmissionPhase::NotAdmitted);
     let evidence = error.details_json().unwrap_or(serde_json::Value::Null);
     let receipt = evidence.get("receipt");
     let hint = if receipt.is_some() {
         "The transaction committed, but its deployment return did not validate. Inspect the receipt before another deployment; rerunning deploy generates a new nonce and address.".to_owned()
     } else if not_sent {
         "No transaction was sent. Resolve the reported issue before submitting.".to_owned()
+    } else if not_admitted {
+        "This submission was not admitted. Resolve the reported issue before another deployment; no retry was attempted.".to_owned()
     } else {
         format!(
             "reconcile the original transaction with `{inspect}` before another deployment; rerunning deploy generates a new nonce and address. A timeout or unknown status does not prove failure"
@@ -1004,7 +1008,7 @@ fn report_unverified_native_deploy(
     print.json(&CommandResult::failure_with_error(
         cmd,
         json!({
-            "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION, "confirmation": if receipt.is_some() { "committed" } else if not_sent { "notSent" } else { "unverified" },
+            "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION, "confirmation": if receipt.is_some() { "committed" } else if not_sent { "notSent" } else if not_admitted { "notAdmitted" } else { "unverified" },
             "receipt": receipt,
             "txHash": tx_hash, "rpcUrl": prepared.rpc_url, "profile": prepared.profile_name,
             "predictedAddress": prepared.predicted_address, "signedTx": prepared.tx_hex,
