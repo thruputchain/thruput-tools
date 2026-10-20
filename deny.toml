@@ -14,7 +14,7 @@ all-features = true
 [advisories]
 # 0.26.11 contains no certificates; it re-exports the patched 1.x package.
 # Keep this exception paired with the version bans below. Remove it when
-# rustls-platform-verifier no longer requires the compatibility package.
+# jsonrpsee moves past rustls-platform-verifier 0.5 (wasm32 dependency).
 ignore = [
     { id = "RUSTSEC-2026-0383", reason = "webpki-root-certs 0.26.11 re-exports 1.0.10; older certificate bundles are banned below" },
 ]
