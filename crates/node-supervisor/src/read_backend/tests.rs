@@ -278,6 +278,7 @@ enum FakeIndexerMode {
     Normal,
     RpcFail,
     Slow,
+    HistoryOutcome(i32),
 }
 
 type CommittedSet = HashMap<[u8; 32], TxInfo>;
@@ -457,6 +458,9 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         &self,
         arg0: thruput_indexer::EventQuery,
     ) -> Result<EventPageResult, ProgramError> {
+        if let FakeIndexerMode::HistoryOutcome(outcome) = self.mode {
+            return Ok(EventPageResult::Default { outcome });
+        }
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail"));
         }
@@ -493,6 +497,9 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         &self,
         _arg0: AddressTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
+        if let FakeIndexerMode::HistoryOutcome(outcome) = self.mode {
+            return Ok(TransactionRefPageResult::Default { outcome });
+        }
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail"));
         }
@@ -511,6 +518,9 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         &self,
         _query: thruput_indexer::BlockTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
+        if let FakeIndexerMode::HistoryOutcome(outcome) = self.mode {
+            return Ok(TransactionRefPageResult::Default { outcome });
+        }
         Err(ProgramError::msg("not implemented in fake indexer"))
     }
 }
@@ -1843,6 +1853,76 @@ async fn native_block_miss_invalid_outcome_outage_and_timeout_remain_distinct() 
                 assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
             }
             FakeIndexerMode::Slow => assert!(matches!(result, Err(RpcServerError::BackendTimeout))),
+            FakeIndexerMode::HistoryOutcome(_) => unreachable!(),
         }
+    }
+}
+
+#[tokio::test]
+async fn native_history_preserves_typed_outcomes_across_x23() {
+    use thruput_indexer::IndexerQueryOutcome as Outcome;
+    use thruput_json_rpc_server::native::read::NativeHistoryPlane;
+    use thruput_json_rpc_types::{hex::HexBytes, requests as input};
+    for outcome in [
+        Outcome::IndexerQueryInvalidCursor,
+        Outcome::IndexerQueryHistoryUnavailable,
+    ] {
+        let (idx_addr, idx) = start_fake_indexer(FakeIndexerMode::HistoryOutcome(outcome.0)).await;
+        let (sched_addr, sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let cursor = || Some(HexBytes(vec![0x81, 0, 0xff]));
+        let errors = [
+            backend
+                .native_events(
+                    RpcRequestContext::unbounded(),
+                    input::EventQuery {
+                        filters: vec![],
+                        start: None,
+                        cursor: cursor(),
+                        limit: Some(1),
+                    },
+                )
+                .await
+                .unwrap_err(),
+            backend
+                .native_root_transactions(
+                    RpcRequestContext::unbounded(),
+                    input::RootAddressQuery {
+                        address: ContractAddress::from([0; 32]).into(),
+                        start: None,
+                        cursor: cursor(),
+                        limit: Some(1),
+                    },
+                )
+                .await
+                .unwrap_err(),
+            backend
+                .native_block_transactions(
+                    RpcRequestContext::unbounded(),
+                    input::BlockPageRequest {
+                        block_height: 1.into(),
+                        start: None,
+                        cursor: cursor(),
+                        limit: Some(1),
+                    },
+                )
+                .await
+                .unwrap_err(),
+        ];
+        for error in errors {
+            if outcome == Outcome::IndexerQueryInvalidCursor {
+                assert!(
+                    matches!(error, RpcServerError::InvalidCursor(_)),
+                    "{error:?}"
+                );
+            } else {
+                assert!(
+                    matches!(error, RpcServerError::HistoryUnavailable(_)),
+                    "{error:?}"
+                );
+            }
+        }
+        idx.abort();
+        sched.abort();
     }
 }

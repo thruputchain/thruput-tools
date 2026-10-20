@@ -19,6 +19,8 @@ struct Backend {
     balance_item: Option<out::StorageItem>,
     wrong_auth_address: bool,
     wrong_block_network: bool,
+    history_refs: Option<out::TransactionRefPage>,
+    history_error: Option<RpcServerError>,
 }
 impl Backend {
     async fn check(&self) -> Result<(), RpcServerError> {
@@ -384,7 +386,13 @@ async fn assembly_registers_each_configured_plane_independently() {
             expected.push("sendTransaction");
         }
         if indexer {
-            expected.extend(["getTransactionReceipt", "getBlockByHeight"]);
+            expected.extend([
+                "getTransactionReceipt",
+                "getBlockByHeight",
+                "getEvents",
+                "getTransactionsByRootAddress",
+                "getTransactionsByBlock",
+            ]);
         }
         if scheduler && indexer {
             expected.push("getTransactionStatus");
@@ -493,12 +501,15 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
         if db {
             expected.extend([
                 "sendTransaction",
+                "getEvents",
+                "getTransactionsByRootAddress",
+                "getTransactionsByBlock",
                 "getBlockByHeight",
                 "getTransactionStatus",
                 "getTransactionReceipt",
             ]);
             expected.sort_unstable();
-            assert_eq!(expected.len(), 14);
+            assert_eq!(expected.len(), 17);
         }
         let module = assembled_service(
             backend.clone(),
@@ -922,4 +933,356 @@ async fn block_metadata_rejects_inconsistent_values_and_deadlines() {
         codes::INVALID_PARAMS
     );
     assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+}
+
+#[async_trait]
+impl NativeHistoryPlane for Backend {
+    async fn native_events(
+        &self,
+        _: RpcRequestContext,
+        request: input::EventQuery,
+    ) -> Result<out::EventPage, RpcServerError> {
+        self.check().await?;
+        assert!(request.limit.is_some_and(|value| value > 0 && value <= 200));
+        if let Some(error) = &self.history_error {
+            return Err(error.clone());
+        }
+        Ok(out::EventPage {
+            events: vec![],
+            next_cursor: None,
+            oldest_indexed_block_height: 0.into(),
+            latest_indexed_block_height: 42.into(),
+        })
+    }
+    async fn native_root_transactions(
+        &self,
+        _: RpcRequestContext,
+        request: input::RootAddressQuery,
+    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        self.check().await?;
+        assert!(request.limit.is_some_and(|value| value > 0 && value <= 200));
+        if let Some(error) = &self.history_error {
+            return Err(error.clone());
+        }
+        if let Some(result) = &self.history_refs {
+            return Ok(result.clone());
+        }
+        Ok(out::TransactionRefPage {
+            transactions: vec![],
+            next_cursor: None,
+            oldest_indexed_block_height: 0.into(),
+            latest_indexed_block_height: 42.into(),
+        })
+    }
+    async fn native_block_transactions(
+        &self,
+        _: RpcRequestContext,
+        request: input::BlockPageRequest,
+    ) -> Result<out::BlockTransactionPage, RpcServerError> {
+        self.check().await?;
+        assert!(request.limit.is_some_and(|value| value > 0 && value <= 200));
+        if let Some(error) = &self.history_error {
+            return Err(error.clone());
+        }
+        if let Some(result) = &self.history_refs {
+            return Ok(result.clone());
+        }
+        Ok(out::TransactionRefPage {
+            transactions: vec![],
+            next_cursor: None,
+            oldest_indexed_block_height: 1.into(),
+            latest_indexed_block_height: 42.into(),
+        })
+    }
+}
+
+#[test]
+fn history_errors_preserve_native_cause_without_changing_legacy_codes() {
+    for (error, code, kind) in [
+        (
+            RpcServerError::InvalidCursor("bad token".into()),
+            -32602,
+            "invalidCursor",
+        ),
+        (
+            RpcServerError::HistoryUnavailable("watermark behind".into()),
+            -32013,
+            "historyUnavailable",
+        ),
+    ] {
+        let legacy: ErrorObjectOwned = error.clone().into();
+        assert_eq!(
+            legacy.code(),
+            thruput_json_rpc_types::error::codes::BACKEND_UNAVAILABLE
+        );
+        let native = rpc_error(&error);
+        assert_eq!(native.code(), code);
+        let data: serde_json::Value = serde_json::from_str(native.data().unwrap().get()).unwrap();
+        assert_eq!(data["kind"], kind);
+        assert!(data.get("reason").is_none());
+        assert!(data.get("admission").is_none());
+        assert!(data.get("oldestIndexedBlockHeight").is_none());
+    }
+}
+
+#[tokio::test]
+async fn history_rejects_direct_invalid_requests_before_dispatch_and_caps_defaults() {
+    let backend = Backend::default();
+    let service = service(
+        backend.clone(),
+        RpcServerConfig::default().with_max_events_per_page(17),
+        NativeReadCapabilities::new(false, false),
+    );
+    let mut request: input::EventQuery = serde_json::from_value(serde_json::json!({
+        "filters": [{"addresses": [invocation().address]}],
+        "start": {"order": "ascending", "anchor": {"kind": "atBeginning"}}
+    }))
+    .unwrap();
+    service.get_events(request.clone()).await.unwrap();
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    request.limit = Some(18);
+    assert_eq!(
+        service
+            .get_events(request.clone())
+            .await
+            .unwrap_err()
+            .code(),
+        -32602
+    );
+    request.limit = None;
+    request.filters.clear();
+    assert_eq!(
+        service.get_events(request).await.unwrap_err().code(),
+        -32602
+    );
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+}
+
+fn reference_page() -> out::TransactionRefPage {
+    out::TransactionRefPage {
+        transactions: [0x7f, 0x80]
+            .into_iter()
+            .map(|byte| out::TransactionRef {
+                transaction_hash: thruput_json_rpc_types::transaction::TxHash(
+                    thruput_json_rpc_types::base58::Base58([byte; 32].into()),
+                ),
+                block_height: 9.into(),
+            })
+            .collect(),
+        next_cursor: Some(HexBytes(vec![2])),
+        oldest_indexed_block_height: 1.into(),
+        latest_indexed_block_height: 10.into(),
+    }
+}
+
+#[tokio::test]
+async fn reference_pages_enforce_order_height_and_progress() {
+    let query = || input::BlockPageRequest {
+        block_height: 9.into(),
+        start: Some(input::BlockStart {
+            order: thruput_json_rpc_types::events::IterationOrder::Ascending,
+        }),
+        cursor: None,
+        limit: Some(2),
+    };
+    let run = |page| {
+        service(
+            Backend {
+                history_refs: Some(page),
+                ..Backend::default()
+            },
+            RpcServerConfig::default(),
+            NativeReadCapabilities::new(false, false),
+        )
+    };
+    run(reference_page())
+        .get_transactions_by_block(query())
+        .await
+        .unwrap();
+    let mut reversed = reference_page();
+    reversed.transactions.reverse();
+    assert_eq!(
+        run(reversed.clone())
+            .get_transactions_by_block(query())
+            .await
+            .unwrap_err()
+            .code(),
+        -32054
+    );
+    let mut resumed = query();
+    resumed.start = None;
+    resumed.cursor = Some(HexBytes(vec![1]));
+    run(reversed)
+        .get_transactions_by_block(resumed.clone())
+        .await
+        .unwrap();
+    resumed.cursor = Some(HexBytes(vec![2]));
+    assert_eq!(
+        run(reference_page())
+            .get_transactions_by_block(resumed)
+            .await
+            .unwrap_err()
+            .code(),
+        -32054
+    );
+    for change in 0..5 {
+        let mut page = reference_page();
+        match change {
+            0 => page.transactions[0].block_height = 8.into(),
+            1 => page.transactions[1] = page.transactions[0].clone(),
+            2 => page.transactions.clear(),
+            3 => page.oldest_indexed_block_height = 0.into(),
+            _ => page.latest_indexed_block_height = 8.into(),
+        }
+        assert_eq!(
+            run(page)
+                .get_transactions_by_block(query())
+                .await
+                .unwrap_err()
+                .code(),
+            -32054
+        );
+    }
+    let mut terminal = reference_page();
+    terminal.transactions.clear();
+    terminal.next_cursor = None;
+    run(terminal.clone())
+        .get_transactions_by_block(query())
+        .await
+        .unwrap();
+    terminal.latest_indexed_block_height = 8.into();
+    run(terminal.clone())
+        .get_transactions_by_block(query())
+        .await
+        .unwrap();
+    let mut resumed = query();
+    resumed.start = None;
+    resumed.cursor = Some(HexBytes(vec![1]));
+    assert_eq!(
+        run(terminal)
+            .get_transactions_by_block(resumed)
+            .await
+            .unwrap_err()
+            .code(),
+        -32054
+    );
+}
+
+#[tokio::test]
+async fn root_reference_pages_enforce_the_inclusive_anchor() {
+    let run = |page| {
+        service(
+            Backend {
+                history_refs: Some(page),
+                ..Backend::default()
+            },
+            RpcServerConfig::default(),
+            NativeReadCapabilities::new(false, false),
+        )
+    };
+    let root = input::RootAddressQuery {
+        address: invocation().address,
+        start: Some(input::HistoryStart::Ascending {
+            anchor: input::AscendingAnchor::AtHeight {
+                block_height: 9.into(),
+            },
+        }),
+        cursor: None,
+        limit: Some(2),
+    };
+    run(reference_page())
+        .get_transactions_by_root_address(root.clone())
+        .await
+        .unwrap();
+    let mut wrong = reference_page();
+    wrong.transactions[0].block_height = 8.into();
+    assert_eq!(
+        run(wrong)
+            .get_transactions_by_root_address(root)
+            .await
+            .unwrap_err()
+            .code(),
+        -32054
+    );
+}
+
+#[tokio::test]
+async fn history_preserves_backend_cursor_outcomes_and_deadlines() {
+    let query = || input::BlockPageRequest {
+        block_height: 9.into(),
+        start: None,
+        cursor: Some(HexBytes(vec![1])),
+        limit: None,
+    };
+    for (error, code) in [
+        (
+            RpcServerError::InvalidCursor("invalid token".into()),
+            -32602,
+        ),
+        (RpcServerError::HistoryUnavailable("behind".into()), -32013),
+    ] {
+        let service = service(
+            Backend {
+                history_error: Some(error),
+                ..Backend::default()
+            },
+            RpcServerConfig::default(),
+            NativeReadCapabilities::new(false, false),
+        );
+        assert_eq!(
+            service
+                .get_transactions_by_block(query())
+                .await
+                .unwrap_err()
+                .code(),
+            code
+        );
+    }
+    let service = service(
+        Backend {
+            slow: true,
+            ..Backend::default()
+        },
+        RpcServerConfig {
+            request_timeout_ms: Some(1),
+            ..RpcServerConfig::default()
+        },
+        NativeReadCapabilities::new(false, false),
+    );
+    assert_eq!(
+        service
+            .get_transactions_by_block(query())
+            .await
+            .unwrap_err()
+            .code(),
+        -32051
+    );
+}
+
+#[tokio::test]
+async fn native_event_limit_advertises_and_enforces_backend_ceiling() {
+    let backend = Backend::default();
+    let service = service(
+        backend.clone(),
+        RpcServerConfig::default().with_max_events_per_page(u32::MAX),
+        NativeReadCapabilities::new(false, false),
+    );
+    let limits = service
+        .get_server_limits(input::EmptyRequest {})
+        .await
+        .unwrap();
+    assert_eq!(limits.max_events_per_page, 200);
+    let mut request: input::EventQuery = serde_json::from_value(serde_json::json!({
+        "filters": [{"addresses": [invocation().address]}],
+        "start": {"order": "ascending", "anchor": {"kind": "atBeginning"}},
+        "limit": 200
+    }))
+    .unwrap();
+    service.get_events(request.clone()).await.unwrap();
+    request.limit = Some(201);
+    assert_eq!(
+        service.get_events(request).await.unwrap_err().code(),
+        -32602
+    );
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
 }

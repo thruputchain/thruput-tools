@@ -146,3 +146,46 @@ impl thruput_json_rpc_server::native::read::NativeBlockPlane for GatewayBackend 
         .await
     }
 }
+
+#[async_trait]
+impl thruput_json_rpc_server::native::read::NativeHistoryPlane for GatewayBackend {
+    #[tracing::instrument(skip_all, fields(filters_len = request.filters.len(), limit = ?request.limit, has_cursor = request.cursor.is_some()))]
+    async fn native_events(
+        &self,
+        context: RpcRequestContext,
+        request: input::EventQuery,
+    ) -> Result<out::EventPage, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::native_history::events(&self.ctx, context, request),
+        )
+        .await
+    }
+    #[tracing::instrument(skip_all, fields(address = ?request.address, limit = ?request.limit, has_cursor = request.cursor.is_some()))]
+    async fn native_root_transactions(
+        &self,
+        context: RpcRequestContext,
+        request: input::RootAddressQuery,
+    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::native_history::root_transactions(&self.ctx, context, request),
+        )
+        .await
+    }
+    #[tracing::instrument(skip_all, fields(block_height = ?request.block_height, limit = ?request.limit, has_cursor = request.cursor.is_some()))]
+    async fn native_block_transactions(
+        &self,
+        context: RpcRequestContext,
+        request: input::BlockPageRequest,
+    ) -> Result<out::BlockTransactionPage, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::native_history::block_transactions(&self.ctx, context, request),
+        )
+        .await
+    }
+}

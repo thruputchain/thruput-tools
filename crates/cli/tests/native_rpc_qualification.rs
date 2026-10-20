@@ -12,7 +12,8 @@ use thruput_json_rpc_types::{
     ContractAddress,
     base58::Base58,
     bootstrap_manifest::BootstrapManifestAllocation,
-    requests::{AddressQuery, BlockQuery, EmptyRequest},
+    events::IterationOrder,
+    requests::{self as input, AddressQuery, BlockQuery, EmptyRequest},
     responses as output,
 };
 use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
@@ -183,6 +184,7 @@ async fn exercise(
         "CLI receipt omitted metering or events",
     )?;
     check_block(&native, &legacy, &receipt.block_height).await?;
+    check_history(&native, fixture, &receipt).await?;
     require(
         call["data"]["blockHeight"].is_string() && call["data"]["gasUsed"].is_string(),
         "CLI receipt wide integers must be decimal strings",
@@ -287,6 +289,139 @@ async fn check_block(
         block.block_height == *height
             && serde_json::to_value(&block)? == serde_json::to_value(&legacy_block)?,
         "native CLI receipt did not resolve to the canonical committed block",
+    )?;
+    Ok(())
+}
+
+async fn check_history(
+    native: &NativeClient<jsonrpsee::http_client::HttpClient>,
+    fixture: &Fixture,
+    receipt: &output::TransactionReceipt,
+) -> TestResult {
+    check_history_commands(fixture, receipt).await?;
+    let start = input::HistoryStart::Ascending {
+        anchor: input::AscendingAnchor::AtHeight {
+            block_height: receipt.block_height.clone(),
+        },
+    };
+    let output::DecodedResponse::Known(root) = native
+        .get_transactions_by_root_address(input::RootAddressQuery {
+            address: Base58(PubkeyAccount::from_public_key_bytes(fixture.owner, 0).address()),
+            start: Some(start.clone()),
+            cursor: None,
+            limit: Some(10),
+        })
+        .await?
+    else {
+        return Err(std::io::Error::other("unsupported root history response").into());
+    };
+    let output::DecodedResponse::Known(block) = native
+        .get_transactions_by_block(input::BlockPageRequest {
+            block_height: receipt.block_height.clone(),
+            start: Some(input::BlockStart {
+                order: IterationOrder::Descending,
+            }),
+            cursor: None,
+            limit: Some(10),
+        })
+        .await?
+    else {
+        return Err(std::io::Error::other("unsupported block history response").into());
+    };
+    for page in [root, block] {
+        require(
+            page.transactions.len() == 1
+                && page.transactions[0].transaction_hash == receipt.transaction_hash
+                && page.transactions[0].block_height == receipt.block_height
+                && page.next_cursor.is_none(),
+            "CLI receipt disagrees with native transaction history",
+        )?;
+    }
+    let output::DecodedResponse::Known(events) = native
+        .get_events(input::EventQuery {
+            filters: vec![input::EventFilter {
+                addresses: vec![Base58(NATIVE_HOG_ADDRESS)],
+                topics: None,
+            }],
+            start: Some(start),
+            cursor: None,
+            limit: Some(100),
+        })
+        .await?
+    else {
+        return Err(std::io::Error::other("unsupported event history response").into());
+    };
+    let expected = receipt
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| event.address == Base58(NATIVE_HOG_ADDRESS))
+        .collect::<Vec<_>>();
+    require(
+        events.events.len() == expected.len() && events.next_cursor.is_none(),
+        "CLI receipt token events disagree with event history",
+    )?;
+    for (event, (sequence, emitted)) in events.events.iter().zip(expected) {
+        require(
+            event.transaction_hash == receipt.transaction_hash
+                && event.block_height == receipt.block_height
+                && event.sequence_number as usize == sequence
+                && serde_json::to_value(&event.event)? == serde_json::to_value(emitted)?,
+            "CLI receipt event identity or payload differs from history",
+        )?;
+    }
+    Ok(())
+}
+
+async fn check_history_commands(
+    fixture: &Fixture,
+    receipt: &output::TransactionReceipt,
+) -> TestResult {
+    let owner = thruput_encoding::encode(
+        PubkeyAccount::from_public_key_bytes(fixture.owner, 0)
+            .address()
+            .as_ref(),
+    );
+    let transactions = fixture
+        .command(&[
+            "tx",
+            "list",
+            &owner,
+            "--limit",
+            "1",
+            "--native-rpc-qualification",
+        ])
+        .await?;
+    let transactions: thruput_cli::tx_json::TxListReport =
+        serde_json::from_value(transactions["data"].clone())?;
+    require(
+        transactions.schema_version == 2
+            && transactions.refs.len() == 1
+            && transactions.refs[0].tx_hash == receipt.transaction_hash
+            && transactions.refs[0].height == receipt.block_height,
+        "CLI native root-history command did not find its submitted transaction",
+    )?;
+    let token = thruput_encoding::encode(NATIVE_HOG_ADDRESS.as_ref());
+    let events = fixture
+        .command(&[
+            "events",
+            "list",
+            &token,
+            "--limit",
+            "100",
+            "--native-rpc-qualification",
+        ])
+        .await?;
+    let events: thruput_cli::events_json::EventListReport =
+        serde_json::from_value(events["data"].clone())?;
+    require(
+        events.schema_version == 2
+            && events.events.iter().any(|event| {
+                event.raw.tx_hash == receipt.transaction_hash
+                    && event.raw.block_height == receipt.block_height
+                    && event.raw.contract_address == Base58(NATIVE_HOG_ADDRESS)
+            }),
+        "CLI native event command did not find the submitted token transfer",
     )?;
     Ok(())
 }

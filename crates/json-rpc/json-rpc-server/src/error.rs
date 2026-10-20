@@ -43,6 +43,14 @@ pub enum RpcServerError {
     #[error("invalid params: {0}")]
     InvalidParam(String),
 
+    /// Backend-owned cursor validation failed without a finer classification.
+    #[error("invalid cursor: {0}")]
+    InvalidCursor(String),
+
+    /// The backend cannot serve the historical range required by the request.
+    #[error("history unavailable: {0}")]
+    HistoryUnavailable(String),
+
     /// Backend is unavailable.
     #[error("backend unavailable: {0}")]
     BackendUnavailable(String),
@@ -92,9 +100,10 @@ impl RpcServerError {
             Self::TxNotFound => codes::TX_NOT_FOUND,
             Self::BlockNotFound => codes::BLOCK_NOT_FOUND,
             Self::InvalidParam(_) => codes::INVALID_PARAMS,
-            Self::BackendUnavailable(_) | Self::BackendDataInvalid { .. } => {
-                codes::BACKEND_UNAVAILABLE
-            }
+            Self::BackendUnavailable(_)
+            | Self::BackendDataInvalid { .. }
+            | Self::InvalidCursor(_)
+            | Self::HistoryUnavailable(_) => codes::BACKEND_UNAVAILABLE,
             Self::BackendTimeout => codes::BACKEND_TIMEOUT,
             Self::Overloaded(_) => codes::OVERLOADED,
             Self::NotImplemented(_) => codes::NOT_IMPLEMENTED,

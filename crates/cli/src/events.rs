@@ -1,3 +1,6 @@
+#[cfg(feature = "native-rpc-qualification")]
+mod native;
+
 use std::path::Path;
 
 use thruput_json_rpc_client::GroundhogApiClient;
@@ -42,37 +45,103 @@ pub fn list(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    list_with_rpc(
+        HistoryRpc::Legacy,
+        contract_input,
+        topic0_inputs,
+        topic1_inputs,
+        topic2_inputs,
+        limit_input,
+        cursor_input,
+        spec_path,
+        selected_event,
+        project_start,
+        profile_name,
+        overrides,
+        cmd,
+        print,
+    )
+}
+
+/// List one page through the explicitly selected native candidate endpoint.
+#[cfg(feature = "native-rpc-qualification")]
+#[expect(clippy::too_many_arguments)]
+pub fn list_native(
+    contract_input: &str,
+    topic0_inputs: &[String],
+    topic1_inputs: &[String],
+    topic2_inputs: &[String],
+    limit_input: Option<&str>,
+    cursor_input: Option<&str>,
+    spec_path: Option<&Path>,
+    selected_event: Option<&str>,
+    project_start: &Path,
+    profile_name: Option<&str>,
+    overrides: &ProfileOverrides,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    list_with_rpc(
+        HistoryRpc::Native,
+        contract_input,
+        topic0_inputs,
+        topic1_inputs,
+        topic2_inputs,
+        limit_input,
+        cursor_input,
+        spec_path,
+        selected_event,
+        project_start,
+        profile_name,
+        overrides,
+        cmd,
+        print,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum HistoryRpc {
+    Legacy,
+    #[cfg(feature = "native-rpc-qualification")]
+    Native,
+}
+
+#[expect(clippy::too_many_arguments)]
+fn list_with_rpc(
+    rpc: HistoryRpc,
+    contract_input: &str,
+    topic0_inputs: &[String],
+    topic1_inputs: &[String],
+    topic2_inputs: &[String],
+    limit_input: Option<&str>,
+    cursor_input: Option<&str>,
+    spec_path: Option<&Path>,
+    selected_event: Option<&str>,
+    project_start: &Path,
+    profile_name: Option<&str>,
+    overrides: &ProfileOverrides,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     let mut topic0 = parse_topic_values(topic0_inputs, "topic0")?;
     let topic1 = parse_topic_values(topic1_inputs, "topic1")?;
     let topic2 = parse_topic_values(topic2_inputs, "topic2")?;
     let limit = parse_event_limit(limit_input)?;
     let cursor = parse_event_cursor(cursor_input)?;
-    let continuation_requested = cursor_input.is_some();
-    let event_spec = match spec_path {
-        Some(path) => Some(ValidatedEventSpec::load(path)?),
-        None if selected_event.is_some() => {
-            return Err(CliError::InvalidEventOptions {
-                message: "`--event` requires `--spec <PATH>`".into(),
-            });
-        }
-        None => None,
-    };
-    if let Some(name) = selected_event {
-        let signature = event_spec
-            .as_ref()
-            .expect("bug: event selection must have a loaded spec")
-            .selected_signature(name)?;
-        if topic0.is_empty() {
-            topic0.push(signature);
-        } else if topic0.iter().any(|topic| topic != &signature) {
-            return Err(CliError::InvalidEventOptions {
-                message: format!(
-                    "`--topic0` conflicts with selected event `{}`",
-                    terminal_safe(name)
-                ),
-            });
-        }
+    #[cfg(feature = "native-rpc-qualification")]
+    if matches!(rpc, HistoryRpc::Native)
+        && let Some(input) = cursor_input
+        && cursor.0.is_empty()
+    {
+        return Err(CliError::InvalidEventCursor {
+            input: input.to_owned(),
+            display_input: terminal_safe(input),
+            message: "an empty cursor marks the end of history; omit --cursor to start a new walk"
+                .into(),
+        });
     }
+    let continuation_requested = cursor_input.is_some();
+    let event_spec = prepare_event_spec(spec_path, selected_event, &mut topic0)?;
 
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
     let rpc_url = profile.rpc_endpoint()?.to_owned();
@@ -101,7 +170,15 @@ pub fn list(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let task = crate::print::progress::Task::start(print, "Reading events", true);
-    let page = rt.block_on(fetch_event_page(&rpc_url, query))?;
+    let page = rt.block_on(async {
+        match rpc {
+            HistoryRpc::Legacy => fetch_event_page(&rpc_url, query).await,
+            #[cfg(feature = "native-rpc-qualification")]
+            HistoryRpc::Native => {
+                native::fetch_event_page(&rpc_url, query, cursor_input.is_some()).await
+            }
+        }
+    })?;
     let _ = task.finish();
     let spec_report = event_spec.as_ref().map(|spec| spec.report(selected_event));
     let events = match &event_spec {
@@ -132,6 +209,39 @@ pub fn list(
         });
     }
     print.json(&CommandResult::new(cmd, report))
+}
+
+fn prepare_event_spec(
+    spec_path: Option<&Path>,
+    selected_event: Option<&str>,
+    topic0: &mut Vec<Topic>,
+) -> Result<Option<ValidatedEventSpec>, CliError> {
+    let event_spec = match spec_path {
+        Some(path) => Some(ValidatedEventSpec::load(path)?),
+        None if selected_event.is_some() => {
+            return Err(CliError::InvalidEventOptions {
+                message: "`--event` requires `--spec <PATH>`".into(),
+            });
+        }
+        None => None,
+    };
+    if let Some(name) = selected_event {
+        let signature = event_spec
+            .as_ref()
+            .expect("bug: event selection must have a loaded spec")
+            .selected_signature(name)?;
+        if topic0.is_empty() {
+            topic0.push(signature);
+        } else if topic0.iter().any(|topic| topic != &signature) {
+            return Err(CliError::InvalidEventOptions {
+                message: format!(
+                    "`--topic0` conflicts with selected event `{}`",
+                    terminal_safe(name)
+                ),
+            });
+        }
+    }
+    Ok(event_spec)
 }
 
 fn parse_topic_values(inputs: &[String], position: &'static str) -> Result<Vec<Topic>, CliError> {

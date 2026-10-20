@@ -7,6 +7,7 @@
 
 mod block;
 pub use block::block_lookup;
+pub mod history;
 mod simulation;
 mod state;
 pub mod transaction;

@@ -75,8 +75,18 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
     async fn get_transaction_info(&self, _: TransactionHash) -> Result<TxInfoResult, ProgramError> {
         unreachable!()
     }
-    async fn get_events(&self, _: EventQuery) -> Result<EventPageResult, ProgramError> {
-        unreachable!()
+    async fn get_events(&self, query: EventQuery) -> Result<EventPageResult, ProgramError> {
+        use thruput_indexer::IndexerQueryOutcome as Outcome;
+        match query.limit {
+            1 => Ok(EventPageResult::Default {
+                outcome: Outcome::IndexerQueryInvalidCursor.0,
+            }),
+            2 => Ok(EventPageResult::Default {
+                outcome: Outcome::IndexerQueryHistoryUnavailable.0,
+            }),
+            3 => std::future::pending().await,
+            _ => Err(ProgramError::msg("history read failed")),
+        }
     }
     async fn get_transactions(
         &self,
@@ -86,15 +96,32 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
     }
     async fn get_transactions_by_address(
         &self,
-        _: AddressTransactionQuery,
+        query: AddressTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
-        unreachable!()
+        use thruput_indexer::IndexerQueryOutcome as Outcome;
+        Ok(TransactionRefPageResult::Default {
+            outcome: if query.limit == 1 {
+                Outcome::IndexerQueryInvalidCursor.0
+            } else {
+                Outcome::IndexerQueryHistoryUnavailable.0
+            },
+        })
     }
     async fn get_transactions_by_block(
         &self,
         query: BlockTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
         let height = *query.height;
+        if height == 7 || height == 8 {
+            use thruput_indexer::IndexerQueryOutcome as Outcome;
+            return Ok(TransactionRefPageResult::Default {
+                outcome: if height == 7 {
+                    Outcome::IndexerQueryInvalidCursor.0
+                } else {
+                    Outcome::IndexerQueryHistoryUnavailable.0
+                },
+            });
+        }
         if height == 5 {
             return Ok(TransactionRefPageResult::Default {
                 outcome: thruput_indexer::IndexerQueryOutcome::IndexerQueryNotReady.0,
@@ -148,7 +175,10 @@ async fn block_metrics_count_rejected_values_and_pages_as_errors() {
         )))),
         Arc::new(RwLock::new(None)),
         Arc::new(RwLock::new(None)),
-        Arc::new(GatewayConfig::default()),
+        Arc::new(GatewayConfig {
+            request_timeout_ms: 1_000,
+            ..GatewayConfig::default()
+        }),
         GatewayMetrics::for_tests(),
     ));
     let context = || RpcRequestContext::new(Some(std::time::Duration::from_secs(5)));
@@ -205,6 +235,7 @@ async fn block_metrics_count_rejected_values_and_pages_as_errors() {
         )), "{metrics}");
     }
     check_native_blocks(&ctx, &health).await;
+    check_native_history(&ctx, &health).await;
     server.abort();
 }
 
@@ -247,4 +278,88 @@ async fn check_native_blocks(ctx: &Arc<GatewayContext>, health: &crate::health::
         backend.native_block(deadline, 6.into()).await,
         Err(RpcServerError::BackendTimeout)
     ));
+}
+
+async fn check_native_history(ctx: &Arc<GatewayContext>, health: &crate::health::GatewayHealth) {
+    use thruput_json_rpc_server::native::read::NativeHistoryPlane;
+    use thruput_json_rpc_types::{hex::HexBytes, requests as input};
+    let backend = crate::backend::GatewayBackend::new(ctx.clone());
+    let event = |limit| input::EventQuery {
+        filters: vec![],
+        start: None,
+        cursor: Some(HexBytes(vec![1, 2, 3])),
+        limit: Some(limit),
+    };
+    let root = |limit| input::RootAddressQuery {
+        address: thruput_xdr::types::ContractAddress::from([9; 32]).into(),
+        start: None,
+        cursor: Some(HexBytes(vec![1, 2, 3])),
+        limit: Some(limit),
+    };
+    let block = |height: i64| input::BlockPageRequest {
+        block_height: height.into(),
+        start: None,
+        cursor: Some(HexBytes(vec![1, 2, 3])),
+        limit: Some(1),
+    };
+    let context = || RpcRequestContext::new(Some(std::time::Duration::from_secs(5)));
+    for error in [
+        backend
+            .native_events(context(), event(1))
+            .await
+            .unwrap_err(),
+        backend
+            .native_root_transactions(context(), root(1))
+            .await
+            .unwrap_err(),
+        backend
+            .native_block_transactions(context(), block(7))
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, RpcServerError::InvalidCursor(_)),
+            "{error:?}"
+        );
+    }
+    for error in [
+        backend
+            .native_events(context(), event(2))
+            .await
+            .unwrap_err(),
+        backend
+            .native_root_transactions(context(), root(2))
+            .await
+            .unwrap_err(),
+        backend
+            .native_block_transactions(context(), block(8))
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, RpcServerError::HistoryUnavailable(_)),
+            "{error:?}"
+        );
+    }
+    assert!(matches!(
+        backend.native_events(context(), event(4)).await,
+        Err(RpcServerError::BackendUnavailable(_))
+    ));
+    // Let the configured backend deadline expire before the outer request
+    // deadline so this verifies both the public error and timeout metric.
+    assert!(matches!(
+        backend.native_events(context(), event(3)).await,
+        Err(RpcServerError::BackendTimeout)
+    ));
+    let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
+    for (operation, outcome, count) in [
+        ("get_events", "error", 3),
+        ("get_events", "timeout", 1),
+        ("get_transactions_by_address", "error", 2),
+        ("get_transactions_by_block", "error", 6),
+    ] {
+        assert!(metrics.contains(&format!(
+            "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"{operation}\",outcome=\"{outcome}\"}} {count}\n"
+        )), "{metrics}");
+    }
 }
