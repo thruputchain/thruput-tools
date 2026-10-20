@@ -264,7 +264,7 @@ bench_chain_tip() {
     log "Bench $label chainTip: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers"
     run_bench_command "$(benchmark_slug "$label")-chain-tip-${rate}rps.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
-        --url "$url" --runtime-manifest "$manifest" --method chainTip \
+        --url "$url" --runtime-manifest "$manifest" --method getChainTip \
         --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers"
 }
 
@@ -278,10 +278,10 @@ bench_send_raw() {
     local workers="$7"
     local accounts="$8"
 
-    log "Bench $label sendRawTransaction: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers, ${accounts} accounts"
+    log "Bench $label sendTransaction: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers, ${accounts} accounts"
     run_bench_command "$(benchmark_slug "$label")-send-raw-transaction-${rate}rps.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
-        --url "$url" --runtime-manifest "$manifest" --account-seed "$BENCH_ACCOUNT_SEED" --method sendRawTransaction \
+        --url "$url" --runtime-manifest "$manifest" --account-seed "$BENCH_ACCOUNT_SEED" --method sendTransaction \
         --accounts "$accounts" --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers" \
         --force
 }

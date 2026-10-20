@@ -49,7 +49,7 @@ pub struct ContractSetup {
 /// A manifest read-after-write target resolved to a deployed contract address.
 ///
 /// The executor wraps the write through the scheduled actor's wallet adapter
-/// transaction and issues the read as a `groundhog_view` call, so this carries
+/// transaction and issues the read as a `simulateInvocation` call, so this carries
 /// only the inner write/read entrypoints and calldata plus the deployed address.
 #[derive(Debug, Clone)]
 pub struct PreparedReadAfterWrite {

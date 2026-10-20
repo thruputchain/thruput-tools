@@ -184,21 +184,21 @@ fn diagnostics_summarize_error_classes_and_resource_failures() {
     let mut metrics = RunMetricsBuilder::default();
     metrics.record_error_diagnostic(
         WorkloadKind::ChainTip,
-        "groundhog_chainTip",
+        "getChainTip",
         2_000,
         "rpc-error",
         Some("Request rejected `429`"),
     );
     metrics.record_error_diagnostic(
         WorkloadKind::EventsQuery,
-        "groundhog_getEvents",
+        "getEvents",
         1_000,
         "rpc-error",
         Some("Request rejected `429`"),
     );
     metrics.record_error_diagnostic(
         WorkloadKind::StorageRead,
-        "groundhog_getStorageAt",
+        "getStorage",
         3_000,
         "storage-read-rpc-error",
         Some("client error"),
@@ -220,9 +220,7 @@ fn diagnostics_summarize_error_classes_and_resource_failures() {
         Some(&1)
     );
     assert_eq!(
-        diagnostics.error_classes[0]
-            .rpc_methods
-            .get("groundhog_getEvents"),
+        diagnostics.error_classes[0].rpc_methods.get("getEvents"),
         Some(&1)
     );
     assert_eq!(

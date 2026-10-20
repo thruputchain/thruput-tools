@@ -7,7 +7,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use thruput_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
+use thruput_json_rpc_client::{HttpClient, HttpClientBuilder};
 use thruput_json_rpc_types::{
     ContractAddress,
     block::ChainTip,
@@ -135,9 +135,7 @@ impl SimRpcClient for SimHttpClientPool {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
-            GroundhogApiClient::chain_tip(&client)
-                .await
-                .map_err(|source| SimRpcError::rpc("chainTip", source))
+            SimRpcClient::chain_tip(&client).await
         }
     }
 
@@ -149,9 +147,7 @@ impl SimRpcClient for SimHttpClientPool {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
-            GroundhogApiClient::send_raw_transaction(&client, tx_hex)
-                .await
-                .map_err(|source| SimRpcError::rpc("sendRawTransaction", source))
+            SimRpcClient::send_raw_transaction(&client, tx_hex).await
         }
     }
 
@@ -163,9 +159,7 @@ impl SimRpcClient for SimHttpClientPool {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
-            GroundhogApiClient::get_transaction_receipt(&client, tx_hash)
-                .await
-                .map_err(|source| SimRpcError::rpc("getTransactionReceipt", source))
+            SimRpcClient::transaction_receipt(&client, tx_hash).await
         }
     }
 
@@ -177,9 +171,7 @@ impl SimRpcClient for SimHttpClientPool {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
-            GroundhogApiClient::view(&client, request)
-                .await
-                .map_err(|source| SimRpcError::rpc("view", source))
+            SimRpcClient::view(&client, request).await
         }
     }
 
@@ -192,9 +184,7 @@ impl SimRpcClient for SimHttpClientPool {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
-            GroundhogApiClient::get_storage_at(&client, address, key)
-                .await
-                .map_err(|source| SimRpcError::rpc("getStorageAt", source))
+            SimRpcClient::storage_read(&client, address, key).await
         }
     }
 
@@ -206,9 +196,7 @@ impl SimRpcClient for SimHttpClientPool {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
-            GroundhogApiClient::get_events(&client, query)
-                .await
-                .map_err(|source| SimRpcError::rpc("getEvents", source))
+            SimRpcClient::events_query(&client, query).await
         }
     }
 }
@@ -464,6 +452,7 @@ async fn run_resolved_target(
         &loaded_runtime.manifest,
         &target.rpc_url,
         rpc_client_config.request_timeout,
+        &required_native_methods(&loaded_sim.manifest, &loaded_runtime.manifest),
     )
     .await?;
     let accounts = if let Some(spec) = &loaded_sim.manifest.accounts {
@@ -1014,6 +1003,65 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
     })
 }
 
+fn required_native_methods(
+    manifest: &SimulationManifest,
+    runtime: &RuntimeManifest,
+) -> Vec<&'static str> {
+    let mut methods =
+        std::collections::BTreeSet::from(["getVersionInfo", "getNetworkInfo", "getChainTip"]);
+    for workload in &manifest.workloads {
+        match workload.name {
+            WorkloadKind::ChainTip => {}
+            WorkloadKind::WalletSubmitSmoke | WorkloadKind::ContractCall => {
+                methods.extend(["sendTransaction", "getTransactionReceipt"]);
+            }
+            WorkloadKind::ReceiptPoll => {
+                methods.insert("getTransactionReceipt");
+            }
+            WorkloadKind::StatusPoll => {
+                methods.insert("getTransactionStatus");
+            }
+            WorkloadKind::EventsQuery => {
+                methods.insert("getEvents");
+            }
+            WorkloadKind::StorageRead => {
+                methods.insert("getStorage");
+            }
+            WorkloadKind::ViewCall => {
+                methods.insert("simulateInvocation");
+            }
+            WorkloadKind::ReadAfterWrite => {
+                methods.extend([
+                    "sendTransaction",
+                    "getTransactionReceipt",
+                    "simulateInvocation",
+                ]);
+            }
+        }
+    }
+    if !manifest.contract_artifacts.is_empty()
+        || crate::provision::actor_provisioning_enabled(manifest)
+    {
+        methods.extend(["sendTransaction", "getTransactionReceipt"]);
+    }
+    if let Some(accounts) = &manifest.accounts {
+        methods.insert("getBalance");
+        if accounts.funding == crate::manifest::NativeAccountFunding::Faucet {
+            methods.insert("getTransactionReceipt");
+            methods.insert(
+                if runtime.kind
+                    == thruput_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
+                {
+                    "dev_fundAccount"
+                } else {
+                    "faucet_requestAirdrop"
+                },
+            );
+        }
+    }
+    methods.into_iter().collect()
+}
+
 fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), SimError> {
     let unsupported: Vec<_> = manifest
         .workloads
@@ -1061,6 +1109,95 @@ mod tests {
     use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
     use crate::util::simulation_config_sha256;
     use thruput_json_rpc_types::hex::sha256_prefixed_hex;
+
+    #[test]
+    fn capability_preflight_tracks_workload_and_optional_funding() {
+        let mut scenario = manifest();
+        let mut runtime = runtime_manifest();
+        let methods = required_native_methods(&scenario, &runtime);
+        assert!(!methods.contains(&"getEvents"));
+        scenario.workloads = serde_json::from_value(
+            json!([{"name":"events-query","weight":1},{"name":"read-after-write","weight":1}]),
+        )
+        .unwrap();
+        scenario.accounts=Some(serde_json::from_value(json!({"kind":"native","seed":"fixture","funding":"faucet","fundingAmountRaw":"100"})).unwrap());
+        runtime.kind = "hogd-dev-runtime".into();
+        let methods = required_native_methods(&scenario, &runtime);
+        for method in [
+            "getEvents",
+            "simulateInvocation",
+            "sendTransaction",
+            "getTransactionReceipt",
+            "getBalance",
+            "dev_fundAccount",
+        ] {
+            assert!(methods.contains(&method), "{method}");
+        }
+        assert!(!methods.contains(&"faucet_requestAirdrop"));
+        runtime.kind = "hosted-runtime".into();
+        assert!(required_native_methods(&scenario, &runtime).contains(&"faucet_requestAirdrop"));
+    }
+
+    #[tokio::test]
+    async fn receipt_wait_releases_the_only_pool_permit_between_reads() {
+        let server = jsonrpsee::server::ServerBuilder::default()
+            .build("127.0.0.1:0")
+            .await
+            .unwrap();
+        let url = format!("http://{}", server.local_addr().unwrap());
+        let seen = Arc::new(tokio::sync::Notify::new());
+        let notified = seen.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let reads = calls.clone();
+        let mut module = jsonrpsee::RpcModule::new(());
+        module.register_method("getTransactionReceipt", move |params, (), _| {
+            let request: thruput_json_rpc_types::requests::TransactionQuery = params.parse().unwrap();
+            if reads.fetch_add(1,Ordering::SeqCst) == 0 { notified.notify_one(); serde_json::Value::Null }
+            else { json!({"transactionHash":request.transaction_hash,"blockHeight":"1","execution":{"result":"return","returnData":"0x"},"events":[],"gasUsed":"1"}) }
+        }).unwrap();
+        module
+            .register_method(
+                "getChainTip",
+                |_, (), _| json!({"blockHeight":"1","blockHash":Base58(SHA256Hash::from([1;32]))}),
+            )
+            .unwrap();
+        module
+            .register_method("getTransactionStatus", |_, (), _| -> serde_json::Value {
+                panic!("receipt-only waits must not query scheduler status")
+            })
+            .unwrap();
+        let handle = server.start(module);
+        let pool = SimHttpClientPool::new(
+            &url,
+            RpcClientConfig {
+                pool_size: 1,
+                max_concurrent_requests: 1,
+                request_timeout: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        let waiting = pool.clone();
+        let task = tokio::spawn(async move {
+            thruput_json_rpc_client::poll_receipt(
+                &crate::rpc::SimReceiptSource(&waiting),
+                TxHash(Base58(SHA256Hash::from([2; 32]))),
+                thruput_json_rpc_client::ReceiptPollConfig::within(
+                    Duration::from_secs(2),
+                    Duration::from_millis(200),
+                ),
+            )
+            .await
+            .unwrap()
+        });
+        seen.notified().await;
+        tokio::time::timeout(Duration::from_millis(100), pool.chain_tip())
+            .await
+            .expect("receipt sleep must not hold the only permit")
+            .unwrap();
+        task.await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        handle.stop().unwrap();
+    }
 
     #[derive(Clone)]
     struct MockClient {

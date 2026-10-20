@@ -922,7 +922,7 @@ fn assert_contract_storage_artifacts(
         events.iter().any(|event| {
             event["kind"] == "workload-completed"
                 && event["workload"] == "storage-read"
-                && event["rpcMethod"] == "groundhog_getStorageAt"
+                && event["rpcMethod"] == "getStorage"
                 && event["chainHeight"].as_i64().is_some()
                 && event["storageReadName"] == "fib-zero-key"
                 && event["storageContract"].as_str().is_some()
@@ -965,7 +965,7 @@ fn assert_contract_events_artifacts(
             events.iter().any(|event| {
                 event["kind"] == "workload-completed"
                     && event["workload"] == "contract-call"
-                    && event["rpcMethod"] == "groundhog_sendRawTransaction"
+                    && event["rpcMethod"] == "sendTransaction"
                     && event["contractCallName"].as_str().is_some()
                     && event["contractCallContract"].as_str().is_some()
                     && event["receiptPresent"] == true
@@ -978,7 +978,7 @@ fn assert_contract_events_artifacts(
         events.iter().any(|event| {
             event["kind"] == "workload-completed"
                 && event["workload"] == "events-query"
-                && event["rpcMethod"] == "groundhog_getEvents"
+                && event["rpcMethod"] == "getEvents"
                 && event["eventQueryName"] == expected_query
                 && event["eventContract"].as_str().is_some()
                 && event["eventCount"].as_u64().is_some()
@@ -1017,7 +1017,7 @@ fn assert_read_after_write_artifacts(
         .filter(|event| {
             event["kind"] == "workload-completed"
                 && event["workload"] == "read-after-write"
-                && event["rpcMethod"] == "groundhog_view"
+                && event["rpcMethod"] == "simulateInvocation"
                 && event["receiptPresent"] == true
                 && event["receiptStatus"] == "ok"
                 && event["readAfterWriteName"] == "counter-roundtrip"

@@ -376,9 +376,9 @@ mod tests {
                             }
                         }
                     };
-                    assert_eq!(request["method"], "groundhog_getTransactionStatus");
+                    assert_eq!(request["method"], "getTransactionStatus");
                     serde_json::from_value::<thruput_json_rpc_types::transaction::TxHash>(
-                        request["params"][0].clone(),
+                        request["params"]["transactionHash"].clone(),
                     )
                     .expect("lookup request must contain a valid transaction hash");
                     peak.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);

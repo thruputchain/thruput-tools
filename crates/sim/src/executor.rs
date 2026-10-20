@@ -343,7 +343,7 @@ where
                         },
                         "native-tip-refresh",
                         reason.clone(),
-                        "groundhog_chainTip",
+                        "getChainTip",
                     )?;
                     record_completion(completion, actor_states, event_writer, metrics).await?;
                     failure = Some(reason);
@@ -1762,7 +1762,7 @@ fn target_restarted_receipt_completion(
                 started_at_unix_ms: now.clone(),
                 completed_at_unix_ms: now,
                 latency_ms: 0,
-                rpc_method: "groundhog_getTransactionReceipt",
+                rpc_method: "getTransactionReceipt",
                 chain_height: None,
                 chain_block_hash: None,
                 tx_hash: Some(tx_hash),
@@ -1912,7 +1912,7 @@ where
                         started_at_unix_ms,
                         completed_at_unix_ms,
                         latency_ms,
-                        rpc_method: "groundhog_chainTip",
+                        rpc_method: "getChainTip",
                         chain_height: Some(height),
                         chain_block_hash: Some(block_hash),
                         tx_hash: None,
@@ -1970,7 +1970,7 @@ where
                     started_at_unix_ms,
                     completed_at_unix_ms,
                     latency_ms,
-                    rpc_method: "groundhog_chainTip",
+                    rpc_method: "getChainTip",
                     chain_height: None,
                     chain_block_hash: None,
                     tx_hash: None,
@@ -2056,7 +2056,7 @@ where
                         started_at_unix_ms,
                         completed_at_unix_ms,
                         latency_ms,
-                        rpc_method: "groundhog_sendRawTransaction",
+                        rpc_method: "sendTransaction",
                         chain_height: None,
                         chain_block_hash: None,
                         tx_hash: Some(tx_hash_json),
@@ -2114,7 +2114,7 @@ where
                     started_at_unix_ms,
                     completed_at_unix_ms,
                     latency_ms,
-                    rpc_method: "groundhog_sendRawTransaction",
+                    rpc_method: "sendTransaction",
                     chain_height: None,
                     chain_block_hash: None,
                     tx_hash: None,
@@ -2505,7 +2505,7 @@ fn view_workload_event(
         started_at_unix_ms,
         completed_at_unix_ms,
         latency_ms,
-        rpc_method: "groundhog_view",
+        rpc_method: "simulateInvocation",
         chain_height: None,
         chain_block_hash: None,
         tx_hash: None,
@@ -2677,7 +2677,7 @@ struct ReadAfterWriteReadFailure {
     message: String,
 }
 
-/// Read the actor's counter via `groundhog_view`, decoding the CXS `u64` return.
+/// Read the actor's counter via `simulateInvocation`, decoding the CXS `u64` return.
 async fn read_after_write_counter<C>(
     client: &C,
     prepared: &PreparedReadAfterWriteWorkload,
@@ -2908,7 +2908,7 @@ where
                         &prepared,
                         &started_at_unix_ms,
                         &started,
-                        "groundhog_sendRawTransaction",
+                        "sendTransaction",
                         tx_nonce,
                         false,
                     );
@@ -2929,7 +2929,7 @@ where
                             &prepared,
                             &started_at_unix_ms,
                             &started,
-                            "groundhog_view",
+                            "simulateInvocation",
                             tx_nonce,
                             true,
                         );
@@ -2945,7 +2945,7 @@ where
                         started_at_unix_ms.clone(),
                         unix_ms()?.to_string(),
                         latency_ms,
-                        "groundhog_view",
+                        "simulateInvocation",
                         tx_nonce.clone(),
                         None,
                         false,
@@ -2982,7 +2982,7 @@ where
                 started_at_unix_ms.clone(),
                 unix_ms()?.to_string(),
                 latency_ms,
-                "groundhog_sendRawTransaction",
+                "sendTransaction",
                 tx_nonce.clone(),
                 Some(expected),
                 rebased,
@@ -3033,7 +3033,7 @@ where
                 started_at_unix_ms.clone(),
                 unix_ms()?.to_string(),
                 latency_ms,
-                "groundhog_getTransactionReceipt",
+                "getTransactionReceipt",
                 tx_nonce.clone(),
                 Some(expected),
                 rebased,
@@ -3070,7 +3070,7 @@ where
             started_at_unix_ms.clone(),
             unix_ms()?.to_string(),
             latency_ms,
-            "groundhog_getTransactionReceipt",
+            "getTransactionReceipt",
             tx_nonce.clone(),
             Some(expected),
             rebased,
@@ -3115,7 +3115,7 @@ where
         started_at_unix_ms,
         unix_ms()?.to_string(),
         latency_ms,
-        "groundhog_view",
+        "simulateInvocation",
         tx_nonce,
         Some(expected),
         rebased,
@@ -3224,7 +3224,7 @@ fn contract_call_workload_event(
         started_at_unix_ms,
         completed_at_unix_ms,
         latency_ms,
-        rpc_method: "groundhog_sendRawTransaction",
+        rpc_method: "sendTransaction",
         chain_height: None,
         chain_block_hash: None,
         tx_hash,
@@ -3401,7 +3401,7 @@ fn storage_read_workload_event(
         started_at_unix_ms,
         completed_at_unix_ms,
         latency_ms,
-        rpc_method: "groundhog_getStorageAt",
+        rpc_method: "getStorage",
         chain_height: None,
         chain_block_hash: None,
         tx_hash: None,
@@ -3609,7 +3609,7 @@ fn events_query_workload_event(
         started_at_unix_ms,
         completed_at_unix_ms,
         latency_ms,
-        rpc_method: "groundhog_getEvents",
+        rpc_method: "getEvents",
         chain_height: None,
         chain_block_hash: None,
         tx_hash: None,
@@ -3658,7 +3658,7 @@ fn receipt_poll_event(
         started_at_unix_ms: times.started_unix.clone(),
         completed_at_unix_ms: times.completed_unix.clone(),
         latency_ms: times.rpc_latency,
-        rpc_method: "groundhog_getTransactionReceipt",
+        rpc_method: "getTransactionReceipt",
         chain_height: None,
         chain_block_hash: None,
         tx_hash,
@@ -3937,17 +3937,17 @@ async fn sleep_until_sim_time_draining(
 
 fn rpc_method(workload: WorkloadKind) -> &'static str {
     match workload {
-        WorkloadKind::ChainTip => "groundhog_chainTip",
+        WorkloadKind::ChainTip => "getChainTip",
         // read-after-write reports its write RPC for skipped/aborted ticks; the
         // executed round-trip sets its own terminal rpc_method in Slice L3.
         WorkloadKind::WalletSubmitSmoke
         | WorkloadKind::ContractCall
-        | WorkloadKind::ReadAfterWrite => "groundhog_sendRawTransaction",
-        WorkloadKind::ReceiptPoll => "groundhog_getTransactionReceipt",
-        WorkloadKind::StatusPoll => "groundhog_getTransactionStatus",
-        WorkloadKind::EventsQuery => "groundhog_getEvents",
-        WorkloadKind::StorageRead => "groundhog_getStorageAt",
-        WorkloadKind::ViewCall => "groundhog_view",
+        | WorkloadKind::ReadAfterWrite => "sendTransaction",
+        WorkloadKind::ReceiptPoll => "getTransactionReceipt",
+        WorkloadKind::StatusPoll => "getTransactionStatus",
+        WorkloadKind::EventsQuery => "getEvents",
+        WorkloadKind::StorageRead => "getStorage",
+        WorkloadKind::ViewCall => "simulateInvocation",
     }
 }
 
@@ -5192,7 +5192,7 @@ mod tests {
                         started_at_unix_ms: "100".into(),
                         completed_at_unix_ms: "101".into(),
                         latency_ms: 1,
-                        rpc_method: "groundhog_sendRawTransaction",
+                        rpc_method: "sendTransaction",
                         chain_height: None,
                         chain_block_hash: None,
                         tx_hash: Some(prefixed_hex(0x20)),
@@ -5542,7 +5542,7 @@ mod tests {
         match completion.event {
             ResultEvent::WorkloadCompleted { event } => {
                 assert_eq!(event.workload, WorkloadKind::ViewCall);
-                assert_eq!(event.rpc_method, "groundhog_view");
+                assert_eq!(event.rpc_method, "simulateInvocation");
                 assert_eq!(event.chain_height, Some(44));
                 assert_eq!(event.view_result.as_deref(), Some("return"));
                 assert_eq!(event.view_return_data.as_deref(), Some("0x37"));
@@ -5625,7 +5625,7 @@ mod tests {
         match completion.event {
             ResultEvent::WorkloadCompleted { event } => {
                 assert_eq!(event.workload, WorkloadKind::StorageRead);
-                assert_eq!(event.rpc_method, "groundhog_getStorageAt");
+                assert_eq!(event.rpc_method, "getStorage");
                 assert_eq!(event.chain_height, Some(45));
                 assert_eq!(event.storage_read_name.as_deref(), Some("fib-zero-key"));
                 assert_eq!(
@@ -5792,7 +5792,7 @@ mod tests {
         match completion.event {
             ResultEvent::WorkloadCompleted { event } => {
                 assert_eq!(event.workload, WorkloadKind::EventsQuery);
-                assert_eq!(event.rpc_method, "groundhog_getEvents");
+                assert_eq!(event.rpc_method, "getEvents");
                 assert_eq!(event.event_query_name.as_deref(), Some("fib-events"));
                 assert_eq!(
                     event.event_contract.as_deref(),
@@ -7401,7 +7401,7 @@ mod tests {
             "0".into(),
             "0".into(),
             0,
-            "groundhog_view",
+            "simulateInvocation",
             Some("4294967296".into()),
             Some(value),
             true,
@@ -7623,7 +7623,7 @@ mod tests {
         assert_eq!(completed["readAfterWriteObserved"], "1");
         assert_eq!(completed["readAfterWriteMatched"], true);
         assert_eq!(completed["readAfterWriteRebased"], true);
-        assert_eq!(completed["rpcMethod"], "groundhog_view");
+        assert_eq!(completed["rpcMethod"], "simulateInvocation");
         assert_eq!(completed["receiptStatus"], "ok");
     }
 
@@ -7701,7 +7701,7 @@ mod tests {
         assert_eq!(actors[0].next_nonce_sequence, 0);
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "view-rpc-error");
-        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["rpcMethod"], "simulateInvocation");
         assert_eq!(failed["readAfterWriteRebased"], false);
         assert!(failed.get("readAfterWriteExpected").is_none());
     }
@@ -7723,7 +7723,7 @@ mod tests {
         assert!(actors[0].read_after_write_needs_reconcile());
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "read-after-write-mismatch");
-        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["rpcMethod"], "simulateInvocation");
         assert_eq!(failed["readAfterWriteExpected"], "6");
         assert_eq!(failed["readAfterWriteObserved"], "9");
         assert_eq!(failed["readAfterWriteMatched"], false);
@@ -7751,7 +7751,7 @@ mod tests {
         );
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "view-rpc-error");
-        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["rpcMethod"], "simulateInvocation");
         assert_eq!(failed["readAfterWriteExpected"], "6");
         assert!(failed.get("readAfterWriteObserved").is_none());
         assert!(failed.get("readAfterWriteMatched").is_none());
@@ -7797,7 +7797,7 @@ mod tests {
             );
             let failed = find_event(&events, "workload-failed");
             assert_eq!(failed["errorClass"], error_class);
-            assert_eq!(failed["rpcMethod"], "groundhog_view");
+            assert_eq!(failed["rpcMethod"], "simulateInvocation");
             assert_eq!(failed["readAfterWriteExpected"], "6");
             assert!(failed.get("readAfterWriteObserved").is_none());
             assert!(failed.get("readAfterWriteMatched").is_none());
@@ -7827,7 +7827,7 @@ mod tests {
         assert_eq!(actors[0].next_nonce_sequence, 0);
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "read-after-write-overflow");
-        assert_eq!(failed["rpcMethod"], "groundhog_sendRawTransaction");
+        assert_eq!(failed["rpcMethod"], "sendTransaction");
         assert!(failed.get("readAfterWriteExpected").is_none());
     }
 
@@ -7848,7 +7848,7 @@ mod tests {
         assert_eq!(actors[0].next_nonce_sequence, 0);
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "read-after-write-overflow");
-        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["rpcMethod"], "simulateInvocation");
         assert_eq!(failed["readAfterWriteRebased"], true);
         assert!(failed.get("readAfterWriteExpected").is_none());
     }
@@ -7869,7 +7869,7 @@ mod tests {
         assert_eq!(actors[0].next_nonce_sequence, 0);
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "rpc-error");
-        assert_eq!(failed["rpcMethod"], "groundhog_sendRawTransaction");
+        assert_eq!(failed["rpcMethod"], "sendTransaction");
     }
 
     #[tokio::test]
@@ -7887,7 +7887,7 @@ mod tests {
         assert_eq!(actors[0].next_nonce_sequence, 1);
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "rpc-error");
-        assert_eq!(failed["rpcMethod"], "groundhog_getTransactionReceipt");
+        assert_eq!(failed["rpcMethod"], "getTransactionReceipt");
         assert_eq!(failed["readAfterWriteExpected"], "4");
     }
 
@@ -7915,6 +7915,6 @@ mod tests {
         );
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "contract-call-receipt-status");
-        assert_eq!(failed["rpcMethod"], "groundhog_getTransactionReceipt");
+        assert_eq!(failed["rpcMethod"], "getTransactionReceipt");
     }
 }

@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use thruput_json_rpc_types::{
-    receipt::TransactionReceipt,
-    transaction::{TransactionStatus, TxHash},
+    responses::{ResponseData, TransactionReceipt, TransactionStatus},
+    transaction::TxHash,
 };
 
 use crate::BenchError;
@@ -69,10 +69,10 @@ impl ExpectedResult {
         match self {
             Self::Any => true,
             Self::Committed { height: expected } => {
-                matches!(TransactionStatus::deserialize(value), Ok(TransactionStatus::Committed { height }) if *height == expected)
+                matches!(TransactionStatus::deserialize(value), Ok(TransactionStatus::Committed { block_height }) if *block_height == expected)
             }
             Self::Receipt { hash, height } => {
-                matches!(TransactionReceipt::deserialize(value), Ok(receipt) if receipt.tx_hash == hash && *receipt.height == height)
+                matches!(TransactionReceipt::deserialize(value), Ok(receipt) if receipt.transaction_hash == hash && *receipt.block_height == height && receipt.is_supported())
             }
         }
     }
@@ -170,9 +170,9 @@ where
 
 /// Calibrate connection pool size by measuring RTT with a small burst.
 ///
-/// Always probes with `chainTip` — it's cheap, read-only, always valid,
+/// Always probes with `getChainTip` — it's cheap, read-only, always valid,
 /// and avoids the trap of sending a dummy empty payload through
-/// `sendRawTransaction`'s validator. The result is only a rough sizing
+/// `sendTransaction`'s validator. The result is only a rough sizing
 /// hint for Little's Law; server-side processing time on the real
 /// benchmark method may be larger, which is why the caller inflates
 /// the connection count before clamping. An HTTP/2 origin (or a
@@ -184,7 +184,7 @@ pub(super) async fn calibrate_rtt(
     request_timeout: Duration,
     max_response_bytes: usize,
 ) -> Result<Duration, BenchError> {
-    let body = make_request("chainTip", "", 0);
+    let body = make_request("getChainTip", "", 0);
     let mut rtts = Vec::with_capacity(20);
 
     for _ in 0..20 {
@@ -306,22 +306,22 @@ mod tests {
             json!(null),
             json!({"status":"pending"}),
             json!({"status":"unknown"}),
-            json!({"status":"committed","height":"8"}),
+            json!({"status":"committed","blockHeight":"8"}),
         ] {
             assert!(!status.validate(&value));
         }
-        assert!(status.validate(&json!({"status":"committed","height":"7"})));
+        assert!(status.validate(&json!({"status":"committed","blockHeight":"7"})));
         let expected = ExpectedResult::Receipt { hash, height: 7 };
         assert!(!expected.validate(&json!(null)));
-        let mut receipt = json!({"txHash":hash,"height":"7","status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":"1500"});
+        let mut receipt = json!({"transactionHash":hash,"blockHeight":"7","execution":{"result":"fault"},"events":[],"gasUsed":"1500"});
         assert!(
             expected.validate(&receipt),
             "committed execution failures are valid read records"
         );
-        receipt["height"] = json!("8");
+        receipt["blockHeight"] = json!("8");
         assert!(!expected.validate(&receipt));
-        receipt["height"] = json!("7");
-        receipt["txHash"] = json!(TxHash(
+        receipt["blockHeight"] = json!("7");
+        receipt["transactionHash"] = json!(TxHash(
             thruput_xdr::types::SHA256Hash::from([0xbb; 32]).into()
         ));
         assert!(!expected.validate(&receipt));

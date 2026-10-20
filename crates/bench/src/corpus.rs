@@ -8,10 +8,11 @@ use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 use serde::{Deserialize, Serialize};
 use thruput_json_rpc_types::{
     NetworkHash,
-    network_info::NetworkInfo,
-    receipt::TransactionReceipt,
+    responses::{
+        NetworkInfo, ResponseData, SendTransactionResult, TransactionReceipt, TransactionStatus,
+    },
     runtime_manifest::RuntimeManifest,
-    transaction::{TransactionStatus, TxHash},
+    transaction::TxHash,
 };
 use tokio::io::AsyncReadExt;
 
@@ -86,7 +87,7 @@ pub(super) async fn rpc(
     method: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, BenchError> {
-    let body = serde_json::json!({"jsonrpc":"2.0", "id":0, "method":format!("groundhog_{method}"), "params":params});
+    let body = serde_json::json!({"jsonrpc":"2.0", "id":0, "method":method, "params":params});
     request_value(
         client.post(&cli.url).json(&body).send(),
         0,
@@ -95,6 +96,23 @@ pub(super) async fn rpc(
     )
     .await
     .map_err(|kind| BenchError::Setup(format!("{method}: {kind:?}")))
+}
+
+fn supported_response<T: serde::de::DeserializeOwned + ResponseData>(
+    method: &str,
+    raw: serde_json::Value,
+) -> Result<T, BenchError> {
+    let value = T::deserialize(&raw).map_err(|error| {
+        BenchError::Setup(format!(
+            "invalid {method} response: {error}; response: {raw}"
+        ))
+    })?;
+    if !value.is_supported() {
+        return Err(BenchError::Setup(format!(
+            "unsupported {method} response: {raw}"
+        )));
+    }
+    Ok(value)
 }
 
 fn validate_file(corpus: &HashCorpus) -> Result<(), BenchError> {
@@ -138,7 +156,7 @@ async fn prepare_inner(
     progress: &mut String,
 ) -> Result<ConfirmedCorpus, BenchError> {
     let network: NetworkInfo =
-        serde_json::from_value(rpc(client, cli, "networkInfo", serde_json::json!([])).await?)
+        serde_json::from_value(rpc(client, cli, "getNetworkInfo", serde_json::json!({})).await?)
             .map_err(|error| BenchError::Setup(format!("invalid networkInfo: {error}")))?;
     if let Some(manifest) = manifest
         && network.network_hash.as_ref()
@@ -172,7 +190,7 @@ async fn prepare_inner(
         })?;
         let manifest = manifest.ok_or(BenchError::MissingRuntimeManifest)?;
         let accounts = transaction_inputs_for_method(
-            "sendRawTransaction",
+            "sendTransaction",
             Some(manifest),
             cli.accounts,
             cli.account_seed.as_deref(),
@@ -201,12 +219,12 @@ async fn prepare_inner(
             let value = rpc(
                 client,
                 cli,
-                "sendRawTransaction",
-                serde_json::json!([tx.hex]),
+                "sendTransaction",
+                serde_json::json!({"signedTransaction":tx.hex}),
             )
             .await?;
-            let hash: TxHash = serde_json::from_value(value)
-                .map_err(|error| BenchError::Setup(format!("invalid submission hash: {error}")))?;
+            let submission: SendTransactionResult = supported_response("sendTransaction", value)?;
+            let hash = submission.transaction_hash;
             if hash != tx.hash {
                 return Err(BenchError::Setup(
                     "submission returned a different transaction hash".into(),
@@ -224,42 +242,53 @@ async fn prepare_inner(
     let mut shapes = Vec::with_capacity(corpus.hashes.len());
     for (index, hash) in corpus.hashes.iter().enumerate() {
         *progress = format!("confirming hash {} of {}", index + 1, corpus.hashes.len());
+        let mut committed_height = None;
         loop {
-            let status: TransactionStatus = serde_json::from_value(
-                rpc(
-                    client,
-                    cli,
+            let status: TransactionStatus = if let Some(block_height) = committed_height.clone() {
+                TransactionStatus::Committed { block_height }
+            } else {
+                supported_response(
                     "getTransactionStatus",
-                    serde_json::json!([hash]),
-                )
-                .await?,
-            )
-            .map_err(|error| BenchError::Setup(format!("invalid status: {error}")))?;
-            if let TransactionStatus::Committed { height } = status {
-                let receipt: Option<TransactionReceipt> = serde_json::from_value(
+                    rpc(
+                        client,
+                        cli,
+                        "getTransactionStatus",
+                        serde_json::json!({"transactionHash":hash}),
+                    )
+                    .await?,
+                )?
+            };
+            if let TransactionStatus::Committed {
+                block_height: height,
+            } = status
+            {
+                committed_height = Some(height.clone());
+                let receipt: Option<TransactionReceipt> = supported_response(
+                    "getTransactionReceipt",
                     rpc(
                         client,
                         cli,
                         "getTransactionReceipt",
-                        serde_json::json!([hash]),
+                        serde_json::json!({"transactionHash":hash}),
                     )
                     .await?,
-                )
-                .map_err(|error| BenchError::Setup(format!("invalid receipt: {error}")))?;
+                )?;
                 let Some(receipt) = receipt else {
                     *progress = format!("waiting for committed hash {hash:?} to be indexed");
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 };
-                if receipt.tx_hash != *hash || receipt.height != height {
+                if receipt.transaction_hash != *hash || receipt.block_height != height {
                     return Err(BenchError::Setup(
                         "receipt hash/height differs from committed status".into(),
                     ));
                 }
                 shapes.push(serde_json::to_string(&serde_json::json!({
-                    "status": receipt.status,
-                    "returnBytes": receipt.return_data.as_ref().map(|bytes| bytes.0.len()),
-                    "abortBytes": receipt.abort_data.as_ref().map(|bytes| bytes.0.len()),
+                    "execution": match &receipt.execution {
+                        thruput_json_rpc_types::responses::ReceiptExecution::Return { return_data } => serde_json::json!(["return",return_data.0.len()]),
+                        thruput_json_rpc_types::responses::ReceiptExecution::Abort { abort_data } => serde_json::json!(["abort",abort_data.0.len()]),
+                        other => serde_json::to_value(other).expect("bug: execution serializes"),
+                    },
                     "events": receipt.events.iter().map(|event| (event.topics.len(), event.data.0.len())).collect::<Vec<_>>()
                 })).expect("bug: receipt shape serializes"));
                 records.push(ConfirmedRecord {
@@ -271,10 +300,7 @@ async fn prepare_inner(
             if cli.hashes_file.is_some()
                 || matches!(
                     status,
-                    TransactionStatus::Invalid { .. }
-                        | TransactionStatus::Retry { .. }
-                        | TransactionStatus::Dropped { .. }
-                        | TransactionStatus::Other
+                    TransactionStatus::Retry { .. } | TransactionStatus::Dropped { .. }
                 )
             {
                 return Err(BenchError::Setup(format!(
@@ -282,7 +308,7 @@ async fn prepare_inner(
                 )));
             }
             let label = match status {
-                TransactionStatus::Pending => "pending",
+                TransactionStatus::Pending {} => "pending",
                 TransactionStatus::RecentFailure { .. } => "recentFailure",
                 _ => "unknown",
             };
@@ -341,6 +367,33 @@ async fn prepare_inner(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn corpus_rejects_future_native_results_with_raw_evidence() {
+        let hash = thruput_json_rpc_types::NetworkHashText::from([0xaa; 32]).to_string();
+        let admission = json!({"transactionHash":hash,"admission":"future"});
+        let status = json!({"status":"future","proof":"retained"});
+        let receipt = json!({"transactionHash":hash,"blockHeight":"1","execution":{"result":"future","proof":"retained"},"events":[],"gasUsed":"1"});
+        for (raw, error) in [
+            (
+                admission.clone(),
+                supported_response::<SendTransactionResult>("sendTransaction", admission)
+                    .unwrap_err(),
+            ),
+            (
+                status.clone(),
+                supported_response::<TransactionStatus>("getTransactionStatus", status)
+                    .unwrap_err(),
+            ),
+            (
+                receipt.clone(),
+                supported_response::<Option<TransactionReceipt>>("getTransactionReceipt", receipt)
+                    .unwrap_err(),
+            ),
+        ] {
+            assert!(error.to_string().contains(&raw.to_string()));
+        }
+    }
 
     #[test]
     fn corpus_rejects_unknown_version_empty_or_duplicate_hashes() {

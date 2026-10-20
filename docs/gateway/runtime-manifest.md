@@ -51,7 +51,7 @@ Leave the gateway running too. In a third terminal:
 RUNTIME_MANIFEST=$(jq -er '.data.runtimeManifest.path' /tmp/groundhog-node.json)
 thruput-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" --account-seed benchmark-fixtures-v1 \
-  --method sendRawTransaction --accounts 3 --rate 3 --duration 2 --force
+  --method sendTransaction --accounts 3 --rate 3 --duration 2 --force
 ```
 
 This submits real test transactions. `--force` explicitly authorizes the submit

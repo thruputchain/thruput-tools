@@ -97,7 +97,7 @@ pub(super) struct Cli {
     pub(super) accounts: usize,
 
     /// Method to benchmark.
-    #[arg(long, default_value = "sendRawTransaction")]
+    #[arg(long, default_value = "sendTransaction")]
     pub(super) method: String,
 
     /// Warmup seconds (results discarded).
@@ -112,7 +112,7 @@ pub(super) struct Cli {
     #[arg(long, default_value = "0")]
     pub(super) connections_per_worker: usize,
 
-    /// Pre-generated transaction batch size for sendRawTransaction.
+    /// Pre-generated transaction batch size for sendTransaction.
     ///
     /// Defaults to the scheduled request count in rate-limited mode and 100000
     /// in unthrottled mode. Increase this if an unthrottled submit run exhausts
@@ -144,7 +144,7 @@ pub(super) struct Cli {
     #[arg(long)]
     pub(super) json: bool,
 
-    /// Skip confirmation for sendRawTransaction.
+    /// Skip confirmation for sendTransaction.
     #[arg(long)]
     pub(super) force: bool,
 }
@@ -156,7 +156,7 @@ pub(super) fn confirm_submission(
     input: &mut impl BufRead,
     error: &mut impl Write,
 ) -> Result<(), BenchError> {
-    if (cli.method != "sendRawTransaction" && cli.seed_count.is_none()) || cli.force {
+    if (cli.method != "sendTransaction" && cli.seed_count.is_none()) || cli.force {
         return Ok(());
     }
     if cli.json || !stdin_is_terminal || !stderr_is_terminal {
@@ -178,7 +178,7 @@ pub(super) fn confirm_submission(
     let url = terminal_safe(&cli.url);
     write!(
         error,
-        "This benchmark will submit signed, native-wallet transactions via sendRawTransaction.\nURL: {}\nAccounts: {}\nRate: {rate}\nDuration: {}s plus {}s warmup\nContinue? [y/N] ",
+        "This benchmark will submit signed, native-wallet transactions via sendTransaction.\nURL: {}\nAccounts: {}\nRate: {rate}\nDuration: {}s plus {}s warmup\nContinue? [y/N] ",
         url, cli.accounts, cli.duration, cli.warmup
     )
     .and_then(|()| error.flush())
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn read_only_method_does_not_require_confirmation() {
-        let cli = confirmation_cli("chainTip");
+        let cli = confirmation_cli("getChainTip");
         let mut input = std::io::Cursor::new(Vec::<u8>::new());
         let mut error = Vec::new();
 
@@ -278,7 +278,7 @@ mod tests {
             fn consume(&mut self, _amount: usize) {}
         }
 
-        let mut cli = confirmation_cli("sendRawTransaction");
+        let mut cli = confirmation_cli("sendTransaction");
         cli.force = true;
         let mut input = Unreadable;
         let mut error = Vec::new();
@@ -296,7 +296,7 @@ mod tests {
             (false, false, true),
             (false, true, false),
         ] {
-            let mut cli = confirmation_cli("sendRawTransaction");
+            let mut cli = confirmation_cli("sendTransaction");
             cli.json = json;
             let mut input = std::io::Cursor::new(b"yes\n");
             let mut error = Vec::new();
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn submit_confirmation_accepts_y_and_yes() {
-        let cli = confirmation_cli("sendRawTransaction");
+        let cli = confirmation_cli("sendTransaction");
         for answer in ["y\n", "YES\n"] {
             let mut input = std::io::Cursor::new(answer.as_bytes());
             let mut error = Vec::new();
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn submit_confirmation_defaults_to_no() {
-        let cli = confirmation_cli("sendRawTransaction");
+        let cli = confirmation_cli("sendTransaction");
         for answer in ["\n", "no\n", "anything else\n"] {
             let mut input = std::io::Cursor::new(answer.as_bytes());
             let mut error = Vec::new();

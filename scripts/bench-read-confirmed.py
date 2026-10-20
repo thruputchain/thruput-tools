@@ -115,7 +115,7 @@ def main():
 
     def rpc(method):
         request = urllib.request.Request(url, data=json.dumps({"jsonrpc": "2.0", "id": 1,
-            "method": "groundhog_" + method, "params": []}).encode(), headers={"Content-Type": "application/json"})
+            "method": method, "params": {}}).encode(), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(request, timeout=2) as response:
             value = json.load(response)
         if "error" in value:
@@ -161,10 +161,10 @@ def main():
         if trace:
             argv += ["--trace-spans"]
         process = launch(argv, name, gateway_process=True, trace=trace)
-        wait_until(process, lambda: rpc("chainTip"), 120)
+        wait_until(process, lambda: rpc("getChainTip"), 120)
         runtime = json.loads(manifest.read_text())
         info = {"schemaVersion": 1, "topology": "loopback gateway and isolated interval-driven devnode on one host",
-            "gateway": {"artifactSha256": binary_hashes[str(binary)], "commitHash": rpc("version").get("commitHash"),
+            "gateway": {"artifactSha256": binary_hashes[str(binary)], "commitHash": rpc("getVersionInfo").get("commitHash"),
                 "buildProfile": args.build_profile, "workerThreads": args.runtime_workers,
                 "effectiveConfig": effective, "host": host,
                 "logging": {"filter": "info" if trace else args.gateway_log_filter, "sink": "bounded-pipe" if trace else args.gateway_log_sink, "spanEvents": "close" if trace else "none"}},
