@@ -182,6 +182,52 @@ fn all_core_results_have_known_schemas_and_roundtrip_without_legacy_fields() {
 }
 
 #[test]
+fn scheduler_status_keeps_an_optional_independent_attempt_diagnostic() {
+    let diagnostic = json!({"attemptBlockHeight":"6", "cause": {
+        "kind":"dbConflict", "conflict": {
+            "address":identifier(), "key":"0x0102", "code":"insufficientFunds"
+        }
+    }});
+    for state in ["pending", "retry", "dropped"] {
+        let mut raw = json!({"status":state});
+        if state != "pending" {
+            raw["error"] = json!({"source":"executor", "code":17});
+        }
+        check("getTransactionStatus", &raw, Some(true), true);
+        assert_eq!(roundtrip::<res::TransactionStatus>(raw.clone()), raw);
+        raw["recentFailure"] = diagnostic.clone();
+        check("getTransactionStatus", &raw, Some(true), true);
+        assert_eq!(roundtrip::<res::TransactionStatus>(raw.clone()), raw);
+
+        let mut unknown = raw.clone();
+        unknown["recentFailure"]["cause"] = json!({"kind":"future", "payload":{"kept":true}});
+        check("getTransactionStatus", &unknown, Some(false), false);
+        // An unfamiliar nested cause cannot hide malformed known fields.
+        unknown["recentFailure"]["attemptBlockHeight"] = json!(-1);
+        check("getTransactionStatus", &unknown, None, false);
+        for height in [
+            json!(6),
+            json!("-1"),
+            json!("06"),
+            json!("9223372036854775808"),
+            Value::Null,
+        ] {
+            let mut invalid = raw.clone();
+            invalid["recentFailure"]["attemptBlockHeight"] = height;
+            check("getTransactionStatus", &invalid, None, false);
+        }
+        let mut invalid = raw.clone();
+        invalid["recentFailure"]["cause"]["conflict"]
+            .as_object_mut()
+            .unwrap()
+            .remove("key");
+        check("getTransactionStatus", &invalid, None, false);
+        raw["recentFailure"] = Value::Null;
+        check("getTransactionStatus", &raw, None, false);
+    }
+}
+
+#[test]
 fn nullable_members_are_required_and_absence_is_not_inferred() {
     for (method, field) in [
         ("getStorage", "item"),

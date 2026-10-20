@@ -308,7 +308,7 @@ async fn prepare_inner(
                 )));
             }
             let label = match status {
-                TransactionStatus::Pending {} => "pending",
+                TransactionStatus::Pending { .. } => "pending",
                 TransactionStatus::RecentFailure { .. } => "recentFailure",
                 _ => "unknown",
             };

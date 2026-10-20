@@ -1655,6 +1655,7 @@ fn scheduler_error() -> thruput_json_rpc_types::responses::SchedulerError {
 async fn scheduler_retries_only_reconcile_the_retained_transaction() {
     let submitter = Arc::new(MockAirdropSubmitter::success());
     *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        recent_failure: None,
         error: scheduler_error(),
     });
     let config = test_config_with_submitters(submitter.clone());
@@ -1689,6 +1690,7 @@ async fn scheduler_retries_only_reconcile_the_retained_transaction() {
 async fn dropped_airdrop_remains_pending_until_a_receipt_resolves_it() {
     let submitter = Arc::new(MockAirdropSubmitter::success());
     *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Dropped {
+        recent_failure: None,
         error: scheduler_error(),
     });
     let config = test_config_with_submitters(submitter.clone());
@@ -1730,6 +1732,7 @@ async fn retention_failure_prevents_broadcast() {
 async fn retry_without_retained_bytes_never_signs_a_replacement() {
     let submitter = Arc::new(MockAirdropSubmitter::success());
     *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        recent_failure: None,
         error: scheduler_error(),
     });
     let config = test_config_with_submitters(submitter.clone());
@@ -1756,6 +1759,7 @@ async fn concurrent_same_key_retry_never_rebroadcasts() {
     let mut submitter = MockAirdropSubmitter::success();
     submitter.poll_gate = Some(gate.clone());
     *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        recent_failure: None,
         error: scheduler_error(),
     });
     let submitter = Arc::new(submitter);
@@ -1831,9 +1835,11 @@ async fn commitment_and_failed_lookups_prevent_scheduler_replay_or_terminal_cach
     for committed in [true, false] {
         for status in [
             TransactionStatus::Retry {
+                recent_failure: None,
                 error: scheduler_error(),
             },
             TransactionStatus::Dropped {
+                recent_failure: None,
                 error: scheduler_error(),
             },
             serde_json::from_value(serde_json::json!({
@@ -1874,6 +1880,7 @@ async fn retained_commitment_survives_service_recreation_with_the_same_store() {
     let mut first = MockAirdropSubmitter::success();
     first.poll_observation = PollObservation::Committed;
     *first.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        recent_failure: None,
         error: scheduler_error(),
     });
     let first = Arc::new(first);
@@ -1888,6 +1895,7 @@ async fn retained_commitment_survives_service_recreation_with_the_same_store() {
     let mut restarted = MockAirdropSubmitter::success();
     restarted.poll_observation = PollObservation::LookupFailed;
     *restarted.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        recent_failure: None,
         error: scheduler_error(),
     });
     let restarted = Arc::new(restarted);
@@ -1895,9 +1903,11 @@ async fn retained_commitment_survives_service_recreation_with_the_same_store() {
     restarted_config.policy_store = config.policy_store.clone();
     for status in [
         TransactionStatus::Retry {
+            recent_failure: None,
             error: scheduler_error(),
         },
         TransactionStatus::Dropped {
+            recent_failure: None,
             error: scheduler_error(),
         },
     ] {

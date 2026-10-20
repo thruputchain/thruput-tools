@@ -193,8 +193,9 @@ impl ReceiptEvidence {
 /// Retry/Dropped statuses never end a wait; even without a prior commitment they
 /// do not prove nonexecution. Transient receipt failures use bounded jittered
 /// backoff. Transient status failures retain evidence and continue to the next
-/// receipt read. Unsupported or malformed status representations stop with the
-/// original response evidence; they never permit transaction resubmission.
+/// receipt read. Unsupported or malformed status representations (including an
+/// unfamiliar optional attempt diagnostic) stop with the original response
+/// evidence; they never permit transaction resubmission.
 #[tracing::instrument(skip_all)]
 pub async fn poll_receipt<S, F>(
     source: &S,

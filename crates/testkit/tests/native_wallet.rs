@@ -587,11 +587,23 @@ fn serve_submission(module: &mut RpcModule<Arc<State>>) {
                     0 => TransactionStatus::Committed {
                         block_height: 3.into(),
                     },
-                    1 => TransactionStatus::Retry { error },
-                    _ => TransactionStatus::Dropped { error },
+                    1 => TransactionStatus::Retry {
+                        error,
+                        recent_failure: None,
+                    },
+                    _ => TransactionStatus::Dropped {
+                        error,
+                        recent_failure: None,
+                    },
                 },
-                Outcome::Retry => TransactionStatus::Retry { error },
-                Outcome::Dropped => TransactionStatus::Dropped { error },
+                Outcome::Retry => TransactionStatus::Retry {
+                    error,
+                    recent_failure: None,
+                },
+                Outcome::Dropped => TransactionStatus::Dropped {
+                    error,
+                    recent_failure: None,
+                },
                 _ => TransactionStatus::Unknown {},
             })
         })

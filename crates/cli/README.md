@@ -521,10 +521,11 @@ status alongside any receipt. If the status lookup fails but a receipt is availa
 it derives committed status from the receipt and retains the failure in `statusError`.
 A scheduler-confirmed committed status can precede the indexed receipt. Both include
 their block height, which must match when both are available.
-Scheduler `retry` outcomes mean the transaction
-may be resubmitted; the mempool will not retry it automatically. `dropped`
-outcomes require modifying the transaction before resubmission. Both retain
-the error source and protocol error code in terminal and JSON output.
+Scheduler `retry` and `dropped` outcomes retain the error source and protocol code.
+Pending, retry and dropped statuses can also include `recentFailure`, an independently
+observed attempt diagnostic with its block height. It need not describe the scheduler's
+same or latest attempt. Neither the status nor the diagnostic authorizes automatic
+resubmission or replacement; receipt waiting remains read-only.
 `tx list` preserves the endpoint's opaque cursor
 and does not fetch receipts. Address history includes root invocations only, so
 incoming wallet-wrapped transfers may not appear in a recipient's history.

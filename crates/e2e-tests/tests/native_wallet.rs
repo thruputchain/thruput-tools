@@ -22,7 +22,7 @@ use thruput_json_rpc_types::{
     },
     responses::{
         AirdropAttempt, ConflictCode, DecodedResponse, FailureCause, ReceiptExecution,
-        TransactionReceipt, TransactionStatus,
+        RecentAttemptFailure, SchedulerErrorSource, TransactionReceipt, TransactionStatus,
     },
     transaction::TxHash,
 };
@@ -228,8 +228,7 @@ async fn funded_fixture() -> WalletFixture {
     }
 }
 
-/// Requires the scheduler to release its retained outcome so the advisory
-/// indexer conflict can be observed. Retry alone does not prove storage failure.
+/// Verifies the indexed conflict remains visible alongside the scheduler retry.
 #[tokio::test]
 #[ignore = "requires a disposable runtime exposing the advisory unfunded-deployment diagnostic"]
 async fn unfunded_deployment_reports_target_storage_conflict() {
@@ -268,20 +267,30 @@ async fn unfunded_deployment_reports_target_storage_conflict() {
         );
         last_status = Some(status.clone());
         match status {
-            TransactionStatus::RecentFailure {
-                cause: FailureCause::DbConflict { conflict },
-                ..
+            TransactionStatus::Retry {
+                error,
+                recent_failure:
+                    Some(RecentAttemptFailure {
+                        cause: FailureCause::DbConflict { conflict },
+                        ..
+                    }),
             } if conflict.address.0 == unfunded_target
                 && matches!(
                     conflict.code,
                     ConflictCode::BoundsExceeded | ConflictCode::InsufficientFunds
                 ) =>
             {
+                assert!(matches!(error.source, SchedulerErrorSource::Executor));
+                assert_eq!(
+                    error.code,
+                    thruput_xdr::exec_result::ExecResult::ExecResultTxNonDeterministicError.0
+                );
+                eprintln!("unfunded deployment diagnostic: {last_status:?}");
                 saw_funding_failure = true;
                 break;
             }
             TransactionStatus::Committed { .. } => panic!("unfunded deploy unexpectedly committed"),
-            TransactionStatus::Dropped { error } => panic!("unexpected rejection: {error:?}"),
+            TransactionStatus::Dropped { error, .. } => panic!("unexpected rejection: {error:?}"),
             _ => tokio::time::sleep(Duration::from_millis(250)).await,
         }
     }

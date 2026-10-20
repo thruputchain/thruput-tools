@@ -399,14 +399,14 @@ impl Network {
                 PendingStatusClassification::Terminal => {
                     return Err(TestkitError::TransactionNotPending {
                         tx_hash: format!("{tx_hash:?}"),
-                        status,
+                        status: Box::new(status),
                     });
                 }
             }
         }
         Err(TestkitError::PendingTimeout {
             tx_hash: format!("{tx_hash:?}"),
-            last_status,
+            last_status: Box::new(last_status),
         })
     }
 
@@ -686,7 +686,7 @@ enum PendingStatusClassification {
 
 fn classify_pending_status(status: &TransactionStatus) -> PendingStatusClassification {
     match status {
-        TransactionStatus::Pending {} => PendingStatusClassification::Ready,
+        TransactionStatus::Pending { .. } => PendingStatusClassification::Ready,
         TransactionStatus::Unknown {} => PendingStatusClassification::Retry,
         _ => PendingStatusClassification::Terminal,
     }
@@ -714,7 +714,9 @@ mod tests {
     fn pending_status_classification_never_resubmits() {
         use thruput_json_rpc_types::responses::{SchedulerError, SchedulerErrorSource};
         assert_eq!(
-            classify_pending_status(&TransactionStatus::Pending {}),
+            classify_pending_status(&TransactionStatus::Pending {
+                recent_failure: None
+            }),
             PendingStatusClassification::Ready
         );
         assert_eq!(
@@ -726,12 +728,14 @@ mod tests {
                 block_height: 2.into(),
             },
             TransactionStatus::Retry {
+                recent_failure: None,
                 error: SchedulerError {
                     source: SchedulerErrorSource::Executor,
                     code: 7,
                 },
             },
             TransactionStatus::Dropped {
+                recent_failure: None,
                 error: SchedulerError {
                     source: SchedulerErrorSource::Executor,
                     code: 7,

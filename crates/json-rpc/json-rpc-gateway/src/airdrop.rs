@@ -637,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn registered_http_small_array_waits_without_raising_execution_limit() {
-        use thruput_json_rpc_server::batch::{ConcurrentBatchService, RpcBatchConcurrency};
+        use thruput_json_rpc_server::batch::RpcBatchConcurrency;
 
         for concurrency in [1, RpcBatchConcurrency::default().get()] {
             let gate = Arc::new(Semaphore::new(0));
@@ -673,27 +673,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            let middleware =
-                jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(move |inner| {
-                    ConcurrentBatchService::new(inner, 100_000, concurrency.try_into().unwrap())
-                });
-            let server = jsonrpsee::server::Server::builder()
-                .set_rpc_middleware(middleware)
-                .build("127.0.0.1:0")
-                .await
-                .unwrap();
-            let address = server.local_addr().unwrap();
-            let mut module = jsonrpsee::RpcModule::new(facade.clone());
-            module
-                .register_async_method("faucet_requestAirdrop", |params, funding, _| async move {
-                    let request = thruput_json_rpc_server::params::parse_named(&params)?;
-                    thruput_json_rpc_server::native::funding::NativeFundingPlane::request_airdrop(
-                        &*funding, request,
-                    )
-                    .await
-                })
-                .unwrap();
-            let handle = server.start(module);
+            let (address, handle) = spawn_funding_rpc(facade.clone(), concurrency).await;
             let body: Vec<_> = (1..=65).map(|id| json!({
                 "jsonrpc": "2.0", "id": id, "method": "faucet_requestAirdrop",
                 "params": {"recipient": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([u8::try_from(id).unwrap(); 32])), "clientNonce": "0x01"}
@@ -741,6 +721,36 @@ mod tests {
             handle.stopped().await;
             faucet.abort();
         }
+    }
+
+    async fn spawn_funding_rpc(
+        facade: HostedAirdrop,
+        concurrency: usize,
+    ) -> (std::net::SocketAddr, jsonrpsee::server::ServerHandle) {
+        use thruput_json_rpc_server::batch::ConcurrentBatchService;
+
+        let middleware =
+            jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(move |inner| {
+                ConcurrentBatchService::new(inner, 100_000, concurrency.try_into().unwrap())
+            });
+        let server = jsonrpsee::server::Server::builder()
+            .set_rpc_middleware(middleware)
+            .build("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = server.local_addr().unwrap();
+        let mut module = jsonrpsee::RpcModule::new(facade);
+        module
+            .register_async_method("faucet_requestAirdrop", |params, funding, _| async move {
+                let request = thruput_json_rpc_server::params::parse_named(&params)?;
+                thruput_json_rpc_server::native::funding::NativeFundingPlane::request_airdrop(
+                    &*funding, request,
+                )
+                .await
+            })
+            .unwrap();
+        let handle = server.start(module);
+        (address, handle)
     }
 
     #[tokio::test]

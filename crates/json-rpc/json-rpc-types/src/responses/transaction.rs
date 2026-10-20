@@ -1,7 +1,7 @@
 use super::{
     Deserialize, Deserializer, EmittedEvent, JsonSchema, ResponseData, Serialize, UnknownVariant,
     Value,
-    fields::{height_schema, hex_schema, i32_schema, read_height, read_hex, u32_schema},
+    fields::{height_schema, hex_schema, i32_schema, present, read_height, read_hex, u32_schema},
 };
 use crate::{BlockHeight, ContractAddress, hex::HexBytes, transaction::TxHash};
 
@@ -21,14 +21,28 @@ SendTransactionResult {
 response_enum! {
 /// Retained transaction observations. No negative status proves nonexecution.
 TransactionStatus, "status" {
-    Pending("pending", true) {},
+    Pending("pending", true) {
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+        #[schemars(with = "RecentAttemptFailure")]
+        recent_failure: Option<RecentAttemptFailure>,
+    },
     Committed("committed", true) {
         #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]
         #[schemars(schema_with = "height_schema")]
         block_height: BlockHeight,
     },
-    Retry("retry", true) { error: SchedulerError },
-    Dropped("dropped", true) { error: SchedulerError },
+    Retry("retry", true) {
+        error: SchedulerError,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+        #[schemars(with = "RecentAttemptFailure")]
+        recent_failure: Option<RecentAttemptFailure>,
+    },
+    Dropped("dropped", true) {
+        error: SchedulerError,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+        #[schemars(with = "RecentAttemptFailure")]
+        recent_failure: Option<RecentAttemptFailure>,
+    },
     RecentFailure("recentFailure", true) {
         #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]
         #[schemars(schema_with = "height_schema")]
@@ -37,6 +51,18 @@ TransactionStatus, "status" {
     },
     Unknown("unknown", true) {},
     Other("other", false) {},
+}
+}
+
+response_object! {
+/// A recently indexed attempt failure, independent of the scheduler observation.
+/// It need not describe the same or latest attempt. Absence does not prove success,
+/// and its presence does not authorize resubmission or replacement.
+RecentAttemptFailure {
+    #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]
+    #[schemars(schema_with = "height_schema")]
+    attempt_block_height: BlockHeight,
+    cause: FailureCause,
 }
 }
 

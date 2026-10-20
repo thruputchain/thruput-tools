@@ -16934,3 +16934,53 @@ fn tx_show_human_discloses_receipt_derived_status_after_lookup_failure() {
     assert!(text.contains("scheduler offline"), "{text}");
     assert!(text.contains("receipt block height: 42"), "{text}");
 }
+
+#[test]
+fn tx_show_preserves_recent_attempt_diagnostics_in_json_and_terminal_output() {
+    let hash = thruput_encoding::encode(&[0xab; 32]);
+    let address = thruput_encoding::encode(&[0xcd; 32]);
+    let status = serde_json::json!({
+        "status":"retry", "error":{"source":"executor", "code":3},
+        "recentFailure":{"attemptBlockHeight":"41", "cause":{
+            "kind":"dbConflict", "conflict":{"address":address,"key":"0x0102","code":"insufficientFunds"}
+        }}
+    });
+    for json_output in [true, false] {
+        let tmp = TempDir::new().unwrap();
+        let (url, server) = spawn_tx_show_rpc(
+            &hash,
+            TxShowRpcResponse::Result(status.clone()),
+            Some(TxShowRpcResponse::Result(serde_json::Value::Null)),
+        );
+        let mut command = thruput();
+        if json_output {
+            command.arg("--json");
+        }
+        let output = command
+            .args(["tx", "show", &hash, "--rpc-url", &url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if json_output {
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["data"]["status"], status);
+            assert!(report["data"]["receipt"].is_null());
+        } else {
+            let text = String::from_utf8(output.stderr).unwrap();
+            let observed = text
+                .lines()
+                .find_map(|line| line.split_once("status: ").map(|(_, value)| value))
+                .expect("human status line");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(observed).unwrap(),
+                status
+            );
+        }
+    }
+}

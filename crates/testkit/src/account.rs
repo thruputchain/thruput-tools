@@ -141,9 +141,11 @@ impl SubmittedDeploy {
         if let Some(receipt) = &self.cached_receipt {
             return Err(TestkitError::TransactionNotPending {
                 tx_hash: format!("{:?}", self.tx_hash),
-                status: thruput_json_rpc_types::responses::TransactionStatus::Committed {
-                    block_height: receipt.block_height.clone(),
-                },
+                status: Box::new(
+                    thruput_json_rpc_types::responses::TransactionStatus::Committed {
+                        block_height: receipt.block_height.clone(),
+                    },
+                ),
             });
         }
         self.network.await_pending(self.tx_hash).await
@@ -511,9 +513,9 @@ mod tests {
         assert!(matches!(
             error,
             TestkitError::TransactionNotPending {
-                status: TransactionStatus::Committed { block_height: height },
+                status,
                 ..
-            } if height == BlockHeight::from(7)
+            } if matches!(status.as_ref(), TransactionStatus::Committed { block_height: height } if height == &BlockHeight::from(7))
         ));
     }
 

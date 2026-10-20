@@ -341,7 +341,7 @@ pub enum TestkitError {
         /// Transaction hash that never appeared as pending.
         tx_hash: String,
         /// Last status observed before timeout.
-        last_status: TransactionStatus,
+        last_status: Box<TransactionStatus>,
     },
 
     /// A submitted transaction reached a terminal or unexpected state before becoming pending.
@@ -350,7 +350,7 @@ pub enum TestkitError {
         /// Transaction hash whose status was observed.
         tx_hash: String,
         /// Status observed instead of `Pending`.
-        status: TransactionStatus,
+        status: Box<TransactionStatus>,
     },
 
     /// Manual block production is unavailable for this target or driver mode.
