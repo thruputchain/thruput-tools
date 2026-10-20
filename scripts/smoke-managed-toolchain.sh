@@ -118,14 +118,14 @@ try:
                     raise RuntimeError(f'{phase} timed out: {errors.read_text()}')
                 assert startup['ok'], startup
                 data = startup['data']
-                request = urllib.request.Request(data['rpc_url'], data=json.dumps({
+                request = urllib.request.Request(data['rpcUrl'], data=json.dumps({
                     'jsonrpc': '2.0', 'id': 1, 'method': 'groundhog_chainTip', 'params': []
                 }).encode(), headers={'Content-Type': 'application/json'})
                 with urllib.request.urlopen(request, timeout=10) as response:
                     rpc = json.load(response)
                 assert 'result' in rpc and 'error' not in rpc, rpc
                 if offline:
-                    assert data['chain_state'] == 'recovered', data
+                    assert data['chainState'] == 'recovered', data
                 cleanup = command('--json', 'toolchain', 'clean')
                 assert cleanup.returncode != 0, 'cleanup removed a running node bundle'
                 assert 'busy' in cleanup.stderr.lower() or 'busy' in cleanup.stdout.lower(), cleanup

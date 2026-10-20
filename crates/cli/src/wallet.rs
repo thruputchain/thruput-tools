@@ -17,6 +17,9 @@ use thruput_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
 
 /// JSON contract for offline native account creation.
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 6;
+/// Version of the `wallet ls` result. Version 1 is the first versioned shape,
+/// with `camelCase` wallet fields.
+pub const WALLET_LIST_JSON_SCHEMA_VERSION: u32 = 1;
 
 /// Result of deriving and optionally saving a native account. No chain state is inferred.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -51,6 +54,7 @@ pub struct WalletCreateReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SavedWallet {
     name: String,
     address: String,
@@ -321,7 +325,10 @@ pub fn list(profile: Option<&str>, cmd: &'static str, print: &Print) -> Result<(
         .collect();
 
     if print.is_json() {
-        print.json(&CommandResult::new(cmd, json!({ "wallets": wallets })))?;
+        print.json(&CommandResult::new(
+            cmd,
+            json!({ "schemaVersion": WALLET_LIST_JSON_SCHEMA_VERSION, "wallets": wallets }),
+        ))?;
         return Ok(());
     }
 

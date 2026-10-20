@@ -105,6 +105,7 @@ pub struct KeyStatus {
 
 /// Project-level context for the current working directory.
 #[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_path: Option<PathBuf>,
@@ -141,6 +142,7 @@ pub struct ProjectContext {
 
 /// Aggregated diagnostic report from all checks.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StatusReport {
     pub environment: EnvironmentStatus,
     pub keys: KeyStatus,

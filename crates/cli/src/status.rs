@@ -14,7 +14,7 @@ use crate::checks;
 use crate::{CliError, Print};
 
 /// Schema version of the `status --json` data payload.
-pub const STATUS_JSON_SCHEMA_VERSION: u32 = 4;
+pub const STATUS_JSON_SCHEMA_VERSION: u32 = 5;
 
 /// Run the `status` diagnostic command.
 pub fn run(

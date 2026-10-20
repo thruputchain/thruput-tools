@@ -2,6 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
+/// Version of the `keys generate`, `keys ls`, `keys use` and `keys rm` results.
+/// Version 1 is the first versioned shape, with `camelCase` key fields.
+pub(crate) const KEYS_JSON_SCHEMA_VERSION: u32 = 1;
+
 pub(crate) const KEYS_EXPORT_JSON_SCHEMA_VERSION: u32 = 1;
 
 /// Stable machine-readable result for `thruput keys export`.

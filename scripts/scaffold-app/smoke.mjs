@@ -152,7 +152,7 @@ try {
   await waitFor(() => node.stdout.includes("\n"), node, "local node");
   const started = JSON.parse(node.stdout.trim().split("\n")[0]);
   assert.equal(started.ok, true, node.stderr);
-  const rpcUrl = started.data.rpc_url;
+  const rpcUrl = started.data.rpcUrl;
   assert.equal(typeof rpcUrl, "string");
   console.log(`Local node ready: ${rpcUrl}`);
 
