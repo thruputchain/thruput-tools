@@ -13,7 +13,7 @@ use thruput_node_supervisor::ConfigParamName;
 
 const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
-const NODE_STARTUP_SCHEMA_VERSION: u32 = 4;
+const NODE_STARTUP_SCHEMA_VERSION: u32 = 5;
 pub(crate) const GENESIS_ROOT_ARTIFACT_FILENAME: &str = "genesis_root.rv32a";
 
 #[cfg(test)]
@@ -59,8 +59,9 @@ pub fn run_with_options(
 }
 
 /// Select a stored key's public nonce-zero account for a fresh local chain.
-/// No key is generated. With no selected default, or a default key that is not
-/// Ed25519, the node starts with only its faucet.
+/// No key is generated. With no selected default the node starts with only its
+/// faucet. A default key that is not Ed25519 stays selected but gets no
+/// allocation, so startup reports its account and how to fund it.
 pub fn stored_key_allocation(
     key: Option<&str>,
     raw_amount: u64,
@@ -87,7 +88,7 @@ pub fn stored_key_allocation(
     // Genesis allocations name their recipient by Ed25519 key; other keys
     // start unfunded and are funded through the faucet.
     let Some(public_key) = crate::keys::ed25519_public_key_bytes(&public_key) else {
-        return Ok((None, Vec::new()));
+        return Ok((Some(key), Vec::new()));
     };
     Ok((
         Some(key),
@@ -593,26 +594,50 @@ struct StartupWallet {
     address: String,
     has_initial_allocation: bool,
     funding_hint: Option<String>,
+    /// Set when the profile still selects a saved wallet this key cannot sign
+    /// for; commands that use the default wallet keep resolving that wallet.
+    default_wallet_warning: Option<String>,
 }
 
 fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, CliError> {
     let Some(key) = started.selected_key.as_deref() else {
         return Ok(None);
     };
-    let (name, address) = match crate::config::resolve_profile(&std::env::current_dir()?, None) {
-        Ok(mut profile) => {
-            profile.default_key = Some(key.to_owned());
-            crate::account_resolution::resolve_address_target_or_default_wallet(&profile, None)?
+    let public_key = crate::keys::load_local_public_key(key)?
+        .ok_or_else(|| CliError::KeyNotFound(key.to_owned()))?;
+    let default_account = |public_key| {
+        (
+            key.to_owned(),
+            thruput_signing::PubkeyAccount::new(public_key, 0).address(),
+        )
+    };
+    // Saved wallets bind Ed25519 owners only, so a profile's default wallet
+    // never belongs to another scheme's key: report that key's own account,
+    // and warn that the profile's default wallet still governs other commands.
+    let mut default_wallet_warning = None;
+    let (name, address) = if crate::keys::ed25519_public_key_bytes(&public_key).is_none() {
+        match crate::config::resolve_profile(&std::env::current_dir()?, None) {
+            Ok(profile) => {
+                if let Some(wallet) = profile.default_wallet {
+                    default_wallet_warning = Some(format!(
+                        "Profile `{}` selects default wallet `{wallet}`, a saved Ed25519 wallet that key `{key}` cannot sign for, so commands that use the default wallet fail with saved_wallet_owner_mismatch. To use `{key}`'s own account, remove `default_wallet` from the profile or run `thruput wallet rm {wallet}`.",
+                        profile.name
+                    ));
+                }
+            }
+            Err(CliError::NoActiveProfile) => {}
+            Err(error) => return Err(error),
         }
-        Err(CliError::NoActiveProfile) => {
-            let public_key = crate::keys::load_local_public_key(key)?
-                .ok_or_else(|| CliError::KeyNotFound(key.to_owned()))?;
-            (
-                key.to_owned(),
-                thruput_signing::PubkeyAccount::new(public_key, 0).address(),
-            )
+        default_account(public_key)
+    } else {
+        match crate::config::resolve_profile(&std::env::current_dir()?, None) {
+            Ok(mut profile) => {
+                profile.default_key = Some(key.to_owned());
+                crate::account_resolution::resolve_address_target_or_default_wallet(&profile, None)?
+            }
+            Err(CliError::NoActiveProfile) => default_account(public_key),
+            Err(error) => return Err(error),
         }
-        Err(error) => return Err(error),
     };
     let has_initial_allocation = started
         .readiness()
@@ -639,6 +664,7 @@ fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, C
         address,
         has_initial_allocation,
         funding_hint,
+        default_wallet_warning,
     }))
 }
 
@@ -697,6 +723,9 @@ fn print_started_local_node(
                 );
                 if let Some(hint) = wallet.funding_hint {
                     print.note(hint);
+                }
+                if let Some(warning) = wallet.default_wallet_warning {
+                    print.warn(warning);
                 }
             }
             Ok(None) => {}
@@ -1325,7 +1354,7 @@ fn hogd_dev_startup_payload(
     json!({
         "schemaVersion": NODE_STARTUP_SCHEMA_VERSION,
         "chain": readiness.network_hash,
-        "chain_state": readiness.chain_state,
+        "chainState": readiness.chain_state,
         "mode": "dev",
         "experimental": false,
         "backend": {
@@ -1334,12 +1363,12 @@ fn hogd_dev_startup_payload(
             "planes": backend_planes,
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
-        "runtime_manifest": runtime_manifest_payload(readiness),
+        "runtimeManifest": runtime_manifest_payload(readiness),
         "bootstrapAccounts": readiness.runtime_manifest.as_ref().map(|manifest| &manifest.bootstrap_accounts),
-        "local_runtime_state": local_runtime_state_payload(local_runtime_state_result),
-        "data_dir": data_dir,
-        "rpc_listen_address": addr.to_string(),
-        "rpc_url": rpc_url_for_addr(addr),
+        "localRuntimeState": local_runtime_state_payload(local_runtime_state_result),
+        "dataDir": data_dir,
+        "rpcListenAddress": addr.to_string(),
+        "rpcUrl": rpc_url_for_addr(addr),
     })
 }
 
@@ -1376,30 +1405,30 @@ fn hogd_dev_endpoints_payload(
 ) -> serde_json::Value {
     let mut endpoints = serde_json::Map::new();
     endpoints.insert(
-        "scheduler_coord".into(),
+        "schedulerCoord".into(),
         serde_json::Value::String(readiness.endpoints.scheduler_coord.to_string()),
     );
     if let Some(indexer) = readiness.endpoints.indexer_block_explorer {
         endpoints.insert(
-            "indexer_block_explorer".into(),
+            "indexerBlockExplorer".into(),
             serde_json::Value::String(indexer.to_string()),
         );
     }
     if let Some(db_gateway) = readiness.endpoints.db_gateway {
         endpoints.insert(
-            "db_gateway".into(),
+            "dbGateway".into(),
             serde_json::Value::String(db_gateway.to_string()),
         );
     }
     if let Some(view_gateway) = readiness.endpoints.view_gateway {
         endpoints.insert(
-            "view_gateway".into(),
+            "viewGateway".into(),
             serde_json::Value::String(view_gateway.to_string()),
         );
     }
     if let Some(dev_control) = readiness.endpoints.dev_control {
         endpoints.insert(
-            "dev_control".into(),
+            "devControl".into(),
             serde_json::Value::String(dev_control.to_string()),
         );
     }
@@ -1964,40 +1993,40 @@ mod tests {
             &local_runtime_state,
             Some(std::path::Path::new("/tmp/hog-devnode-data")),
         );
-        assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
-        assert_eq!(payload["rpc_listen_address"], "127.0.0.1:9545");
+        assert_eq!(payload["rpcUrl"], "http://127.0.0.1:9545");
+        assert_eq!(payload["rpcListenAddress"], "127.0.0.1:9545");
         assert_eq!(payload["chain"], "1".repeat(32));
-        assert!(payload["chain_state"].is_null());
+        assert!(payload["chainState"].is_null());
         assert_eq!(payload["backend"]["kind"], "hogd_dev");
         let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_scheduler_only())
             .expect("bug: backend planes should serialize");
         assert_eq!(payload["backend"]["planes"], expected_planes);
         assert!(payload["backend"].get("limitations").is_none());
         assert_eq!(
-            payload["backend"]["endpoints"]["scheduler_coord"],
+            payload["backend"]["endpoints"]["schedulerCoord"],
             "127.0.0.1:12345"
         );
         assert_eq!(
-            payload["backend"]["endpoints"]["indexer_block_explorer"],
+            payload["backend"]["endpoints"]["indexerBlockExplorer"],
             "127.0.0.1:12346"
         );
         assert_eq!(
-            payload["backend"]["endpoints"]["db_gateway"],
+            payload["backend"]["endpoints"]["dbGateway"],
             "127.0.0.1:12347"
         );
         assert_eq!(
-            payload["backend"]["endpoints"]["view_gateway"],
+            payload["backend"]["endpoints"]["viewGateway"],
             "127.0.0.1:12348"
         );
         assert_eq!(
-            payload["backend"]["endpoints"]["dev_control"],
+            payload["backend"]["endpoints"]["devControl"],
             "127.0.0.1:12349"
         );
-        assert!(payload["runtime_manifest"].is_null());
-        assert_eq!(payload["local_runtime_state"]["ok"], true);
-        assert_eq!(payload["data_dir"], "/tmp/hog-devnode-data");
+        assert!(payload["runtimeManifest"].is_null());
+        assert_eq!(payload["localRuntimeState"]["ok"], true);
+        assert_eq!(payload["dataDir"], "/tmp/hog-devnode-data");
         assert_eq!(
-            payload["local_runtime_state"]["path"],
+            payload["localRuntimeState"]["path"],
             "/tmp/groundhog-config.toml"
         );
         assert!(payload.get("accounts").is_none());
@@ -2073,16 +2102,16 @@ mod tests {
         );
 
         assert_eq!(payload["schemaVersion"], NODE_STARTUP_SCHEMA_VERSION);
-        assert_eq!(payload["chain_state"], "fresh");
+        assert_eq!(payload["chainState"], "fresh");
         assert_eq!(
-            payload["runtime_manifest"]["schemaVersion"],
+            payload["runtimeManifest"]["schemaVersion"],
             thruput_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION
         );
         assert_eq!(
-            payload["runtime_manifest"]["path"],
+            payload["runtimeManifest"]["path"],
             manifest_path.display().to_string()
         );
-        assert_eq!(payload["runtime_manifest"]["hash"], hash);
+        assert_eq!(payload["runtimeManifest"]["hash"], hash);
     }
 
     #[test]
@@ -2103,7 +2132,7 @@ mod tests {
             None,
         );
         assert_eq!(
-            payload["backend"]["endpoints"]["scheduler_coord"],
+            payload["backend"]["endpoints"]["schedulerCoord"],
             "127.0.0.1:12345"
         );
         assert!(

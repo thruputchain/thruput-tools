@@ -10,13 +10,13 @@ use crate::config::ResolvedProfile;
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
-pub const TEST_JSON_SCHEMA_VERSION: u32 = 7;
+pub const TEST_JSON_SCHEMA_VERSION: u32 = 8;
 
 /// Schema version for the `thruput test --workspace --json` payload.
 ///
 /// Bump this when the shape or semantics of `WorkspaceTestReport` change
 /// in a way that could break existing machine consumers.
-pub const WORKSPACE_TEST_JSON_SCHEMA_VERSION: u32 = 2;
+pub const WORKSPACE_TEST_JSON_SCHEMA_VERSION: u32 = 3;
 
 /// Structured machine-readable report for `thruput test --json`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

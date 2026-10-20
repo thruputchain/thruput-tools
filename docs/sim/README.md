@@ -48,7 +48,7 @@ Start a node separately as described in the
 [runtime-manifest guide](../gateway/runtime-manifest.md), then run:
 
 ```sh
-RUNTIME_MANIFEST=$(jq -er '.data.runtime_manifest.path' /tmp/groundhog-node.json)
+RUNTIME_MANIFEST=$(jq -er '.data.runtimeManifest.path' /tmp/groundhog-node.json)
 cargo run -p thruput-sim --bin hogsim -- run examples/sim/local-wallet-soak.json \
   --rpc-url http://127.0.0.1:9545 --runtime-manifest "$RUNTIME_MANIFEST" --json
 ```

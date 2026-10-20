@@ -37,7 +37,7 @@ use crate::{CliError, Print};
 pub const DEFAULT_CALL_GAS_LIMIT: u64 = 25_000_000;
 
 /// Current schema version for `call --json` data payloads.
-pub const CALL_JSON_SCHEMA_VERSION: u32 = 2;
+pub const CALL_JSON_SCHEMA_VERSION: u32 = 3;
 
 /// Resolved contract entrypoint plus any metadata used for codec work.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -491,7 +491,7 @@ pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
                 "name": metadata.interface_name,
                 "version": metadata.version,
             },
-            "source_path": metadata.source.display().to_string(),
+            "sourcePath": metadata.source.display().to_string(),
         }),
         None => json!({
             "source": "explicit_entrypoint",
@@ -1359,7 +1359,7 @@ mod tests {
                     "name": "Counter",
                     "version": "0.1.0",
                 },
-                "source_path": "/tmp/local.rs",
+                "sourcePath": "/tmp/local.rs",
             })
         );
     }

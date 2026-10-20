@@ -348,7 +348,7 @@ if [[ "$NODE_OK" != "true" ]]; then
     die "local node startup command reported failure"
 fi
 NODE_DESCENDANTS="$(collect_descendants "$NODE_PID" || true)"
-RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
+RUNTIME_MANIFEST="$(json_field data.runtimeManifest.path "$NODE_JSON")"
 [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
     || die "thruput node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"

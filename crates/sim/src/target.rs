@@ -1194,18 +1194,22 @@ async fn read_local_startup(
 fn parse_local_startup_json(line: &str) -> Result<LocalNodeStartup, SimError> {
     let value: serde_json::Value =
         serde_json::from_str(line).map_err(|source| SimError::LocalNodeStartupJson { source })?;
-    let rpc_url = value
-        .pointer("/data/rpc_url")
-        .and_then(serde_json::Value::as_str)
+    // The launched CLI may predate startup schema 5, which renamed these
+    // fields to camelCase, so accept either spelling.
+    let field = |current: &str, legacy: &str| {
+        value
+            .pointer(current)
+            .or_else(|| value.pointer(legacy))
+            .and_then(serde_json::Value::as_str)
+    };
+    let rpc_url = field("/data/rpcUrl", "/data/rpc_url")
         .ok_or(SimError::LocalNodeStartupJsonMissing {
-            field: "data.rpc_url",
+            field: "data.rpcUrl",
         })?
         .to_string();
-    let runtime_manifest = value
-        .pointer("/data/runtime_manifest/path")
-        .and_then(serde_json::Value::as_str)
+    let runtime_manifest = field("/data/runtimeManifest/path", "/data/runtime_manifest/path")
         .ok_or(SimError::LocalNodeStartupJsonMissing {
-            field: "data.runtime_manifest.path",
+            field: "data.runtimeManifest.path",
         })?;
     Ok(LocalNodeStartup {
         rpc_url,
@@ -1703,7 +1707,7 @@ mod tests {
         let capture = start_stdout_capture(reader, log_path.clone())
             .await
             .expect("stdout capture should start");
-        let startup = r#"{"ok":true,"data":{"rpc_url":"http://127.0.0.1:9545","runtime_manifest":{"path":"/tmp/runtime-manifest.json"}}}"#;
+        let startup = r#"{"ok":true,"data":{"rpcUrl":"http://127.0.0.1:9545","runtimeManifest":{"path":"/tmp/runtime-manifest.json"}}}"#;
 
         writer
             .write_all(b"\n")
@@ -1790,16 +1794,19 @@ mod tests {
 
     #[test]
     fn parse_local_startup_json_extracts_rpc_and_runtime_manifest() {
-        let startup = parse_local_startup_json(
+        // Startup schema 5 is camelCase; earlier CLIs emitted snake_case.
+        for line in [
+            r#"{"ok":true,"command":"node","warnings":[],"data":{"rpcUrl":"http://127.0.0.1:9545","runtimeManifest":{"path":"/tmp/runtime-manifest.json"}}}"#,
             r#"{"ok":true,"command":"node","warnings":[],"data":{"rpc_url":"http://127.0.0.1:9545","runtime_manifest":{"path":"/tmp/runtime-manifest.json"}}}"#,
-        )
-        .expect("startup json should parse");
+        ] {
+            let startup = parse_local_startup_json(line).expect("startup json should parse");
 
-        assert_eq!(startup.rpc_url, "http://127.0.0.1:9545");
-        assert_eq!(
-            startup.runtime_manifest,
-            PathBuf::from("/tmp/runtime-manifest.json")
-        );
+            assert_eq!(startup.rpc_url, "http://127.0.0.1:9545");
+            assert_eq!(
+                startup.runtime_manifest,
+                PathBuf::from("/tmp/runtime-manifest.json")
+            );
+        }
     }
 
     #[test]
@@ -1810,7 +1817,7 @@ mod tests {
         assert!(matches!(
             error,
             SimError::LocalNodeStartupJsonMissing {
-                field: "data.rpc_url"
+                field: "data.rpcUrl"
             }
         ));
     }
@@ -1818,14 +1825,14 @@ mod tests {
     #[test]
     fn parse_local_startup_json_rejects_missing_runtime_manifest_path() {
         let error = parse_local_startup_json(
-            r#"{"ok":true,"data":{"rpc_url":"http://127.0.0.1:9545","runtime_manifest":{}}}"#,
+            r#"{"ok":true,"data":{"rpcUrl":"http://127.0.0.1:9545","runtimeManifest":{}}}"#,
         )
         .expect_err("missing runtime manifest path should fail");
 
         assert!(matches!(
             error,
             SimError::LocalNodeStartupJsonMissing {
-                field: "data.runtime_manifest.path"
+                field: "data.runtimeManifest.path"
             }
         ));
     }
@@ -1938,7 +1945,7 @@ done
 if [ -z "$port" ] || [ "$port" = "0" ]; then
   port="49152"
 fi
-printf '{{"ok":true,"data":{{"rpc_url":"http://127.0.0.1:%s","runtime_manifest":{{"path":"{}"}}}}}}\n' "$port"
+printf '{{"ok":true,"data":{{"rpcUrl":"http://127.0.0.1:%s","runtimeManifest":{{"path":"{}"}}}}}}\n' "$port"
 trap 'exit 0' TERM INT
 while :; do sleep 1; done
 "#,

@@ -1,6 +1,6 @@
 use crate::keys_json::{
     ExportedKey, ImportedKey, KEYS_EXPORT_JSON_SCHEMA_VERSION, KEYS_IMPORT_JSON_SCHEMA_VERSION,
-    KeysExportReport, KeysImportReport,
+    KEYS_JSON_SCHEMA_VERSION, KeysExportReport, KeysImportReport,
 };
 use crate::result::CommandResult;
 use crate::{CliError, Print};
@@ -59,6 +59,7 @@ impl Drop for KeyFile {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct KeyInfo {
     name: String,
     is_default: bool,
@@ -162,8 +163,9 @@ pub fn generate(
     print.json(&CommandResult::new(
         cmd,
         json!({
+            "schemaVersion": KEYS_JSON_SCHEMA_VERSION,
             "key": info,
-            "fund_requested": fund,
+            "fundRequested": fund,
             "funded": false,
         }),
     ))?;
@@ -283,7 +285,10 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
     let keys = load_all_keys()?;
 
     if print.is_json() {
-        print.json(&CommandResult::new(cmd, json!({ "keys": keys })))?;
+        print.json(&CommandResult::new(
+            cmd,
+            json!({ "schemaVersion": KEYS_JSON_SCHEMA_VERSION, "keys": keys }),
+        ))?;
         return Ok(());
     }
 
@@ -427,7 +432,10 @@ pub fn use_key(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliEr
             print.success(format_args!("Default key set to `{name}`"));
         },
     );
-    print.json(&CommandResult::new(cmd, json!({ "key": info })))?;
+    print.json(&CommandResult::new(
+        cmd,
+        json!({ "schemaVersion": KEYS_JSON_SCHEMA_VERSION, "key": info }),
+    ))?;
     Ok(())
 }
 
@@ -464,8 +472,9 @@ pub fn remove(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
     print.json(&CommandResult::new(
         cmd,
         json!({
+            "schemaVersion": KEYS_JSON_SCHEMA_VERSION,
             "name": name,
-            "cleared_default": cleared_default,
+            "clearedDefault": cleared_default,
         }),
     ))?;
     Ok(())

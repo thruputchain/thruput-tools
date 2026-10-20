@@ -14,6 +14,10 @@ pub struct Metrics {
     registry: Registry,
     /// Blocks durably added during this process lifetime.
     pub blocks: IntCounter,
+    /// Verified blocks skipped while fast-forwarding a fresh archive.
+    pub bootstrap_skipped_blocks: IntCounter,
+    /// Whether this connection has skipped blocks awaiting tip establishment.
+    pub bootstrapping: IntGauge,
     /// Full serialized block bytes added during this process lifetime.
     pub bytes: IntCounter,
     /// Events in each newly ingested block.
@@ -44,7 +48,15 @@ impl Metrics {
     pub fn new() -> Result<Self, prometheus::Error> {
         let registry = Registry::new();
         let blocks = IntCounter::new("firehose_blocks_ingested_total", "Durably ingested blocks")?;
+        let bootstrap_skipped_blocks = IntCounter::new(
+            "firehose_bootstrap_skipped_blocks_total",
+            "Verified blocks skipped during fresh archive bootstrap",
+        )?;
         let bytes = IntCounter::new("firehose_bytes_ingested_total", "XDR bytes ingested")?;
+        let bootstrapping = IntGauge::new(
+            "firehose_bootstrapping",
+            "Whether skipped blocks await tip establishment",
+        )?;
         let events = Histogram::with_opts(
             HistogramOpts::new("firehose_events_per_block", "Events per committed block")
                 .buckets(vec![0., 1., 10., 100., 1000., 10_000., 100_000.]),
@@ -83,6 +95,7 @@ impl Metrics {
         )?;
         for label in [
             "block",
+            "skipped",
             "replay",
             "caught_up",
             "not_ready",
@@ -96,6 +109,8 @@ impl Metrics {
         }
         for metric in [
             Box::new(blocks.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(bootstrap_skipped_blocks.clone()),
+            Box::new(bootstrapping.clone()),
             Box::new(bytes.clone()),
             Box::new(events.clone()),
             Box::new(height.clone()),
@@ -113,6 +128,8 @@ impl Metrics {
         Ok(Self {
             registry,
             blocks,
+            bootstrap_skipped_blocks,
+            bootstrapping,
             bytes,
             events,
             height,

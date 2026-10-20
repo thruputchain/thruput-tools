@@ -747,7 +747,7 @@ fn test_workspace_json_reports_every_member() {
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["command"], "test");
     let data = &payload["data"];
-    assert_eq!(data["schemaVersion"], 2);
+    assert_eq!(data["schemaVersion"], 3);
     assert_eq!(data["workspaceRoot"], tmp.path().display().to_string());
     assert_eq!(data["success"], false);
     assert_eq!(data["summary"]["passed"], "2");
@@ -756,7 +756,7 @@ fn test_workspace_json_reports_every_member() {
     let packages = data["packages"].as_array().unwrap();
     assert_eq!(packages.len(), 2);
     assert_eq!(packages[0]["package"], "alpha-contract");
-    assert_eq!(packages[0]["schemaVersion"], 7);
+    assert_eq!(packages[0]["schemaVersion"], 8);
     assert_eq!(packages[0]["success"], true);
     assert_eq!(packages[0]["artifact"]["kind"], "rv32");
     assert_eq!(packages[1]["package"], "beta-contract");
@@ -848,7 +848,7 @@ fn test_workspace_json_reports_a_member_that_fails_to_build() {
         payload["error"]
     );
     let data = &payload["data"];
-    assert_eq!(data["schemaVersion"], 2);
+    assert_eq!(data["schemaVersion"], 3);
     assert_eq!(data["success"], false);
     assert_eq!(data["errored"], "beta-contract");
     assert_eq!(data["skipped"], serde_json::json!(["gamma-contract"]));

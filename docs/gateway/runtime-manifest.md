@@ -41,14 +41,14 @@ through a separate gateway: instant mode is triggered by the local node's own
 RPC submit path. Wait for startup JSON before reading it in another terminal:
 
 ```sh
-RUNTIME_MANIFEST=$(jq -er '.data.runtime_manifest.path' /tmp/groundhog-node.json)
+RUNTIME_MANIFEST=$(jq -er '.data.runtimeManifest.path' /tmp/groundhog-node.json)
 hog-gateway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 ```
 
 Leave the gateway running too. In a third terminal:
 
 ```sh
-RUNTIME_MANIFEST=$(jq -er '.data.runtime_manifest.path' /tmp/groundhog-node.json)
+RUNTIME_MANIFEST=$(jq -er '.data.runtimeManifest.path' /tmp/groundhog-node.json)
 thruput-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" --account-seed benchmark-fixtures-v1 \
   --method sendRawTransaction --accounts 3 --rate 3 --duration 2 --force
