@@ -7,7 +7,7 @@ quotas, queueing, and deployment policy out of transaction-validity rules.
 
 ## Shared server, separate lifecycles
 
-[json-rpc-server](../../crates/json-rpc/json-rpc-server/src/server.rs) implements
+[json-rpc-server](../../crates/json-rpc/json-rpc-server/src/native/service.rs) implements
 the public methods against backend traits. The production gateway and local
 node supervisor supply adapters. This keeps validation and public errors
 consistent while allowing different connection, recovery, and process policies.
@@ -78,7 +78,7 @@ response-size budget includes events and measures XDR bytes; the public JSON
 response and transport message caps still apply. Timeout settings bound the
 public response wait, not cancellation of running VM work or database I/O.
 
-`serverLimits.viewBatch` advertises the endpoint policy. The embedded supervisor
+`getServerLimits({}).simulationBatch` advertises the endpoint policy. The embedded supervisor
 uses the same `ViewBatchConfig` and its existing `view_timeout` setting. Limits
 can change between requests; clients must handle rejections and must not split a
 group into separate snapshots automatically.
@@ -121,25 +121,24 @@ local waiting, and backend duration.
 
 ## Transaction Status Lookup Order
 
-Indexed commitment wins immediately. Otherwise the shared probe looks up pending
-and retained scheduler outcomes, returning an advisory indexer failure diagnostic
-only after a successful scheduler miss. Scheduler retry and dropped outcomes
-preserve their error source and protocol error code.
-Scheduler success reports `Committed` with its committed block height, even before
-the indexer has a record. Indexed records also supply the actual height, including
-block zero. Every committed status includes its height; receipts can lag behind.
-`Unknown` requires successful misses from both backends. Backend unavailability
-cannot establish absence. These rules prevent an unavailable scheduler from
-making a pending transaction appear to have disappeared.
+Indexed commitment wins immediately. Otherwise the shared probe preserves the
+scheduler's status and raw error source/code. Pending, retry and dropped results
+can include `recentFailure: { attemptBlockHeight, cause }` from the indexer. This
+best-effort diagnostic may describe a different attempt and can expire sooner
+than the scheduler outcome. Its presence never authorizes resubmission. A
+scheduler miss can still return the standalone `recentFailure` status.
+
+Scheduler commitment includes its block height, even before a receipt is indexed.
+If the indexer fails, scheduler pending or commitment can still answer. Retry,
+dropped and scheduler misses cannot hide that read failure. `unknown` requires
+successful misses from both backends; it does not prove historical nonexecution.
 
 Reads across services are not an atomic snapshot. A transaction can commit
-between reads, so a later poll may change an `Unknown` answer. A recent failure
-is advisory and does not prove a transaction can never commit; a receipt records
-a committed execution result.
+between reads. Clients retain known commitment; a later advisory status cannot
+downgrade it. Receipts describe committed execution, including failed execution.
 
-The exact sequencing and degraded-mode behavior live in
-[status.rs](../../crates/x23/hogd-backend/src/status.rs) and its tests. Gateway
-admission and timing remain in its adapter; both binaries share the sequencing.
+The shared [status sequencer](../../crates/x23/hogd-backend/src/native/transaction/status.rs)
+owns these rules. Gateway admission and timing remain in its adapter.
 
 ## Batching does not change transaction boundaries
 
@@ -162,12 +161,10 @@ simulated effects without committing them. That makes it useful for wallet
 previews as well as read-style contract calls. It is not a historical replay
 service or proof that a future submitted transaction will see the same state.
 
-Public declarations do not guarantee a backend exists in every deployment.
-For example, the standalone gateway's pending-count adapter
-currently returns `NotImplemented`; see
-[blocks.rs](../../crates/json-rpc/json-rpc-gateway/src/handlers/blocks.rs).
-Optional backend availability and registered extensions must be checked for the
-target being used.
+`getVersionInfo({}).supportedMethods` lists the methods registered on the endpoint.
+The standalone gateway omits `dev_getPendingTransactionCount`; a configured
+local node exposes it. Configured backend outages remain errors, not evidence
+that a method is unsupported.
 
 ### Committed block reads
 
@@ -176,33 +173,30 @@ references from `IndexerBlockExplorer`. The local chain adapter shares the read
 adapter's validated indexer pool. Neither path uses the scheduler coordinator to
 reconstruct history. Both retain the normal request deadlines and cancellation.
 
-`getBlockByNumber` accepts a nonnegative decimal-string height. It hashes the
-complete canonical consensus value and checks that its height matches the request.
-It returns `null` outside indexed coverage, including genesis. An unavailable or
-corrupt index is a backend error, not a missing block.
+`getBlockByHeight({ blockHeight })` accepts a nonnegative decimal-string height.
+It hashes the complete canonical consensus value and checks that its height
+matches the request. It returns `null` outside indexed coverage, including
+genesis. An unavailable or corrupt index is a backend error, not a missing block.
 
-`getTransactionsByBlock` takes `height`, `order`, `cursor`, and `limit`. References
-are ordered by unsigned transaction-hash bytes, not execution order. The limit
-must be positive and no greater than the endpoint cap or 200. Zero is rejected
-before backend dispatch; send 50 for a normal page. The
-shared server checks page size, height membership, coverage, and strict ordering.
-It rejects invalid backend pages rather than dropping their rows.
+Start a block walk with
+`getTransactionsByBlock({ blockHeight, start: { order }, limit? })`.
+Continue with the same `blockHeight`, the returned `cursor`, and optional `limit`;
+omit `start`. References are ordered by unsigned transaction-hash bytes, not
+execution order. The default limit is the smaller of 50 and the advertised cap;
+positive limits cannot exceed that cap or 200. The shared server validates page size, height membership,
+coverage and strict ordering, and fails invalid pages without dropping rows.
 
-Start with cursor `0x`. Preserve returned cursors and the same height. A cursor
-supplies its original order, even if the next request changes `order`. Malformed,
-stale, or wrong-height cursors produce an empty terminal page under the internal
-protocol. Requests exceeding the advertised cursor byte limit are invalid params.
-An empty page does not prove a block exists: query its metadata too. Returned
-bounds describe indexed history and can lag behind `chainTip`.
+Preserve cursors verbatim. A cursor owns direction and its snapshot bound.
+Invalid cursor encoding, empty cursors and oversized cursors are invalid params.
+Rejected opaque tokens, including query mismatches, return `invalidCursor`;
+unavailable continuation coverage returns `historyUnavailable`. Completion is
+`nextCursor: null`. An empty page does not prove that a block exists: query its
+metadata too. Serving bounds can lag behind `getChainTip`.
 
-These reads require the node's block-query projection (hogd PR #4475). An old
-index must be rebuilt into a separate directory from compatible retained history
-before serving them. Deploying only the gateway cannot add that history.
-
-This additive contract uses wire format 12.1 with the current identifier encoding.
-The native API proposal (#555) remains a separate, unmerged contract; these methods
-must be mapped explicitly if that proposal is selected for the coordinated release.
-Do not publish a native method name or change encoding based on this addition alone.
+These reads require the runtime's block-query projection. An old index must be
+rebuilt into a separate directory from compatible retained history before serving
+them. Deploying only the gateway cannot add that history. The native methods,
+strict named parameters and canonical OpenRPC schema ship together as wire 14.
 
 To qualify both adapters against a compatible runtime with the block-query index,
 build the gateway and run the persistent-node integration test:
