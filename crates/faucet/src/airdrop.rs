@@ -938,7 +938,7 @@ pub enum AirdropSubmitError {
     RpcConnect(String),
     /// Endpoint or signing-network preflight failed before transaction dispatch.
     #[error("RPC preflight failed: {0}")]
-    Preflight(Box<thruput_client::native::NativeRpcError>),
+    Preflight(Box<thruput_client::NativeRpcError>),
     /// A native call failed, retaining its original application or transport error.
     #[error("{method} failed: {source}")]
     Rpc {
@@ -1147,7 +1147,7 @@ impl RpcAirdropSubmitter {
             crate::telemetry::rpc_client(&self.rpc_url)
                 .map_err(|error| AirdropSubmitError::RpcConnect(error.to_string()))?,
         );
-        thruput_client::native::check_endpoint(
+        thruput_client::check_endpoint(
             &client,
             &[
                 "getNetworkInfo",
@@ -1159,7 +1159,7 @@ impl RpcAirdropSubmitter {
         )
         .await
         .map_err(|error| AirdropSubmitError::Preflight(Box::new(error)))?;
-        thruput_client::native::validate_network(&client, &self.network_hash)
+        thruput_client::validate_network(&client, &self.network_hash)
             .await
             .map_err(|error| AirdropSubmitError::Preflight(Box::new(error)))?;
         Ok(client)
@@ -1177,7 +1177,7 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
         recipient: ContractAddress,
     ) -> Result<PreparedAirdrop, AirdropSubmitError> {
         let client = self.client().await?;
-        let block_expiry_height = thruput_client::native::resolve_block_expiry_height(
+        let block_expiry_height = thruput_client::resolve_block_expiry_height(
             &client,
             DEFAULT_BLOCK_EXPIRY_OFFSET,
         )
