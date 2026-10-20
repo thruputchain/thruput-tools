@@ -30,6 +30,19 @@ not contact the network. Submission is not retried by this library. After an
 ambiguous submission error or receipt timeout, reconcile by the retained hash
 before deciding what to do next.
 
+## Native JSON-RPC candidate
+
+For a native wire-14 endpoint, use `native::check_endpoint` with the methods your
+flow needs, then `native::validate_network` with an independently trusted hash.
+`native::resolve_block_expiry_height` reads the native tip. Prepare and sign the
+call as above, then use `SignedCall::submit_native` and `NativeSubmittedCall::wait`.
+These helpers send once and wait read-only. They retain the canonical hash,
+original RPC errors, unfamiliar responses and receipt-wait evidence.
+
+This choice concerns the RPC contract. `Wallet::Native` identifies a wallet
+account and can also be used with the existing wire-13 helpers. No helper chooses
+or falls back between RPC versions automatically.
+
 ## Native deployment
 
 `prepare_deploy(DeployRequest, NetworkHash)` builds a `DefaultWallet` deployment

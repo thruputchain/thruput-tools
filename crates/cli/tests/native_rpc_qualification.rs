@@ -1,0 +1,266 @@
+//! Opt-in CLI call/view qualification against an isolated real local runtime.
+#![cfg(all(feature = "native-rpc-qualification", unix))]
+
+use std::{error::Error, os::unix::fs::PermissionsExt, path::PathBuf, time::Duration};
+
+use jsonrpsee::http_client::HttpClientBuilder;
+use serde_json::Value;
+use tempfile::TempDir;
+use thruput_json_rpc_client::{GroundhogApiClient, native::NativeClient};
+use thruput_json_rpc_server::RpcServerConfig;
+use thruput_json_rpc_types::{
+    ContractAddress,
+    base58::Base58,
+    bootstrap_manifest::BootstrapManifestAllocation,
+    requests::{AddressQuery, EmptyRequest},
+    responses as output,
+};
+use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
+use thruput_signing::{
+    NATIVE_HOG_ADDRESS, NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, native_hog_transfer_calldata,
+};
+
+const AMOUNT: u128 = 50_000_000;
+type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+
+fn require(condition: bool, message: &str) -> TestResult {
+    if condition {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(message).into())
+    }
+}
+
+fn text<'a>(value: &'a Value, name: &str) -> TestResult<&'a str> {
+    value[name]
+        .as_str()
+        .ok_or_else(|| std::io::Error::other(format!("missing string {name}")).into())
+}
+
+struct Fixture {
+    dir: TempDir,
+    owner: [u8; 32],
+}
+
+impl Fixture {
+    async fn new() -> TestResult<Self> {
+        let mut fixture = Self {
+            dir: TempDir::new()?,
+            owner: [0; 32],
+        };
+        let key = fixture.command(&["keys", "generate", "owner"]).await?;
+        fixture.owner =
+            thruput_encoding::decode_fixed::<32>(text(&key["data"]["key"], "public_key")?)?;
+        let key_path = fixture.dir.path().join("config/thruput/keys/owner.json");
+        require(
+            std::fs::metadata(key_path)?.permissions().mode() & 0o777 == 0o600,
+            "CLI key file permissions are not 0600",
+        )?;
+        Ok(fixture)
+    }
+
+    async fn command(&self, args: &[&str]) -> TestResult<Value> {
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_thruput"));
+        command
+            .args(["--json", "--non-interactive"])
+            .args(args)
+            .current_dir(self.dir.path())
+            .env("XDG_CONFIG_HOME", self.dir.path().join("config"))
+            .env("XDG_CACHE_HOME", self.dir.path().join("cache"))
+            .env_remove("THRUPUT_PROFILE")
+            .env_remove("THRUPUT_RUNTIME_MANIFEST")
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_mins(1), command.output()).await??;
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "CLI failed: {}\n{}",
+                String::from_utf8_lossy(&output.stderr),
+                String::from_utf8_lossy(&output.stdout)
+            ))
+            .into());
+        }
+        // One complete JSON envelope also rejects progress or text mixed into stdout.
+        let report: Value = serde_json::from_slice(&output.stdout)?;
+        require(report["ok"] == true, "CLI reported a failed command")?;
+        Ok(report)
+    }
+
+    fn configure(&self, node: &NodeSupervisorHandle, rpc: std::net::SocketAddr) -> TestResult {
+        std::fs::write(
+            self.dir.path().join("thruput.toml"),
+            format!(
+                "default_profile = 'default'\n[profile.default]\ndefault_key = 'owner'\nrpc_url = 'http://{rpc}'\nnetwork_hash = '{}'\n",
+                node.hogd_readiness().network_hash.as_str()
+            ),
+        )?;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires absolute THRUPUT_DEVNODE_BINARY; runs a fresh real local runtime"]
+async fn native_cli_call_receipt_and_view_keep_wire13_serving() {
+    let binary = PathBuf::from(
+        std::env::var_os("THRUPUT_DEVNODE_BINARY")
+            .expect("THRUPUT_DEVNODE_BINARY must select a compatible runtime"),
+    );
+    assert!(binary.is_absolute() && binary.is_file());
+    let artifacts = binary.parent().unwrap().join("contracts");
+    let fixture = Fixture::new().await.unwrap();
+    let node = NodeSupervisorHandle::start(
+        NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(
+                HogdDevConfig::default()
+                    .with_binary_path(binary)
+                    .with_contract_artifact_directories([artifacts])
+                    .with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(
+                        Base58(fixture.owner.into()),
+                        "1000000000000",
+                    )]),
+            ),
+    )
+    .await
+    .unwrap();
+    let result = qualify(&fixture, &node).await;
+    node.stop().await.unwrap();
+    result.unwrap();
+}
+
+async fn qualify(fixture: &Fixture, node: &NodeSupervisorHandle) -> TestResult {
+    let candidate = node
+        .start_native_qualification(RpcServerConfig::default().with_view_gas_limit(25_000_000))
+        .await?;
+    let result = exercise(fixture, node, candidate.rpc_addr()).await;
+    candidate.stop().await;
+    result
+}
+
+async fn exercise(
+    fixture: &Fixture,
+    node: &NodeSupervisorHandle,
+    candidate: std::net::SocketAddr,
+) -> TestResult {
+    fixture.configure(node, candidate)?;
+    let legacy = HttpClientBuilder::default().build(format!("http://{}", node.rpc_addr()))?;
+    require(
+        legacy.version().await?.wire_format == "13.0.0",
+        "wire 13 was replaced",
+    )?;
+    let native =
+        NativeClient::new(HttpClientBuilder::default().build(format!("http://{candidate}"))?);
+    let expected_balance = expected_free_balance(&native).await?;
+    let recipient = Base58(PubkeyAccount::from_public_key_bytes([0x63; 32], 0).address());
+    let token = thruput_encoding::encode(NATIVE_HOG_ADDRESS.as_ref());
+    let selector = format!("0x{}", hex::encode(NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref()));
+    let calldata = format!(
+        "0x{}",
+        hex::encode(native_hog_transfer_calldata(&recipient.0, AMOUNT)?)
+    );
+    // The candidate listener has no groundhog_* registrations. Successful CLI
+    // call and view therefore cannot depend on a legacy-method fallback.
+    let call = fixture
+        .command(&[
+            "call",
+            &token,
+            &selector,
+            &calldata,
+            "--native-rpc-qualification",
+            "--force",
+        ])
+        .await?;
+    require(
+        call["command"] == "call" && call["data"]["schemaVersion"] == 3,
+        "native call JSON envelope/schema mismatch",
+    )?;
+    let receipt: output::TransactionReceipt = serde_json::from_value(call["data"].clone())?;
+    require(
+        matches!(receipt.execution, output::ReceiptExecution::Return { .. }),
+        "CLI transfer did not execute successfully",
+    )?;
+    require(
+        receipt.gas_used > 0 && !receipt.events.is_empty(),
+        "CLI receipt omitted metering or events",
+    )?;
+    require(
+        call["data"]["blockHeight"].is_string() && call["data"]["gasUsed"].is_string(),
+        "CLI receipt wide integers must be decimal strings",
+    )?;
+    let before = balance(&native, recipient).await?;
+    require(
+        before.raw_balance == expected_balance && before.state_block_height >= receipt.block_height,
+        "CLI transfer balance does not match amount less balance storage collateral",
+    )?;
+    let sender = thruput_encoding::encode(
+        PubkeyAccount::from_public_key_bytes(fixture.owner, 0)
+            .address()
+            .as_ref(),
+    );
+    let view = fixture
+        .command(&[
+            "view",
+            &token,
+            &selector,
+            &calldata,
+            "--from",
+            &sender,
+            "--native-rpc-qualification",
+        ])
+        .await?;
+    check_view(&view, &before)?;
+    let after = balance(&native, recipient).await?;
+    require(
+        after.raw_balance == before.raw_balance
+            && after.state_block_height == before.state_block_height,
+        "CLI view changed committed state",
+    )?;
+    require(
+        legacy.version().await?.wire_format == "13.0.0",
+        "wire 13 stopped serving",
+    )
+}
+
+fn check_view(report: &Value, before: &output::BalanceResult) -> TestResult {
+    require(
+        report["command"] == "view" && report["data"]["schemaVersion"] == 3,
+        "native view JSON envelope/schema mismatch",
+    )?;
+    let simulation: output::SimulationResult = serde_json::from_value(report["data"].clone())?;
+    require(
+        matches!(simulation.output, output::InvocationOutput::Return { .. }),
+        "CLI token simulation did not execute successfully",
+    )?;
+    require(
+        simulation.state_block_height == before.state_block_height
+            && simulation.gas_used > 0
+            && !simulation.events.is_empty(),
+        "CLI simulation lost its snapshot/events/gas",
+    )?;
+    require(
+        report["data"]["stateBlockHeight"].is_string() && report["data"]["gasUsed"].is_string(),
+        "CLI simulation wide integers must be decimal strings",
+    )
+}
+
+async fn balance(
+    client: &NativeClient<jsonrpsee::http_client::HttpClient>,
+    address: ContractAddress,
+) -> TestResult<output::BalanceResult> {
+    match client.get_balance(AddressQuery { address }).await? {
+        output::DecodedResponse::Known(balance) => Ok(balance),
+        _ => Err(std::io::Error::other("unsupported balance response").into()),
+    }
+}
+
+async fn expected_free_balance(
+    client: &NativeClient<jsonrpsee::http_client::HttpClient>,
+) -> TestResult<i128> {
+    let output::DecodedResponse::Known(config) = client.get_chain_config(EmptyRequest {}).await?
+    else {
+        return Err(std::io::Error::other("unsupported chain configuration").into());
+    };
+    let execution = config
+        .execution
+        .ok_or_else(|| std::io::Error::other("missing authoritative storage costs"))?;
+    Ok(i128::try_from(AMOUNT)? - i128::from(execution.storage_costs.balance_cost))
+}

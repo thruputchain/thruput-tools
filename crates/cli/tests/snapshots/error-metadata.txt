@@ -412,6 +412,11 @@ RpcMethodFailed
   code: rpc_method_failed
   hint text: check the RPC endpoint and node logs for details
 
+NativeRpcFailure
+  code: native_rpc_failure
+  hint text: check the candidate endpoint and retained evidence before choosing a recovery action
+  details: computed
+
 RpcCapabilityUnsupported
   code: rpc_capability_unsupported
   hint text: use a full local devnode or a compatible remote RPC that supports the required RPC method

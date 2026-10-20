@@ -832,6 +832,10 @@ impl DeployArgs {
 
 #[derive(Args)]
 struct CallArgs {
+    /// Select the native candidate endpoint for local qualification
+    #[cfg(feature = "native-rpc-qualification")]
+    #[arg(long, hide = true)]
+    native_rpc_qualification: bool,
     /// Contract alias, C StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     contract: String,
@@ -866,7 +870,14 @@ struct CallArgs {
 impl CallArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let cwd = invocation_cwd()?;
-        thruput_cli::call::run(
+        let run = thruput_cli::call::run;
+        #[cfg(feature = "native-rpc-qualification")]
+        let run = if self.native_rpc_qualification {
+            thruput_cli::call::run_native
+        } else {
+            run
+        };
+        run(
             &self.contract,
             &self.method,
             &self.args,
@@ -981,6 +992,10 @@ impl BalanceArgs {
 
 #[derive(Args)]
 struct ViewArgs {
+    /// Select the native candidate endpoint for local qualification
+    #[cfg(feature = "native-rpc-qualification")]
+    #[arg(long, hide = true)]
+    native_rpc_qualification: bool,
     /// Contract alias, C StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     contract: String,
@@ -1009,7 +1024,14 @@ struct ViewArgs {
 impl ViewArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let cwd = invocation_cwd()?;
-        thruput_cli::view::run(
+        let run = thruput_cli::view::run;
+        #[cfg(feature = "native-rpc-qualification")]
+        let run = if self.native_rpc_qualification {
+            thruput_cli::view::run_native
+        } else {
+            run
+        };
+        run(
             &self.contract,
             &self.method,
             &self.args,

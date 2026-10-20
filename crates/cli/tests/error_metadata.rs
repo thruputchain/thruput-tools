@@ -118,6 +118,14 @@ fn details_keys_follow_the_camel_case_wire_convention() {
 // its keys depend on the error's field values. These are those payloads.
 #[test]
 fn computed_details_payloads_carry_their_keys() {
+    let evidence = json!({"transactionHash": "retained", "rpcError": {"code": -32603, "data": {"future": true}}});
+    assert_eq!(
+        details_of(&CliError::NativeRpcFailure {
+            message: "failed".into(),
+            evidence: evidence.clone()
+        }),
+        evidence,
+    );
     assert_eq!(
         details_of(&CliError::Rv32LowerFailed(
             thruput_rv32_lower::LowerError::Invalid("bad .text".to_owned())

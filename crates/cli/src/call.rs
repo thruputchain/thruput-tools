@@ -59,6 +59,8 @@ pub(crate) struct PreparedCall {
     pub(crate) calldata: Vec<u8>,
     pub(crate) tx_hex: String,
     signed: SignedCall,
+    #[cfg(feature = "native-rpc-qualification")]
+    network_hash: thruput_xdr::types::NetworkHash,
 }
 
 #[derive(Debug)]
@@ -74,6 +76,8 @@ struct CallPlan {
     calldata: Vec<u8>,
     transaction: UnsignedCall,
     signer: SchemeSigner,
+    #[cfg(feature = "native-rpc-qualification")]
+    network_hash: thruput_xdr::types::NetworkHash,
 }
 
 /// Call a method on a deployed contract.
@@ -94,12 +98,91 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    run_with_rpc(
+        InvocationRpc::Legacy,
+        contract,
+        method,
+        args,
+        package,
+        dry_run,
+        gas_limit,
+        force,
+        wallet,
+        artifacts,
+        profile,
+        overrides,
+        cmd,
+        print,
+    )
+}
+
+/// Call through the explicitly selected native candidate RPC.
+#[cfg(feature = "native-rpc-qualification")]
+#[allow(clippy::too_many_arguments)]
+pub fn run_native(
+    contract: &str,
+    method: &str,
+    args: &[String],
+    package: Option<&str>,
+    dry_run: bool,
+    gas_limit: u64,
+    force: bool,
+    wallet: Option<&str>,
+    artifacts: &ArtifactOptions,
+    profile: Option<&str>,
+    overrides: &ProfileOverrides,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    run_with_rpc(
+        InvocationRpc::Native,
+        contract,
+        method,
+        args,
+        package,
+        dry_run,
+        gas_limit,
+        force,
+        wallet,
+        artifacts,
+        profile,
+        overrides,
+        cmd,
+        print,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum InvocationRpc {
+    Legacy,
+    #[cfg(feature = "native-rpc-qualification")]
+    Native,
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn run_with_rpc(
+    rpc: InvocationRpc,
+    contract: &str,
+    method: &str,
+    args: &[String],
+    package: Option<&str>,
+    dry_run: bool,
+    gas_limit: u64,
+    force: bool,
+    wallet: Option<&str>,
+    artifacts: &ArtifactOptions,
+    profile: Option<&str>,
+    overrides: &ProfileOverrides,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
     let resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     if !dry_run {
         print.require_confirmation_available(force, "call a contract")?;
     }
     let plan = prepare_call_plan(
+        rpc,
         &cwd,
         resolved_profile,
         contract,
@@ -128,11 +211,27 @@ pub fn run(
         }
         // An underfunded call can be dropped without a receipt; give funding
         // guidance here instead of waiting for a timeout.
-        check_call_gas_balance(&plan.rpc_url, &plan.wallet_address_hex, gas_limit)?;
+        match rpc {
+            InvocationRpc::Legacy => {
+                check_call_gas_balance(&plan.rpc_url, &plan.wallet_address_hex, gas_limit)?;
+            }
+            #[cfg(feature = "native-rpc-qualification")]
+            InvocationRpc::Native => {
+                native::check_balance(&plan.rpc_url, &plan.wallet_address_hex, gas_limit)?;
+            }
+        }
     }
     let prepared = sign_call_plan(plan)?;
     if dry_run {
+        #[cfg(feature = "native-rpc-qualification")]
+        if matches!(rpc, InvocationRpc::Native) {
+            return native::print_dry_run(&prepared, cmd, print);
+        }
         return print_dry_run(&prepared, cmd, print);
+    }
+    #[cfg(feature = "native-rpc-qualification")]
+    if matches!(rpc, InvocationRpc::Native) {
+        return native::execute(&prepared, cmd, print);
     }
 
     print.detail(
@@ -403,6 +502,7 @@ pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
 
 #[allow(clippy::too_many_arguments)]
 fn prepare_call_plan(
+    rpc: InvocationRpc,
     cwd: &Path,
     resolved_profile: ResolvedProfile,
     contract: &str,
@@ -415,6 +515,7 @@ fn prepare_call_plan(
 ) -> Result<CallPlan, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     prepare_call_plan_with_runtime(
+        rpc,
         cwd,
         resolved_profile,
         contract,
@@ -430,6 +531,7 @@ fn prepare_call_plan(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn prepare_call_plan_with_runtime(
+    rpc: InvocationRpc,
     cwd: &Path,
     resolved_profile: ResolvedProfile,
     contract: &str,
@@ -454,9 +556,17 @@ fn prepare_call_plan_with_runtime(
     let wallet_address = sender.wallet_address;
     let wallet_address_hex = format_contract_address(&wallet_address);
 
-    let wallet_context = sender.signing_context(&resolved_profile, rt)?;
+    let (wallet_context, block_expiry_height) = match rpc {
+        InvocationRpc::Legacy => (
+            sender.signing_context(&resolved_profile, rt)?,
+            rt.block_on(resolve_block_expiry_height(rpc_url))?,
+        ),
+        #[cfg(feature = "native-rpc-qualification")]
+        InvocationRpc::Native => native::prepare_context(&sender, rpc_url, rt)?,
+    };
     let wallet_entrypoint_id = format_entrypoint_id(wallet_context.entrypoints.do_action);
-    let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
+    #[cfg(feature = "native-rpc-qualification")]
+    let network_hash = wallet_context.network_hash.clone();
 
     let tx = thruput_client::prepare_call(
         CallRequest {
@@ -485,6 +595,8 @@ fn prepare_call_plan_with_runtime(
         calldata,
         transaction: tx,
         signer: sender.signer,
+        #[cfg(feature = "native-rpc-qualification")]
+        network_hash,
     })
 }
 
@@ -527,6 +639,8 @@ fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {
         calldata: plan.calldata,
         tx_hex,
         signed,
+        #[cfg(feature = "native-rpc-qualification")]
+        network_hash: plan.network_hash,
     })
 }
 
@@ -2498,3 +2612,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(feature = "native-rpc-qualification")]
+mod native;
