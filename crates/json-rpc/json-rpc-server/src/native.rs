@@ -124,3 +124,6 @@ pub mod read;
 
 /// Native transaction producers and evidence, not registered by production binaries.
 pub mod transaction;
+
+/// Composition of implemented native handlers without production activation.
+pub mod service;

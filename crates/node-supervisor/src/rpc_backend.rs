@@ -158,6 +158,32 @@ impl HogdDevSchedulerBackend {
         Ok(())
     }
 
+    /// Recheck identities without requiring two moving tips to match.
+    #[cfg(feature = "native-rpc-qualification")]
+    pub(crate) async fn validate_running_network(
+        &self,
+        expected_network: &NetworkHashText,
+    ) -> Result<(), NodeSupervisorError> {
+        let coordinator_tip = require_dev_genesis(&self.coordinator).await?;
+        let gateway_tip = self
+            .gateway
+            .schedgateway_get_tip()
+            .await
+            .map_err(|source| NodeSupervisorError::SchedulerGatewayRpc {
+                op: "schedgateway_get_tip",
+                source,
+            })?;
+        match gateway_tip {
+            ExpectedDBTip::kRPCNone { db_tip } => {
+                validate_running_tips(expected_network, &coordinator_tip, &db_tip)
+            }
+            other => Err(NodeSupervisorError::SchedulerRejected {
+                op: "schedgateway_get_tip",
+                result: format!("{other:?}"),
+            }),
+        }
+    }
+
     /// Borrow the internal coordinator client for genesis and block driving.
     pub(crate) fn scheduler_client(&self) -> &SchedulerCoord_SchedulerCoord1_Client {
         &self.coordinator
@@ -185,6 +211,16 @@ impl HogdDevSchedulerBackend {
         self.submitter.set_block_driver(block_driver);
         self
     }
+}
+
+#[cfg(feature = "native-rpc-qualification")]
+fn validate_running_tips(
+    expected: &NetworkHashText,
+    coordinator: &DbTip,
+    gateway: &DbTip,
+) -> Result<(), NodeSupervisorError> {
+    validate_scheduler_network_hash(expected, coordinator)?;
+    validate_scheduler_network_hash(expected, gateway)
 }
 
 fn validate_scheduler_network_hash(
@@ -294,5 +330,77 @@ impl thruput_json_rpc_server::native::transaction::NativeSubmitPlane for HogdDev
         self.submitter
             .submit_native(context, tx.bytes, attempt)
             .await
+    }
+}
+
+#[cfg(all(test, feature = "native-rpc-qualification"))]
+mod qualification_tests {
+    use super::*;
+    use thruput_xdr::{
+        contract::{ContractType, DeployedContractHash},
+        header::ProposalHeader,
+        network_config::{NetworkConfig, NetworkConfigV0},
+        types::{
+            BlockHeight, ConfigHash, ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash,
+            Protocol, SHA256Hash, StorageShortHash, TimePoint, TxsHash,
+        },
+        validator::ValidatorID,
+    };
+
+    use thruput_scheduler::{ConsensusValue, ProposalTxsHash};
+
+    fn tip(height: i64, network: [u8; 32]) -> DbTip {
+        DbTip {
+            id: height.try_into().unwrap(),
+            storage_long_hash: [0; 2048].into(),
+            default_wallet: DeployedContractHash {
+                hash: SHA256Hash::from([0; 32]),
+                contract_size: 0,
+                contract_type: ContractType::kNative,
+            },
+            network_config: NetworkConfig::_0 {
+                v0: NetworkConfigV0 {
+                    params: xdr_common::VecM::default(),
+                },
+            },
+            value: ConsensusValue {
+                protocol: Protocol::new(0),
+                ext: ExtensionPoint::_0,
+                prev_hash: ConsensusValueHash::new(SHA256Hash::from([0; 32])),
+                proposal_header: ProposalHeader {
+                    ext: ExtensionPoint::_0,
+                    network_hash: NetworkHash::new(SHA256Hash::from(network)),
+                    config_hash: ConfigHash::new(SHA256Hash::from([0; 32])),
+                    proposer: ValidatorID::default(),
+                    block_timepoint: TimePoint::new(0),
+                    block_height: BlockHeight::from(height),
+                    txs_hash: TxsHash::new(SHA256Hash::from([0; 32])),
+                    storage_hash: StorageShortHash::new(SHA256Hash::from([0; 32])),
+                    events_hash: EventsHash::new(SHA256Hash::from([0; 32])),
+                },
+                proposal_txs_hash: ProposalTxsHash::new(SHA256Hash::from([0; 32])),
+                upgrades: xdr_common::VecM::default(),
+            },
+        }
+    }
+
+    #[test]
+    fn running_tips_can_advance_between_identity_probes() {
+        let expected = NetworkHashText::from([1; 32]);
+        assert!(validate_running_tips(&expected, &tip(10, [1; 32]), &tip(11, [1; 32])).is_ok());
+    }
+
+    #[test]
+    fn either_scheduler_network_mismatch_rejects_qualification() {
+        let expected = NetworkHashText::from([1; 32]);
+        for (coordinator, gateway) in [
+            (tip(10, [2; 32]), tip(11, [1; 32])),
+            (tip(10, [1; 32]), tip(11, [2; 32])),
+        ] {
+            assert!(matches!(
+                validate_running_tips(&expected, &coordinator, &gateway),
+                Err(NodeSupervisorError::SchedulerNetworkHashMismatch { .. })
+            ));
+        }
     }
 }
