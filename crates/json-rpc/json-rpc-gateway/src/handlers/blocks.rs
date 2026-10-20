@@ -32,6 +32,31 @@ pub async fn get_block_by_number(
     context: RpcRequestContext,
     height: BlockHeight,
 ) -> Result<Option<BlockInfo>, RpcServerError> {
+    read_block(ctx, context, height.clone(), |result| {
+        thruput_hogd_backend::indexer::block_lookup(INDEXER, &height, result)
+    })
+    .await
+}
+
+/// Strict native block metadata over the same indexer connection and metrics.
+#[tracing::instrument(skip_all, fields(?height))]
+pub async fn native_block_by_height(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    height: BlockHeight,
+) -> Result<thruput_json_rpc_types::responses::BlockResult, RpcServerError> {
+    read_block(ctx, context, height.clone(), |result| {
+        thruput_hogd_backend::native::block_lookup(&height, result)
+    })
+    .await
+}
+
+async fn read_block<T>(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    height: BlockHeight,
+    project: impl FnOnce(thruput_indexer::BlockLookupResult) -> Result<T, RpcServerError>,
+) -> Result<T, RpcServerError> {
     let client = ctx
         .indexer
         .read()
@@ -44,12 +69,7 @@ pub async fn get_block_by_number(
         "get_block_by_height",
         INDEXER,
         backend_deadline(context, ctx.config.backend_request_timeout())?,
-        async {
-            client
-                .get_block_by_height(&height)
-                .await
-                .map(|result| thruput_hogd_backend::indexer::block_lookup(INDEXER, &height, result))
-        },
+        async { client.get_block_by_height(&height).await.map(project) },
         Result::is_ok,
     )
     .await?

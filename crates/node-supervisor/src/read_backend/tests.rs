@@ -436,9 +436,21 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
 
     async fn get_block_by_height(
         &self,
-        _height: thruput_xdr::types::BlockHeight,
+        height: thruput_xdr::types::BlockHeight,
     ) -> Result<thruput_indexer::BlockLookupResult, ProgramError> {
-        Err(ProgramError::msg("not implemented in fake indexer"))
+        if self.mode == FakeIndexerMode::Slow {
+            std::future::pending::<()>().await;
+        }
+        if self.mode == FakeIndexerMode::RpcFail {
+            return Err(ProgramError::msg("indexer not ready"));
+        }
+        Ok(thruput_indexer::BlockLookupResult::Default {
+            outcome: if *height == 0 {
+                thruput_indexer::BlockLookupOutcome::BlockNotFound.0
+            } else {
+                999
+            },
+        })
     }
 
     async fn get_events(
@@ -1798,4 +1810,39 @@ async fn native_local_receipt_deadline_has_no_commitment_observation() {
         .unwrap_err();
     assert!(matches!(error.error, RpcServerError::BackendTimeout));
     assert!(error.observation.is_none());
+}
+
+#[tokio::test]
+async fn native_block_miss_invalid_outcome_outage_and_timeout_remain_distinct() {
+    use thruput_json_rpc_server::native::read::NativeBlockPlane;
+    let (sched_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
+    for mode in [
+        FakeIndexerMode::Normal,
+        FakeIndexerMode::RpcFail,
+        FakeIndexerMode::Slow,
+    ] {
+        let (idx_addr, _indexer) = start_fake_indexer(mode).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let result = backend
+            .native_block(
+                RpcRequestContext::new(Some(Duration::from_millis(20))),
+                0.into(),
+            )
+            .await;
+        match mode {
+            FakeIndexerMode::Normal => {
+                assert!(result.unwrap().is_none());
+                assert!(matches!(
+                    backend
+                        .native_block(RpcRequestContext::unbounded(), 1.into())
+                        .await,
+                    Err(RpcServerError::BackendDataInvalid { .. })
+                ));
+            }
+            FakeIndexerMode::RpcFail => {
+                assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
+            }
+            FakeIndexerMode::Slow => assert!(matches!(result, Err(RpcServerError::BackendTimeout))),
+        }
+    }
 }

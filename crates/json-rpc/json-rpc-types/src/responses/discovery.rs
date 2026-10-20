@@ -96,6 +96,42 @@ BlockInfo {
 }
 }
 
+impl From<crate::block::BlockInfo> for BlockInfo {
+    /// Preserve every field of the canonical consensus projection.
+    fn from(block: crate::block::BlockInfo) -> Self {
+        let crate::block::BlockInfo {
+            block_hash,
+            protocol,
+            network_hash,
+            config_hash,
+            proposer,
+            block_timepoint,
+            block_height,
+            txs_hash,
+            storage_hash,
+            events_hash,
+            prev_block_hash,
+            proposal_txs_hash,
+            upgrades,
+        } = block;
+        Self {
+            block_hash,
+            protocol,
+            network_hash,
+            config_hash,
+            proposer,
+            block_timepoint,
+            block_height,
+            txs_hash,
+            storage_hash,
+            events_hash,
+            prev_block_hash,
+            proposal_txs_hash,
+            upgrades,
+        }
+    }
+}
+
 /// Null is a successful metadata lookup outside authoritative block coverage.
 pub type BlockResult = Option<BlockInfo>;
 

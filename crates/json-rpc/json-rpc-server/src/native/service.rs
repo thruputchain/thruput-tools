@@ -7,13 +7,16 @@ use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
 
 use super::{
     FinalizedNativeModule, NativeModule,
-    read::{NativeReadCapabilities, NativeReadService, NativeSimulationPlane, NativeStatePlane},
+    read::{
+        NativeBlockPlane, NativeReadCapabilities, NativeReadService, NativeSimulationPlane,
+        NativeStatePlane,
+    },
     transaction::{NativeSubmitPlane, NativeTransactionReadPlane},
 };
 use crate::{BuildInfo, BuildVersion, ChainPlane, GroundhogRpcServer, RpcServerConfig};
 
 /// Configured backend planes. Transient health does not change registration.
-/// History, block projections and funding remain outside this composition.
+/// History and funding remain outside this composition.
 #[derive(Debug, Clone, Copy)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -45,7 +48,7 @@ impl NativeCapabilities {
         match method {
             "getVersionInfo" | "getNetworkInfo" | "getServerLimits" => true,
             "sendTransaction" => self.scheduler,
-            "getTransactionReceipt" => self.indexer,
+            "getTransactionReceipt" | "getBlockByHeight" => self.indexer,
             "getTransactionStatus" => self.indexer && self.scheduler,
             "getChainTip" | "getChainConfig" | "getStorage" | "getBalance"
             | "getRegisteredAuth" => self.db,
@@ -135,7 +138,7 @@ impl<S, C, R, V> NativeService<S, C, R, V>
 where
     S: NativeSubmitPlane,
     C: ChainPlane,
-    R: NativeStatePlane + NativeTransactionReadPlane,
+    R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane,
     V: NativeSimulationPlane,
 {
     /// Remove unavailable and unimplemented methods, then freeze discovery.
@@ -176,6 +179,9 @@ macro_rules! dispatch {
     };
     (get_server_limits, $s:expr, $r:expr) => {
         $s.reads.get_server_limits($r).await
+    };
+    (get_block_by_height, $s:expr, $r:expr) => {
+        $s.reads.get_block_by_height($r).await
     };
     (get_chain_tip, $s:expr, $r:expr) => {
         $s.reads.get_chain_tip($r).await
@@ -219,7 +225,7 @@ macro_rules! implement {
         where
             S: NativeSubmitPlane,
             C: ChainPlane,
-            R: NativeStatePlane + NativeTransactionReadPlane,
+            R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane,
             V: NativeSimulationPlane,
         {
             $(
