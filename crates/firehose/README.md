@@ -118,17 +118,28 @@ request to the 0.36.0 **request-only `CaughtUp` cursor state**, which parks unti
 publication. This state is never persisted. After a block the client asks with
 `Initialized` again. There is no polling timer or deadline on the parked pull.
 
-A new archive starts only after `CaughtUp` supplies its origin. A block received
-before that point is refused and store exits without writing it. This makes
-tip-only bootstrap independent of upstream retention policy. An outbox awaiting
-initialization can return `NotReady`, which retains the existing retry behavior.
-Archives with an adopted origin continue ingesting normally.
+A new archive fast-forwards through retained history, verifying each block's
+roots, identity and continuity without writing it. Pulls advance an in-memory
+`Initialized` cursor. `CaughtUp` must confirm the same origin; only then does
+store publish `floor.xdr` at the last skipped progress and park. Subsequent live
+blocks are archived. Reconnects discard the skipped progress and restart from
+`Default`. With no skipped blocks, `CaughtUp` still adopts the origin directly.
+`NotReady` and `InternalFailure` also discard bootstrap progress before retrying.
+A fresh store requires the outbox to begin at its origin's first height and
+contain a single protocol epoch. Once hog-event prunes (hogd#3377), or a protocol
+upgrade leaves an older epoch first, fast-forward will fail closed and needs revisiting.
+
+The start point relies on store's consistency verification of the skipped range,
+not an independent attestation of the tip by hogd. Skipped records are unavailable
+for later audit. Existing archives continue ingesting normally. Bootstrap logs
+report skipped count, height and elapsed seconds every 10,000 blocks and at completion.
 
 All outcomes have distinct logs and counter labels:
 
 | Outcome | Action |
 | --- | --- |
 | Block | Verify roots/identity/continuity, fsync, then advance the cursor |
+| Skipped | Verify history without storing it; advance the bootstrap cursor and count `skipped` |
 | Replay | Identical archived record; count `replay` and back off one second |
 | CaughtUp | Healthy normal state; adopt epoch boundary and park |
 | NotReady | Degraded health; retry after one second |
@@ -240,7 +251,8 @@ without a second content-addressed file layout or deduplication layer.
 
 ## Observability
 
-Store `/health` returns 200 for a working ingester, including when parked, and 503
+Store `/health` returns 200 for a working ingester, including after each verified
+bootstrap skip and when parked, and 503
 before its first successful response or while retrying backend failures.
 An unexpected WebSocket server stop shuts down serve with an error.
 `/metrics` uses a private Prometheus registry:
@@ -248,6 +260,8 @@ An unexpected WebSocket server stop shuts down serve with an error.
 | Metric | Meaning |
 | --- | --- |
 | `firehose_blocks_ingested_total` | Newly durable blocks in this process |
+| `firehose_bootstrap_skipped_blocks_total` | Verified history blocks skipped during bootstrap, including retries |
+| `firehose_bootstrapping` | 1 while this connection has skipped blocks awaiting tip establishment; 0 after establishment, reconnect reset, or bootstrap discard |
 | `firehose_bytes_ingested_total` | New full archive record bytes |
 | `firehose_events_per_block` | Emitted-event histogram |
 | `firehose_current_height` | Durable contiguous height, or -1 before an origin |
