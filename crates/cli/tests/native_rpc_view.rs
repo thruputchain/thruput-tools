@@ -135,7 +135,7 @@ async fn explicit_flag_selects_native_and_default_still_uses_wire_13() {
     let (url, handle, calls) = server(discovery(), Ok(response.clone())).await;
     let fixture = Fixture::new(&url);
     let legacy = fixture.view(false, true);
-    assert_eq!(legacy["data"]["schemaVersion"], 2);
+    assert_eq!(legacy["data"]["schemaVersion"], 3);
     assert_eq!(legacy["data"]["height"], "42");
     assert!(legacy["data"].get("stateBlockHeight").is_none());
     assert_eq!(calls.lock().unwrap()[0].0, "groundhog_view");
