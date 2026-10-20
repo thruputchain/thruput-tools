@@ -160,6 +160,7 @@ scalar_data!(
     i32,
     u64,
     i128,
+    u128,
     crate::BlockHeight,
     crate::Protocol,
     crate::TimePoint,
@@ -185,11 +186,13 @@ impl<T: ResponseData> ResponseData for Option<T> {
 
 mod discovery;
 mod fields;
+mod funding;
 mod history;
 mod simulation;
 mod state;
 mod transaction;
 pub use discovery::*;
+pub use funding::*;
 pub use history::*;
 pub use simulation::*;
 pub use state::*;

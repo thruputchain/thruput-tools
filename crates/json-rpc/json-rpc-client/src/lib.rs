@@ -244,3 +244,6 @@ pub async fn poll_transaction_receipt_with_client_config<C: ClientT + Sync>(
         },
     })
 }
+
+/// Candidate native transport; production activation is separate.
+pub mod native;
