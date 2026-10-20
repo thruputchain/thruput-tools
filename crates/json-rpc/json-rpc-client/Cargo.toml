@@ -27,6 +27,11 @@ tokio = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+thruput-open-rpc = { workspace = true }
+thruput-open-rpc-macros = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+jsonschema = { workspace = true }
 async-trait = { workspace = true }
 thruput-json-rpc-server = { workspace = true }
 thruput-xdr = { workspace = true }

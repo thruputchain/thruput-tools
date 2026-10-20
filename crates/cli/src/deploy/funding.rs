@@ -139,8 +139,8 @@ mod tests {
 
     fn rules(balance: &str, base: &str, per_byte: &str) -> ExecutionConfig {
         serde_json::from_value(serde_json::json!({
-            "observedTip": { "height": "42", "blockHash": format!("0x{}", "11".repeat(32)) },
-            "configHash": format!("0x{}", "22".repeat(32)),
+            "observedTip": { "height": "42", "blockHash": thruput_json_rpc_types::NetworkHashText::from([0x11; 32]) },
+            "configHash": thruput_json_rpc_types::NetworkHashText::from([0x22; 32]),
             "effectiveLimits": {
                 "maxContractSizeBytes": u32::MAX,
                 "maxRv32CodeBytes": 16,

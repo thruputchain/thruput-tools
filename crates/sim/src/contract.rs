@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use thruput_json_rpc_client::poll_receipt;
 use thruput_json_rpc_types::{
+    base58::FixedIdentifier,
     receipt::{ExecStatus, TransactionReceipt},
     transaction::TxHash,
 };
@@ -254,7 +255,7 @@ where
     record.deploy_address_nonce = Some(prepared.deploy_address_nonce.clone());
     record.tx_hash = Some(json_string(&prepared.tx_hash, "deployment txHash")?);
     record.collateral = Some(crate::result::NativeDeploymentCollateral {
-        recipient: format!("0x{}", hex::encode(prepared.predicted_address.as_ref())),
+        recipient: thruput_json_rpc_types::base58::Base58(prepared.predicted_address).to_string(),
         raw_amount: prepared.deployment_amount.to_string(),
     });
     event_writer
@@ -418,7 +419,7 @@ fn prepare_deploy(
         tx_nonce,
         predicted_address,
         artifact_sha256,
-        contract_hash: format!("0x{}", hex::encode(contract_hash.as_ref())),
+        contract_hash: thruput_json_rpc_types::base58::Base58(contract_hash).to_string(),
         deploy_address_nonce: format!("0x{}", hex::encode(deploy_address_nonce.as_ref())),
     })
 }
@@ -471,7 +472,7 @@ where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
     let mut progress = DeployProgress {
-        tx_hash: Some(format!("0x{}", hex::encode(prepared.tx_hash.0.0.as_ref()))),
+        tx_hash: Some(prepared.tx_hash.0.to_string()),
         height: None,
         address: None,
         address_source: None,
@@ -495,9 +496,8 @@ where
         return DeployAttempt {
             progress,
             result: Err(SimError::Executor(format!(
-                "native deployment returned transaction hash 0x{}, expected 0x{}",
-                hex::encode(tx_hash.0.0.as_ref()),
-                hex::encode(prepared.tx_hash.0.0.as_ref())
+                "native deployment returned transaction hash {}, expected {}",
+                tx_hash.0, prepared.tx_hash.0
             ))
             .into()),
         };
@@ -562,7 +562,7 @@ fn resolve_deploy_receipt(
         )
         .into());
     }
-    progress.address = Some(format!("0x{}", hex::encode(predicted_address.as_ref())));
+    progress.address = Some(thruput_json_rpc_types::base58::Base58(*predicted_address).to_string());
     progress.address_source = Some(DeployAddressSource::Receipt);
     Ok(())
 }
@@ -723,11 +723,7 @@ fn resolve_entrypoint(entrypoint: &EntrypointSpec) -> Result<Vec<u8>, SimError> 
 }
 
 fn parse_contract_address(value: &str) -> Result<ContractAddress, SimError> {
-    let bytes = parse_hex(value)?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| SimError::Executor("contract address must be 32 bytes".into()))?;
-    Ok(ContractAddress::from(bytes))
+    ContractAddress::decode_base58(value).map_err(|error| SimError::Executor(error.to_string()))
 }
 
 fn exec_status_name(status: &ExecStatus) -> &'static str {
@@ -750,8 +746,9 @@ mod tests {
     use tempfile::NamedTempFile;
     use thruput_json_rpc_types::{
         BlockHeight,
+        base58::Base58,
         block::ChainTip,
-        hex::{Hex0x, HexBytes},
+        hex::HexBytes,
         receipt::TransactionReceipt,
         view::{ViewRequest, ViewResponse},
     };
@@ -787,7 +784,7 @@ mod tests {
             async move {
                 Ok(ChainTip {
                     height: BlockHeight::from(tip_height),
-                    block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                    block_hash: Base58(SHA256Hash::from([0x42; 32])),
                 })
             }
         }
@@ -802,7 +799,7 @@ mod tests {
                 let signed: SignedTransaction =
                     xdrs::txs::decode(&hex::decode(tx_hex.trim_start_matches("0x")).unwrap())
                         .unwrap();
-                let tx_hash = TxHash(Hex0x(
+                let tx_hash = TxHash(Base58(
                     thruput_signing::transaction_hash(&signed.tx).unwrap(),
                 ));
                 submitted
@@ -892,7 +889,7 @@ mod tests {
             .await
             .expect("event writer should open");
         let mut actors = actor_states();
-        let tx_hash = TxHash(Hex0x(SHA256Hash::from([0x5a; 32])));
+        let tx_hash = TxHash(Base58(SHA256Hash::from([0x5a; 32])));
         let receipt = deploy_receipt(tx_hash, ExecStatus::Ok, Some(vec![0x77; 32]));
         let submitted = Arc::new(Mutex::new(Vec::new()));
 
@@ -971,7 +968,7 @@ mod tests {
             .await
             .expect("event writer should open");
         let mut actors = actor_states();
-        let tx_hash = TxHash(Hex0x(SHA256Hash::from([0x5a; 32])));
+        let tx_hash = TxHash(Base58(SHA256Hash::from([0x5a; 32])));
         let receipt = deploy_receipt(tx_hash, ExecStatus::Ok, Some(vec![0x77; 32]));
         let submitted = Arc::new(Mutex::new(Vec::new()));
 
@@ -1021,7 +1018,7 @@ mod tests {
             .await
             .expect("event writer should open");
         let mut actors = actor_states();
-        let tx_hash = TxHash(Hex0x(SHA256Hash::from([0x6b; 32])));
+        let tx_hash = TxHash(Base58(SHA256Hash::from([0x6b; 32])));
         let receipt = deploy_receipt(
             tx_hash,
             ExecStatus::DeterministicError {
@@ -1084,7 +1081,7 @@ mod tests {
         async fn chain_tip(&self) -> Result<thruput_json_rpc_types::block::ChainTip, SimRpcError> {
             Ok(thruput_json_rpc_types::block::ChainTip {
                 height: 1.into(),
-                block_hash: Hex0x(SHA256Hash::from([0; 32])),
+                block_hash: Base58(SHA256Hash::from([0; 32])),
             })
         }
         async fn send_raw_transaction(&self, tx_hex: String) -> Result<TxHash, SimRpcError> {
@@ -1102,14 +1099,14 @@ mod tests {
                 .expect("submitted tx lock")
                 .push(signed);
             let events = std::fs::read_to_string(&self.event_path).expect("pre-submit evidence");
-            assert!(events.contains(&hex::encode(hash.as_ref())));
+            assert!(events.contains(&thruput_json_rpc_types::SHA256Hash::from(hash).to_string()));
             match self.outcome {
                 NativeDeployOutcome::SendError => Err(SimRpcError::detail(
                     "sendRawTransaction",
                     "ambiguous transport failure",
                 )),
-                NativeDeployOutcome::WrongSendHash => Ok(TxHash(Hex0x(SHA256Hash::from([7; 32])))),
-                _ => Ok(TxHash(Hex0x(hash))),
+                NativeDeployOutcome::WrongSendHash => Ok(TxHash(Base58(SHA256Hash::from([7; 32])))),
+                _ => Ok(TxHash(Base58(hash))),
             }
         }
         async fn transaction_receipt(
@@ -1129,7 +1126,7 @@ mod tests {
             };
             Ok(Some(deploy_receipt(
                 if self.outcome == NativeDeployOutcome::WrongReceiptHash {
-                    TxHash(Hex0x(SHA256Hash::from([7; 32])))
+                    TxHash(Base58(SHA256Hash::from([7; 32])))
                 } else {
                     hash
                 },
@@ -1190,7 +1187,11 @@ mod tests {
             let expected = thruput_signing::transaction_hash(&transactions[0].tx).expect("hash");
             assert_eq!(
                 record.tx_hash.as_deref(),
-                Some(format!("0x{}", hex::encode(expected.as_ref())).as_str())
+                Some(
+                    thruput_json_rpc_types::SHA256Hash::from(expected)
+                        .to_string()
+                        .as_str()
+                )
             );
             if outcome == NativeDeployOutcome::WrongSendHash {
                 assert!(
@@ -1198,7 +1199,7 @@ mod tests {
                         .error
                         .as_ref()
                         .expect("error")
-                        .contains(&"07".repeat(32))
+                        .contains(&Base58(SHA256Hash::from([7; 32])).to_string())
                 );
             }
             let events = std::fs::read_to_string(file.path()).expect("events");
@@ -1258,13 +1259,10 @@ mod tests {
             let record = &setup.records[0];
             let collateral = record.collateral.as_ref().expect("funding effects");
             assert_eq!(collateral.raw_amount, "10000000");
-            assert_eq!(
-                collateral.recipient,
-                format!("0x{}", hex::encode(predicted.as_ref()))
-            );
+            assert_eq!(collateral.recipient, Base58(predicted).to_string());
             assert_eq!(
                 record.contract_hash.as_deref(),
-                Some(format!("0x{}", hex::encode(code_hash.as_ref())).as_str())
+                Some(Base58(code_hash).to_string().as_str())
             );
             assert_eq!(actors[0].next_nonce_sequence, 1);
             if outcome == NativeDeployOutcome::Success {
@@ -1300,7 +1298,7 @@ mod tests {
 
         assert_eq!(
             prepared.contract_hash,
-            format!("0x{}", hex::encode(contract_hash_bytes))
+            Base58(SHA256Hash::from(contract_hash_bytes)).to_string()
         );
         assert_eq!(signed_tx.tx.invocation.entrypoint, deploy_entrypoint);
     }

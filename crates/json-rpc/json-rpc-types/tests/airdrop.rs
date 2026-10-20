@@ -39,7 +39,7 @@ fn client_nonce_accepts_legacy_hex_forms_and_serializes_canonically() {
 }
 
 #[test]
-fn airdrop_request_accepts_legacy_recipient_forms() {
+fn airdrop_request_rejects_legacy_recipient_forms() {
     for recipient in ["11".repeat(32), format!("0X{}", "11".repeat(32))] {
         let request = serde_json::json!({
             "recipient": recipient,
@@ -47,7 +47,7 @@ fn airdrop_request_accepts_legacy_recipient_forms() {
         });
         assert!(
             serde_json::from_value::<thruput_json_rpc_types::airdrop::AirdropRequest>(request)
-                .is_ok()
+                .is_err()
         );
     }
 }
@@ -56,7 +56,7 @@ fn airdrop_request_accepts_legacy_recipient_forms() {
 fn airdrop_response_accepts_future_additive_fields() {
     let response = serde_json::json!({
         "attemptStatus": "pending",
-        "recipient": format!("0x{}", "11".repeat(32)),
+        "recipient": thruput_encoding::encode(&[0x11; 32]),
         "rawAmount": "100000000",
         "retryAfterSeconds": "5",
         "futureField": true
@@ -71,8 +71,8 @@ fn airdrop_response_accepts_future_additive_fields() {
 #[test]
 fn local_funding_rejects_noncanonical_amounts_and_unknown_fields() {
     use thruput_json_rpc_types::airdrop::FundAccountRequest;
-    let valid = json!({ "recipient": format!("0x{}", "11".repeat(32)),
-        "faucet": format!("0x{}", "22".repeat(32)), "clientNonce": "0x01", "rawAmount": "42" });
+    let valid = json!({ "recipient": thruput_encoding::encode(&[0x11; 32]),
+        "faucet": thruput_encoding::encode(&[0x22; 32]), "clientNonce": "0x01", "rawAmount": "42" });
     assert_eq!(
         serde_json::from_value::<FundAccountRequest>(valid.clone())
             .unwrap()

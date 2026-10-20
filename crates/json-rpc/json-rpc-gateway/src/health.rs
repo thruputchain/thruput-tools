@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, future::Future, path::PathBuf, sync::Arc, time:
 use serde::Serialize;
 use thruput_build_info::BuildVersion;
 use thruput_hogd_backend::{IntroOutcome, intro, scheduler as shared_scheduler};
-use thruput_json_rpc_types::{BlockHeight, NetworkHashHex};
+use thruput_json_rpc_types::{BlockHeight, NetworkHashText};
 use thruput_scheduler::{DbTip, ExpectedDBTip};
 use thruput_scp::network::ProtocolCommit as Protocol;
 use thruput_x23_transport::ConnectError;
@@ -391,12 +391,12 @@ impl ProbeState {
 struct SchedulerProbeState {
     timeout_streak: u8,
     pending: Option<PendingSchedulerProbe>,
-    expected_network_hash: Option<NetworkHashHex>,
+    expected_network_hash: Option<NetworkHashText>,
     identity_status: SchedulerIdentityStatus,
 }
 
 impl SchedulerProbeState {
-    fn with_expected_network_hash(expected_network_hash: Option<NetworkHashHex>) -> Self {
+    fn with_expected_network_hash(expected_network_hash: Option<NetworkHashText>) -> Self {
         Self {
             timeout_streak: 0,
             pending: None,
@@ -1000,7 +1000,7 @@ fn successful_scheduler_probe(
     db_tip: &DbTip,
     state: &mut SchedulerProbeState,
 ) -> SchedulerProbeResult {
-    let observed = NetworkHashHex::from(
+    let observed = NetworkHashText::from(
         db_tip
             .value
             .proposal_header
@@ -1541,7 +1541,8 @@ mod tests {
     use thruput_json_rpc_server::{ChainPlane, ReadPlane, RpcRequestContext, ViewPlane};
     use thruput_json_rpc_types::{
         ContractAddress as RpcContractAddress,
-        hex::{Hex0x, HexBytes},
+        base58::Base58,
+        hex::HexBytes,
         transaction::{TransactionStatus, TxHash},
         view::{RootInvocationOutput, ViewRequest},
     };
@@ -1830,7 +1831,7 @@ mod tests {
         let reading = tip_reading(
             "test",
             DbGatewayConfigResult::kRPCNone { config },
-            Some(&NetworkHashHex::from([0x41; 32])),
+            Some(&NetworkHashText::from([0x41; 32])),
         )
         .unwrap();
         assert_eq!(
@@ -1858,7 +1859,7 @@ mod tests {
             tip_reading(
                 "test",
                 test_db_config(),
-                Some(&NetworkHashHex::from([0x42; 32]))
+                Some(&NetworkHashText::from([0x42; 32]))
             )
             .is_err()
         );
@@ -1871,7 +1872,7 @@ mod tests {
 
     #[test]
     fn scheduler_network_hash_matching_pin_is_healthy() {
-        let expected = NetworkHashHex::from([0x41; 32]);
+        let expected = NetworkHashText::from([0x41; 32]);
         let mut state = SchedulerProbeState::with_expected_network_hash(Some(expected.clone()));
 
         let result = successful_scheduler_probe(&test_db_tip([0x41; 32]), &mut state);
@@ -1884,7 +1885,7 @@ mod tests {
 
     #[test]
     fn optional_scheduler_network_hash_mismatch_is_readiness_error() {
-        let expected = NetworkHashHex::from([0x42; 32]);
+        let expected = NetworkHashText::from([0x42; 32]);
         let mut state = SchedulerProbeState::with_expected_network_hash(Some(expected.clone()));
 
         let result = successful_scheduler_probe(&test_db_tip([0x41; 32]), &mut state);
@@ -1895,8 +1896,8 @@ mod tests {
             result.error.as_deref(),
             Some(
                 "scheduler network hash mismatch: expected \
-4242424242424242424242424242424242424242424242424242424242424242, observed \
-4141414141414141414141414141414141414141414141414141414141414141"
+5TeWSsjg2gbxCyWVniXeCmwM7UtHTCK7svzJr5xYJzHf, observed \
+5PjDJaGfSPJj4tFzMRCiuuAasKg5n8dJKXKenhuwZexx"
             )
         );
         assert_eq!(state.expected_network_hash, Some(expected));
@@ -1940,7 +1941,7 @@ mod tests {
 
     #[test]
     fn scheduler_first_tip_pins_identity_across_later_probes() {
-        let pinned = NetworkHashHex::from([0x41; 32]);
+        let pinned = NetworkHashText::from([0x41; 32]);
         let mut state = SchedulerProbeState::default();
 
         let first = successful_scheduler_probe(&test_db_tip([0x41; 32]), &mut state);
@@ -2606,7 +2607,7 @@ mod tests {
     }
 
     fn lifecycle_tx_hash() -> TxHash {
-        TxHash(Hex0x(SHA256Hash::from([0x55; 32])))
+        TxHash(Base58(SHA256Hash::from([0x55; 32])))
     }
 
     fn lifecycle_contract_address() -> RpcContractAddress {
@@ -3357,7 +3358,7 @@ mod tests {
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
         let config = Arc::new(GatewayConfig {
             scheduler_address: scheduler_addr.to_string(),
-            network_hash: Some(NetworkHashHex::from([0x42; 32])),
+            network_hash: Some(NetworkHashText::from([0x42; 32])),
             indexer_address: None,
             db_gateway_address: None,
             view_gateway_address: None,
@@ -3397,7 +3398,7 @@ mod tests {
         assert!(ctx.scheduler_quarantine.read().await.is_none());
         assert_eq!(
             scheduler_state.expected_network_hash,
-            Some(NetworkHashHex::from([0x42; 32]))
+            Some(NetworkHashText::from([0x42; 32]))
         );
 
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -3420,7 +3421,7 @@ mod tests {
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
         let config = Arc::new(GatewayConfig {
             scheduler_address: scheduler_addr.to_string(),
-            network_hash: Some(NetworkHashHex::from([0x42; 32])),
+            network_hash: Some(NetworkHashText::from([0x42; 32])),
             indexer_address: None,
             db_gateway_address: None,
             view_gateway_address: None,

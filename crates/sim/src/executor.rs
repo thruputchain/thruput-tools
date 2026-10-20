@@ -6,11 +6,12 @@ use thruput_json_rpc_client::poll_receipt;
 use sha2::{Digest, Sha256};
 use thruput_json_rpc_types::{
     BlockHeight,
+    base58::Base58,
     events::{
         BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
         EventTopicFilter, IterationOrder, PaginationCursor, TopicList,
     },
-    hex::{Hex0x, HexBytes},
+    hex::HexBytes,
     receipt::{ExecStatus, TransactionReceipt},
     state::{StorageItemInfo, StorageItemRead},
     transaction::TxHash,
@@ -2342,10 +2343,10 @@ where
     let request = ViewRequest {
         auth_claim: None,
         min_height: None,
-        contract: Hex0x(prepared.view.contract),
+        contract: Base58(prepared.view.contract),
         entrypoint: HexBytes(prepared.view.entrypoint.clone()),
         calldata: HexBytes(prepared.view.calldata.clone()),
-        caller: Some(Hex0x(prepared.caller)),
+        caller: Some(Base58(prepared.caller)),
         gas_limit: None,
     };
     let response = client.view(request).await;
@@ -2688,10 +2689,10 @@ where
     let request = ViewRequest {
         auth_claim: None,
         min_height: None,
-        contract: Hex0x(entry.contract),
+        contract: Base58(entry.contract),
         entrypoint: HexBytes(entry.read_entrypoint.clone()),
         calldata: HexBytes(entry.read_calldata.clone()),
-        caller: Some(Hex0x(prepared.caller)),
+        caller: Some(Base58(prepared.caller)),
         gas_limit: None,
     };
     let response = client
@@ -3237,7 +3238,7 @@ fn contract_call_workload_event(
         view_abort_data: None,
         view_event_count: None,
         contract_call_name: Some(call.name.clone()),
-        contract_call_contract: Some(format!("0x{}", hex::encode(call.contract.as_ref()))),
+        contract_call_contract: Some(Base58(call.contract).to_string()),
         storage_read_name: None,
         storage_contract: None,
         storage_key: None,
@@ -3272,7 +3273,7 @@ where
     let started = Instant::now();
     let response = client
         .storage_read(
-            Hex0x(prepared.read.contract),
+            Base58(prepared.read.contract),
             HexBytes(prepared.read.key.clone()),
         )
         .await;
@@ -3416,7 +3417,7 @@ fn storage_read_workload_event(
         contract_call_name: None,
         contract_call_contract: None,
         storage_read_name: Some(read.name.clone()),
-        storage_contract: Some(format!("0x{}", hex::encode(read.contract.as_ref()))),
+        storage_contract: Some(Base58(read.contract).to_string()),
         storage_key: Some(format!("0x{}", hex::encode(&read.key))),
         storage_item_present: None,
         storage_item_kind: None,
@@ -3491,7 +3492,7 @@ where
 fn event_query_request(query: &PreparedEventQuery) -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
-            contract_addresses: ContractAddressList(VecM(vec![Hex0x(query.contract)])),
+            contract_addresses: ContractAddressList(VecM(vec![Base58(query.contract)])),
             topics: EventTopicFilter {
                 topic0: TopicList(VecM(Vec::new())),
                 topic1: TopicList(VecM(Vec::new())),
@@ -3629,7 +3630,7 @@ fn events_query_workload_event(
         storage_item_present: None,
         storage_item_kind: None,
         event_query_name: Some(query.name.clone()),
-        event_contract: Some(format!("0x{}", hex::encode(query.contract.as_ref()))),
+        event_contract: Some(Base58(query.contract).to_string()),
         event_count: None,
         event_cursor: None,
         event_latest_block: None,
@@ -3954,8 +3955,8 @@ fn rpc_method(workload: WorkloadKind) -> &'static str {
 mod tests {
     use thruput_json_rpc_types::{
         BlockHeight,
+        base58::Base58,
         block::ChainTip,
-        hex::Hex0x,
         receipt::{ExecStatus, TransactionReceipt},
         state::StorageItemRead,
         view::{RootInvocationOutput, ViewResponse},
@@ -4103,7 +4104,7 @@ mod tests {
                 .replay("chainTip")?;
             Ok(ChainTip {
                 height: height.into(),
-                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0; 32])),
+                block_hash: Base58(thruput_xdr::types::SHA256Hash::from([0; 32])),
             })
         }
     }
@@ -4296,7 +4297,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(5)).await;
                 Ok(ChainTip {
                     height: BlockHeight::from(7),
-                    block_hash: Hex0x(SHA256Hash::from([0x07; 32])),
+                    block_hash: Base58(SHA256Hash::from([0x07; 32])),
                 })
             }
         }
@@ -4306,7 +4307,7 @@ mod tests {
             &self,
             _tx_hex: String,
         ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
-            async { Ok(TxHash(Hex0x(SHA256Hash::from([0x55; 32])))) }
+            async { Ok(TxHash(Base58(SHA256Hash::from([0x55; 32])))) }
         }
     }
 
@@ -4351,7 +4352,7 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn storage_read(
             &self,
-            address: Hex0x<ContractAddress>,
+            address: Base58<ContractAddress>,
             key: HexBytes,
         ) -> impl Future<Output = Result<StorageItemRead, SimRpcError>> + Send {
             let response = self.response.clone();
@@ -4436,7 +4437,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4452,7 +4453,7 @@ mod tests {
                     .lock()
                     .expect("submitted transaction list should lock")
                     .push(tx_hex);
-                Ok(TxHash(Hex0x(SHA256Hash::from([0x5a; 32]))))
+                Ok(TxHash(Base58(SHA256Hash::from([0x5a; 32]))))
             }
         }
     }
@@ -4463,7 +4464,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4490,7 +4491,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4533,7 +4534,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4578,7 +4579,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4619,7 +4620,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4659,7 +4660,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4708,7 +4709,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -4751,7 +4752,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }
@@ -5095,7 +5096,7 @@ mod tests {
         assert_eq!(actors[0].next_nonce_sequence, 1);
         assert_eq!(
             actors[0].last_submitted_tx_hash,
-            Some(TxHash(Hex0x(SHA256Hash::from([0x5a; 32]))))
+            Some(TxHash(Base58(SHA256Hash::from([0x5a; 32]))))
         );
         assert_eq!(actors[0].last_submitted_scheduled_time_ms, Some(0));
         assert_eq!(
@@ -5114,9 +5115,7 @@ mod tests {
             .await
             .expect("events should read");
         assert!(events.contains("\"workload\":\"wallet-submit-smoke\""));
-        assert!(events.contains(
-            "\"txHash\":\"0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\""
-        ));
+        assert!(events.contains("\"txHash\":\"75hbt6uvDqjPZ9WgFtMhBnTeyHw7cinoHiz4FD2vEz2d\""));
         assert!(events.contains("\"txNonce\":\"4294967296\""));
     }
 
@@ -5263,7 +5262,10 @@ mod tests {
             .collect();
         assert_eq!(events[0]["kind"], "workload-completed");
         assert_eq!(events[1]["kind"], "simulator-overload");
-        assert_eq!(events[1]["txHash"], prefixed_hex(0x20));
+        assert_eq!(
+            events[1]["txHash"],
+            thruput_json_rpc_types::NetworkHashText::from([0x20; 32]).to_string()
+        );
         assert_eq!(events[1]["pendingReceipts"], 1);
         assert_eq!(events[1]["pendingReceiptLimit"], 1);
     }
@@ -5341,7 +5343,10 @@ mod tests {
         let completed = find_event(&events, "workload-completed");
         assert_eq!(completed["workload"], "contract-call");
         assert_eq!(completed["contractCallName"], "events-store-value");
-        assert_eq!(completed["contractCallContract"], prefixed_hex(0x88));
+        assert_eq!(
+            completed["contractCallContract"],
+            Base58(ContractAddress::from([0x88; 32])).to_string()
+        );
         assert_eq!(completed["receiptPresent"], true);
         assert_eq!(completed["receiptStatus"], "ok");
     }
@@ -5502,7 +5507,10 @@ mod tests {
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["workload"], "contract-call");
         assert_eq!(failed["errorClass"], "contract-call-receipt-poll-error");
-        assert_eq!(failed["txHash"], prefixed_hex(0x6d));
+        assert_eq!(
+            failed["txHash"],
+            thruput_json_rpc_types::NetworkHashText::from([0x6d; 32]).to_string()
+        );
     }
 
     #[tokio::test]
@@ -5622,7 +5630,11 @@ mod tests {
                 assert_eq!(event.storage_read_name.as_deref(), Some("fib-zero-key"));
                 assert_eq!(
                     event.storage_contract.as_deref(),
-                    Some(prefixed_hex(0x88).as_str())
+                    Some(
+                        Base58(ContractAddress::from([0x88; 32]))
+                            .to_string()
+                            .as_str()
+                    )
                 );
                 assert_eq!(
                     event.storage_key.as_deref(),
@@ -5784,7 +5796,11 @@ mod tests {
                 assert_eq!(event.event_query_name.as_deref(), Some("fib-events"));
                 assert_eq!(
                     event.event_contract.as_deref(),
-                    Some(prefixed_hex(0x88).as_str())
+                    Some(
+                        Base58(ContractAddress::from([0x88; 32]))
+                            .to_string()
+                            .as_str()
+                    )
                 );
                 assert_eq!(event.event_count, Some(0));
                 assert_eq!(event.event_cursor.as_deref(), Some("0xab"));
@@ -6812,7 +6828,7 @@ mod tests {
         assert_eq!(failed_events[0]["errorClass"], "target-restarted");
         assert_eq!(
             failed_events[0]["txHash"],
-            "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+            "75hbt6uvDqjPZ9WgFtMhBnTeyHw7cinoHiz4FD2vEz2d"
         );
     }
 
@@ -7086,7 +7102,7 @@ mod tests {
             SimAccount {
                 index: 0,
                 signer: derive_dev_account_signer("executor-test-seed", 0),
-                wallet_address: Hex0x(ContractAddress::from([0x99; 32])).0,
+                wallet_address: Base58(ContractAddress::from([0x99; 32])).0,
                 network_hash: thruput_xdr::types::NetworkHash::new(
                     thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
@@ -7181,7 +7197,7 @@ mod tests {
     }
 
     fn tx_hash(byte: u8) -> TxHash {
-        TxHash(Hex0x(SHA256Hash::from([byte; 32])))
+        TxHash(Base58(SHA256Hash::from([byte; 32])))
     }
 
     fn receipt(tx_hash: TxHash) -> TransactionReceipt {
@@ -7217,7 +7233,7 @@ mod tests {
             async {
                 Ok(ChainTip {
                     height: 42.into(),
-                    block_hash: Hex0x(thruput_xdr::types::SHA256Hash::new([0; 32])),
+                    block_hash: Base58(thruput_xdr::types::SHA256Hash::new([0; 32])),
                 })
             }
         }

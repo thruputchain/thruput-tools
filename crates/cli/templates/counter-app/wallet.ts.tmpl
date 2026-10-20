@@ -4,7 +4,7 @@ import {
   createWalletClient,
   localnet,
   PrivateKeySigner,
-  addressFromHex,
+  addressFromBase58,
 } from "@thruputchain/client";
 
 // One promise per page load also prevents React remounts from creating extra wallets.
@@ -33,7 +33,7 @@ async function connect() {
       "Missing contract address. Run npm run contract:deploy, then reload.",
     );
   }
-  const contract = addressFromHex(config.contractAddress);
+  const contract = addressFromBase58(config.contractAddress);
   const client = await createThruputClient({
     cluster: localnet({ rpcUrl: new URL("/rpc", window.location.origin).href }),
   });

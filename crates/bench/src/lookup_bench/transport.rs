@@ -25,7 +25,10 @@ pub(super) fn corpus(seed: &str, count: u32) -> Vec<String> {
             hash.update(b"thruput-lookup-bench-v1\0");
             hash.update(seed.as_bytes());
             hash.update(index.to_be_bytes());
-            format!("0x{}", hex::encode(hash.finalize()))
+            thruput_json_rpc_types::base58::Base58::from(thruput_xdr::types::SHA256Hash::from(
+                <[u8; 32]>::from(hash.finalize()),
+            ))
+            .to_string()
         })
         .collect()
 }
@@ -196,6 +199,10 @@ mod tests {
         assert_eq!(corpus("a", 2), corpus("a", 2));
         assert_ne!(corpus("a", 2), corpus("b", 2));
         assert_ne!(corpus("a", 2)[0], corpus("a", 2)[1]);
-        assert_eq!(corpus("a", 1)[0].len(), 66);
+        for text in corpus("a", 2) {
+            let hash: thruput_json_rpc_types::transaction::TxHash =
+                serde_json::from_value(json!(text)).unwrap();
+            assert_eq!(hash.0.to_string(), text);
+        }
     }
 }

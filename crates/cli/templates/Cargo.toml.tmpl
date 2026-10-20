@@ -34,7 +34,7 @@ bench = false
 [features]
 entrypoints = []
 dev = ["thruput-sdk/dev"]
-thruput-integration-test = ["dep:thruput-json-rpc-client", "dep:tokio"]
+thruput-integration-test = ["dep:thruput-json-rpc-client", "dep:tokio", "dep:serde_json"]
 
 # `thruput-sdk` is declared per target because it needs `std` on the host and forbids
 # it on the guest. Cargo resolves features per platform, so host `cargo build`
@@ -46,6 +46,7 @@ thruput-sdk = { version = "={{SDK_VERSION}}", registry = "thruput" }
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
 thruput-sdk = { version = "={{SDK_VERSION}}", registry = "thruput", features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
+serde_json = { version = "1", optional = true }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies.thruput-json-rpc-client]
 version = "{{JSON_RPC_CLIENT_VERSION}}"

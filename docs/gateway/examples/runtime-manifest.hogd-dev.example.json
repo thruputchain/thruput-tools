@@ -1,8 +1,8 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "kind": "hogd-dev-runtime",
   "chainState": "fresh",
-  "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "networkHash": "11111111111111111111111111111111",
   "protocol": "hogp/020ed23d4e2f",
   "producer": {
     "binary": "hog-devnode",
@@ -19,20 +19,20 @@
   "bootstrapAccounts": [
     {
       "role": "faucet",
-      "publicKey": "0x6161616161616161616161616161616161616161616161616161616161616161",
-      "walletAddress": "0x7171717171717171717171717171717171717171717171717171717171717171",
+      "publicKey": "7Z8ftDAzMvoyXnGEJye8DurzgQQXLAbYCaeeesM7UKHa",
+      "walletAddress": "8dqQB2d9phZbmEGMHkrpsvDCawmk7Baf97K9ax4hReSt",
       "initialStorageTokens": "10000000000000"
     },
     {
       "role": "local_user",
-      "publicKey": "0x6262626262626262626262626262626262626262626262626262626262626262",
-      "walletAddress": "0x7272727272727272727272727272727272727272727272727272727272727272",
+      "publicKey": "7d3y2WdzxE7CfsWjkGy3WndkvZcj1EHMkzKJiFPiDecH",
+      "walletAddress": "8hkhKL6AQzrpuKWrj4BkAnyxq6ywnFGUhWyoeL7JAymb",
       "initialStorageTokens": "1000000000"
     }
   ],
   "bootstrap": {
     "storageCostModel": {
-      "hash": "0x5353535353535353535353535353535353535353535353535353535353535353",
+      "hash": "6cGXszer5keoaWm8Co5G9f4KGBThuGz4NsKTqYij1emg",
       "baseDataItemCost": "12000",
       "bytestringCostPerByte": "10",
       "baseContractDeploymentCost": "12000",

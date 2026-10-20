@@ -7,8 +7,8 @@ use thruput_xdr::storage_item::{
 use thruput_xdr::transaction::{Invocation, InvocationFrameOutput};
 
 use crate::ContractAddress;
-use crate::hex::{Hex0x, HexBytes};
 use crate::receipt::TransactionReceipt;
+use crate::{base58::Base58, hex::HexBytes};
 
 /// Dev-only execution detail for a committed transaction.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -120,7 +120,7 @@ pub enum FrameOutputInfo {
 impl From<&FlaggedStorageDelta> for StorageDeltaInfo {
     fn from(delta: &FlaggedStorageDelta) -> Self {
         Self {
-            address: Hex0x(delta.addrkey.address),
+            address: Base58(delta.addrkey.address),
             key: xdr_hex_bytes(&delta.addrkey.key),
             kind: storage_delta_kind(&delta.delta),
             summary: storage_delta_summary(delta),
@@ -160,7 +160,7 @@ impl From<InvocationFrameTrace> for TraceInfo {
 impl From<&Invocation> for InvocationInfo {
     fn from(invocation: &Invocation) -> Self {
         Self {
-            address: Hex0x(invocation.invoked_address),
+            address: Base58(invocation.invoked_address),
             entrypoint: HexBytes(invocation.entrypoint.into_inner().to_vec()),
             gas_limit: configured_gas_limit(invocation.gas_limit),
             calldata: HexBytes(invocation.calldata.0.clone()),
@@ -257,10 +257,7 @@ fn storage_delta_summary(delta: &FlaggedStorageDelta) -> String {
         }
         StorageDelta::kDeltaTypeDeployContract {
             deployed_contract_hash,
-        } => format!(
-            "DeployContract -> 0x{}",
-            hex::encode(deployed_contract_hash.hash.as_ref())
-        ),
+        } => format!("DeployContract -> {}", Base58(deployed_contract_hash.hash)),
         StorageDelta::kDeltaTypeConsumeUniquifier {
             consume_uniquifier_args,
         } => format!(

@@ -13,7 +13,8 @@ use thruput_signing::{
     PubkeyAccount, derive_deploy_address, derive_dev_account_signer, transaction_hash,
 };
 use thruput_testkit::rpc_types::{
-    hex::{Hex0x, HexBytes},
+    base58::Base58,
+    hex::HexBytes,
     receipt::{ExecStatus, TransactionReceipt},
     transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource, TransactionStatus, TxHash,
@@ -76,7 +77,7 @@ impl Fixture {
                 let signed: SignedTransaction =
                     xdrs::txs::decode(&hex::decode(encoded.trim_start_matches("0x")).unwrap())
                         .unwrap();
-                let hash = TxHash(Hex0x(transaction_hash(&signed.tx).unwrap()));
+                let hash = TxHash(Base58(transaction_hash(&signed.tx).unwrap()));
                 state.submitted.lock().unwrap().push(signed);
                 match *state.outcome.lock().unwrap() {
                     Outcome::SendError => Err(ErrorObjectOwned::owned(
@@ -84,7 +85,7 @@ impl Fixture {
                         "ambiguous submission",
                         None::<()>,
                     )),
-                    Outcome::SendHash => Ok(TxHash(Hex0x([9; 32].into()))),
+                    Outcome::SendHash => Ok(TxHash(Base58([9; 32].into()))),
                     _ => Ok(hash),
                 }
             })
@@ -133,7 +134,7 @@ impl Fixture {
                 };
                 Ok(Some(TransactionReceipt {
                     tx_hash: if matches!(*state.outcome.lock().unwrap(), Outcome::ReceiptHash) {
-                        TxHash(Hex0x([9; 32].into()))
+                        TxHash(Base58([9; 32].into()))
                     } else {
                         hash
                     },
@@ -175,16 +176,15 @@ fn native_runtime_document() -> serde_json::Value {
     for index in 0..2 {
         let signer = derive_dev_account_signer("groundhog-dev-accounts", index);
         document["bootstrapAccounts"][index]["publicKey"] =
-            format!("0x{}", hex::encode(signer.verifying_key_bytes())).into();
-        document["bootstrapAccounts"][index]["walletAddress"] = format!(
-            "0x{}",
-            hex::encode(
-                PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
-                    .address()
-                    .as_ref()
-            )
-        )
-        .into();
+            serde_json::to_value(thruput_json_rpc_types::Ed25519PublicKey::from(
+                thruput_xdr::types::Ed25519PublicKey::from(signer.verifying_key_bytes()),
+            ))
+            .unwrap();
+        document["bootstrapAccounts"][index]["walletAddress"] =
+            serde_json::to_value(thruput_json_rpc_types::ContractAddress::from(
+                PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address(),
+            ))
+            .unwrap();
     }
     document
 }

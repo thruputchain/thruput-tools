@@ -347,9 +347,9 @@ mod tests {
     use crate::nonce::NonceNamespace;
 
     use thruput_json_rpc_types::BlockHeight;
-    use thruput_json_rpc_types::hex::{Hex0x, HexBytes};
     use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
     use thruput_json_rpc_types::transaction::TxHash;
+    use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
     use thruput_xdr::types::SHA256Hash;
 
     use super::{
@@ -359,7 +359,7 @@ mod tests {
 
     fn receipt(return_data: Option<Vec<u8>>) -> TransactionReceipt {
         TransactionReceipt {
-            tx_hash: TxHash(Hex0x(SHA256Hash::from([1; 32]))),
+            tx_hash: TxHash(Base58(SHA256Hash::from([1; 32]))),
             height: BlockHeight::from(1),
             status: ExecStatus::Ok,
             events: Vec::new(),

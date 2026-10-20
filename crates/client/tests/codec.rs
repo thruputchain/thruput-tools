@@ -430,8 +430,8 @@ fn decode_abort_reports_unreadable_selector() {
 }
 
 #[test]
-fn strkey_contract_arguments_match_hex_and_reject_wrong_type() {
-    let hex_address = format!("0x{}", "42".repeat(32));
+fn strkey_contract_arguments_match_base58_and_reject_wrong_type() {
+    let base58_address = thruput_encoding::encode(&[0x42; 32]);
     let contract_strkey = thruput_signing::strkey::format_contract_address(&[0x42; 32].into());
     let public_key_strkey = thruput_signing::strkey::format_public_key(&[0x42; 32]);
     let metadata = CallMetadata::Local(ContractMetadata {
@@ -444,15 +444,70 @@ fn strkey_contract_arguments_match_hex_and_reject_wrong_type() {
         },
     });
     assert_eq!(
-        encode_args(std::slice::from_ref(&hex_address), Some(&metadata)).unwrap(),
+        encode_args(std::slice::from_ref(&base58_address), Some(&metadata)).unwrap(),
         encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).unwrap()
     );
     assert!(encode_args(&[public_key_strkey], Some(&metadata)).is_err());
 }
 
 #[test]
-fn strkey_public_key_arguments_match_hex_and_reject_wrong_type() {
-    let hex_address = format!("0x{}", "42".repeat(32));
+fn typed_identifiers_preserve_binary_bytes_and_decode_to_base58() {
+    let bytes = [0x42; 32];
+    let text = thruput_encoding::encode(&bytes);
+    for ty in ["ContractAddress", "Ed25519PublicKey", "SHA256Hash"] {
+        let metadata = CallMetadata::Local(ContractMetadata {
+            interface_name: "test".into(),
+            version: "1".into(),
+            source: std::path::PathBuf::default(),
+            method: MethodMetadata {
+                arg_types: vec![ty.into()],
+                return_type: Some(ty.into()),
+            },
+        });
+        let encoded = encode_args(std::slice::from_ref(&text), Some(&metadata)).unwrap();
+        assert_eq!(encoded, bytes, "{ty}");
+        assert_eq!(
+            decode_return(&encoded, Some(&metadata)),
+            Some(text.clone().into())
+        );
+        assert!(encode_args(&[format!("0x{}", "42".repeat(32))], Some(&metadata)).is_err());
+    }
+    let metadata = CallMetadata::Local(ContractMetadata {
+        interface_name: "test".into(),
+        version: "1".into(),
+        source: std::path::PathBuf::default(),
+        method: MethodMetadata {
+            arg_types: vec!["ContractEntrypointID".into()],
+            return_type: Some("ContractEntrypointID".into()),
+        },
+    });
+    let selector = "0x4242424242424242".to_owned();
+    let encoded = encode_args(std::slice::from_ref(&selector), Some(&metadata)).unwrap();
+    assert_eq!(encoded, [0x42; 8]);
+    assert_eq!(
+        decode_return(&encoded, Some(&metadata)),
+        Some(selector.into())
+    );
+}
+
+#[test]
+fn spec_address_and_same_length_raw_bytes_have_distinct_text_encodings() {
+    let bytes = [0x42; 32];
+    let text = thruput_encoding::encode(&bytes);
+    for (ty, value) in [
+        (ContractType::Address, text),
+        (ContractType::Bytes, format!("0x{}", "42".repeat(32))),
+    ] {
+        let metadata = numeric_tuple_metadata(ty);
+        let input = serde_json::json!([value]);
+        let encoded = encode_args(&[input.to_string()], Some(&metadata)).unwrap();
+        assert_eq!(decode_return(&encoded, Some(&metadata)), Some(input));
+    }
+}
+
+#[test]
+fn strkey_public_key_arguments_match_base58_and_reject_wrong_type() {
+    let base58_address = thruput_encoding::encode(&[0x42; 32]);
     let contract_strkey = thruput_signing::strkey::format_contract_address(&[0x42; 32].into());
     let public_key_strkey = thruput_signing::strkey::format_public_key(&[0x42; 32]);
     let metadata = CallMetadata::Local(ContractMetadata {
@@ -465,15 +520,15 @@ fn strkey_public_key_arguments_match_hex_and_reject_wrong_type() {
         },
     });
     assert_eq!(
-        encode_args(std::slice::from_ref(&hex_address), Some(&metadata)).unwrap(),
+        encode_args(std::slice::from_ref(&base58_address), Some(&metadata)).unwrap(),
         encode_args(std::slice::from_ref(&public_key_strkey), Some(&metadata)).unwrap()
     );
     assert!(encode_args(&[contract_strkey], Some(&metadata)).is_err());
 }
 
 #[test]
-fn strkey_spec_address_arguments_match_hex_and_reject_wrong_type() {
-    let hex_address = format!("0x{}", "42".repeat(32));
+fn strkey_spec_address_arguments_match_base58_and_reject_wrong_type() {
+    let base58_address = thruput_encoding::encode(&[0x42; 32]);
     let contract_strkey = thruput_signing::strkey::format_contract_address(&[0x42; 32].into());
     let public_key_strkey = thruput_signing::strkey::format_public_key(&[0x42; 32]);
     let metadata = CallMetadata::Spec(SpecMethodMetadata {
@@ -494,7 +549,7 @@ fn strkey_spec_address_arguments_match_hex_and_reject_wrong_type() {
         throws: vec![],
     });
     assert_eq!(
-        encode_args(std::slice::from_ref(&hex_address), Some(&metadata)).unwrap(),
+        encode_args(std::slice::from_ref(&base58_address), Some(&metadata)).unwrap(),
         encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).unwrap()
     );
     assert!(encode_args(&[public_key_strkey], Some(&metadata)).is_err());

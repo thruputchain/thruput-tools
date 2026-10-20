@@ -299,8 +299,8 @@ pub(crate) fn spawn_tip_refresh<C: ChainPlane>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use thruput_json_rpc_types::base58::Base58;
     use thruput_json_rpc_types::block::ChainTip;
-    use thruput_json_rpc_types::hex::Hex0x;
     use thruput_xdr::network_config::{NetworkConfig, NetworkConfigV0};
     use xdr_common::VecM;
 
@@ -309,7 +309,7 @@ mod tests {
         TipReading::new(
             ChainTip {
                 height: height.into(),
-                block_hash: Hex0x(thruput_xdr::types::SHA256Hash::from([0u8; 32])),
+                block_hash: Base58(thruput_xdr::types::SHA256Hash::from([0u8; 32])),
             },
             NetworkConfig::_0 {
                 v0: NetworkConfigV0 {

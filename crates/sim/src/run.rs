@@ -1046,7 +1046,9 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
 mod tests {
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
-    use thruput_json_rpc_types::{BlockHeight, block::ChainTip, hex::Hex0x, transaction::TxHash};
+    use thruput_json_rpc_types::{
+        BlockHeight, base58::Base58, block::ChainTip, transaction::TxHash,
+    };
     use thruput_signing::derive_dev_account_signer;
     use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
@@ -1079,7 +1081,7 @@ mod tests {
             &self,
             _tx_hex: String,
         ) -> impl std::future::Future<Output = Result<TxHash, SimRpcError>> + Send {
-            async { Ok(TxHash(Hex0x(SHA256Hash::from([0x55; 32])))) }
+            async { Ok(TxHash(Base58(SHA256Hash::from([0x55; 32])))) }
         }
     }
 
@@ -1173,7 +1175,7 @@ mod tests {
             MockClient {
                 tip: ChainTip {
                     height: BlockHeight::from(42),
-                    block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                    block_hash: Base58(SHA256Hash::from([0x42; 32])),
                 },
             },
             LoadedExecution {
@@ -1253,7 +1255,7 @@ mod tests {
         let mut writer = EventWriter::create(file.path()).await.expect("writer");
         let mut actors = actor_states();
         actors[0].use_native_wallet();
-        let accepted = TxHash(Hex0x(SHA256Hash::from([0x55; 32])));
+        let accepted = TxHash(Base58(SHA256Hash::from([0x55; 32])));
         actors[0]
             .record_submitted_tx(accepted, 0, std::time::Instant::now())
             .expect("earlier admission");
@@ -1332,7 +1334,7 @@ mod tests {
             MockClient {
                 tip: ChainTip {
                     height: BlockHeight::from(42),
-                    block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                    block_hash: Base58(SHA256Hash::from([0x42; 32])),
                 },
             },
             LoadedExecution {
@@ -1425,7 +1427,7 @@ mod tests {
             MockClient {
                 tip: ChainTip {
                     height: BlockHeight::from(42),
-                    block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                    block_hash: Base58(SHA256Hash::from([0x42; 32])),
                 },
             },
             LoadedExecution {
@@ -1913,10 +1915,10 @@ mod tests {
 
     fn runtime_manifest() -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "kind": "hosted-devnet-runtime",
             "chainState": "fresh",
-            "networkHash": "00".repeat(32),
+            "networkHash": "1".repeat(32),
             "protocol": "hogp/test00000000000",
             "producer": {
                 "binary": "hog-devnode",
@@ -1932,7 +1934,7 @@ mod tests {
             "bootstrapAccounts": [],
             "bootstrap": {
                 "storageCostModel": {
-                    "hash": prefixed_hex(0x53),
+                    "hash": identifier(0x53),
                     "baseDataItemCost": "12000",
                     "bytestringCostPerByte": "10",
                     "baseContractDeploymentCost": "12000",
@@ -1947,8 +1949,8 @@ mod tests {
         .expect("runtime manifest fixture should parse")
     }
 
-    fn prefixed_hex(byte: u8) -> String {
-        format!("0x{}", hex::encode([byte; 32]))
+    fn identifier(byte: u8) -> String {
+        thruput_json_rpc_types::NetworkHashText::from([byte; 32]).to_string()
     }
 
     fn actor_states() -> Vec<ActorState> {
@@ -1957,7 +1959,7 @@ mod tests {
             SimAccount {
                 index: 0,
                 signer: derive_dev_account_signer("run-test-seed", 0),
-                wallet_address: Hex0x(ContractAddress::from([0x66; 32])).0,
+                wallet_address: Base58(ContractAddress::from([0x66; 32])).0,
                 network_hash: thruput_xdr::types::NetworkHash::new(
                     thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),

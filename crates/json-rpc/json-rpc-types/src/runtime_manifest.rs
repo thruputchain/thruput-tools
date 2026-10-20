@@ -5,10 +5,10 @@ use std::{fmt, net::SocketAddr};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{ContractAddress, Ed25519PublicKey, NetworkHashHex, SHA256Hash};
+use crate::{ContractAddress, Ed25519PublicKey, NetworkHashText, SHA256Hash};
 
 /// Current runtime manifest schema version.
-pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 4;
+pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 5;
 
 /// Runtime manifest family emitted by hog-devnode.
 pub const HOGD_DEV_RUNTIME_MANIFEST_KIND: &str = "hogd-dev-runtime";
@@ -36,14 +36,14 @@ pub struct RuntimeManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain_state: Option<RuntimeManifestChainState>,
     /// Unprefixed 32-byte network hash shared by all services for this runtime.
-    pub network_hash: NetworkHashHex,
+    pub network_hash: NetworkHashText,
     /// x23 protocol string expected by backend services.
     pub protocol: String,
     /// Build metadata for the manifest producer.
     pub producer: RuntimeManifestProducer,
     /// Dial addresses for services available in this runtime.
     pub endpoints: RuntimeManifestEndpoints,
-    /// Derivation metadata advertised only by hosted schema-3 runtimes.
+    /// Derivation metadata advertised only by hosted schema-4 runtimes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bootstrap_account_derivation: Option<BootstrapAccountDerivation>,
     /// Accounts present in genesis and funded by the producer.
@@ -85,7 +85,7 @@ pub fn parse_runtime_manifest(bytes: &[u8]) -> Result<RuntimeManifest, RuntimeMa
 
     let envelope: RuntimeManifestEnvelope = serde_json::from_slice(bytes)?;
     let expected = match envelope.kind.as_deref() {
-        Some(HOSTED_DEVNET_RUNTIME_MANIFEST_KIND) => 3,
+        Some(HOSTED_DEVNET_RUNTIME_MANIFEST_KIND) => 4,
         Some(HOGD_DEV_RUNTIME_MANIFEST_KIND) | None => RUNTIME_MANIFEST_SCHEMA_VERSION,
         Some(kind) => {
             return Err(serde_json::Error::custom(format!(
@@ -113,7 +113,7 @@ pub fn parse_runtime_manifest(bytes: &[u8]) -> Result<RuntimeManifest, RuntimeMa
                 })
         {
             return Err(serde_json::Error::custom(
-                "local schema 4 must not contain account derivation or index fields",
+                "local schema 5 must not contain account derivation or index fields",
             )
             .into());
         }
@@ -124,7 +124,7 @@ pub fn parse_runtime_manifest(bytes: &[u8]) -> Result<RuntimeManifest, RuntimeMa
             .any(|account| account.index.is_none())
     {
         return Err(serde_json::Error::custom(
-            "hosted schema 3 requires account derivation and indices",
+            "hosted schema 4 requires account derivation and indices",
         )
         .into());
     }
@@ -214,7 +214,7 @@ pub struct BootstrapAccountDerivation {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct BootstrapAccount {
-    /// Hosted schema-3 fixture derivation index; absent on local schema 4.
+    /// Hosted schema-4 fixture derivation index; absent on local schema 5.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<u32>,
     /// Account role discriminator. Local runtimes use `faucet` for the service
@@ -276,7 +276,7 @@ mod tests {
     use serde_json::json;
     use thruput_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 
-    use crate::hex::Hex0x;
+    use crate::base58::Base58;
 
     use super::{
         BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, RUNTIME_MANIFEST_SCHEMA_VERSION,
@@ -291,7 +291,7 @@ mod tests {
         assert!(matches!(
             super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()),
             Err(super::RuntimeManifestParseError::UnsupportedSchema {
-                expected: 4,
+                expected: 5,
                 actual: 2
             })
         ));
@@ -304,10 +304,10 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 4,
+                "schemaVersion": 5,
                 "kind": "hogd-dev-runtime",
                 "chainState": "fresh",
-                "networkHash": "4242424242424242424242424242424242424242424242424242424242424242",
+                "networkHash": thruput_encoding::encode(&hex::decode("4242424242424242424242424242424242424242424242424242424242424242").unwrap()),
                 "protocol": "hogp/test00000000000",
                 "producer": {
                     "binary": "hogd-dev",
@@ -323,13 +323,13 @@ mod tests {
                 },
                 "bootstrapAccounts": [{
                     "role": BOOTSTRAP_ACCOUNT_ROLE_FAUCET,
-                    "publicKey": prefixed_hex(0x61),
-                    "walletAddress": prefixed_hex(0x71),
+                    "publicKey": base58_text(0x61),
+                    "walletAddress": base58_text(0x71),
                     "initialStorageTokens": "10000000000000",
                 }],
                 "bootstrap": {
                     "storageCostModel": {
-                        "hash": prefixed_hex(0x53),
+                        "hash": base58_text(0x53),
                         "baseDataItemCost": "12000",
                         "bytestringCostPerByte": "10",
                         "baseContractDeploymentCost": "12000",
@@ -355,7 +355,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("networkHash must be exactly 64 lowercase hexadecimal characters")
+                .contains("networkHash must be base58 encoding of exactly 32 bytes")
         );
     }
 
@@ -365,9 +365,9 @@ mod tests {
         value["networkHash"] = json!("AA".repeat(32));
 
         let error = serde_json::from_value::<RuntimeManifest>(value)
-            .expect_err("uppercase network hash should fail");
+            .expect_err("legacy hex network hash should fail");
 
-        assert!(error.to_string().contains("lowercase hexadecimal"));
+        assert!(error.to_string().contains("base58 encoding"));
     }
 
     #[test]
@@ -395,7 +395,7 @@ mod tests {
         }
 
         let manifest = serde_json::from_value::<RuntimeManifest>(value)
-            .expect("schema 3 should allow a missing additive field");
+            .expect("the runtime schema should allow a missing additive field");
 
         assert_eq!(manifest.chain_state, None);
         assert_eq!(manifest.endpoints.scheduler_gateway, None);
@@ -418,21 +418,21 @@ mod tests {
     }
 
     #[test]
-    fn hosted_three_is_supported_but_local_three_is_rejected() {
+    fn hosted_four_is_supported_but_local_four_is_rejected() {
         let mut value = serde_json::to_value(full_manifest()).unwrap();
-        value["schemaVersion"] = json!(3);
+        value["schemaVersion"] = json!(4);
         assert!(super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
         value["kind"] = json!(super::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND);
         value["bootstrapAccountDerivation"] =
             json!({"scheme":"groundhog-bootstrap-account-v1","seed":"hosted-fixture"});
         value["bootstrapAccounts"][0]["index"] = json!(0);
         assert!(super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()).is_ok());
-        value["schemaVersion"] = json!(4);
+        value["schemaVersion"] = json!(5);
         assert!(super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
     }
 
     #[test]
-    fn local_four_rejects_legacy_derivation_even_null() {
+    fn local_five_rejects_legacy_derivation_even_null() {
         for field in ["bootstrapAccountDerivation", "index"] {
             let mut value = serde_json::to_value(full_manifest()).unwrap();
             if field == "index" {
@@ -449,8 +449,8 @@ mod tests {
         let original = serde_json::to_string(&full_manifest()).unwrap();
         for (needle, replacement) in [
             (
-                "\"schemaVersion\":4",
-                "\"schemaVersion\":4,\"schemaVersion\":4",
+                "\"schemaVersion\":5",
+                "\"schemaVersion\":5,\"schemaVersion\":5",
             ),
             (
                 "\"kind\":\"hogd-dev-runtime\"",
@@ -473,7 +473,7 @@ mod tests {
             schema_version: RUNTIME_MANIFEST_SCHEMA_VERSION,
             kind: "hogd-dev-runtime".into(),
             chain_state: Some(RuntimeManifestChainState::Fresh),
-            network_hash: crate::NetworkHashHex::from([0x42; 32]),
+            network_hash: crate::NetworkHashText::from([0x42; 32]),
             protocol: "hogp/test00000000000".into(),
             producer: RuntimeManifestProducer {
                 binary: "hogd-dev".into(),
@@ -548,8 +548,8 @@ mod tests {
         let account = serde_json::from_value::<BootstrapAccount>(json!({
             "index": 0,
             "role": "local_user",
-            "publicKey": prefixed_hex(0x61),
-            "walletAddress": prefixed_hex(0x71),
+            "publicKey": base58_text(0x61),
+            "walletAddress": base58_text(0x71),
             "initialStorageTokens": "1000000000",
             "producerAddedField": "ignored",
         }))
@@ -563,18 +563,18 @@ mod tests {
     }
 
     fn hash(byte: u8) -> crate::SHA256Hash {
-        Hex0x(SHA256Hash::from([byte; 32]))
+        Base58(SHA256Hash::from([byte; 32]))
     }
 
     fn public_key(byte: u8) -> crate::Ed25519PublicKey {
-        Hex0x(Ed25519PublicKey::from([byte; 32]))
+        Base58(Ed25519PublicKey::from([byte; 32]))
     }
 
     fn contract_address(byte: u8) -> crate::ContractAddress {
-        Hex0x(ContractAddress::from([byte; 32]))
+        Base58(ContractAddress::from([byte; 32]))
     }
 
-    fn prefixed_hex(byte: u8) -> String {
-        format!("0x{}", hex::encode([byte; 32]))
+    fn base58_text(byte: u8) -> String {
+        thruput_encoding::encode(&[byte; 32])
     }
 }

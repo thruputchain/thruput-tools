@@ -23,7 +23,7 @@ pub struct TransferReportCommon {
     /// Signature scheme of the signing key: `ed25519` or `mldsa65`.
     pub signer_scheme: String,
     /// Raw encoded public key of the signing key in its scheme.
-    pub signer_public_key: HexBytes,
+    pub signer_public_key: String,
     pub recipient_input: String,
     pub recipient: ContractAddress,
     pub token_address: ContractAddress,
@@ -89,8 +89,8 @@ pub struct TransferUnconfirmedReport {
 
 #[cfg(test)]
 mod tests {
-    use thruput_json_rpc_types::hex::{Hex0x, HexBytes};
     use thruput_json_rpc_types::transaction::TxHash;
+    use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
     use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
     use super::{
@@ -160,16 +160,16 @@ mod tests {
             rpc_url: "http://127.0.0.1:9545".into(),
             dry_run: false,
             submitted: true,
-            sender: Hex0x(ContractAddress::from([0x11; 32])),
+            sender: Base58(ContractAddress::from([0x11; 32])),
             sender_wallet: Some("alice".into()),
             signer_scheme: "ed25519".into(),
-            signer_public_key: HexBytes(vec![0x22; 32]),
+            signer_public_key: thruput_encoding::encode(&[0x22; 32]),
             recipient_input: "alice".into(),
-            recipient: Hex0x(ContractAddress::from([0x33; 32])),
-            token_address: Hex0x(ContractAddress::from([0x44; 32])),
+            recipient: Base58(ContractAddress::from([0x33; 32])),
+            token_address: Base58(ContractAddress::from([0x44; 32])),
             amount: "1.5".into(),
             raw_amount: "15000000".into(),
-            tx_hash: TxHash(Hex0x(SHA256Hash::from([0x55; 32]))),
+            tx_hash: TxHash(Base58(SHA256Hash::from([0x55; 32]))),
         }
     }
 
@@ -182,16 +182,16 @@ mod tests {
                 rpc_url: "http://127.0.0.1:9545".into(),
                 dry_run: true,
                 submitted: false,
-                sender: Hex0x(ContractAddress::from([0x11; 32])),
+                sender: Base58(ContractAddress::from([0x11; 32])),
                 sender_wallet: Some("alice".into()),
                 signer_scheme: "ed25519".into(),
-                signer_public_key: HexBytes(vec![0x22; 32]),
+                signer_public_key: thruput_encoding::encode(&[0x22; 32]),
                 recipient_input: "alice".into(),
-                recipient: Hex0x(ContractAddress::from([0x33; 32])),
-                token_address: Hex0x(ContractAddress::from([0x44; 32])),
+                recipient: Base58(ContractAddress::from([0x33; 32])),
+                token_address: Base58(ContractAddress::from([0x44; 32])),
                 amount: "1.5".into(),
                 raw_amount: "15000000".into(),
-                tx_hash: TxHash(Hex0x(SHA256Hash::from([0x55; 32]))),
+                tx_hash: TxHash(Base58(SHA256Hash::from([0x55; 32]))),
             },
             expiry_height: 123,
             signed_transaction: HexBytes(vec![0xaa, 0xbb]),

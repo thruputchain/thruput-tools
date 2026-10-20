@@ -22,6 +22,7 @@ name = "thruput"
 path = "src/main.rs"
 
 [dependencies]
+thruput-encoding = { workspace = true }
 shlex = { workspace = true }
 thruput-client = { workspace = true }
 clap = { workspace = true }

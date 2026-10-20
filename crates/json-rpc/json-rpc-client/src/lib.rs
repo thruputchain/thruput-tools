@@ -2,6 +2,9 @@
 //
 // Re-exports json-rpc-types so consumers (SDK, CLI) only need this crate.
 pub use thruput_json_rpc_types as types;
+// Native result readers are available before production method migration.
+pub use thruput_json_rpc_types::error::native::DecodedError;
+pub use thruput_json_rpc_types::responses::DecodedResponse;
 
 pub mod receipt;
 

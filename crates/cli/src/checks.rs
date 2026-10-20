@@ -1511,8 +1511,8 @@ mod tests {
             crate::config::SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: format!("0x{}", "11".repeat(32)),
-                owner_public_key: format!("0x{}", "22".repeat(32)),
+                address: thruput_encoding::encode(&[0x11; 32]),
+                owner_public_key: thruput_encoding::encode(&[0x22; 32]),
             },
         );
         let profile = crate::config::ResolvedProfile {
@@ -1583,7 +1583,7 @@ mod tests {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
                 address: "not-an-address".into(),
-                owner_public_key: format!("0x{}", "22".repeat(32)),
+                owner_public_key: thruput_encoding::encode(&[0x22; 32]),
             },
         );
         let profile = crate::config::ResolvedProfile {

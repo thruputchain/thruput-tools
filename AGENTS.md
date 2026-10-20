@@ -53,9 +53,10 @@ re-derive protocol primitives in the CLI.
   `hogd-backend`, not separate gateway/supervisor implementations.
 - RPC fields use `camelCase`, tagged enums, canonical decimal strings for all
   64-bit-or-wider integers (including small values), JSON numbers for smaller
-  bounded integers, and
-  `0x`-prefixed lowercase hex bytes. Use `HexBytes` or `Topic` from
-  `json-rpc-types/src/hex.rs`, not raw `Vec<u8>` in RPC payloads. Preserve
+  bounded integers, and unprefixed base58 for typed addresses, keys, hashes and
+  signatures. Opaque payloads, raw topics, storage keys and selectors retain
+  `0x`-prefixed lowercase hex. Use typed `Base58` identifiers or `HexBytes` and
+  `Topic`, not raw `Vec<u8>` in RPC payloads. Preserve
   opaque server-authored cursors verbatim.
 - Request structs reject unknown fields with `deny_unknown_fields`. For
   internally tagged enums with unit variants, follow `BlockAnchor`'s

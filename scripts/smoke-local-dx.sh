@@ -19,7 +19,7 @@
 #   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
 #   SMOKE_PROTOCOL_RS_PATH=/path/to/protocol-rs  # defaults to sdk_rs sibling
 #   CARGO_TARGET_DIR=/absolute/path/to/build-output
-#   SMOKE_NETWORK_HASH=<64 lowercase hex digits, optionally 0x-prefixed>
+#   SMOKE_NETWORK_HASH=<32-byte network hash in unprefixed base58>
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
@@ -99,7 +99,7 @@ request = urllib.request.Request(
 )
 with urllib.request.urlopen(request, timeout=10) as response:
     payload = json.load(response)
-assert payload["result"]["networkHash"] == "0x" + expected, payload
+assert payload["result"]["networkHash"] == expected, payload
 PY
 }
 
@@ -620,8 +620,7 @@ if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_BASE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"
 fi
-EXPECTED_NETWORK_HASH="${SMOKE_NETWORK_HASH:-0000000000000000000000000000000000000000000000000000000000000000}"
-EXPECTED_NETWORK_HASH="${EXPECTED_NETWORK_HASH#0x}"
+EXPECTED_NETWORK_HASH="${SMOKE_NETWORK_HASH:-11111111111111111111111111111111}"
 NODE_INIT_ARGS=("${NODE_BASE_ARGS[@]}")
 if [[ -n "${SMOKE_NETWORK_HASH:-}" ]]; then
     NODE_INIT_ARGS+=(--init-network-hash "$SMOKE_NETWORK_HASH")
@@ -727,7 +726,7 @@ assert_rpc_network_identity "$RPC_URL"
 python3 - "$RUNTIME_MANIFEST" <<'MANIFEST'
 import json, sys
 m = json.load(open(sys.argv[1]))
-assert m["schemaVersion"] == 4
+assert m["schemaVersion"] == 5
 assert "bootstrapAccountDerivation" not in m
 assert all("index" not in a for a in m["bootstrapAccounts"])
 MANIFEST

@@ -6,7 +6,7 @@ use std::{
 use thruput_hogd_backend::status::{StatusProbe, transaction_status};
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::{
-    hex::Hex0x,
+    base58::Base58,
     transaction::{TransactionStatus, TxHash},
 };
 use thruput_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
@@ -57,7 +57,7 @@ impl StatusProbe for Scripted {
 }
 
 fn hash() -> TxHash {
-    TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from([0x11; 32])))
+    TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x11; 32])))
 }
 
 fn committed() -> TransactionStatus {

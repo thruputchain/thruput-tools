@@ -72,11 +72,15 @@ includes the producer's recovered/fresh chain state; directory existence alone
 is not evidence of recovery. Ordinary child logs go to stderr and are forwarded
 through Rust tracing, leaving stdout available for startup protocol.
 
-Local runtime and bootstrap manifests use schema 4; the readiness pointer retains
-schema 3. Local accounts have public keys, addresses and initial raw allocations,
+Local runtime and bootstrap manifests use schema 5; the readiness pointer uses
+schema 4. Network hashes, public keys, addresses, storage-cost model hashes and
+the readiness manifest checksum use unprefixed, case-sensitive base58. Selectors
+and opaque payloads retain hex. Local data-directory metadata uses schema 5;
+older directories require their original runtime and tools or a fresh directory.
+Local accounts have public keys, addresses and initial raw allocations,
 with no derivation seed or account indices. The supervisor owns the private
 faucet key; users and harnesses own their signing keys. Hosted Devnet retains its
-separate schema-3 deterministic adapter. Every native account has nonce zero and
+separate schema-4 deterministic adapter. Every native account has nonce zero and
 an address matching its public key. Bootstrap metadata contains the storage cost
 model; native wallets need no RV32 artifact.
 

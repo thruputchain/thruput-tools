@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use thruput_json_rpc_types::hex::decode_fixed_hex;
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -584,7 +583,8 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
     prepared: &PreparedDeploy,
 ) -> Result<SubmittedDeploy, CliError> {
     let (tx_hash, receipt) = submit_prepared_deploy(prepared)?;
-    let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
+    let predicted_address =
+        ContractAddress::from(parse_predicted_address(&prepared.predicted_address)?);
     let (contract_address, address_source) = match &receipt.status {
         thruput_json_rpc_types::receipt::ExecStatus::Ok => {
             let (address, source) = if prepared.native.is_some() {
@@ -846,8 +846,8 @@ fn prepare_deploy_transaction_plan(
     );
     let native = funding.map(|amount| NativeDeployment {
         sender: crate::codec::format_contract_address(&wallet_address),
-        network_hash: format!("0x{}", hex::encode(wallet_context.network_hash.as_ref())),
-        contract_hash: format!("0x{}", hex::encode(contract_hash.as_ref())),
+        network_hash: thruput_encoding::encode(wallet_context.network_hash.as_ref()),
+        contract_hash: thruput_encoding::encode(contract_hash.as_ref()),
         deployment_nonce: format!("0x{}", hex::encode(deploy_nonce.as_ref())),
         expiry_height: block_expiry_height,
         gas_limit,
@@ -871,10 +871,10 @@ fn prepare_deploy_transaction_plan(
         rpc_url: rpc_url.to_owned(),
         profile_name: profile.name.clone(),
         wallet_name: sender.wallet_name,
-        wallet_address: format!("0x{}", hex::encode(wallet_address.as_ref())),
+        wallet_address: crate::codec::format_contract_address(&wallet_address),
         artifact,
         artifact_bytes_len,
-        predicted_address: format!("0x{}", hex::encode(predicted_address.as_ref())),
+        predicted_address: crate::codec::format_contract_address(&predicted_address),
         wallet_entrypoint_id: format!(
             "0x{}",
             hex::encode(wallet_context.entrypoints.deploy.into_inner())
@@ -1048,9 +1048,9 @@ fn report_unverified_native_deploy(
     Err(CliError::CommandReportedFailure)
 }
 
-/// Parse a `0x`-prefixed hex string into a 32-byte array.
-fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32], CliError> {
-    decode_fixed_hex(hex_str)
+/// Decode the canonical base58 address produced during deployment preparation.
+fn parse_predicted_address(address: &str) -> Result<[u8; 32], CliError> {
+    thruput_encoding::decode_fixed(address)
         .map_err(|error| CliError::Other(format!("invalid predicted address: {error}")))
 }
 
@@ -1120,7 +1120,7 @@ fn resolve_deployed_address(
     if let Some(return_data) = return_data {
         if return_data.0.len() == 32 {
             return Ok((
-                format!("0x{}", hex::encode(&return_data.0)),
+                thruput_encoding::encode(&return_data.0),
                 DeployAddressSource::Receipt,
             ));
         }
@@ -1131,7 +1131,7 @@ fn resolve_deployed_address(
     }
 
     Ok((
-        format!("0x{}", hex::encode(predicted_address.as_ref())),
+        crate::codec::format_contract_address(predicted_address),
         DeployAddressSource::Derived,
     ))
 }
@@ -1142,8 +1142,8 @@ mod tests {
 
     use super::{
         DeployAddressSource, PreparedDeploy, command_error_for_deploy_receipt,
-        deploy_funding_commands, derive_deploy_address, hex_to_32_bytes, newest_input_mtime,
-        resolve_deployed_address, stale_artifact_warning,
+        deploy_funding_commands, derive_deploy_address, newest_input_mtime,
+        parse_predicted_address, resolve_deployed_address, stale_artifact_warning,
     };
     use super::{INTEGRATION_DEPLOY_FUND_HOG, resolve_native_funding};
     use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_thruput_artifact};
@@ -1151,7 +1151,8 @@ mod tests {
     use tempfile::TempDir;
     use thruput_json_rpc_types::{
         BlockHeight,
-        hex::{Hex0x, HexBytes},
+        base58::Base58,
+        hex::HexBytes,
         receipt::{ExecStatus, TransactionReceipt},
         transaction::TxHash,
     };
@@ -1181,7 +1182,7 @@ mod tests {
             .unwrap();
         let url = format!("http://{}", server.local_addr().unwrap());
         let mut module = jsonrpsee::RpcModule::new(submissions.clone());
-        let hash = TxHash(Hex0x(SHA256Hash::from([1; 32])));
+        let hash = TxHash(Base58(SHA256Hash::from([1; 32])));
         module
             .register_method("groundhog_sendRawTransaction", move |_, state, _| {
                 state.fetch_add(1, Ordering::SeqCst);
@@ -1246,17 +1247,17 @@ mod tests {
     }
 
     #[test]
-    fn hex_to_32_bytes_parses_prefixed_hex() {
-        let input = format!("0x{}", "ab".repeat(32));
-        let bytes = hex_to_32_bytes(&input).expect("bug: valid prefixed hex should parse");
+    fn predicted_address_parses_base58() {
+        let input = thruput_encoding::encode(&[0xab; 32]);
+        let bytes = parse_predicted_address(&input).unwrap();
         assert_eq!(bytes, [0xab; 32]);
     }
 
     #[test]
-    fn hex_to_32_bytes_parses_unprefixed_hex() {
-        let input = "cd".repeat(32);
-        let bytes = hex_to_32_bytes(&input).expect("bug: valid unprefixed hex should parse");
-        assert_eq!(bytes, [0xcd; 32]);
+    fn predicted_address_rejects_legacy_hex() {
+        for input in ["cd".repeat(32), format!("0x{}", "cd".repeat(32))] {
+            assert!(parse_predicted_address(&input).is_err());
+        }
     }
 
     #[test]
@@ -1306,15 +1307,14 @@ mod tests {
     }
 
     #[test]
-    fn hex_to_32_bytes_rejects_wrong_length() {
-        let short = format!("0x{}", "ab".repeat(16));
-        assert!(hex_to_32_bytes(&short).is_err());
+    fn predicted_address_rejects_wrong_length() {
+        let short = thruput_encoding::encode(&[0xab; 16]);
+        assert!(parse_predicted_address(&short).is_err());
     }
 
     #[test]
-    fn hex_to_32_bytes_rejects_invalid_hex() {
-        let bad = format!("0x{}", "zz".repeat(32));
-        assert!(hex_to_32_bytes(&bad).is_err());
+    fn predicted_address_rejects_invalid_base58() {
+        assert!(parse_predicted_address(&"0".repeat(32)).is_err());
     }
 
     #[test]
@@ -1322,7 +1322,7 @@ mod tests {
         let predicted = ContractAddress::from([0x11; 32]);
         let resolved = resolve_deployed_address(None, &predicted)
             .expect("bug: predicted address fallback should succeed");
-        assert_eq!(resolved.0, format!("0x{}", "11".repeat(32)));
+        assert_eq!(resolved.0, thruput_encoding::encode(&[0x11; 32]));
         assert_eq!(resolved.1, DeployAddressSource::Derived);
     }
 
@@ -1331,7 +1331,7 @@ mod tests {
         let predicted = ContractAddress::from([0x11; 32]);
         let resolved = resolve_deployed_address(Some(&HexBytes(vec![0x22; 32])), &predicted)
             .expect("bug: receipt return_data should be accepted");
-        assert_eq!(resolved.0, format!("0x{}", "22".repeat(32)));
+        assert_eq!(resolved.0, thruput_encoding::encode(&[0x22; 32]));
         assert_eq!(resolved.1, DeployAddressSource::Receipt);
     }
 
@@ -1390,7 +1390,7 @@ mod tests {
     fn funding_commands_support_option_like_wallet_and_profile_names() {
         let prepared = PreparedDeploy {
             initializer_metadata: None,
-            tx_hash: TxHash(Hex0x(SHA256Hash::from([0; 32]))),
+            tx_hash: TxHash(Base58(SHA256Hash::from([0; 32]))),
             native: None,
             rpc_url: String::new(),
             profile_name: "-preview".into(),
@@ -1419,7 +1419,7 @@ mod tests {
 
     fn failed_receipt(abort_data: Option<HexBytes>) -> TransactionReceipt {
         TransactionReceipt {
-            tx_hash: TxHash(Hex0x(SHA256Hash::from([0x11; 32]))),
+            tx_hash: TxHash(Base58(SHA256Hash::from([0x11; 32]))),
             height: BlockHeight::from(1),
             status: ExecStatus::Reverted { message: None },
             events: Vec::new(),

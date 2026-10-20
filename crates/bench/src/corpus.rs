@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn corpus_rejects_unknown_version_empty_or_duplicate_hashes() {
-        let hash = format!("0x{}", "aa".repeat(32));
+        let hash = thruput_json_rpc_types::NetworkHashText::from([0xaa; 32]).to_string();
         for (version, hashes) in [
             (2, vec![hash.clone()]),
             (1, vec![]),

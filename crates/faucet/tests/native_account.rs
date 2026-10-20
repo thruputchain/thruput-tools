@@ -9,8 +9,9 @@ use thruput_faucet::airdrop::{
     AirdropRuntimeConfig, AirdropRuntimeConfigError, AirdropSubmitter, RpcAirdropSubmitter,
 };
 use thruput_json_rpc_types::{
+    base58::Base58,
     block::ChainTip,
-    hex::{Hex0x, HexBytes},
+    hex::HexBytes,
     network_descriptor::{
         FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
     },
@@ -30,14 +31,14 @@ fn descriptor(account: &PubkeyAccount, rpc_url: String) -> NetworkDescriptor {
         "devnet".into(),
         SHA256Hash::from([0x42; 32]).into(),
         "x23".into(),
-        Hex0x([0x43; 32].into()),
+        Base58([0x43; 32].into()),
         NetworkDescriptorEndpoints::new(rpc_url),
         NativeHogDescriptor::new(
-            Hex0x([0x61; 32].into()),
+            Base58([0x61; 32].into()),
             7,
             HexBytes(0x6328_5b35_23f9_dc3f_u64.to_be_bytes().to_vec()),
         ),
-        FaucetDescriptor::new(Hex0x(account.address())),
+        FaucetDescriptor::new(Base58(account.address())),
     )
 }
 
@@ -98,7 +99,7 @@ async fn hosted_airdrops_use_native_authentication_and_distinct_transaction_nonc
             }
             Ok::<_, ErrorObjectOwned>(ChainTip {
                 height: height.into(),
-                block_hash: Hex0x([0; 32].into()),
+                block_hash: Base58([0; 32].into()),
             })
         })
         .unwrap();
@@ -107,10 +108,10 @@ async fn hosted_airdrops_use_native_authentication_and_distinct_transaction_nonc
             let (encoded,): (String,) = params.parse()?;
             let signed: SignedTransaction =
                 xdrs::txs::decode(&hex::decode(encoded.trim_start_matches("0x")).unwrap()).unwrap();
-            let hash = TxHash(Hex0x(transaction_hash(&signed.tx).unwrap()));
+            let hash = TxHash(Base58(transaction_hash(&signed.tx).unwrap()));
             state.0.lock().unwrap().push(signed);
             Ok::<_, ErrorObjectOwned>(if state.2.load(Ordering::SeqCst) {
-                TxHash(Hex0x([9; 32].into()))
+                TxHash(Base58([9; 32].into()))
             } else {
                 hash
             })
@@ -124,7 +125,7 @@ async fn hosted_airdrops_use_native_authentication_and_distinct_transaction_nonc
     let submitter =
         RpcAirdropSubmitter::new(&descriptor, &config, SHA256Hash::from([0x42; 32]).into())
             .unwrap();
-    let recipient = Hex0x(ContractAddress::from([0x71; 32]));
+    let recipient = Base58(ContractAddress::from([0x71; 32]));
     let first = submitter.prepare_airdrop(recipient).await.unwrap();
     assert!(recorded.lock().unwrap().is_empty());
     // Preparation already read the tip; a later tip outage must not strand

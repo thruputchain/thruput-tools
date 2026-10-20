@@ -246,7 +246,7 @@ async fn public_views_preserve_order_gas_height_and_freshness_errors() {
     .into_rpc();
     for min_height in ["42", "43"] {
         let calls: Vec<_> = [("0x01", "123"), ("0x02", "456")].into_iter().map(|(calldata, gas)| serde_json::json!({
-            "contract": format!("0x{}", "07".repeat(32)), "entrypoint": "0x0808080808080808", "calldata": calldata, "gasLimit": gas,
+            "contract": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])), "entrypoint": "0x0808080808080808", "calldata": calldata, "gasLimit": gas,
             "authClaim": {"kind":"sourceAddress", "allowedKeys":5, "requiredWeight": if calldata == "0x01" { 3 } else { 4 }},
         })).collect();
         let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"groundhog_viewBatch", "params":[{"calls":calls,"minHeight":min_height}]}).to_string();

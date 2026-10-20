@@ -1,15 +1,15 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "kind": "groundhog-bootstrap",
-  "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "networkHash": "11111111111111111111111111111111",
   "profile": "local-dev",
   "bootstrapFaucet": {
-    "publicKey": "0x6161616161616161616161616161616161616161616161616161616161616161",
+    "publicKey": "7Z8ftDAzMvoyXnGEJye8DurzgQQXLAbYCaeeesM7UKHa",
     "initialStorageTokens": "10000000000000"
   },
   "bootstrapAccounts": [
     {
-      "publicKey": "0x6262626262626262626262626262626262626262626262626262626262626262",
+      "publicKey": "7d3y2WdzxE7CfsWjkGy3WndkvZcj1EHMkzKJiFPiDecH",
       "initialStorageTokens": "1000000000"
     }
   ],

@@ -76,17 +76,13 @@ fn init_configures_profiles_and_succeeds() {
     assert!(global_config.contains("[profile.local]"));
     assert!(global_config.contains("network = \"local\""));
     assert!(global_config.contains("devnet"));
-    assert!(
-        global_config.contains(
-            "HOG = \"0x0000000000000000000000000000000000000000000000000000000000000001\""
-        )
-    );
+    assert!(global_config.contains("HOG = \"11111111111111111111111111111112\""));
     let local = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(local.network, Some(thruput_cli::config::Network::Local));
     assert!(local.rpc_url.is_none());
     assert_eq!(
         local.contracts.get("HOG").map(String::as_str),
-        Some("0x0000000000000000000000000000000000000000000000000000000000000001")
+        Some("11111111111111111111111111111112")
     );
     let devnet = thruput_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
     assert_eq!(devnet.name, "devnet");
@@ -101,7 +97,7 @@ fn init_configures_profiles_and_succeeds() {
     );
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),
-        Some("0x0000000000000000000000000000000000000000000000000000000000000001")
+        Some("11111111111111111111111111111112")
     );
 
     unsafe {
@@ -184,7 +180,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     );
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),
-        Some("0x0000000000000000000000000000000000000000000000000000000000000001")
+        Some("11111111111111111111111111111112")
     );
 
     unsafe {

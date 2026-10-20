@@ -79,7 +79,7 @@ pub enum TransactionBuildError {
 
 #[cfg(test)]
 mod tests {
-    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::base58::Base58;
     use thruput_signing::derive_dev_account_signer;
     use thruput_xdr::types::ContractAddress;
 
@@ -142,7 +142,7 @@ mod tests {
             SimAccount {
                 index: 0,
                 signer: derive_dev_account_signer("seed", 0),
-                wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
+                wallet_address: Base58(ContractAddress::from([0x77; 32])).0,
                 network_hash: thruput_xdr::types::NetworkHash::new(
                     thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
@@ -170,7 +170,7 @@ mod tests {
             SimAccount {
                 index: 0,
                 signer: derive_dev_account_signer("seed", 0),
-                wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
+                wallet_address: Base58(ContractAddress::from([0x77; 32])).0,
                 network_hash: thruput_xdr::types::NetworkHash::new(
                     thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
@@ -199,7 +199,7 @@ mod tests {
             SimAccount {
                 index: 0,
                 signer: derive_dev_account_signer("seed", 0),
-                wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
+                wallet_address: Base58(ContractAddress::from([0x77; 32])).0,
                 network_hash: thruput_xdr::types::NetworkHash::new(
                     thruput_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),

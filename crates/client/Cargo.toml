@@ -13,6 +13,7 @@ categories.workspace = true
 description = "Embeddable Thruput contract invocation client"
 
 [dependencies]
+thruput-encoding = { workspace = true }
 thruput-signing.workspace = true
 thruput-json-rpc-client.workspace = true
 thruput-json-rpc-types.workspace = true

@@ -484,10 +484,10 @@ fn collect_archive_files(data_dir: &Path) -> Result<Vec<(String, PathBuf)>, CliE
     if value
         .get("schemaVersion")
         .and_then(serde_json::Value::as_u64)
-        != Some(4)
+        != Some(5)
     {
         return Err(archive_io(
-            "old local state requires the previous runtime and tooling".into(),
+            "unsupported local state schema; start a fresh node in a new data directory".into(),
         ));
     }
     let mut files = vec![(DATA_DIR_METADATA.to_owned(), metadata)];
@@ -1219,7 +1219,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         fs::write(
             temp.path().join(DATA_DIR_METADATA),
-            b"{\"schemaVersion\":4}",
+            b"{\"schemaVersion\":5}",
         )
         .unwrap();
         for relative in PRIVATE_STATE_FILES {

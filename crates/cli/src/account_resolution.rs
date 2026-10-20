@@ -1,5 +1,5 @@
-use thruput_json_rpc_types::hex::prefixed_hex;
-use thruput_json_rpc_types::{NetworkHashHex, runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET};
+use thruput_encoding::encode;
+use thruput_json_rpc_types::{NetworkHashText, runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET};
 use thruput_signing::SchemeSigner;
 use thruput_xdr::types::PublicKey;
 
@@ -176,7 +176,7 @@ pub(crate) fn resolve_network_hash(
             Err(CliError::MissingNetworkHash)
         };
     };
-    NetworkHashHex::try_from(configured.strip_prefix("0x").unwrap_or(configured))
+    NetworkHashText::try_from(configured)
         .map(|hash| Some(hash.to_network_hash()))
         .map_err(|_| CliError::InvalidNetworkHash {
             value: configured.to_owned(),
@@ -219,10 +219,10 @@ pub(crate) fn resolve_selected_wallet(
         return Err(CliError::SavedWalletOwnerMismatch {
             wallet_name: wallet_name.to_owned(),
             key_name: key_name.to_owned(),
-            configured: prefixed_hex(&validated.owner_public_key),
+            configured: encode(&validated.owner_public_key),
             local: local.map_or_else(
-                || prefixed_hex(thruput_signing::public_key_hash(public_key).as_ref()),
-                prefixed_hex,
+                || encode(thruput_signing::public_key_hash(public_key).as_ref()),
+                |bytes| encode(&bytes),
             ),
         });
     }
@@ -284,15 +284,10 @@ fn resolve_saved_wallet_for_public_key(
     let expected_owner = crate::keys::ed25519_public_key_bytes(expected_public_key);
     let mut matches = Vec::new();
     for (wallet_name, wallet) in &profile.wallets {
-        match parse_owner_public_key(wallet_name, &wallet.owner_public_key) {
-            Ok(owner_public_key)
-                if expected_owner
-                    .is_some_and(|expected| owner_public_key.as_slice() == expected.as_slice()) =>
-            {
-                matches.push((wallet_name, wallet));
-            }
-            // Neither another owner nor invalid metadata establishes a match.
-            Ok(_) | Err(_) => {}
+        let owner_public_key = parse_owner_public_key(wallet_name, &wallet.owner_public_key)?;
+        if expected_owner.is_some_and(|expected| owner_public_key.as_slice() == expected.as_slice())
+        {
+            matches.push((wallet_name, wallet));
         }
     }
     let [(_, wallet)] = matches.as_slice() else {
@@ -328,9 +323,9 @@ fn saved_wallet_owner_public_key_invalid(key_name: &str, message: impl Into<Stri
     }
 }
 
-/// Recognize explicit address prefixes without validating the address itself.
+/// Recognize base58 addresses and explicitly typed contract addresses.
 pub(crate) fn looks_like_address_literal(value: &str) -> bool {
-    value.starts_with("0x") || value.starts_with("0X") || value.starts_with('C')
+    value.starts_with('C') || codec::parse_contract_address(value).is_ok()
 }
 
 /// Resolve a saved wallet, contract alias, direct address, or named key account.
@@ -353,9 +348,7 @@ fn resolve_address_target_with_keys(
     if let Some(address) = profile.contracts.get(target) {
         return parse_target_address(target, address);
     }
-    let literal_error = if looks_like_address_literal(target)
-        || (target.len() == 64 && target.bytes().all(|byte| byte.is_ascii_hexdigit()))
-    {
+    let literal_error = if looks_like_address_literal(target) {
         match parse_target_address(target, target) {
             Ok(address) => return Ok(address),
             Err(error) => Some(error),
@@ -398,7 +391,7 @@ pub(crate) fn resolve_address_target_or_default_wallet(
     Ok((wallet_name.unwrap_or(key_name), address))
 }
 
-/// Resolve a contract alias or an explicitly prefixed direct address.
+/// Resolve a contract alias or a base58 / typed `StrKey` address.
 pub(crate) fn resolve_contract_target(
     profile: &ResolvedProfile,
     target: &str,
@@ -421,12 +414,9 @@ fn parse_target_address(
     target: &str,
     address: &str,
 ) -> Result<thruput_xdr::types::ContractAddress, CliError> {
-    let normalized = address.strip_prefix("0X").map(|value| format!("0x{value}"));
-    codec::parse_contract_address(normalized.as_deref().unwrap_or(address)).map_err(|error| {
-        CliError::InvalidAddressTarget {
-            target: target.to_owned(),
-            message: error.to_string(),
-        }
+    codec::parse_contract_address(address).map_err(|error| CliError::InvalidAddressTarget {
+        target: target.to_owned(),
+        message: error.to_string(),
     })
 }
 
@@ -444,10 +434,13 @@ pub(crate) fn resolve_local_bootstrap_account(
              or profile.<name>.runtime_manifest from `thruput node`",
         ));
     };
-    if manifest.kind != "hogd-dev-runtime" || manifest.schema_version != 4 {
+    if manifest.kind != "hogd-dev-runtime"
+        || manifest.schema_version
+            != thruput_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION
+    {
         return Err(local_runtime_error(
             key_name,
-            "local funding requires a schema 4 local runtime; old state requires the previous runtime and tooling",
+            "local funding requires a schema 5 local runtime; start a fresh node with matching tooling",
         ));
     }
     let mut accounts = manifest
@@ -562,14 +555,14 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: prefixed_hex(wallet_address.as_ref()),
-                owner_public_key: prefixed_hex([0x33; 32]),
+                address: encode(wallet_address.as_ref()),
+                owner_public_key: encode(&[0x33; 32]),
             },
         );
         let mut profile = test_profile("alice", None, wallets);
         profile
             .contracts
-            .insert("alice".into(), prefixed_hex(contract_address.as_ref()));
+            .insert("alice".into(), encode(contract_address.as_ref()));
 
         let resolved = resolve_address_target(&profile, "alice")
             .expect("bug: saved wallet target should resolve");
@@ -583,7 +576,7 @@ mod tests {
         let mut profile = test_profile("alice", None, BTreeMap::new());
         profile
             .contracts
-            .insert("counter".into(), prefixed_hex(expected.as_ref()));
+            .insert("counter".into(), encode(expected.as_ref()));
 
         let resolved = resolve_address_target(&profile, "counter")
             .expect("bug: contract alias should resolve");
@@ -592,23 +585,20 @@ mod tests {
     }
 
     #[test]
-    fn address_target_accepts_uppercase_prefix_and_canonicalizes_on_format() {
-        let target = format!("0X{}", "Ab".repeat(32));
+    fn address_target_accepts_base58_and_preserves_case() {
+        let target = encode(&[0xab; 32]);
 
         let resolved =
             resolve_address_target(&test_profile("alice", None, BTreeMap::new()), &target)
-                .expect("bug: mixed-case direct address should resolve");
+                .expect("bug: base58 direct address should resolve");
 
-        assert_eq!(
-            codec::format_contract_address(&resolved),
-            format!("0x{}", "ab".repeat(32))
-        );
+        assert_eq!(codec::format_contract_address(&resolved), target);
     }
 
     #[test]
     fn address_target_rejects_malformed_prefixed_address() {
         let error =
-            resolve_address_target(&test_profile("alice", None, BTreeMap::new()), "0xdeadbeef")
+            resolve_address_target(&test_profile("alice", None, BTreeMap::new()), "Cinvalid")
                 .expect_err("bug: malformed direct address should fail");
 
         assert_eq!(error.code(), "invalid_address_target");
@@ -631,10 +621,10 @@ mod tests {
         profile.source = Some(source.clone());
         profile
             .contracts
-            .insert("zebra".into(), prefixed_hex([0x11; 32]));
+            .insert("zebra".into(), encode(&[0x11; 32]));
         profile
             .contracts
-            .insert("alpha".into(), prefixed_hex([0x22; 32]));
+            .insert("alpha".into(), encode(&[0x22; 32]));
 
         let error = resolve_contract_target(&profile, "counter")
             .expect_err("bug: unknown contract alias should fail");
@@ -661,26 +651,26 @@ mod tests {
     fn contract_target_preserves_direct_address_validation() {
         let profile = test_profile("alice", None, BTreeMap::new());
 
-        let error = resolve_contract_target(&profile, "0xdeadbeef")
+        let error = resolve_contract_target(&profile, "Cinvalid")
             .expect_err("bug: malformed direct address should fail");
 
         assert_eq!(error.code(), "invalid_address_target");
         assert_eq!(
             error.details_json().expect("details expected")["target"],
-            "0xdeadbeef"
+            "Cinvalid"
         );
     }
 
     #[test]
     fn contract_target_does_not_resolve_saved_wallet_names() {
-        let address = prefixed_hex([0x33; 32]);
+        let address = encode(&[0x33; 32]);
         let wallets = BTreeMap::from([(
             "counter".into(),
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
                 address,
-                owner_public_key: prefixed_hex([0x44; 32]),
+                owner_public_key: encode(&[0x44; 32]),
             },
         )]);
         let profile = test_profile("alice", None, wallets);
@@ -701,8 +691,8 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: prefixed_hex(wallet_address.as_ref()),
-                owner_public_key: prefixed_hex(signer.verifying_key_bytes()),
+                address: encode(wallet_address.as_ref()),
+                owner_public_key: encode(&signer.verifying_key_bytes()),
             },
         );
         let profile = test_profile("alice", None, wallets);
@@ -724,8 +714,8 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: prefixed_hex(wallet_address.as_ref()),
-                owner_public_key: prefixed_hex(signer.verifying_key_bytes()),
+                address: encode(wallet_address.as_ref()),
+                owner_public_key: encode(&signer.verifying_key_bytes()),
             },
         );
         let profile = test_profile("default", None, wallets);
@@ -738,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn non_dev_key_uses_owner_match_despite_unrelated_malformed_wallet() {
+    fn automatic_selection_rejects_unreadable_owner_even_with_a_valid_match() {
         let signer = thruput_signing::derive_default_dev_account_signer(0);
         let wallet_address = thruput_xdr::types::ContractAddress::from([0x84; 32]);
         let mut wallets = BTreeMap::new();
@@ -747,7 +737,7 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: prefixed_hex([0x85; 32]),
+                address: encode(&[0x85; 32]),
                 owner_public_key: "not-hex".into(),
             },
         );
@@ -756,23 +746,62 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: prefixed_hex(wallet_address.as_ref()),
-                owner_public_key: prefixed_hex(signer.verifying_key_bytes()),
+                address: encode(wallet_address.as_ref()),
+                owner_public_key: encode(&signer.verifying_key_bytes()),
             },
         );
         let profile = test_profile("alice", None, wallets);
 
-        let resolved = resolve_wallet_selection(&profile, "alice", &signer, None)
-            .expect("bug: unrelated malformed wallet should not hide owner match")
-            .1;
+        let error = resolve_wallet_selection(&profile, "alice", &signer, None)
+            .expect_err("unreadable owner must not hide a potential matching wallet");
+        assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
+        assert_eq!(error.details_json().unwrap()["keyName"], "broken");
+    }
 
-        assert_eq!(resolved, wallet_address);
+    #[test]
+    fn incompatible_saved_owner_cannot_fall_back_to_nonce_zero() {
+        let signer = thruput_signing::derive_default_dev_account_signer(0);
+        let owner = signer.verifying_key_bytes();
+        let native = thruput_signing::PubkeyAccount::from_public_key_bytes(owner, 17);
+        for (kind, account_nonce, address) in [
+            (
+                crate::config::WalletKind::DevWallet,
+                None,
+                thruput_xdr::types::ContractAddress::from([0x81; 32]),
+            ),
+            (
+                crate::config::WalletKind::Native,
+                Some(17),
+                native.address(),
+            ),
+        ] {
+            let binding = SavedWalletBinding {
+                kind,
+                account_nonce,
+                address: encode(address.as_ref()),
+                owner_public_key: encode(&owner),
+            };
+            let mut profile =
+                test_profile("alice", None, BTreeMap::from([("trading".into(), binding)]));
+            assert_eq!(
+                resolve_wallet_selection(&profile, "alice", &signer, None)
+                    .unwrap()
+                    .1,
+                address
+            );
+            profile.wallets.get_mut("trading").unwrap().owner_public_key =
+                format!("0x{}", hex::encode(owner));
+            let error = resolve_wallet_selection(&profile, "alice", &signer, None)
+                .expect_err("incompatible saved owner must require configuration repair");
+            assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
+            assert_eq!(error.details_json().unwrap()["keyName"], "trading");
+        }
     }
 
     #[test]
     fn non_dev_key_rejects_multiple_owner_matched_wallets() {
         let signer = thruput_signing::derive_default_dev_account_signer(0);
-        let owner_public_key = prefixed_hex(signer.verifying_key_bytes());
+        let owner_public_key = encode(&signer.verifying_key_bytes());
         let mut wallets = BTreeMap::new();
         for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
             wallets.insert(
@@ -780,7 +809,7 @@ mod tests {
                 SavedWalletBinding {
                     kind: crate::config::WalletKind::DevWallet,
                     account_nonce: None,
-                    address: prefixed_hex([byte; 32]),
+                    address: encode(&[byte; 32]),
                     owner_public_key: owner_public_key.clone(),
                 },
             );
@@ -800,7 +829,7 @@ mod tests {
     #[test]
     fn selected_wallet_disambiguates_owner_matched_wallets() {
         let signer = thruput_signing::derive_default_dev_account_signer(0);
-        let owner_public_key = prefixed_hex(signer.verifying_key_bytes());
+        let owner_public_key = encode(&signer.verifying_key_bytes());
         let mut wallets = BTreeMap::new();
         for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
             wallets.insert(
@@ -808,7 +837,7 @@ mod tests {
                 SavedWalletBinding {
                     kind: crate::config::WalletKind::DevWallet,
                     account_nonce: None,
-                    address: prefixed_hex([byte; 32]),
+                    address: encode(&[byte; 32]),
                     owner_public_key: owner_public_key.clone(),
                 },
             );
@@ -826,7 +855,7 @@ mod tests {
     #[test]
     fn profile_default_wallet_disambiguates_owner_matched_wallets() {
         let signer = thruput_signing::derive_default_dev_account_signer(0);
-        let owner_public_key = prefixed_hex(signer.verifying_key_bytes());
+        let owner_public_key = encode(&signer.verifying_key_bytes());
         let mut wallets = BTreeMap::new();
         for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
             wallets.insert(
@@ -834,7 +863,7 @@ mod tests {
                 SavedWalletBinding {
                     kind: crate::config::WalletKind::DevWallet,
                     account_nonce: None,
-                    address: prefixed_hex([byte; 32]),
+                    address: encode(&[byte; 32]),
                     owner_public_key: owner_public_key.clone(),
                 },
             );
@@ -864,8 +893,8 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: prefixed_hex([0x83; 32]),
-                owner_public_key: prefixed_hex(other.verifying_key_bytes()),
+                address: encode(&[0x83; 32]),
+                owner_public_key: encode(&other.verifying_key_bytes()),
             },
         );
         let profile = test_profile("default", None, wallets);
@@ -921,15 +950,15 @@ mod tests {
     }
 
     #[test]
-    fn network_hash_accepts_a_hand_edited_0x_prefix() {
+    fn network_hash_accepts_canonical_base58() {
         let mut profile = test_profile("alice", None, BTreeMap::new());
-        profile.network_hash = Some(format!("0x{}", "ab".repeat(32)));
+        profile.network_hash = Some(NetworkHashText::from([0xab; 32]).to_string());
 
         let resolved = resolve_network_hash(&profile, "alice").unwrap();
 
         assert_eq!(
             resolved,
-            Some(NetworkHashHex::from([0xab; 32]).to_network_hash())
+            Some(NetworkHashText::from([0xab; 32]).to_network_hash())
         );
     }
 
@@ -940,7 +969,7 @@ mod tests {
             thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 17);
         let binding = SavedWalletBinding {
             address: crate::codec::format_contract_address(&account.address()),
-            owner_public_key: format!("0x{}", hex::encode(signer.verifying_key_bytes())),
+            owner_public_key: encode(&signer.verifying_key_bytes()),
             kind: crate::config::WalletKind::Native,
             account_nonce: Some(17),
         };
@@ -1013,8 +1042,8 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: prefixed_hex(wallet_address.as_ref()),
-                owner_public_key: prefixed_hex(other.verifying_key_bytes()),
+                address: encode(wallet_address.as_ref()),
+                owner_public_key: encode(&other.verifying_key_bytes()),
             },
         );
 
@@ -1034,7 +1063,7 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: prefixed_hex(wallet_address.as_ref()),
+                address: encode(wallet_address.as_ref()),
                 owner_public_key: "not-hex".into(),
             },
         );
@@ -1053,7 +1082,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_selection_ignores_malformed_owner_public_key() {
+    fn automatic_selection_rejects_malformed_owner_public_key() {
         let signer = thruput_signing::derive_default_dev_account_signer(0);
         let wallet_address = thruput_xdr::types::ContractAddress::from([0x41; 32]);
         let mut profile = test_profile("alice", None, BTreeMap::new());
@@ -1062,14 +1091,14 @@ mod tests {
             SavedWalletBinding {
                 kind: crate::config::WalletKind::DevWallet,
                 account_nonce: None,
-                address: prefixed_hex(wallet_address.as_ref()),
+                address: encode(wallet_address.as_ref()),
                 owner_public_key: String::new(),
             },
         );
 
-        let (name, address) = resolve_wallet_selection(&profile, "alice", &signer, None).unwrap();
-        assert!(name.is_none());
-        assert_eq!(address, default_native_account(&signer).address());
+        let error = resolve_wallet_selection(&profile, "alice", &signer, None)
+            .expect_err("unreadable owner must not select a different sender");
+        assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
     }
 
     #[test]
@@ -1145,8 +1174,8 @@ mod tests {
                 let signer = thruput_signing::derive_default_dev_account_signer(*index);
                 serde_json::json!({
                     "role": role,
-                    "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
-                    "walletAddress": format!("0x{}", hex::encode(wallet_address.as_ref())),
+                    "publicKey": thruput_json_rpc_types::Ed25519PublicKey::from(thruput_xdr::types::Ed25519PublicKey::from(signer.verifying_key_bytes())),
+                    "walletAddress": thruput_json_rpc_types::ContractAddress::from(*wallet_address),
                     "initialStorageTokens": "1000000000"
                 })
             })
@@ -1159,12 +1188,12 @@ mod tests {
         accounts: &[serde_json::Value],
     ) {
         let manifest = serde_json::json!({
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
-            "networkHash": "00".repeat(32),
+            "networkHash": "1".repeat(32),
             "protocol": "hogp/test00000000000",
-            "genesisHash": format!("0x{}", "42".repeat(32)),
+            "genesisHash": NetworkHashText::from([0x42; 32]),
             "producer": {
                 "binary": "hog-devnode",
                 "version": "0.1.0"
@@ -1175,7 +1204,7 @@ mod tests {
             "bootstrapAccounts": accounts,
             "bootstrap": {
                 "storageCostModel": {
-                    "hash": format!("0x{}", "53".repeat(32)),
+                    "hash": NetworkHashText::from([0x53; 32]),
                     "baseDataItemCost": "12000",
                     "bytestringCostPerByte": "10",
                     "baseContractDeploymentCost": "12000",

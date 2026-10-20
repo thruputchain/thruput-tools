@@ -29,7 +29,7 @@ fn recent_failure_serializes_camel_case() {
     assert_eq!(value["attemptHeight"], "1234");
     assert_eq!(
         value["cause"]["conflict"]["address"],
-        format!("0x{}", "11".repeat(32))
+        thruput_encoding::encode(&[0x11; 32])
     );
     let expected_key = format!(
         "0x{}",

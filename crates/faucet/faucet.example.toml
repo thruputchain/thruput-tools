@@ -7,22 +7,22 @@ cors_allowed_origins = ["http://127.0.0.1:5173"]
 [network]
 network_id = "local-devnet"
 protocol = "x23"
-genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+genesis_hash = "11111111111111111111111111111111"
 # Network hash this faucet signs against, as `hog-devnode` writes it into the
-# runtime manifest: bare lowercase hex, no 0x prefix.
-network_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+# runtime manifest: unprefixed, case-sensitive base58.
+network_hash = "11111111111111111111111111111111"
 
 [network.endpoints]
 rpc_url = "http://127.0.0.1:9545"
 
 [network.native_hog]
-token_address = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_address = "11111111111111111111111111111112"
 decimals = 7
 transfer_entrypoint = "0x63285b3523f9dc3f"
 
 [network.faucet]
-wallet_address = "0x0000000000000000000000000000000000000000000000000000000000000000"
-public_key = "0x0000000000000000000000000000000000000000000000000000000000000000"
+wallet_address = "11111111111111111111111111111111"
+public_key = "11111111111111111111111111111111"
 
 [airdrop]
 raw_amount = "1000000000"

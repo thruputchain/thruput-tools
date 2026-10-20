@@ -12,7 +12,7 @@ use thruput_json_rpc_client::{
 };
 use thruput_json_rpc_types::{
     airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
-    hex::Hex0x,
+    base58::Base58,
     receipt::{ExecStatus, TransactionReceipt},
     transaction::{ConflictCode, TransactionStatus, TxHash},
 };
@@ -35,7 +35,7 @@ async fn submit(
     network: &NetworkHash,
     tx: Transaction,
 ) -> TxHash {
-    let hash = TxHash(Hex0x(transaction_hash(&tx).unwrap()));
+    let hash = TxHash(Base58(transaction_hash(&tx).unwrap()));
     let bytes =
         sign_and_encode_transaction_hex(tx, signer, SignTransactionParams::default(), network)
             .unwrap();
@@ -55,7 +55,7 @@ async fn success(client: &HttpClient, hash: TxHash) -> TransactionReceipt {
 
 async fn balance(client: &HttpClient, address: ContractAddress) -> u128 {
     client
-        .get_balance(Hex0x(address))
+        .get_balance(Base58(address))
         .await
         .unwrap()
         .raw_balance
@@ -101,7 +101,7 @@ async fn qualify_native_deployment(atomic: bool) {
     let account = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
     assert_eq!(balance(&client, account.address()).await, 0);
     let request = AirdropRequest {
-        recipient: Hex0x(account.address()),
+        recipient: Base58(account.address()),
         client_nonce: ClientNonce::new(vec![0x37]).unwrap(),
     };
     let mut funded = false;

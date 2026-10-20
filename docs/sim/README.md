@@ -147,3 +147,10 @@ target cleanup still runs. Calibrate resource-growth thresholds for the target
 class before making them CI gates; unsupported measurements cannot establish a
 pass. See [compare.rs](../../crates/sim/src/compare.rs) and
 [assertions.rs](../../crates/sim/src/assertions.rs).
+
+## Saved report formats
+
+`result.json` and result-event streams use schema version 5. Chain addresses,
+transaction hashes and contract hashes are unprefixed base58. Payload bytes,
+storage keys, deployment nonces and artifact checksums retain hex encoding.
+Regenerate older run reports before comparing them with current results.

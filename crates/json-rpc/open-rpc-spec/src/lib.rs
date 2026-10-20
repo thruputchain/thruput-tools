@@ -6,6 +6,8 @@ use thruput_json_rpc_api::{
 };
 use thruput_open_rpc::{Project, ProjectInfo};
 
+pub mod native;
+
 /// Build the canonical `OpenRPC` artifact for the current RPC surface.
 ///
 /// The returned JSON is recursively key-sorted so the checked-in

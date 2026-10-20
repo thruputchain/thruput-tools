@@ -16,7 +16,7 @@ use thruput_json_rpc_server::{
     ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading, ValidatedTransaction,
 };
 use thruput_json_rpc_types::{
-    BlockHeight, NetworkHashHex, block::BlockInfo, protocol_token::protocol_from_text,
+    BlockHeight, NetworkHashText, block::BlockInfo, protocol_token::protocol_from_text,
 };
 use thruput_scheduler::{
     DbTip, ExpectedDBTip, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
@@ -46,7 +46,7 @@ pub(crate) struct HogdDevSchedulerBackend {
     submitter: SubmitBatcher,
     db_gateway: Option<DbGateway_DbGateway1_Client>,
     indexer: Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>,
-    expected_network: Option<NetworkHashHex>,
+    expected_network: Option<NetworkHashText>,
 }
 
 impl fmt::Debug for HogdDevSchedulerBackend {
@@ -126,7 +126,7 @@ impl HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all)]
     pub(crate) async fn require_dev_genesis(
         &self,
-        expected_network_hash: &NetworkHashHex,
+        expected_network_hash: &NetworkHashText,
     ) -> Result<(), NodeSupervisorError> {
         let coordinator_tip = require_dev_genesis(&self.coordinator).await?;
         validate_scheduler_network_hash(expected_network_hash, &coordinator_tip)?;
@@ -173,7 +173,7 @@ impl HogdDevSchedulerBackend {
     pub(crate) fn with_db_gateway(
         mut self,
         client: Option<DbGateway_DbGateway1_Client>,
-        expected_network: NetworkHashHex,
+        expected_network: NetworkHashText,
     ) -> Self {
         self.db_gateway = client;
         self.expected_network = Some(expected_network);
@@ -188,7 +188,7 @@ impl HogdDevSchedulerBackend {
 }
 
 fn validate_scheduler_network_hash(
-    expected: &NetworkHashHex,
+    expected: &NetworkHashText,
     db_tip: &DbTip,
 ) -> Result<(), NodeSupervisorError> {
     let mut bytes = [0; 32];
@@ -201,7 +201,7 @@ fn validate_scheduler_network_hash(
             .into_inner()
             .as_ref(),
     );
-    let observed = NetworkHashHex::from(bytes);
+    let observed = NetworkHashText::from(bytes);
     if expected == &observed {
         return Ok(());
     }

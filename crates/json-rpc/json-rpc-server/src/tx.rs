@@ -1,5 +1,5 @@
 use sha2::Digest;
-use thruput_json_rpc_types::{hex::Hex0x, transaction::TxHash};
+use thruput_json_rpc_types::{base58::Base58, transaction::TxHash};
 
 use thruput_tx_validation::{NetworkConfigParams, check_transaction};
 
@@ -118,7 +118,7 @@ pub fn validate_raw_transaction_bytes(
     check_transaction(&tx, params).map_err(RpcServerError::TxInvalidDetailed)?;
 
     let hash_bytes: [u8; 32] = sha2::Sha256::digest(&tx_bytes[..tx_end]).into();
-    let hash = TxHash(Hex0x(thruput_xdr::types::SHA256Hash::from(hash_bytes)));
+    let hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from(hash_bytes)));
 
     Ok(ValidatedTransaction {
         bytes: tx_bytes,

@@ -3,10 +3,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{Ed25519PublicKey, NetworkHashHex};
+use crate::{Ed25519PublicKey, NetworkHashText};
 
 /// Current bootstrap manifest schema version.
-pub const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 4;
+pub const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 5;
 
 /// Bootstrap intent consumed by a backend launcher before genesis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -18,7 +18,7 @@ pub struct BootstrapManifest {
     /// Manifest family, for example `groundhog-bootstrap`.
     pub kind: String,
     /// Unprefixed 32-byte network hash stamped into proposed block headers.
-    pub network_hash: NetworkHashHex,
+    pub network_hash: NetworkHashText,
     /// Free-form profile name used by launcher-specific defaults.
     pub profile: String,
     /// Public allocation for the supervisor-owned faucet.
@@ -33,7 +33,7 @@ impl BootstrapManifest {
     /// Construct a bootstrap manifest.
     pub fn new(
         kind: impl Into<String>,
-        network_hash: NetworkHashHex,
+        network_hash: NetworkHashText,
         profile: impl Into<String>,
         bootstrap_faucet: BootstrapManifestAllocation,
         bootstrap_accounts: Vec<BootstrapManifestAllocation>,
@@ -57,7 +57,6 @@ impl BootstrapManifest {
 #[non_exhaustive]
 pub struct BootstrapManifestAllocation {
     /// Public key authorized to sign for the account.
-    #[serde(deserialize_with = "canonical_public_key")]
     pub public_key: Ed25519PublicKey,
     /// Positive canonical decimal allocation in raw HOG units.
     #[serde(deserialize_with = "positive_amount")]
@@ -72,23 +71,6 @@ impl BootstrapManifestAllocation {
             initial_storage_tokens: initial_storage_tokens.into(),
         }
     }
-}
-
-fn canonical_public_key<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Ed25519PublicKey, D::Error> {
-    let text = String::deserialize(deserializer)?;
-    if text.len() != 66
-        || !text.starts_with("0x")
-        || !text[2..]
-            .bytes()
-            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-    {
-        return Err(serde::de::Error::custom(
-            "publicKey must be 0x-prefixed lowercase 32-byte hex",
-        ));
-    }
-    serde_json::from_value(serde_json::Value::String(text)).map_err(serde::de::Error::custom)
 }
 
 fn positive_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -135,16 +117,16 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 4,
+                "schemaVersion": 5,
                 "kind": "groundhog-bootstrap",
-                "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
+                "networkHash": thruput_encoding::encode(&hex::decode("5151515151515151515151515151515151515151515151515151515151515151").unwrap()),
                 "profile": "local-dev",
                 "bootstrapFaucet": {
-                    "publicKey": "0x1111111111111111111111111111111111111111111111111111111111111111",
+                    "publicKey": thruput_encoding::encode(&hex::decode("1111111111111111111111111111111111111111111111111111111111111111").unwrap()),
                     "initialStorageTokens": "10000000000000",
                 },
                 "bootstrapAccounts": [{
-                    "publicKey": "0x2222222222222222222222222222222222222222222222222222222222222222",
+                    "publicKey": thruput_encoding::encode(&hex::decode("2222222222222222222222222222222222222222222222222222222222222222").unwrap()),
                     "initialStorageTokens": "1000000000",
                 }],
                 "storageCostModel": {
@@ -165,7 +147,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("networkHash must be exactly 64 lowercase hexadecimal characters")
+                .contains("networkHash must be base58 encoding of exactly 32 bytes")
         );
     }
 
@@ -175,9 +157,9 @@ mod tests {
         value["networkHash"] = json!("AA".repeat(32));
 
         let error = serde_json::from_value::<BootstrapManifest>(value)
-            .expect_err("uppercase network hash should fail");
+            .expect_err("legacy hex network hash should fail");
 
-        assert!(error.to_string().contains("lowercase hexadecimal"));
+        assert!(error.to_string().contains("base58 encoding"));
     }
 
     #[test]
@@ -202,14 +184,14 @@ mod tests {
         BootstrapManifest {
             schema_version: BOOTSTRAP_MANIFEST_SCHEMA_VERSION,
             kind: "groundhog-bootstrap".into(),
-            network_hash: crate::NetworkHashHex::from([0x51; 32]),
+            network_hash: crate::NetworkHashText::from([0x51; 32]),
             profile: "local-dev".into(),
             bootstrap_faucet: BootstrapManifestAllocation::new(
-                crate::hex::Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x11; 32])),
+                crate::base58::Base58(thruput_xdr::types::Ed25519PublicKey::from([0x11; 32])),
                 "10000000000000",
             ),
             bootstrap_accounts: vec![BootstrapManifestAllocation::new(
-                crate::hex::Hex0x(thruput_xdr::types::Ed25519PublicKey::from([0x22; 32])),
+                crate::base58::Base58(thruput_xdr::types::Ed25519PublicKey::from([0x22; 32])),
                 "1000000000",
             )],
             storage_cost_model: BootstrapManifestStorageCostModel {

@@ -16,7 +16,7 @@ use thruput_xdr::types::{ContractAddress, NetworkHash};
 use tokio::io::AsyncReadExt;
 
 use crate::BenchError;
-use thruput_json_rpc_types::{hex::Hex0x, transaction::TxHash};
+use thruput_json_rpc_types::{base58::Base58, transaction::TxHash};
 
 const HOG_BALANCE_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new(0x41ac_95d6_e06e_2620_u64.to_be_bytes());
@@ -79,7 +79,7 @@ pub(super) fn generate_tx_batch(
             .map_err(|source| BenchError::WalletCalldata { source })?;
 
             let hash =
-                TxHash(Hex0x(transaction_hash(&tx).map_err(|source| {
+                TxHash(Base58(transaction_hash(&tx).map_err(|source| {
                     BenchError::SignAndEncodeTransaction { source }
                 })?));
             let hex = sign_and_encode_transaction_hex(
@@ -256,7 +256,7 @@ pub(super) fn make_request(method: &str, input: &str, id: u64) -> serde_json::Va
             "jsonrpc": "2.0",
             "id": id,
             "method": format!("groundhog_{method}"),
-            "params": [if input.is_empty() { "0x0000000000000000000000000000000000000000000000000000000000000000" } else { input }]
+            "params": [if input.is_empty() { "11111111111111111111111111111111" } else { input }]
         }),
         _ => unreachable!("bug: method validated before benchmark starts"),
     }
@@ -276,7 +276,7 @@ pub(super) fn validate_method(method: &str) -> Result<(), BenchError> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::base58::Base58;
     use thruput_xdr::types::{Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash};
 
     use super::*;
@@ -291,8 +291,8 @@ mod tests {
         for (index, account) in manifest.bootstrap_accounts.iter_mut().enumerate() {
             let signer = derive_dev_account_signer(&format!("groundhog-bench:{seed}"), index);
             account.index = None;
-            account.public_key = Hex0x(signer.verifying_key_bytes().into());
-            account.wallet_address = Hex0x(
+            account.public_key = Base58(signer.verifying_key_bytes().into());
+            account.wallet_address = Base58(
                 PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address(),
             );
         }
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn send_raw_transaction_rejects_public_key_mismatch() {
         let mut manifest = manifest();
-        manifest.bootstrap_accounts[0].public_key = Hex0x(XdrEd25519PublicKey::from([0x99; 32]));
+        manifest.bootstrap_accounts[0].public_key = Base58(XdrEd25519PublicKey::from([0x99; 32]));
 
         let err =
             match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1, None) {
@@ -481,10 +481,10 @@ mod tests {
         let mut public_key = [0u8; 32];
         public_key.copy_from_slice(&signer.verifying_key_bytes());
         serde_json::from_value(json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "kind": "hosted-devnet-runtime",
             "chainState": "fresh",
-            "networkHash": "00".repeat(32),
+            "networkHash": "1".repeat(32),
             "protocol": "hogp/test00000000000",
             "producer": {
                 "binary": "hogd-dev",
@@ -501,8 +501,8 @@ mod tests {
             "bootstrapAccounts": [{
                 "index": 0,
                 "role": "local_user",
-                "publicKey": Hex0x(XdrEd25519PublicKey::from(public_key)),
-                "walletAddress": Hex0x(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()),
+                "publicKey": Base58(XdrEd25519PublicKey::from(public_key)),
+                "walletAddress": Base58(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()),
                 "initialStorageTokens": "1000000000",
             }],
             "bootstrap": {
@@ -533,16 +533,16 @@ mod tests {
             public_key.copy_from_slice(&signer.verifying_key_bytes());
             let mut account = manifest.bootstrap_accounts[0].clone();
             account.index = Some(u32::try_from(index).expect("bug: test account index should fit"));
-            account.wallet_address = Hex0x(
+            account.wallet_address = Base58(
                 PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address(),
             );
-            account.public_key = Hex0x(XdrEd25519PublicKey::from(public_key));
+            account.public_key = Base58(XdrEd25519PublicKey::from(public_key));
             manifest.bootstrap_accounts.push(account);
         }
         manifest
     }
 
-    fn hash(byte: u8) -> Hex0x<SHA256Hash> {
-        Hex0x(SHA256Hash::from([byte; 32]))
+    fn hash(byte: u8) -> Base58<SHA256Hash> {
+        Base58(SHA256Hash::from([byte; 32]))
     }
 }

@@ -282,10 +282,8 @@ async fn block(client: &WsClient, sub: &mut Subscription<Value>, height: i64) ->
     let decoded: EventIndexerPulledBlock = xdrs::txs::decode(&bytes).unwrap();
     assert_eq!(
         message["block"]["consensusHash"],
-        format!(
-            "0x{}",
-            hex::encode(decoded.block.identity.consensus_hash.as_ref())
-        )
+        thruput_json_rpc_types::base58::Base58(decoded.block.identity.consensus_hash.into_inner())
+            .to_string()
     );
     assert_eq!(
         *decoded

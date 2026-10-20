@@ -14,7 +14,7 @@ use thruput_json_rpc_client::{
 };
 use thruput_json_rpc_types::{
     airdrop::{AirdropRequest, ClientNonce, FundAccountRequest},
-    hex::Hex0x,
+    base58::Base58,
     runtime_manifest::RuntimeManifest,
 };
 use thruput_signing::{
@@ -131,7 +131,7 @@ pub async fn prepare_accounts(
         .map_err(|error| SimError::RpcClient(error.to_string()))?;
     let mut records = Vec::new();
     for actor in actors {
-        records.push(json!({"actorId":actor.actor_id,"accountIndex":actor.account_index,"address":format!("0x{}",hex::encode(actor.wallet_address.as_ref())),"status":"started"}));
+        records.push(json!({"actorId":actor.actor_id,"accountIndex":actor.account_index,"address":Base58(actor.wallet_address),"status":"started"}));
         save_accounts(out_dir, &records).await?;
         let result = prepare_account(
             spec,
@@ -176,7 +176,7 @@ async fn prepare_account(
     records: &mut [serde_json::Value],
 ) -> Result<(), SimError> {
     let balance = client
-        .get_balance(Hex0x(actor.wallet_address))
+        .get_balance(Base58(actor.wallet_address))
         .await
         .map_err(|error| SimError::Executor(format!("native account balance: {error}")))?;
     records.last_mut().expect("current actor record")["balance"] = json!(balance);
@@ -195,9 +195,9 @@ async fn prepare_account(
     }
     if spec.funding != NativeAccountFunding::Faucet {
         return Err(SimError::Executor(format!(
-            "native actor {} at 0x{} has balance {}, requires {}; pre-fund it or explicitly select accounts.funding=faucet",
+            "native actor {} at {} has balance {}, requires {}; pre-fund it or explicitly select accounts.funding=faucet",
             actor.actor_id,
-            hex::encode(actor.wallet_address.as_ref()),
+            Base58(actor.wallet_address),
             balance.raw_balance,
             minimum
         )));
@@ -226,7 +226,7 @@ async fn prepare_account(
     digest.update(actor.wallet_address.as_ref());
     digest.update(actor.nonce_namespace.get().to_le_bytes());
     let request = AirdropRequest {
-        recipient: Hex0x(actor.wallet_address),
+        recipient: Base58(actor.wallet_address),
         client_nonce: ClientNonce::new(digest.finalize().to_vec())
             .map_err(|error| SimError::Executor(error.to_string()))?,
     };
@@ -306,7 +306,7 @@ async fn fund_local_account(
     digest.update(actor.wallet_address.as_ref());
     digest.update(actor.nonce_namespace.get().to_le_bytes());
     let request = FundAccountRequest {
-        recipient: Hex0x(actor.wallet_address),
+        recipient: Base58(actor.wallet_address),
         raw_amount,
         faucet: faucet.wallet_address,
         client_nonce: ClientNonce::new(digest.finalize().to_vec())
@@ -369,7 +369,7 @@ async fn verify_funded_balance(
 ) -> Result<thruput_json_rpc_types::balance::BalanceResponse, SimError> {
     loop {
         let balance = client
-            .get_balance(Hex0x(actor.wallet_address))
+            .get_balance(Base58(actor.wallet_address))
             .await
             .map_err(|error| SimError::Executor(format!("native funding balance: {error}")))?;
         if balance.address.0 != actor.wallet_address {
@@ -415,9 +415,9 @@ mod tests {
         let faucet = derive_dev_account_signer("local-faucet-fixture", 0);
         let allocation = &mut runtime.bootstrap_accounts[0];
         allocation.index = None;
-        allocation.public_key = Hex0x(faucet.verifying_key_bytes().into());
+        allocation.public_key = Base58(faucet.verifying_key_bytes().into());
         allocation.wallet_address =
-            Hex0x(PubkeyAccount::from_public_key_bytes(faucet.verifying_key_bytes(), 0).address());
+            Base58(PubkeyAccount::from_public_key_bytes(faucet.verifying_key_bytes(), 0).address());
         runtime
     }
 
@@ -447,7 +447,7 @@ mod tests {
         )
         .unwrap();
         let hash =
-            thruput_json_rpc_types::transaction::TxHash(Hex0x(transaction_hash(&tx).unwrap()));
+            thruput_json_rpc_types::transaction::TxHash(Base58(transaction_hash(&tx).unwrap()));
         let encoded = sign_and_encode_transaction_hex(
             tx,
             &faucet,
@@ -507,7 +507,7 @@ mod tests {
             .unwrap();
         let url = format!("http://{}", server.local_addr().unwrap());
         let mut module = jsonrpsee::RpcModule::new(requests.clone());
-        module.register_method("groundhog_getBalance", move |_, requests, _| json!({"address":Hex0x(address),"rawBalance":if requests.lock().unwrap().is_empty(){"0"}else{"100"},"height":"3"})).unwrap();
+        module.register_method("groundhog_getBalance", move |_, requests, _| json!({"address":Base58(address),"rawBalance":if requests.lock().unwrap().is_empty(){"0"}else{"100"},"height":"3"})).unwrap();
         module
             .register_async_method("groundhog_fundAccount", move |params, requests, _| {
                 let artifact = artifact.clone();
@@ -621,8 +621,8 @@ mod tests {
         let balance_calls = calls.clone();
         let faucet_calls = calls.clone();
         let mut module = jsonrpsee::RpcModule::new(());
-        module.register_method("groundhog_getBalance", move |_, (), _| json!({"address":Hex0x(address),"rawBalance":if balance_calls.load(Ordering::SeqCst)>0 {"100".into()} else {initial.to_string()},"height":"1"})).expect("balance method");
-        module.register_method("groundhog_requestAirdrop", move |_, (), _| {faucet_calls.fetch_add(1,Ordering::SeqCst); json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":"1","status":{"result":"ok"}})}).expect("faucet method");
+        module.register_method("groundhog_getBalance", move |_, (), _| json!({"address":Base58(address),"rawBalance":if balance_calls.load(Ordering::SeqCst)>0 {"100".into()} else {initial.to_string()},"height":"1"})).expect("balance method");
+        module.register_method("groundhog_requestAirdrop", move |_, (), _| {faucet_calls.fetch_add(1,Ordering::SeqCst); json!({"attemptStatus":"succeeded","recipient":Base58(address),"txHash":Base58(SHA256Hash::from([1; 32])),"rawAmount":"100","height":"1","status":{"result":"ok"}})}).expect("faucet method");
         (url, server.start(module), calls)
     }
 
@@ -677,7 +677,7 @@ mod tests {
                         assert!(evidence["accounts"][0]["funding"]["txHash"].is_string());
                         "invalid"
                     };
-                    json!({"address":Hex0x(address),"rawBalance":raw,"height":"1"})
+                    json!({"address":Base58(address),"rawBalance":raw,"height":"1"})
                 })
                 .expect("balance");
             let request_artifact = artifact.clone();
@@ -687,7 +687,7 @@ mod tests {
                 assert_eq!(evidence["accounts"][0]["fundingRequest"],request[0]);
                 if transport_failure { return Err(jsonrpsee::types::ErrorObjectOwned::owned(-32000,"uncertain funding",None::<()>)); }
                 funded.store(1,Ordering::SeqCst);
-                Ok(json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":"1","status":{"result":"ok"}}))
+                Ok(json!({"attemptStatus":"succeeded","recipient":Base58(address),"txHash":Base58(SHA256Hash::from([1; 32])),"rawAmount":"100","height":"1","status":{"result":"ok"}}))
             }).expect("faucet");
             let handle = server.start(module);
             let spec =
@@ -754,7 +754,7 @@ mod tests {
                     } else {
                         "100"
                     };
-                    json!({"address":Hex0x(address),"rawBalance":raw,"height":"1"})
+                    json!({"address":Base58(address),"rawBalance":raw,"height":"1"})
                 })
                 .expect("balance");
             module.register_async_method("groundhog_requestAirdrop", move |_, _, _| {
@@ -767,7 +767,7 @@ mod tests {
                         funded.store(1, Ordering::SeqCst);
                     });
                     worker.await.expect("funding worker");
-                    json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":"1","status":{"result":"ok"}})
+                    json!({"attemptStatus":"succeeded","recipient":Base58(address),"txHash":Base58(SHA256Hash::from([1; 32])),"rawAmount":"100","height":"1","status":{"result":"ok"}})
                 }
             }).expect("faucet");
             let handle = server.start(module);

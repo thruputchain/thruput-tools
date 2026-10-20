@@ -463,7 +463,7 @@ pub(crate) fn verify_deployment_receipt(
 #[cfg(test)]
 mod tests {
     use thruput_json_rpc_types::BlockHeight;
-    use thruput_json_rpc_types::hex::Hex0x;
+    use thruput_json_rpc_types::base58::Base58;
     use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
     use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
     use thruput_xdr::types::{ContractAddress, SHA256Hash};
@@ -478,7 +478,7 @@ mod tests {
 
     #[tokio::test]
     async fn recovered_committed_deploy_does_not_satisfy_pending_barrier() {
-        let tx_hash = TxHash(Hex0x(SHA256Hash::from([0x11; 32])));
+        let tx_hash = TxHash(Base58(SHA256Hash::from([0x11; 32])));
         let address = ContractAddress::from([0x22; 32]);
         let attempt = PendingRegistration {
             tx_hash,

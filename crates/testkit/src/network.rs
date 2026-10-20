@@ -14,12 +14,12 @@ use thruput_json_rpc_client::{
 };
 use thruput_json_rpc_types::block::ChainTip;
 use thruput_json_rpc_types::events::{EventPage, EventQuery};
-use thruput_json_rpc_types::hex::{Hex0x, HexBytes};
 use thruput_json_rpc_types::receipt::TransactionReceipt;
 use thruput_json_rpc_types::runtime_manifest::RuntimeManifest;
 use thruput_json_rpc_types::state::StorageItemRead;
 use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use thruput_json_rpc_types::view::{ViewRequest, ViewResponse};
+use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
 use thruput_xdr::contract::ContractEntrypointID;
 use thruput_xdr::types::ContractAddress;
 
@@ -325,7 +325,7 @@ impl Network {
         key: &[u8],
     ) -> Result<StorageItemRead> {
         self.require_client("getStorageAt")?
-            .get_storage_at(Hex0x(address), HexBytes(key.to_vec()))
+            .get_storage_at(Base58(address), HexBytes(key.to_vec()))
             .await
             .map_err(|e| TestkitError::rpc("getStorageAt", e))
     }
@@ -344,10 +344,10 @@ impl Network {
         let request = ViewRequest {
             auth_claim: None,
             min_height: None,
-            contract: Hex0x(contract),
+            contract: Base58(contract),
             entrypoint: HexBytes(entrypoint.into_inner().to_vec()),
             calldata: HexBytes(calldata.to_vec()),
-            caller: caller.map(Hex0x),
+            caller: caller.map(Base58),
             gas_limit: None,
         };
         self.require_client("view")?
@@ -420,9 +420,9 @@ impl Network {
                 recipient,
                 LocalFundingAttempt {
                     request: FundAccountRequest {
-                        recipient: Hex0x(recipient),
+                        recipient: Base58(recipient),
                         raw_amount: amount.to_string(),
-                        faucet: Hex0x(faucet),
+                        faucet: Base58(faucet),
                         client_nonce: ClientNonce::new(nonce.to_vec())
                             .map_err(TestkitError::signing)?,
                     },
@@ -615,7 +615,7 @@ mod tests {
                 attempt_height: 1.into(),
                 cause: thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
                     conflict: thruput_json_rpc_types::transaction::ConflictDiagnostic {
-                        address: thruput_json_rpc_types::hex::Hex0x([0; 32].into()),
+                        address: thruput_json_rpc_types::base58::Base58([0; 32].into()),
                         key: thruput_json_rpc_types::hex::HexBytes(Vec::new()),
                         code: thruput_json_rpc_types::transaction::ConflictCode::Other,
                     }

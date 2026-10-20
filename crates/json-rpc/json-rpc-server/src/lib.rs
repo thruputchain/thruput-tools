@@ -10,6 +10,7 @@ pub mod batch;
 mod block_queries;
 pub mod config;
 pub mod error;
+pub mod params;
 pub mod server;
 mod tip_cache;
 pub mod tx;

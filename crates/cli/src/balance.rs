@@ -240,7 +240,7 @@ mod tests {
 
     fn costs() -> RuntimeManifestStorageCostModel {
         serde_json::from_value(json!({
-            "hash": format!("0x{}", "00".repeat(32)),
+            "hash": "1".repeat(32),
             "baseDataItemCost": "12000",
             "bytestringCostPerByte": "10",
             "baseContractDeploymentCost": "12000",

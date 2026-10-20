@@ -4,7 +4,7 @@ use jsonrpsee::http_client::HttpClientBuilder;
 use thruput_json_rpc_api::{GroundhogApiClient, LocalFundingApiClient};
 use thruput_json_rpc_types::{
     airdrop::{ClientNonce, FundAccountRequest},
-    hex::Hex0x,
+    base58::Base58,
     receipt::ExecStatus,
 };
 use thruput_node_supervisor::{
@@ -38,7 +38,7 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
     assert_eq!(manifest.bootstrap_accounts.len(), 1);
     let faucet = manifest.bootstrap_accounts[0].wallet_address;
     let recipient_signer = LocalSigner::from_secret_key([0x77; 32]);
-    let recipient = Hex0x(
+    let recipient = Base58(
         PubkeyAccount::from_public_key_bytes(recipient_signer.verifying_key_bytes(), 0).address(),
     );
     let request = FundAccountRequest {

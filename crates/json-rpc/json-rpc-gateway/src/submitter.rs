@@ -505,7 +505,7 @@ mod tests {
     fn hash_from_u32(x: u32) -> TxHash {
         let mut bytes = [0u8; 32];
         bytes[..4].copy_from_slice(&x.to_be_bytes());
-        TxHash(thruput_json_rpc_types::hex::Hex0x(
+        TxHash(thruput_json_rpc_types::base58::Base58(
             thruput_xdr::types::SHA256Hash::from(bytes),
         ))
     }

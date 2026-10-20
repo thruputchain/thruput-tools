@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "runId": "baseline-chain-tip-smoke",
   "name": "chain-tip-smoke-baseline",
   "outcome": "passed",
@@ -13,9 +13,9 @@
     "rpcUrl": "http://127.0.0.1:9545"
   },
   "runtimeIdentity": {
-    "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "networkHash": "11111111111111111111111111111111",
     "protocol": "hogp/test",
-    "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
+    "genesisHash": "5TeWSsjg2gbxCyWVniXeCmwM7UtHTCK7svzJr5xYJzHf",
     "producer": {
       "binary": "hog-devnode",
       "version": "0.1.0"
