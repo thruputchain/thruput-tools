@@ -50,7 +50,7 @@ impl Fixture {
         };
         let key = fixture.command(&["keys", "generate", "owner"]).await?;
         fixture.owner =
-            thruput_encoding::decode_fixed::<32>(text(&key["data"]["key"], "public_key")?)?;
+            thruput_encoding::decode_fixed::<32>(text(&key["data"]["key"], "publicKey")?)?;
         let key_path = fixture.dir.path().join("config/thruput/keys/owner.json");
         require(
             std::fs::metadata(key_path)?.permissions().mode() & 0o777 == 0o600,
@@ -113,6 +113,7 @@ async fn native_cli_call_receipt_view_and_history() {
             .with_view_gas_limit(25_000_000)
             .with_hogd_dev(
                 HogdDevConfig::default()
+                    .with_ramdb_bytes(1024 * 1024 * 1024)
                     .with_binary_path(binary)
                     .with_contract_artifact_directories([artifacts])
                     .with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(
