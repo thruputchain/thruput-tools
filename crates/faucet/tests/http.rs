@@ -162,7 +162,8 @@ async fn airdrop_validates_request_then_submits() {
             "txHash": identifier(0x22),
             "rawAmount": "100000000",
             "height": "42",
-            "status": { "result": "ok" }
+            "status": { "result": "ok" },
+            "returnData": "0x"
         })
     );
 }
@@ -1067,6 +1068,7 @@ fn seed_airdrop_attempt_with_expiry(
             tx_hash,
             transaction: None,
             height: None,
+            return_data: None,
             error_code: None,
             created_at: now,
             updated_at: now,
@@ -1222,6 +1224,7 @@ struct MockAirdropSubmitter {
     poll_calls: Mutex<usize>,
     broadcasts: Mutex<Vec<airdrop::PreparedAirdrop>>,
     poll_status: Mutex<Option<TransactionStatus>>,
+    receipt_override: Mutex<Option<TransactionReceipt>>,
     raw_amount: String,
     accepted_raw_amount: String,
     poll_times_out: bool,
@@ -1307,6 +1310,7 @@ impl MockAirdropSubmitter {
             poll_calls: Mutex::new(0),
             broadcasts: Mutex::new(Vec::new()),
             poll_status: Mutex::new(None),
+            receipt_override: Mutex::new(None),
             raw_amount: raw_amount.into(),
             accepted_raw_amount: raw_amount.into(),
             poll_times_out: false,
@@ -1350,6 +1354,7 @@ impl MockAirdropSubmitter {
             poll_calls: Mutex::new(0),
             broadcasts: Mutex::new(Vec::new()),
             poll_status: Mutex::new(None),
+            receipt_override: Mutex::new(None),
             raw_amount: "100000000".into(),
             accepted_raw_amount: "100000000".into(),
             poll_times_out: false,
@@ -1369,6 +1374,7 @@ impl MockAirdropSubmitter {
             poll_calls: Mutex::new(0),
             broadcasts: Mutex::new(Vec::new()),
             poll_status: Mutex::new(None),
+            receipt_override: Mutex::new(None),
             raw_amount: "100000000".into(),
             accepted_raw_amount: "100000000".into(),
             poll_times_out: false,
@@ -1392,6 +1398,7 @@ impl MockAirdropSubmitter {
             poll_calls: Mutex::new(0),
             broadcasts: Mutex::new(Vec::new()),
             poll_status: Mutex::new(None),
+            receipt_override: Mutex::new(None),
             raw_amount: "100000000".into(),
             accepted_raw_amount: "100000000".into(),
             poll_times_out: false,
@@ -1507,7 +1514,12 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
                 },
             ));
         }
-        Ok(successful_receipt(tx_hash))
+        Ok(self
+            .receipt_override
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| successful_receipt(tx_hash)))
     }
 }
 
@@ -1521,7 +1533,7 @@ fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
         height: BlockHeight::from(42),
         status: ExecStatus::Ok,
         events: vec![],
-        return_data: None,
+        return_data: Some(thruput_json_rpc_types::hex::HexBytes(vec![])),
         abort_data: None,
         gas_used: 1_500,
     }
@@ -1689,4 +1701,51 @@ async fn concurrent_same_key_retry_has_one_broadcast() {
     assert_eq!(first.await.unwrap().status(), StatusCode::ACCEPTED);
     assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
     assert_eq!(submitter.calls(), 0);
+}
+
+#[tokio::test]
+async fn observed_receipt_identity_and_output_are_preserved() {
+    for invalid in 0..8 {
+        let submitter = MockAirdropSubmitter::success();
+        let mut receipt = successful_receipt(test_tx_hash());
+        receipt.return_data = Some(thruput_json_rpc_types::hex::HexBytes(vec![1, 2]));
+        match invalid {
+            1 => receipt.tx_hash = TxHash(Base58([3; 32].into())),
+            2 => receipt.height = (-1).into(),
+            3 => receipt.abort_data = Some(thruput_json_rpc_types::hex::HexBytes(vec![])),
+            4 => receipt.return_data = None,
+            5 => {
+                receipt.status = ExecStatus::Reverted { message: None };
+                receipt.return_data = None;
+            }
+            6 => receipt.status = ExecStatus::Reverted { message: None },
+            7 => {
+                receipt.status = ExecStatus::DeterministicError {
+                    kind: "fault".into(),
+                }
+            }
+            _ => {}
+        }
+        *submitter.receipt_override.lock().unwrap() = Some(receipt);
+        let submitter = Arc::new(submitter);
+        let config = test_config_with_submitters(submitter.clone());
+        let response = airdrop_request(&config).await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        if invalid == 0 {
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["returnData"], "0x0102");
+        } else {
+            assert_eq!(status, StatusCode::BAD_GATEWAY);
+            assert_eq!(body["error"]["code"], "airdrop_receipt_invalid");
+            *submitter.receipt_override.lock().unwrap() = Some(successful_receipt(test_tx_hash()));
+            let corrected = airdrop_request(&config).await;
+            assert_eq!(corrected.status(), StatusCode::OK);
+            assert_eq!(submitter.poll_calls(), 2);
+            assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
+        }
+    }
 }

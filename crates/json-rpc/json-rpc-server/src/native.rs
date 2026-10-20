@@ -127,3 +127,6 @@ pub mod transaction;
 
 /// Composition of implemented native handlers without production activation.
 pub mod service;
+
+/// Optional faucet and local funding semantics.
+pub mod funding;

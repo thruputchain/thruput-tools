@@ -1286,3 +1286,85 @@ async fn native_event_limit_advertises_and_enforces_backend_ceiling() {
     );
     assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
 }
+
+#[derive(Clone, Copy)]
+struct Funding(crate::native::funding::FundingCapabilities);
+#[async_trait]
+impl crate::native::funding::NativeFundingPlane for Funding {
+    fn capabilities(&self) -> crate::native::funding::FundingCapabilities {
+        self.0
+    }
+    async fn request_airdrop(
+        &self,
+        _: input::AirdropRequest,
+    ) -> jsonrpsee::core::RpcResult<out::AirdropAttempt> {
+        Err(crate::native::funding::rpc_error(
+            &RpcServerError::BackendUnavailable("offline".into()),
+        ))
+    }
+    async fn fund_account(
+        &self,
+        _: input::FundAccountRequest,
+    ) -> jsonrpsee::core::RpcResult<out::FundingSubmission> {
+        Err(crate::native::funding::rpc_error(
+            &RpcServerError::BackendUnavailable("offline".into()),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn optional_funding_registration_is_configured_not_health_driven() {
+    use crate::native::{funding::FundingCapabilities, service::NativeCapabilities};
+    for (capabilities, local, names) in [
+        (FundingCapabilities::None, false, vec![]),
+        (
+            FundingCapabilities::Faucet,
+            false,
+            vec!["faucet_requestAirdrop"],
+        ),
+        (
+            FundingCapabilities::Local,
+            true,
+            vec![
+                "dev_fundAccount",
+                "dev_getPendingTransactionCount",
+                "faucet_requestAirdrop",
+            ],
+        ),
+    ] {
+        let service = assembled_service(
+            Backend::default(),
+            NativeCapabilities::new(false, false, false, false),
+        )
+        .with_funding(Funding(capabilities));
+        let service = if local {
+            service.with_local_pending_count()
+        } else {
+            service
+        };
+        let module = service.into_module().unwrap().into_rpc();
+        for name in [
+            "faucet_requestAirdrop",
+            "dev_fundAccount",
+            "dev_getPendingTransactionCount",
+        ] {
+            assert_eq!(
+                module.method_names().any(|method| method == name),
+                names.contains(&name)
+            );
+        }
+        let version = r#"{"jsonrpc":"2.0","id":1,"method":"getVersionInfo","params":{}}"#;
+        let (before, _) = module.raw_json_request(version, 1).await.unwrap();
+        if !names.is_empty() {
+            let request = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"faucet_requestAirdrop","params":{"recipient":thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([1;32])),"clientNonce":"0x01"}});
+            let (failed, _) = module
+                .raw_json_request(&request.to_string(), 1)
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(failed.get()).unwrap();
+            assert_eq!(value["error"]["data"]["kind"], "backendUnavailable");
+        }
+        let (after, _) = module.raw_json_request(version, 1).await.unwrap();
+        assert_eq!(before.get(), after.get());
+    }
+}

@@ -415,3 +415,20 @@ fn validate_call(
     }
     Ok(gas)
 }
+
+impl<C: ChainPlane, R, V> NativeReadService<C, R, V> {
+    /// Read this local runtime's pending pool count, without claiming network-wide state.
+    #[tracing::instrument(skip_all)]
+    pub async fn get_pending_transaction_count(
+        &self,
+        _: input::EmptyRequest,
+    ) -> RpcResult<out::PendingTransactionCount> {
+        let context = self.context();
+        self.within(context, async {
+            Ok(out::PendingTransactionCount {
+                count: self.chain.pending_transaction_count(context).await?,
+            })
+        })
+        .await
+    }
+}

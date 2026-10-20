@@ -561,7 +561,9 @@ async fn start_rpc_server_with_read<R, V>(
     options: RpcServerOptions,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
-    R: thruput_json_rpc_server::ReadPlane + Clone,
+    R: thruput_json_rpc_server::ReadPlane
+        + Clone
+        + thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane,
     V: thruput_json_rpc_server::ViewPlane,
 {
     let RpcServerOptions {

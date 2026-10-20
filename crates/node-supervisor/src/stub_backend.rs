@@ -94,3 +94,28 @@ impl ReadPlane for StubBackend {
 
 #[async_trait]
 impl ViewPlane for StubBackend {}
+
+#[async_trait]
+impl thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane for StubBackend {
+    async fn native_receipt(
+        &self,
+        _context: RpcRequestContext,
+        _tx_hash: TxHash,
+    ) -> Result<
+        Option<thruput_json_rpc_types::responses::TransactionReceipt>,
+        thruput_json_rpc_server::native::transaction::NativeReadError,
+    > {
+        Err(RpcServerError::NotImplemented("getTransactionReceipt".into()).into())
+    }
+
+    async fn native_status(
+        &self,
+        _context: RpcRequestContext,
+        _tx_hash: TxHash,
+    ) -> Result<
+        thruput_json_rpc_types::responses::TransactionStatus,
+        thruput_json_rpc_server::native::transaction::NativeReadError,
+    > {
+        Err(RpcServerError::NotImplemented("getTransactionStatus".into()).into())
+    }
+}

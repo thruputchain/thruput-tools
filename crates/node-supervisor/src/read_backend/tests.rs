@@ -279,6 +279,9 @@ enum FakeIndexerMode {
     RpcFail,
     Slow,
     HistoryOutcome(i32),
+    ReceiptHashMismatch,
+    ReceiptMalformedEvent,
+    ReceiptInvalidOutput,
 }
 
 type CommittedSet = HashMap<[u8; 32], TxInfo>;
@@ -292,9 +295,25 @@ struct FakeIndexer {
 
 impl FakeIndexer {
     fn new(mode: FakeIndexerMode) -> Self {
+        let mut committed = Self::build_committed_set();
+        let log = &mut committed.get_mut(&CANNED_TX_HASH_A).unwrap().events;
+        match mode {
+            FakeIndexerMode::ReceiptHashMismatch => log.tx_hash = [3; 32].into(),
+            FakeIndexerMode::ReceiptMalformedEvent => {
+                log.events = VecM(vec![TxEmittedEvent {
+                    contract_address: [8; 32].into(),
+                    num_topics: 1,
+                    serialized_event: BytesM(vec![0; 31]),
+                }]);
+            }
+            FakeIndexerMode::ReceiptInvalidOutput => {
+                log.root_output = thruput_xdr::transaction::InvocationFrameOutput::Fault;
+            }
+            _ => {}
+        }
         Self {
             mode,
-            committed: Self::build_committed_set(),
+            committed,
             event_pages: Self::build_event_pages(),
         }
     }
@@ -1853,7 +1872,10 @@ async fn native_block_miss_invalid_outcome_outage_and_timeout_remain_distinct() 
                 assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
             }
             FakeIndexerMode::Slow => assert!(matches!(result, Err(RpcServerError::BackendTimeout))),
-            FakeIndexerMode::HistoryOutcome(_) => unreachable!(),
+            FakeIndexerMode::HistoryOutcome(_)
+            | FakeIndexerMode::ReceiptHashMismatch
+            | FakeIndexerMode::ReceiptMalformedEvent
+            | FakeIndexerMode::ReceiptInvalidOutput => unreachable!(),
         }
     }
 }
@@ -1924,5 +1946,35 @@ async fn native_history_preserves_typed_outcomes_across_x23() {
         }
         idx.abort();
         sched.abort();
+    }
+}
+
+#[tokio::test]
+async fn native_funding_receipt_rejects_bad_log_identity_events_and_output() {
+    for mode in [
+        FakeIndexerMode::Normal,
+        FakeIndexerMode::ReceiptHashMismatch,
+        FakeIndexerMode::ReceiptMalformedEvent,
+        FakeIndexerMode::ReceiptInvalidOutput,
+    ] {
+        let (idx_addr, _indexer) = start_fake_indexer(mode).await;
+        let (sched_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let hash = canned_tx_hash(CANNED_TX_HASH_A);
+        let result =
+            crate::airdrop::read_funding_receipt(&backend, RpcRequestContext::unbounded(), hash)
+                .await;
+        if mode == FakeIndexerMode::Normal {
+            let receipt = result.unwrap().unwrap();
+            assert_eq!(receipt.tx_hash, hash);
+            assert_eq!(*receipt.height, CANNED_HEIGHT_A);
+            assert_eq!(receipt.return_data.unwrap().0, Vec::<u8>::new());
+            assert_eq!(receipt.gas_used, CANNED_GAS_USED_A);
+        } else {
+            assert!(
+                matches!(result, Err(RpcServerError::BackendDataInvalid { .. })),
+                "{mode:?}: {result:?}"
+            );
+        }
     }
 }

@@ -440,6 +440,17 @@
                 "$ref": "#/components/schemas/Base58_ContractAddress",
                 "description": "Address receiving the native HOG transfer."
               },
+              "returnData": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/HexBytes"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Actual root return bytes, retained from the matched receipt.\nOlder producers may omit these; native success projection must fail closed."
+              },
               "status": {
                 "$ref": "#/components/schemas/ExecStatus",
                 "description": "Committed execution result."
@@ -1911,7 +1922,7 @@
                 "type": "null"
               }
             ],
-            "description": "Bytes the contract passed to its `abort` / `revert` syscall\nwhen the transaction reverted deterministically.  Present\nwhen `status` is `reverted` and the chain version that\nexecuted the transaction recorded the revert payload; absent\notherwise.  Returned raw — decode against the contract's\nspec (typically the error variant) to recover a human-\nreadable reason."
+            "description": "Bytes passed to the root call's `abort` / `revert` syscall when `status`\nis `reverted`, including an empty buffer for an empty payload. Absent for\nother statuses. Decode against the contract's error spec."
           },
           "events": {
             "description": "Events emitted during execution.",
@@ -1937,7 +1948,7 @@
                 "type": "null"
               }
             ],
-            "description": "Bytes returned by the contract's root call on a successful\ntransaction.  Present when `status` is `ok` and the chain\nversion that executed the transaction recorded a return\nvalue; absent otherwise.  Returned raw — decode against the\ncontract's spec to recover typed values."
+            "description": "Bytes returned by the root call when `status` is `ok`, including an empty\nbuffer for an empty return. Absent for other statuses. Decode against the\ncontract's spec to recover typed values."
           },
           "status": {
             "$ref": "#/components/schemas/ExecStatus",

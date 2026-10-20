@@ -270,10 +270,12 @@ impl HostedAirdrop {
         self.inner.validation.read().await.validated
     }
 
-    async fn forward(
+    async fn forward<T>(
         &self,
         request: AirdropRequest,
-    ) -> Result<AirdropAttemptResponse, RpcServerError> {
+        native: bool,
+        project: impl FnOnce(AirdropAttemptResponse) -> Result<T, RpcServerError>,
+    ) -> Result<T, HostedFailure> {
         let deadline = tokio::time::Instant::now() + self.inner.request_timeout;
         let _permit =
             self.inner.admission.try_acquire().map_err(|_| {
@@ -284,7 +286,7 @@ impl HostedAirdrop {
             .map_err(|_| RpcServerError::BackendTimeout)?
             .map_err(|_| RpcServerError::BackendUnavailable("faucet execution is closed".into()))?;
         if tokio::time::Instant::now() >= deadline {
-            return Err(RpcServerError::BackendTimeout);
+            return Err(RpcServerError::BackendTimeout.into());
         }
         tokio::time::timeout_at(deadline, self.ensure_validated())
             .await
@@ -300,26 +302,38 @@ impl HostedAirdrop {
         let url = endpoint(&self.inner.base_url, "v1/airdrop")
             .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
         let started = Instant::now();
-        let result = tokio::time::timeout_at(deadline, self.post_airdrop(url, &hosted))
+        let result = tokio::time::timeout_at(deadline, self.post_airdrop(url, &hosted, native))
             .await
-            .unwrap_or(Err(RpcServerError::BackendTimeout));
+            .unwrap_or(Err(RpcServerError::BackendTimeout.into()))
+            .and_then(|response| {
+                let outcome = match &response {
+                    AirdropAttemptResponse::Pending { .. } => AirdropRequestOutcome::Pending,
+                    AirdropAttemptResponse::Succeeded { .. } => AirdropRequestOutcome::Succeeded,
+                    _ => AirdropRequestOutcome::Error,
+                };
+                project(response)
+                    .map(|value| (value, outcome))
+                    .map_err(HostedFailure::from)
+            });
         let outcome = match &result {
-            Ok(AirdropAttemptResponse::Pending { .. }) => AirdropRequestOutcome::Pending,
-            Ok(AirdropAttemptResponse::Succeeded { .. }) => AirdropRequestOutcome::Succeeded,
-            Err(RpcServerError::BackendTimeout) => AirdropRequestOutcome::Timeout,
-            Ok(_) | Err(_) => AirdropRequestOutcome::Error,
+            Ok((_, outcome)) => *outcome,
+            Err(HostedFailure::Backend(RpcServerError::BackendTimeout)) => {
+                AirdropRequestOutcome::Timeout
+            }
+            Err(_) => AirdropRequestOutcome::Error,
         };
         self.inner
             .metrics
             .observe_airdrop_request("hosted", outcome, started.elapsed());
-        result
+        result.map(|(value, _)| value)
     }
 
     async fn post_airdrop(
         &self,
         url: Url,
         hosted: &HostedAirdropRequest,
-    ) -> Result<AirdropAttemptResponse, RpcServerError> {
+        native: bool,
+    ) -> Result<AirdropAttemptResponse, HostedFailure> {
         let response = self
             .inner
             .client
@@ -335,33 +349,48 @@ impl HostedAirdrop {
             && let Ok(response) = decoded_response
         {
             if response.recipient() != &hosted.recipient {
-                return Err(RpcServerError::BackendUnavailable(
-                    "faucet response recipient does not match the request".into(),
-                ));
+                return Err(RpcServerError::invalid_data(
+                    thruput_json_rpc_types::error::native::BackendDataInvalidReason::InconsistentResult,
+                    "faucet response recipient does not match the request",
+                )
+                .into());
             }
             if matches!(
                 &response,
                 AirdropAttemptResponse::Succeeded { status, .. }
                     if !matches!(status, ExecStatus::Ok)
             ) {
-                return Err(RpcServerError::BackendUnavailable(
-                    "faucet returned a succeeded response with a failed execution status".into(),
-                ));
+                return Err(RpcServerError::invalid_data(
+                    thruput_json_rpc_types::error::native::BackendDataInvalidReason::InconsistentResult,
+                    "faucet returned a succeeded response with a failed execution status",
+                )
+                .into());
             }
             return Ok(response);
         }
         if let Ok(error) = serde_json::from_slice::<FaucetErrorEnvelope>(&body) {
-            return Err(map_faucet_error(status, error.error));
+            return Err(HostedFailure::Service {
+                status,
+                error: error.error,
+            });
         }
         let detail = match decoded_response {
             Ok(_) => "success response body returned with a non-success HTTP status".to_owned(),
             Err(error) => error.to_string(),
         };
+        if native {
+            return Err(RpcServerError::invalid_data(
+                thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidEncoding,
+                format!("faucet returned malformed HTTP {status} response: {detail}"),
+            )
+            .into());
+        }
         Err(RpcServerError::BackendUnavailable(if status.is_success() {
             format!("faucet returned a malformed success response: {detail}")
         } else {
             format!("faucet returned malformed HTTP {status} error: {detail}")
-        }))
+        })
+        .into())
     }
 }
 
@@ -378,7 +407,9 @@ pub(crate) fn merge_rpc(
 #[async_trait]
 impl AirdropApiServer for HostedAirdrop {
     async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse> {
-        self.forward(request).await.map_err(ErrorObjectOwned::from)
+        self.forward(request, false, Ok)
+            .await
+            .map_err(|error| ErrorObjectOwned::from(error.legacy()))
     }
 }
 
@@ -392,10 +423,48 @@ struct FaucetErrorEnvelope {
 struct FaucetError {
     code: String,
     message: String,
+    // Keep the original JSON so malformed policy hints cannot silently become no hint.
+    #[serde(default, deserialize_with = "present_retry_hint")]
+    retry_after_seconds: Option<serde_json::Value>,
+}
+
+fn present_retry_hint<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug)]
+enum HostedFailure {
+    Backend(RpcServerError),
+    Service {
+        status: StatusCode,
+        error: FaucetError,
+    },
+}
+impl From<RpcServerError> for HostedFailure {
+    fn from(error: RpcServerError) -> Self {
+        Self::Backend(error)
+    }
+}
+impl HostedFailure {
+    fn legacy(self) -> RpcServerError {
+        match self {
+            Self::Backend(error) => error,
+            Self::Service { status, error } => map_faucet_error(status, error),
+        }
+    }
+    fn native(self) -> ErrorObjectOwned {
+        use thruput_json_rpc_server::native::funding;
+        match self {
+            Self::Backend(error) => funding::rpc_error(&error),
+            Self::Service { error, .. } => native_faucet_error(error),
+        }
+    }
 }
 
 fn map_faucet_error(status: StatusCode, error: FaucetError) -> RpcServerError {
-    let FaucetError { code, message } = error;
+    let FaucetError { code, message, .. } = error;
     let (mapped, bounded_code) = match code.as_str() {
         code @ "airdrop_invalid_client_nonce" => (RpcServerError::InvalidParam(message), code),
         code @ ("airdrop_quota_exceeded"
@@ -1556,10 +1625,97 @@ mod tests {
                 FaucetError {
                     code: code.into(),
                     message: "test error".into(),
+                    retry_after_seconds: None,
                 },
             );
             let rpc_error = ErrorObjectOwned::from(mapped);
             assert_eq!(rpc_error.code(), expected, "wrong mapping for {code}");
+        }
+    }
+
+    #[tokio::test]
+    async fn native_faucet_validates_output_before_counting_success() {
+        use thruput_json_rpc_server::native::funding::NativeFundingPlane;
+        for (return_data, malformed) in [
+            (None, false),
+            (Some("0x0102"), false),
+            (Some("0x0102"), true),
+        ] {
+            let mut body = json!({
+                "attemptStatus":"succeeded", "recipient":airdrop_request().recipient,
+                "rawAmount":"7", "txHash":SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22;32])),
+                "height":"42", "status":{"result":"ok"}
+            });
+            if let Some(data) = return_data {
+                body["returnData"] = json!(data);
+            }
+            if malformed {
+                body["height"] = json!(42);
+            }
+            let requests = Arc::new(AtomicUsize::new(0));
+            let (url, server) = spawn_server(
+                network_descriptor("devnet"),
+                StatusCode::OK,
+                body,
+                requests.clone(),
+            )
+            .await;
+            let facade = HostedAirdrop::from_config(&config(&url), network_info())
+                .await
+                .unwrap()
+                .unwrap();
+            let request = airdrop_request();
+            let result = NativeFundingPlane::request_airdrop(
+                &facade,
+                thruput_json_rpc_types::requests::AirdropRequest {
+                    recipient: request.recipient,
+                    client_nonce: request.client_nonce,
+                },
+            )
+            .await;
+            if return_data.is_some() && !malformed {
+                let result = serde_json::to_value(result.unwrap()).unwrap();
+                assert_eq!(result["execution"]["returnData"], "0x0102");
+                assert_eq!(result["blockHeight"], "42");
+            } else {
+                assert_eq!(
+                    {
+                        let error = result.unwrap_err();
+                        assert!(matches!(
+                            thruput_json_rpc_types::error::native::DecodedError::decode(
+                                "faucet_requestAirdrop",
+                                serde_json::to_value(&error).unwrap()
+                            ),
+                            thruput_json_rpc_types::error::native::DecodedError::Known { .. }
+                        ));
+                        error.code()
+                    },
+                    thruput_json_rpc_types::error::native::codes::BACKEND_DATA_INVALID
+                );
+            }
+            assert_eq!(requests.load(Ordering::SeqCst), 1);
+            let health = crate::health::GatewayHealth::new(
+                &GatewayConfig::default(),
+                thruput_build_info::BuildVersion::new("test", None),
+                None,
+            );
+            let metrics = facade
+                .inner
+                .metrics
+                .gather(&health.snapshot().await)
+                .unwrap();
+            let outcome = if return_data.is_some() && !malformed {
+                "succeeded"
+            } else {
+                "error"
+            };
+            assert!(
+                metrics.lines().any(|line| line.contains("airdrop")
+                    && line.contains(&format!("outcome=\"{outcome}\""))
+                    && line.ends_with(" 1")),
+                "{metrics}"
+            );
+            server.abort();
         }
     }
 
@@ -1665,5 +1821,172 @@ mod tests {
 
     fn faucet_error(code: &str, message: &str) -> serde_json::Value {
         json!({ "error": { "code": code, "message": message } })
+    }
+}
+
+#[async_trait]
+impl thruput_json_rpc_server::native::funding::NativeFundingPlane for HostedAirdrop {
+    fn capabilities(&self) -> thruput_json_rpc_server::native::funding::FundingCapabilities {
+        thruput_json_rpc_server::native::funding::FundingCapabilities::Faucet
+    }
+    #[tracing::instrument(skip_all)]
+    async fn request_airdrop(
+        &self,
+        request: thruput_json_rpc_types::requests::AirdropRequest,
+    ) -> RpcResult<thruput_json_rpc_types::responses::AirdropAttempt> {
+        use thruput_json_rpc_server::native::funding;
+        let recipient = request.recipient;
+        self.forward(
+            AirdropRequest {
+                recipient,
+                client_nonce: request.client_nonce,
+            },
+            true,
+            |result| funding::airdrop_result(recipient, result),
+        )
+        .await
+        .map_err(HostedFailure::native)
+    }
+    async fn fund_account(
+        &self,
+        _: thruput_json_rpc_types::requests::FundAccountRequest,
+    ) -> RpcResult<thruput_json_rpc_types::responses::FundingSubmission> {
+        Err(ErrorObjectOwned::owned(
+            -32601,
+            "Method not found",
+            None::<()>,
+        ))
+    }
+}
+
+fn native_faucet_error(error: FaucetError) -> ErrorObjectOwned {
+    use thruput_json_rpc_server::native::funding;
+    use thruput_json_rpc_types::error::native::{
+        BackendDataInvalidReason, ErrorData, FundingAttemptStoppedData, ServiceCode, codes,
+    };
+    let invalid = || {
+        funding::rpc_error(&RpcServerError::invalid_data(
+            BackendDataInvalidReason::InconsistentResult,
+            "faucet returned invalid error evidence",
+        ))
+    };
+    let Ok(service_code) = ServiceCode::try_from(error.code.clone()) else {
+        return invalid();
+    };
+    let retry_after_ms = match error.retry_after_seconds {
+        None => None,
+        Some(value) => {
+            let Ok(seconds) =
+                serde_json::from_value::<thruput_json_rpc_types::decimal::Decimal<u64>>(value)
+            else {
+                return invalid();
+            };
+            let Some(ms) = seconds.0.checked_mul(1000) else {
+                return invalid();
+            };
+            Some(ms)
+        }
+    };
+    let (code, data) = match error.code.as_str() {
+        "airdrop_receipt_invalid" => return invalid(),
+        "airdrop_invalid_client_nonce" => (
+            codes::INVALID_PARAMS,
+            ErrorData::InvalidParams {
+                reason: None,
+                path: Some("/params/clientNonce".into()),
+            },
+        ),
+        "airdrop_attempt_terminal"
+        | "airdrop_transaction_failed"
+        | "airdrop_submit_amount_mismatch" => (
+            codes::FUNDING_ATTEMPT_STOPPED,
+            ErrorData::FundingAttemptStopped(FundingAttemptStoppedData {
+                service_code: Some(service_code),
+                transaction_hash: None,
+                signed_transaction: None,
+                receipt: None,
+            }),
+        ),
+        "airdrop_quota_exceeded"
+        | "airdrop_recipient_pending_limit_exceeded"
+        | "airdrop_capacity_exceeded"
+        | "airdrop_already_pending" => (
+            codes::OVERLOADED,
+            ErrorData::Overloaded {
+                admission: None,
+                transaction_hash: None,
+                retry_after_ms,
+                error: None,
+            },
+        ),
+        _ => (
+            codes::BACKEND_UNAVAILABLE,
+            ErrorData::BackendUnavailable {
+                admission: None,
+                transaction_hash: None,
+                retry_after_ms,
+                error: None,
+                service_code: Some(service_code),
+            },
+        ),
+    };
+    ErrorObjectOwned::owned(code, error.message, Some(data))
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    use thruput_json_rpc_types::error::native::codes;
+    #[test]
+    fn native_faucet_errors_preserve_policy_delay_and_terminal_cause() {
+        let error = |code: &str, delay| {
+            let error = native_faucet_error(FaucetError {
+                code: code.into(),
+                message: "producer error".into(),
+                retry_after_seconds: delay,
+            });
+            assert!(matches!(
+                thruput_json_rpc_types::error::native::DecodedError::decode(
+                    "faucet_requestAirdrop",
+                    serde_json::to_value(&error).unwrap()
+                ),
+                thruput_json_rpc_types::error::native::DecodedError::Known { .. }
+            ));
+            error
+        };
+        assert_eq!(
+            error("airdrop_submit_amount_mismatch", None).code(),
+            codes::FUNDING_ATTEMPT_STOPPED
+        );
+        let stopped = error("airdrop_attempt_terminal", None);
+        assert_eq!(stopped.code(), codes::FUNDING_ATTEMPT_STOPPED);
+        let value: serde_json::Value = serde_json::from_str(stopped.data().unwrap().get()).unwrap();
+        assert_eq!(value["serviceCode"], "airdrop_attempt_terminal");
+        assert!(value.get("admission").is_none());
+        let overloaded = error("airdrop_quota_exceeded", Some(serde_json::json!("7")));
+        assert_eq!(overloaded.code(), codes::OVERLOADED);
+        let value: serde_json::Value =
+            serde_json::from_str(overloaded.data().unwrap().get()).unwrap();
+        assert_eq!(value["retryAfterMs"], "7000");
+        assert!(value.get("admission").is_none());
+        for delay in [
+            serde_json::json!(7),
+            serde_json::json!("07"),
+            serde_json::json!(u64::MAX.to_string()),
+            serde_json::Value::Null,
+        ] {
+            assert_eq!(
+                error("airdrop_quota_exceeded", Some(delay)).code(),
+                codes::BACKEND_DATA_INVALID
+            );
+        }
+        let unknown = error("future_service_code", None);
+        assert_eq!(unknown.code(), codes::BACKEND_UNAVAILABLE);
+        let value: serde_json::Value = serde_json::from_str(unknown.data().unwrap().get()).unwrap();
+        assert_eq!(value["serviceCode"], "future_service_code");
+        assert_eq!(
+            error(&"x".repeat(129), None).code(),
+            codes::BACKEND_DATA_INVALID
+        );
     }
 }

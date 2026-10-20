@@ -122,6 +122,7 @@ impl AirdropService {
             tx_hash: None,
             transaction: None,
             height: None,
+            return_data: None,
             error_code: None,
             created_at: now,
             updated_at: now,
@@ -648,6 +649,17 @@ impl AirdropService {
         }
     }
 
+    async fn observed_funding_receipt(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<TransactionReceipt, AirdropSubmitError> {
+        let receipt = self.submitter.poll_airdrop(tx_hash).await?;
+        if !valid_funding_receipt(tx_hash, &receipt) {
+            return Err(AirdropSubmitError::InvalidReceipt);
+        }
+        Ok(receipt)
+    }
+
     async fn poll_airdrop_attempt(
         &self,
         recipient: ContractAddress,
@@ -671,9 +683,10 @@ impl AirdropService {
                 "airdrop attempt has an invalid accepted transaction hash",
             );
         };
-        match self.submitter.poll_airdrop(tx_hash).await {
+        match self.observed_funding_receipt(tx_hash).await {
             Ok(receipt) if matches!(receipt.status, ExecStatus::Ok) => {
                 attempt.status = AirdropAttemptStatus::Succeeded;
+                attempt.return_data = receipt.return_data;
                 attempt.height = Some(*receipt.height);
                 attempt.error_code = None;
                 let now = SystemTime::now();
@@ -764,6 +777,10 @@ fn terminal_attempt_expiry(now: SystemTime, retention_secs: u64) -> Option<Syste
     ))
 }
 
+fn valid_funding_receipt(tx_hash: TxHash, receipt: &TransactionReceipt) -> bool {
+    receipt.tx_hash == tx_hash && *receipt.height >= 0 && receipt.has_consistent_execution_output()
+}
+
 fn response_from_attempt(
     status: StatusCode,
     recipient: ContractAddress,
@@ -789,6 +806,7 @@ fn response_from_attempt(
                 raw_amount: attempt.raw_amount,
                 height: height.into(),
                 status: ExecStatus::Ok,
+                return_data: attempt.return_data,
             },
             None => {
                 return error_response(
@@ -834,6 +852,7 @@ fn policy_store_error_response(error: &PolicyStoreError) -> Response {
 fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
     match error {
         AirdropSubmitError::TransactionFailed { .. } => "airdrop_transaction_failed",
+        AirdropSubmitError::InvalidReceipt => "airdrop_receipt_invalid",
         AirdropSubmitError::RpcConnect(_)
         | AirdropSubmitError::ChainTip(_)
         | AirdropSubmitError::EncodeTransferCalldata(_)
@@ -911,6 +930,10 @@ pub struct PreparedAirdrop {
 /// Errors produced while submitting a faucet airdrop.
 #[derive(Debug, thiserror::Error)]
 pub enum AirdropSubmitError {
+    /// Receipt metadata or execution output is inconsistent with the attempt.
+    /// Legacy receipt polling does not validate the underlying log identity or events.
+    #[error("faucet received an inconsistent transaction receipt")]
+    InvalidReceipt,
     /// The transaction committed but did not execute successfully.
     #[error("airdrop transaction {tx_hash:?} did not commit successfully")]
     TransactionFailed { tx_hash: TxHash },
@@ -940,6 +963,11 @@ pub enum AirdropSubmitError {
 impl AirdropSubmitError {
     fn into_response(self) -> Response {
         match self {
+            Self::InvalidReceipt => error_response(
+                StatusCode::BAD_GATEWAY,
+                "airdrop_receipt_invalid",
+                "faucet received an inconsistent transaction receipt",
+            ),
             Self::Poll(
                 thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
                     status: TransactionStatus::Dropped { error },

@@ -13,6 +13,8 @@ pub enum RpcServerError {
         reason: String,
         /// Signed evidence, independent of admission or execution status.
         evidence: LocalFundingErrorData,
+        /// Typed failure retained before wrapping durable signed evidence.
+        cause: Option<Box<RpcServerError>>,
     },
     /// The selected committed snapshot did not meet the freshness floor.
     #[error("view height unavailable: requested {}, observed {}", *.0.requested, *.0.observed)]
