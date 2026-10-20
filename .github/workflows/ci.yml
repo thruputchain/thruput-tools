@@ -56,6 +56,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Clippy (native RPC qualification)
+        run: cargo clippy -p thruput-node-supervisor --all-targets --features native-rpc-qualification --locked -- -D warnings
+
       - name: Clippy (heap-profiling feature)
         run: cargo clippy --locked -p groundhog-heap-profiling -p thruput-json-rpc-gateway -p thruput-faucet --all-targets --features groundhog-heap-profiling/jemalloc,thruput-json-rpc-gateway/heap-profiling,thruput-faucet/heap-profiling -- -D warnings
 
@@ -87,6 +90,9 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      - name: Test (native RPC qualification)
+        run: cargo test -p thruput-node-supervisor --features native-rpc-qualification --locked
 
       - name: Test (heap-profiling feature)
         run: |

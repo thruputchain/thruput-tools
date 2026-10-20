@@ -352,78 +352,129 @@ impl crate::native::transaction::NativeTransactionReadPlane for Backend {
         })
     }
 }
-type Transactions = crate::GroundhogRpcServer<Backend, Backend, Backend, ()>;
-fn transactions(backend: Backend) -> Transactions {
-    crate::GroundhogRpcServer::new(
+type AssembledService = crate::native::service::NativeService<Backend, Backend, Backend, Backend>;
+fn assembled_service(
+    backend: Backend,
+    capabilities: crate::native::service::NativeCapabilities,
+) -> AssembledService {
+    AssembledService::new(
+        backend.clone(),
         backend.clone(),
         backend.clone(),
         backend,
-        (),
-        thruput_json_rpc_types::network_info::NetworkInfo::new(
-            thruput_json_rpc_types::base58::Base58([9; 32].into()),
-        ),
-        RpcServerConfig {
-            tip_refresh_interval_ms: 0,
-            ..Default::default()
-        },
-        crate::BuildInfo::new("test-build", None),
+        NetworkHash::from(thruput_xdr::types::SHA256Hash::from([9; 32])),
+        RpcServerConfig::default().with_tip_refresh_interval_ms(0),
+        BuildVersion::new("test-build", None),
+        capabilities,
     )
 }
 
-// Candidate HTTP composition exists only in tests. Unimplemented methods must
-// be removed before serving; accidentally dispatching one fails this test.
-struct Candidate(Service, Transactions);
-macro_rules! dispatch {
-    (get_version_info, $s:expr, $r:expr) => {
-        $s.0.get_version_info($r).await
-    };
-    (get_network_info, $s:expr, $r:expr) => {
-        $s.0.get_network_info($r).await
-    };
-    (get_server_limits, $s:expr, $r:expr) => {
-        $s.0.get_server_limits($r).await
-    };
-    (get_chain_tip, $s:expr, $r:expr) => {
-        $s.0.get_chain_tip($r).await
-    };
-    (get_chain_config, $s:expr, $r:expr) => {
-        $s.0.get_chain_config($r).await
-    };
-    (get_storage, $s:expr, $r:expr) => {
-        $s.0.get_storage($r).await
-    };
-    (get_balance, $s:expr, $r:expr) => {
-        $s.0.get_balance($r).await
-    };
-    (get_registered_auth, $s:expr, $r:expr) => {
-        $s.0.get_registered_auth($r).await
-    };
-    (simulate_invocation, $s:expr, $r:expr) => {
-        $s.0.simulate_invocation($r).await
-    };
-    (simulate_invocations, $s:expr, $r:expr) => {
-        $s.0.simulate_invocations($r).await
-    };
-    (send_transaction, $s:expr, $r:expr) => {
-        $s.1.native_send_transaction($r).await
-    };
-    (get_transaction_status, $s:expr, $r:expr) => {
-        $s.1.native_transaction_status($r).await
-    };
-    (get_transaction_receipt, $s:expr, $r:expr) => {
-        $s.1.native_transaction_receipt($r).await
-    };
-    ($name:ident, $s:expr, $r:expr) => {{
-        let _ = $r;
-        panic!("unregistered method reached service")
-    }};
+#[tokio::test]
+async fn assembly_registers_each_configured_plane_independently() {
+    use crate::native::service::NativeCapabilities;
+    for mask in 0..16 {
+        let scheduler = mask & 1 != 0;
+        let indexer = mask & 2 != 0;
+        let db = mask & 4 != 0;
+        let simulation = mask & 8 != 0;
+        let capabilities = NativeCapabilities::new(scheduler, indexer, db, simulation);
+        let mut expected = vec!["getVersionInfo", "getNetworkInfo", "getServerLimits"];
+        if scheduler {
+            expected.push("sendTransaction");
+        }
+        if indexer {
+            expected.push("getTransactionReceipt");
+        }
+        if scheduler && indexer {
+            expected.push("getTransactionStatus");
+        }
+        if db {
+            expected.extend([
+                "getChainTip",
+                "getChainConfig",
+                "getStorage",
+                "getBalance",
+                "getRegisteredAuth",
+            ]);
+        }
+        if simulation {
+            expected.extend(["simulateInvocation", "simulateInvocations"]);
+        }
+        expected.sort_unstable();
+        let backend = Backend::default();
+        let module = assembled_service(backend.clone(), capabilities)
+            .into_module()
+            .unwrap();
+        assert_eq!(module.supported_methods(), expected, "configuration {mask}");
+        let module = module.into_rpc();
+        let mut registered: Vec<_> = module.method_names().collect();
+        registered.sort_unstable();
+        assert_eq!(registered, expected);
+        let version_request = r#"{"jsonrpc":"2.0","id":1,"method":"getVersionInfo","params":{}}"#;
+        let (before, _) = module.raw_json_request(version_request, 1).await.unwrap();
+        let before: serde_json::Value = serde_json::from_str(before.get()).unwrap();
+        assert_eq!(
+            before["result"]["supportedMethods"],
+            serde_json::json!(expected)
+        );
+        assert_eq!(before["result"]["wireFormat"], "14.0.0");
+        assert_eq!(before["result"]["implementation"], "test-build");
+        assert!(before["result"].get("releaseVersion").is_none());
+        assert!(before["result"].get("bundleManifestDigest").is_none());
+        backend.unavailable.store(true, Ordering::SeqCst);
+        let (after, _) = module.raw_json_request(version_request, 1).await.unwrap();
+        assert_eq!(
+            before,
+            serde_json::from_str::<serde_json::Value>(after.get()).unwrap()
+        );
+        for name in thruput_json_rpc_api::native::METHOD_NAMES
+            .iter()
+            .copied()
+            .chain([
+                "groundhog_networkInfo",
+                "groundhog_sendRawTransaction",
+                "groundhog_view",
+            ])
+            .filter(|name| !expected.contains(name))
+        {
+            let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":name,"params":{}});
+            let (response, _) = module
+                .raw_json_request(&request.to_string(), 1)
+                .await
+                .unwrap();
+            let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
+            assert_eq!(response["error"]["code"], -32601, "{mask}: {name}");
+        }
+        assert_eq!(
+            backend.calls.load(Ordering::SeqCst),
+            0,
+            "discovery must not probe backends"
+        );
+    }
 }
-macro_rules! implement {
-    ($( $(#[$doc:meta])* $name:ident($wire:literal,$parse:ident,$decorate:ident): $request:ty => $response:ty; )*) => {
-        impl thruput_json_rpc_api::native::NativeApi for Candidate { $(async fn $name(&self, request: $request) -> jsonrpsee::core::RpcResult<$response> { dispatch!($name, self, request) })* }
-    };
+
+#[tokio::test]
+async fn direct_unconfigured_service_calls_return_method_not_found() {
+    use thruput_json_rpc_api::native::NativeApi;
+    let backend = Backend::default();
+    let service = assembled_service(
+        backend.clone(),
+        crate::native::service::NativeCapabilities::new(false, false, false, false),
+    );
+    let error = service
+        .get_transaction_receipt(input::TransactionQuery {
+            transaction_hash: thruput_json_rpc_types::transaction::TxHash(
+                thruput_xdr::types::SHA256Hash::from([1; 32]).into(),
+            ),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), -32601);
+    let error = service.simulate_invocation(invocation()).await.unwrap_err();
+    assert_eq!(error.code(), -32601);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
 }
-thruput_json_rpc_api::native_methods!(implement);
+
 #[tokio::test]
 #[allow(
     clippy::too_many_lines,
@@ -447,17 +498,16 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
             expected.sort_unstable();
             assert_eq!(expected.len(), 13);
         }
-        let mut module =
-            crate::native::NativeModule::new(Candidate(service, transactions(backend.clone())))
-                .unwrap();
-        for name in thruput_json_rpc_api::native::METHOD_NAMES {
-            if !expected.contains(name) {
-                assert!(module.remove_method(name));
-            }
-        }
+        let module = assembled_service(
+            backend.clone(),
+            crate::native::service::NativeCapabilities::new(db, db, db, db),
+        )
+        .into_module()
+        .unwrap();
+        assert_eq!(module.supported_methods(), expected);
         let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", server.local_addr().unwrap());
-        let handle = server.start(module.finalize().into_rpc());
+        let handle = server.start(module.into_rpc());
         let client = HttpClientBuilder::default().build(url).unwrap();
         let version: serde_json::Value = client
             .request("getVersionInfo", ObjectParams::new())

@@ -30,6 +30,9 @@ use crate::{
     view_backend::HogdDevViewBackend,
 };
 
+#[cfg(feature = "native-rpc-qualification")]
+pub mod qualification;
+
 /// Why a [`NodeSupervisorHandle::stopped`] call returned.
 ///
 /// Callers (CLI exit codes, supervisors-of-supervisors) need to distinguish

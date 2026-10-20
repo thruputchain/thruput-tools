@@ -105,6 +105,31 @@ and [bootstrap_manifest.rs](../../crates/json-rpc/json-rpc-types/src/bootstrap_m
 The supervisor's validation and process protocol are in
 [hogd_dev.rs](../../crates/node-supervisor/src/hogd_dev.rs).
 
+## Native RPC qualification
+
+The opt-in supervisor example starts an ephemeral node with a wire-13 listener
+and a separate native candidate listener. It requires a compatible real runtime
+and the private registry access described in the repository README:
+
+```sh
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
+  cargo run -p thruput-node-supervisor --locked \
+  --features native-rpc-qualification --example native_rpc_qualification
+```
+
+Both URLs use loopback and operating-system assigned ports. The candidate uses
+the node's validated manifest and existing block driver. Query `getVersionInfo`
+for its implemented methods; history, blocks and funding are not registered yet.
+The normal node and gateway still serve wire 13. Ctrl-C stops both listeners and
+the ephemeral runtime. The example does not use an existing data directory.
+It checks API behavior, not production capacity or batch scheduling. If the
+runtime exits early, stop the example with Ctrl-C; it does not monitor child exit.
+
+The [shared service](../../crates/json-rpc/json-rpc-server/src/native/service.rs)
+owns method selection; the
+[connector](../../crates/node-supervisor/src/server/qualification.rs) owns this
+local listener. Enabling the Cargo feature alone starts neither.
+
 ## State and shutdown
 
 Without `--data-dir`, the node is ephemeral. With a persistent directory, startup

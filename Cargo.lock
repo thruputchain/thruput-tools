@@ -4638,6 +4638,7 @@ dependencies = [
  "thruput-hogd-backend",
  "thruput-indexer",
  "thruput-json-rpc-api",
+ "thruput-json-rpc-client",
  "thruput-json-rpc-server",
  "thruput-json-rpc-types",
  "thruput-scheduler",
