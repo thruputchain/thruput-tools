@@ -10,12 +10,14 @@
 //! BDP-style in-flight bounding, sharded for low contention) and
 //! `adaptive_batch.rs` for the shared shard runner.
 
+use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
+
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
 use thruput_hogd_backend::scheduler as shared_scheduler;
 use thruput_hogd_backend::submit::{self as shared_submit, SubmitBatch};
-use thruput_json_rpc_server::RpcRequestContext;
+use thruput_json_rpc_server::{RpcRequestContext, native::transaction::SubmissionAttempt};
 use thruput_json_rpc_types::error::outcome_for_code;
 use thruput_json_rpc_types::transaction::TxHash;
 use thruput_scheduler::SchedGatewaySubmitOutcomeBatch;
@@ -132,6 +134,7 @@ fn classify_rpc_error(e: &rpc_driver::RpcError) -> RpcServerError {
 
 /// A single queued client submission.
 struct Item {
+    attempt: Option<SubmissionAttempt>,
     tx_bytes: Vec<u8>,
     reply: oneshot::Sender<Result<(), RpcServerError>>,
     backend_deadline: Instant,
@@ -183,6 +186,14 @@ impl BatchProcessor for SubmitProcessor {
                 }
                 continue;
             }
+            cohort.retain(|item| {
+                item.attempt
+                    .as_ref()
+                    .is_none_or(SubmissionAttempt::begin_dispatch)
+            });
+            if cohort.is_empty() {
+                continue;
+            }
             self.metrics
                 .observe_internal_batch_size("submit_batcher", cohort.len());
             let packed = match pack(&mut cohort) {
@@ -190,6 +201,9 @@ impl BatchProcessor for SubmitProcessor {
                 Err(error) => {
                     let outcome = outcome_for_submit_error(&error);
                     for item in cohort {
+                        if let Some(attempt) = &item.attempt {
+                            attempt.packing_failed();
+                        }
                         self.metrics.observe_submitted_transaction(outcome);
                         let _ = item.reply.send(Err(error.clone()));
                     }
@@ -213,12 +227,25 @@ impl BatchProcessor for SubmitProcessor {
                     let outcome = outcome_for_submit_error(&error);
                     for item in cohort {
                         self.metrics.observe_submitted_transaction(outcome);
-                        let _ = item.reply.send(Err(error.clone()));
+                        let cause = if item.attempt.is_some() {
+                            RpcServerError::invalid_data(
+                                BackendDataInvalidReason::InvalidCardinality,
+                                "scheduler submission outcome count mismatch",
+                            )
+                        } else {
+                            error.clone()
+                        };
+                        let _ = item.reply.send(Err(cause));
                     }
                 }
                 Ok(outcomes) => {
                     for (item, scheduler_outcome) in cohort.into_iter().zip(outcomes.0) {
-                        let result = shared_scheduler::submit_result(scheduler_outcome);
+                        let result = match &item.attempt {
+                            Some(attempt) => {
+                                shared_scheduler::native_submit_result(scheduler_outcome, attempt)
+                            }
+                            None => shared_scheduler::submit_result(scheduler_outcome),
+                        };
                         self.metrics
                             .observe_submitted_transaction(outcome_for_submit_result(&result));
                         let _ = item.reply.send(result);
@@ -315,6 +342,30 @@ impl BatchSubmitter {
         tx_bytes: Vec<u8>,
         hash: TxHash,
     ) -> Result<(), RpcServerError> {
+        self.submit_inner(context, tx_bytes, hash, None).await
+    }
+
+    /// Native attempt through the same queue, with cancellation/dispatch evidence.
+    #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
+    pub async fn submit_native(
+        &self,
+        context: RpcRequestContext,
+        tx_bytes: Vec<u8>,
+        hash: TxHash,
+        attempt: SubmissionAttempt,
+    ) -> Result<(), RpcServerError> {
+        let _guard = attempt.guard();
+        self.submit_inner(context, tx_bytes, hash, Some(attempt))
+            .await
+    }
+
+    async fn submit_inner(
+        &self,
+        context: RpcRequestContext,
+        tx_bytes: Vec<u8>,
+        hash: TxHash,
+        attempt: Option<SubmissionAttempt>,
+    ) -> Result<(), RpcServerError> {
         let bytes: &[u8] = hash.0.0.as_ref();
         let shard_idx = shard_index_by_routing_key(bytes, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
@@ -335,6 +386,7 @@ impl BatchSubmitter {
         }
         if let Err(err) = self.inner.try_send(
             Item {
+                attempt,
                 tx_bytes,
                 reply: reply_tx,
                 backend_deadline,
@@ -737,11 +789,13 @@ mod tests {
             processor
                 .process(vec![
                     Item {
+                        attempt: None,
                         tx_bytes: vec![1],
                         reply: old_reply,
                         backend_deadline: now + Duration::from_secs(2),
                     },
                     Item {
+                        attempt: None,
                         tx_bytes: vec![2],
                         reply: newer_reply,
                         backend_deadline: now + Duration::from_secs(5),
@@ -783,11 +837,13 @@ mod tests {
         processor
             .process(vec![
                 Item {
+                    attempt: None,
                     tx_bytes: vec![1],
                     reply: old_reply,
                     backend_deadline: now + Duration::from_secs(2),
                 },
                 Item {
+                    attempt: None,
                     tx_bytes: vec![2],
                     reply: newer_reply,
                     backend_deadline: now + Duration::from_secs(5),
@@ -1061,6 +1117,7 @@ mod tests {
         for byte in 0..4 {
             let (reply, waiter) = oneshot::channel();
             items.push(Item {
+                attempt: None,
                 tx_bytes: vec![byte],
                 reply,
                 backend_deadline: Instant::now() + Duration::from_secs(1),
@@ -1112,6 +1169,7 @@ mod tests {
         for byte in 0..3 {
             let (reply, waiter) = oneshot::channel();
             items.push(Item {
+                attempt: None,
                 tx_bytes: vec![byte],
                 reply,
                 backend_deadline: Instant::now() + Duration::from_secs(1),
@@ -1184,6 +1242,7 @@ mod tests {
             .map(|bytes| {
                 let (tx, _rx) = oneshot::channel();
                 Item {
+                    attempt: None,
                     tx_bytes: bytes,
                     reply: tx,
                     backend_deadline: Instant::now() + Duration::from_secs(1),
@@ -1201,5 +1260,150 @@ mod tests {
             items.iter().all(|item| item.tx_bytes.is_empty()),
             "packing should move the bytes out of the items"
         );
+    }
+    #[tokio::test]
+    async fn native_batch_excludes_cancelled_attempt_and_preserves_refusal() {
+        use thruput_json_rpc_types::error::native::AttemptAdmission;
+        let sink = MockSink::arc();
+        sink.queue_outcomes(vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable]);
+        let cancelled = SubmissionAttempt::default();
+        assert!(matches!(cancelled.cancel(), AttemptAdmission::NotAttempted));
+        let rejected = SubmissionAttempt::default();
+        let (reply_a, receiver_a) = oneshot::channel();
+        let (reply_b, receiver_b) = oneshot::channel();
+        let processor = SubmitProcessor {
+            sink: sink.clone(),
+            metrics: GatewayMetrics::for_tests(),
+            max_deadline_skew: Duration::from_secs(1),
+        };
+        let deadline = Instant::now() + Duration::from_secs(1);
+        processor
+            .process(vec![
+                Item {
+                    attempt: Some(cancelled),
+                    tx_bytes: vec![1],
+                    reply: reply_a,
+                    backend_deadline: deadline,
+                },
+                Item {
+                    attempt: Some(rejected.clone()),
+                    tx_bytes: vec![2],
+                    reply: reply_b,
+                    backend_deadline: deadline,
+                },
+            ])
+            .await;
+        assert!(receiver_a.await.is_err());
+        assert!(matches!(
+            receiver_b.await.unwrap(),
+            Err(RpcServerError::Overloaded(_))
+        ));
+        assert!(matches!(rejected.cancel(), AttemptAdmission::Rejected));
+        assert_eq!(sink.seen(), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn native_malformed_submission_batch_never_accepts_a_prefix() {
+        use thruput_json_rpc_types::error::native::{AttemptAdmission, BackendDataInvalidReason};
+        let sink = MockSink::arc();
+        sink.queue_outcomes(vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted]);
+        let processor = SubmitProcessor {
+            sink,
+            metrics: GatewayMetrics::for_tests(),
+            max_deadline_skew: Duration::from_secs(1),
+        };
+        let mut items = vec![];
+        let mut replies = vec![];
+        let mut attempts = vec![];
+        for byte in [1, 2] {
+            let attempt = SubmissionAttempt::default();
+            let (reply, receiver) = oneshot::channel();
+            items.push(Item {
+                attempt: Some(attempt.clone()),
+                tx_bytes: vec![byte],
+                reply,
+                backend_deadline: Instant::now() + Duration::from_secs(1),
+            });
+            replies.push(receiver);
+            attempts.push(attempt);
+        }
+        processor.process(items).await;
+        for (reply, attempt) in replies.into_iter().zip(attempts) {
+            assert!(matches!(
+                reply.await.unwrap(),
+                Err(RpcServerError::BackendDataInvalid {
+                    reason: BackendDataInvalidReason::InvalidCardinality,
+                    ..
+                })
+            ));
+            assert!(matches!(attempt.cancel(), AttemptAdmission::Unknown));
+        }
+    }
+    #[tokio::test]
+    async fn native_worker_cancellation_loses_reply_without_claiming_refusal() {
+        use thruput_json_rpc_types::error::native::AttemptAdmission;
+        let sink = MockSink::arc();
+        let _gate = sink.queue_gate();
+        let processor = SubmitProcessor {
+            sink: sink.clone(),
+            metrics: GatewayMetrics::for_tests(),
+            max_deadline_skew: Duration::from_secs(1),
+        };
+        let attempt = SubmissionAttempt::default();
+        let (reply, receiver) = oneshot::channel();
+        let mut worker = Box::pin(processor.process(vec![Item {
+            attempt: Some(attempt.clone()),
+            tx_bytes: vec![1],
+            reply,
+            backend_deadline: Instant::now() + Duration::from_secs(5),
+        }]));
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(worker.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(sink.seen(), vec![1]);
+        drop(worker);
+        assert!(receiver.await.is_err());
+        assert!(matches!(attempt.cancel(), AttemptAdmission::Unknown));
+    }
+
+    #[tokio::test]
+    async fn native_ingress_refusal_closes_dispatch_gate() {
+        use thruput_json_rpc_types::error::native::AttemptAdmission;
+        let sink = MockSink::arc();
+        let submitter = BatchSubmitter::spawn(
+            &config_for_tests(1, 1, 1, 1),
+            &(sink.clone() as Arc<dyn SubmitSink>),
+            GatewayMetrics::for_tests(),
+        );
+        let (reply, _receiver) = oneshot::channel();
+        // Fill ingress before yielding to its worker on the current-thread runtime.
+        submitter
+            .inner
+            .try_send(
+                Item {
+                    attempt: None,
+                    tx_bytes: vec![1],
+                    reply,
+                    backend_deadline: Instant::now() + Duration::from_secs(5),
+                },
+                0,
+            )
+            .unwrap();
+        let attempt = SubmissionAttempt::default();
+        let result = submitter
+            .submit_native(
+                request_context(),
+                vec![2],
+                hash_from_u32(0),
+                attempt.clone(),
+            )
+            .await;
+        assert!(matches!(result, Err(RpcServerError::Overloaded(_))));
+        assert!(matches!(attempt.cancel(), AttemptAdmission::NotAttempted));
+        assert!(!attempt.begin_dispatch());
+        assert!(sink.seen().is_empty());
+        submitter.abort();
     }
 }

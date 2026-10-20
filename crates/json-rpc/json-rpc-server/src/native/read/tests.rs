@@ -310,39 +310,108 @@ fn native_invalid_data_has_evidence_while_wire13_error_is_unchanged() {
     assert!(data.get("observation").is_none());
 }
 
+#[async_trait]
+impl crate::native::transaction::NativeSubmitPlane for Backend {
+    async fn native_submit(
+        &self,
+        _: RpcRequestContext,
+        _: crate::ValidatedTransaction,
+        attempt: crate::native::transaction::SubmissionAttempt,
+    ) -> Result<(), RpcServerError> {
+        self.check().await?;
+        assert!(attempt.begin_dispatch());
+        Ok(())
+    }
+}
+#[async_trait]
+impl crate::native::transaction::NativeTransactionReadPlane for Backend {
+    async fn native_receipt(
+        &self,
+        _: RpcRequestContext,
+        hash: thruput_json_rpc_types::transaction::TxHash,
+    ) -> Result<out::ReceiptResult, crate::native::transaction::NativeReadError> {
+        self.check().await?;
+        Ok(Some(out::TransactionReceipt {
+            transaction_hash: hash,
+            block_height: 42.into(),
+            execution: out::ReceiptExecution::Return {
+                return_data: HexBytes(vec![]),
+            },
+            events: vec![],
+            gas_used: 99,
+        }))
+    }
+    async fn native_status(
+        &self,
+        _: RpcRequestContext,
+        _: thruput_json_rpc_types::transaction::TxHash,
+    ) -> Result<out::TransactionStatus, crate::native::transaction::NativeReadError> {
+        self.check().await?;
+        Ok(out::TransactionStatus::Committed {
+            block_height: 42.into(),
+        })
+    }
+}
+type Transactions = crate::GroundhogRpcServer<Backend, Backend, Backend, ()>;
+fn transactions(backend: Backend) -> Transactions {
+    crate::GroundhogRpcServer::new(
+        backend.clone(),
+        backend.clone(),
+        backend,
+        (),
+        thruput_json_rpc_types::network_info::NetworkInfo::new(
+            thruput_json_rpc_types::base58::Base58([9; 32].into()),
+        ),
+        RpcServerConfig {
+            tip_refresh_interval_ms: 0,
+            ..Default::default()
+        },
+        crate::BuildInfo::new("test-build", None),
+    )
+}
+
 // Candidate HTTP composition exists only in tests. Unimplemented methods must
 // be removed before serving; accidentally dispatching one fails this test.
-struct Candidate(Service);
+struct Candidate(Service, Transactions);
 macro_rules! dispatch {
     (get_version_info, $s:expr, $r:expr) => {
-        $s.get_version_info($r).await
+        $s.0.get_version_info($r).await
     };
     (get_network_info, $s:expr, $r:expr) => {
-        $s.get_network_info($r).await
+        $s.0.get_network_info($r).await
     };
     (get_server_limits, $s:expr, $r:expr) => {
-        $s.get_server_limits($r).await
+        $s.0.get_server_limits($r).await
     };
     (get_chain_tip, $s:expr, $r:expr) => {
-        $s.get_chain_tip($r).await
+        $s.0.get_chain_tip($r).await
     };
     (get_chain_config, $s:expr, $r:expr) => {
-        $s.get_chain_config($r).await
+        $s.0.get_chain_config($r).await
     };
     (get_storage, $s:expr, $r:expr) => {
-        $s.get_storage($r).await
+        $s.0.get_storage($r).await
     };
     (get_balance, $s:expr, $r:expr) => {
-        $s.get_balance($r).await
+        $s.0.get_balance($r).await
     };
     (get_registered_auth, $s:expr, $r:expr) => {
-        $s.get_registered_auth($r).await
+        $s.0.get_registered_auth($r).await
     };
     (simulate_invocation, $s:expr, $r:expr) => {
-        $s.simulate_invocation($r).await
+        $s.0.simulate_invocation($r).await
     };
     (simulate_invocations, $s:expr, $r:expr) => {
-        $s.simulate_invocations($r).await
+        $s.0.simulate_invocations($r).await
+    };
+    (send_transaction, $s:expr, $r:expr) => {
+        $s.1.native_send_transaction($r).await
+    };
+    (get_transaction_status, $s:expr, $r:expr) => {
+        $s.1.native_transaction_status($r).await
+    };
+    (get_transaction_receipt, $s:expr, $r:expr) => {
+        $s.1.native_transaction_receipt($r).await
     };
     ($name:ident, $s:expr, $r:expr) => {{
         let _ = $r;
@@ -351,7 +420,7 @@ macro_rules! dispatch {
 }
 macro_rules! implement {
     ($( $(#[$doc:meta])* $name:ident($wire:literal,$parse:ident,$decorate:ident): $request:ty => $response:ty; )*) => {
-        impl thruput_json_rpc_api::native::NativeApi for Candidate { $(async fn $name(&self, request: $request) -> jsonrpsee::core::RpcResult<$response> { dispatch!($name, self.0, request) })* }
+        impl thruput_json_rpc_api::native::NativeApi for Candidate { $(async fn $name(&self, request: $request) -> jsonrpsee::core::RpcResult<$response> { dispatch!($name, self, request) })* }
     };
 }
 thruput_json_rpc_api::native_methods!(implement);
@@ -368,8 +437,19 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
             RpcServerConfig::default(),
             NativeReadCapabilities::new(db, db),
         );
-        let expected = service.method_names();
-        let mut module = crate::native::NativeModule::new(Candidate(service)).unwrap();
+        let mut expected = service.method_names();
+        if db {
+            expected.extend([
+                "sendTransaction",
+                "getTransactionStatus",
+                "getTransactionReceipt",
+            ]);
+            expected.sort_unstable();
+            assert_eq!(expected.len(), 13);
+        }
+        let mut module =
+            crate::native::NativeModule::new(Candidate(service, transactions(backend.clone())))
+                .unwrap();
         for name in thruput_json_rpc_api::native::METHOD_NAMES {
             if !expected.contains(name) {
                 assert!(module.remove_method(name));
@@ -443,6 +523,44 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
                 client.request("simulateInvocations", batch).await.unwrap();
             assert_eq!(batch["results"].as_array().unwrap().len(), 2);
             assert_eq!(batch["stateBlockHeight"], "42");
+            let signed = crate::tx::test_fixtures::canonical_signed_transaction();
+            let mut submit = ObjectParams::new();
+            submit
+                .insert(
+                    "signedTransaction",
+                    HexBytes(xdrs::txs::encode(&signed).unwrap()),
+                )
+                .unwrap();
+            let sent: serde_json::Value = client.request("sendTransaction", submit).await.unwrap();
+            assert_eq!(sent["admission"], "accepted");
+            assert!(sent.get("txHash").is_none());
+            let mut query = ObjectParams::new();
+            query
+                .insert("transactionHash", sent["transactionHash"].as_str().unwrap())
+                .unwrap();
+            let status: serde_json::Value =
+                client.request("getTransactionStatus", query).await.unwrap();
+            assert_eq!(
+                status,
+                serde_json::json!({"status":"committed","blockHeight":"42"})
+            );
+            let mut query = ObjectParams::new();
+            query
+                .insert("transactionHash", sent["transactionHash"].as_str().unwrap())
+                .unwrap();
+            let receipt: serde_json::Value = client
+                .request("getTransactionReceipt", query)
+                .await
+                .unwrap();
+            assert_eq!(receipt["transactionHash"], sent["transactionHash"]);
+            assert_eq!(receipt["blockHeight"], "42");
+            assert_eq!(
+                receipt["execution"],
+                serde_json::json!({"result":"return","returnData":"0x"})
+            );
+            assert_eq!(receipt["gasUsed"], "99");
+            assert!(receipt.get("status").is_none());
+            assert!(receipt.get("height").is_none());
             backend.unavailable.store(true, Ordering::SeqCst);
             assert!(
                 client

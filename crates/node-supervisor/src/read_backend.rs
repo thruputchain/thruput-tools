@@ -135,13 +135,19 @@ impl HogdDevReadBackend {
 
     /// Ask the indexer what it knows about one transaction.
     async fn tx_lookup(&self, tx_hash: TxHash) -> Result<shared_indexer::TxLookup, RpcServerError> {
+        shared_indexer::tx_lookup(INDEXER, self.transaction_info(tx_hash).await?)
+    }
+
+    /// Raw indexer response for projections that retain native evidence.
+    async fn transaction_info(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<thruput_indexer::indexer::TxInfoResult, RpcServerError> {
         let hash = shared_receipt::tx_hash_to_wire(tx_hash);
-        let result = self
-            .indexer
+        self.indexer
             .get_transaction_info(&hash)
             .await
-            .map_err(|source| RpcServerError::BackendUnavailable(format!("{INDEXER}: {source}")))?;
-        shared_indexer::tx_lookup(INDEXER, result)
+            .map_err(|source| RpcServerError::BackendUnavailable(format!("{INDEXER}: {source}")))
     }
 }
 

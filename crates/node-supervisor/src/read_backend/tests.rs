@@ -1693,3 +1693,109 @@ async fn native_storage_and_auth_use_the_local_db_connection() {
         task.abort();
     }
 }
+
+#[tokio::test]
+async fn native_receipt_and_commitment_use_local_indexer() {
+    use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
+    use thruput_json_rpc_types::responses as out;
+    let (idx_addr, _indexer) = start_fake_indexer(FakeIndexerMode::Normal).await;
+    let (sched_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
+    let backend = make_read_backend(idx_addr, sched_addr).await;
+    let hash = canned_tx_hash(CANNED_TX_HASH_A);
+    let receipt = backend
+        .native_receipt(RpcRequestContext::unbounded(), hash)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.transaction_hash, hash);
+    assert_eq!(*receipt.block_height, CANNED_HEIGHT_A);
+    assert_eq!(receipt.gas_used, CANNED_GAS_USED_A);
+    assert!(matches!(
+        receipt.execution,
+        out::ReceiptExecution::Return { .. }
+    ));
+    assert!(
+        matches!(backend.native_status(RpcRequestContext::unbounded(), hash).await.unwrap(), out::TransactionStatus::Committed { block_height } if *block_height == CANNED_HEIGHT_A)
+    );
+}
+
+#[tokio::test]
+async fn native_status_requires_both_misses_and_valid_scheduler_cardinality() {
+    use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
+    use thruput_json_rpc_types::{error::native::BackendDataInvalidReason, responses as out};
+    let (idx_addr, _indexer) = start_fake_indexer(FakeIndexerMode::Normal).await;
+    let hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
+    let (sched_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+    let backend = make_read_backend(idx_addr, sched_addr).await;
+    assert!(
+        backend
+            .native_receipt(RpcRequestContext::unbounded(), hash)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        backend
+            .native_status(RpcRequestContext::unbounded(), hash)
+            .await
+            .unwrap(),
+        out::TransactionStatus::Unknown {}
+    ));
+    let (sched_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::EmptyBatch).await;
+    let backend = make_read_backend(idx_addr, sched_addr).await;
+    let error = backend
+        .native_status(RpcRequestContext::unbounded(), hash)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error.error,
+        RpcServerError::BackendDataInvalid {
+            reason: BackendDataInvalidReason::InvalidCardinality,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn native_local_status_does_not_hide_indexer_failure_with_terminal_scheduler_state() {
+    use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
+    use thruput_scheduler::{
+        SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
+        SchedulerTransactionStatus as Status,
+    };
+    let (idx_addr, _indexer) = start_fake_indexer(FakeIndexerMode::RpcFail).await;
+    let (sched_addr, _scheduler) =
+        start_fake_scheduler(FakeSchedulerMode::Outcome(SchedulerTransactionOutcome {
+            status: Status::SchedulerTransactionDropped,
+            height: 7.into(),
+            error_source: Source::SchedulerTransactionErrorAuth,
+            error_code: 1,
+        }))
+        .await;
+    let backend = make_read_backend(idx_addr, sched_addr).await;
+    let error = backend
+        .native_status(
+            RpcRequestContext::unbounded(),
+            canned_tx_hash(CANNED_TX_HASH_A),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error.error, RpcServerError::BackendUnavailable(_)));
+}
+
+#[tokio::test]
+async fn native_local_receipt_deadline_has_no_commitment_observation() {
+    use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
+    let (idx_addr, _indexer) = start_fake_indexer(FakeIndexerMode::Slow).await;
+    let (sched_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+    let backend = make_read_backend(idx_addr, sched_addr).await;
+    let error = backend
+        .native_receipt(
+            RpcRequestContext::new(Some(Duration::from_millis(5))),
+            canned_tx_hash(CANNED_TX_HASH_A),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error.error, RpcServerError::BackendTimeout));
+    assert!(error.observation.is_none());
+}

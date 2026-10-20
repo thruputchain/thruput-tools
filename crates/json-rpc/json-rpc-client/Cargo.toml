@@ -26,8 +26,10 @@ thruput-json-rpc-types = { workspace = true }
 jsonrpsee = { workspace = true, features = ["macros", "http-client"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 thruput-open-rpc = { workspace = true }
 thruput-open-rpc-macros = { workspace = true }
 schemars = { workspace = true }

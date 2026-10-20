@@ -58,7 +58,7 @@ fn invalid(message: &str) -> RpcServerError {
 }
 
 /// Project read-only failure evidence; no error here asserts write admission.
-fn rpc_error(error: &RpcServerError) -> ErrorObjectOwned {
+pub(super) fn rpc_error(error: &RpcServerError) -> ErrorObjectOwned {
     let (code, data) = match error {
         RpcServerError::InvalidParam(_) => (
             codes::INVALID_PARAMS,

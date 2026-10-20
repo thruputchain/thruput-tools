@@ -4,6 +4,7 @@
 use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
 use std::time::Instant;
+use thruput_hogd_backend::native::transaction as native_transaction;
 use thruput_hogd_backend::{
     indexer as shared_indexer, receipt as shared_receipt, scheduler as shared_scheduler,
     status as shared_status,
@@ -12,11 +13,13 @@ use thruput_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client,
     indexer::{TxInfo, TxInfoResult},
 };
-use thruput_json_rpc_server::RpcRequestContext;
+use thruput_json_rpc_server::{RpcRequestContext, native::transaction::NativeReadError};
+use thruput_json_rpc_types::responses as native_out;
 use thruput_json_rpc_types::{
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
+use thruput_scheduler::SchedulerTransactionOutcomeBatch;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 
@@ -165,11 +168,11 @@ async fn acquire_lookup_permits(
     Ok((admission, permit))
 }
 
-async fn scheduler_transaction_status(
+async fn scheduler_transaction_outcomes(
     ctx: &GatewayContext,
     deadline: Instant,
     tx_hash: TxHash,
-) -> Result<Option<TransactionStatus>, RpcServerError> {
+) -> Result<SchedulerTransactionOutcomeBatch, RpcServerError> {
     let (admission, permit) = acquire_lookup_permits(ctx, deadline).await?;
     let execution = ctx.metrics.scheduler_lookup().executing();
     // Queued requests must use the current generation, not a pre-wait snapshot.
@@ -241,7 +244,7 @@ async fn scheduler_transaction_status(
         started_at.elapsed(),
     );
     match rpc_result {
-        Ok(Ok(results)) => shared_scheduler::transaction_outcome(SCHEDULER, &results),
+        Ok(Ok(results)) => Ok(results),
         Ok(Err(error)) => Err(RpcServerError::BackendUnavailable(format!(
             "scheduler lookup failed: {error}"
         ))),
@@ -249,11 +252,20 @@ async fn scheduler_transaction_status(
     }
 }
 
-async fn indexed_transaction_status(
+async fn scheduler_transaction_status(
     ctx: &GatewayContext,
     deadline: Instant,
     tx_hash: TxHash,
 ) -> Result<Option<TransactionStatus>, RpcServerError> {
+    let results = scheduler_transaction_outcomes(ctx, deadline, tx_hash).await?;
+    shared_scheduler::transaction_outcome(SCHEDULER, &results)
+}
+
+async fn indexed_transaction_info(
+    ctx: &GatewayContext,
+    deadline: Instant,
+    tx_hash: TxHash,
+) -> Result<TxInfoResult, RpcServerError> {
     let maybe_indexer = tokio::time::timeout_at(deadline.into(), ctx.indexer.read())
         .await
         .map_err(|_| RpcServerError::BackendTimeout)?
@@ -267,7 +279,15 @@ async fn indexed_transaction_status(
             "indexer not connected".into(),
         ));
     };
-    let result = lookup_transaction_info(ctx, client, deadline, tx_hash).await?;
+    lookup_transaction_info(ctx, client, deadline, tx_hash).await
+}
+
+async fn indexed_transaction_status(
+    ctx: &GatewayContext,
+    deadline: Instant,
+    tx_hash: TxHash,
+) -> Result<Option<TransactionStatus>, RpcServerError> {
+    let result = indexed_transaction_info(ctx, deadline, tx_hash).await?;
     let lookup = shared_indexer::tx_lookup(INDEXER, result)?;
     Ok(shared_indexer::committed_status(lookup))
 }
@@ -328,6 +348,37 @@ pub async fn get_transaction_status(
 ) -> Result<TransactionStatus, RpcServerError> {
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
     shared_status::transaction_status(&GatewayStatusProbe { ctx, deadline }, tx_hash).await
+}
+
+/// Strict native receipt projection using the existing indexer transport.
+#[tracing::instrument(skip_all, fields(?tx_hash))]
+pub async fn native_transaction_receipt(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    tx_hash: TxHash,
+) -> Result<Option<native_out::TransactionReceipt>, NativeReadError> {
+    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
+    let result = indexed_transaction_info(ctx, deadline, tx_hash).await?;
+    native_transaction::receipt_lookup(tx_hash, result)
+}
+
+/// Native status probes share the bounded lookup lane and one absolute deadline.
+#[tracing::instrument(skip_all, fields(?tx_hash))]
+pub async fn native_transaction_status(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    tx_hash: TxHash,
+) -> Result<native_out::TransactionStatus, NativeReadError> {
+    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
+    let indexed = match indexed_transaction_info(ctx, deadline, tx_hash).await {
+        Ok(result) => native_transaction::indexed_status(tx_hash, result),
+        Err(error) => Err(error.into()),
+    };
+    native_transaction::sequence_status(indexed, async {
+        let results = scheduler_transaction_outcomes(ctx, deadline, tx_hash).await?;
+        native_transaction::scheduler_status(&results)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1280,6 +1331,106 @@ mod tests {
         TxInfoResult::Default {
             outcome: TxInfoOutcome::TxInfoNotFound.0,
         }
+    }
+
+    #[tokio::test]
+    async fn native_receipt_preserves_valid_identity_on_invalid_execution() {
+        let TxInfoResult::TxInfoFound { mut info } = committed_result() else {
+            unreachable!()
+        };
+        info.events.root_output = thruput_xdr::transaction::InvocationFrameOutput::Fault;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (addr, _indexer) = start_fake_indexer(TxInfoResult::TxInfoFound { info }, calls).await;
+        let ctx = test_context(None, addr).await;
+        let error = watchdog(native_transaction_receipt(
+            &ctx,
+            RpcRequestContext::unbounded(),
+            test_hash(),
+        ))
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error.error,
+            RpcServerError::BackendDataInvalid { .. }
+        ));
+        let observation = error.observation.unwrap();
+        assert_eq!(observation.transaction_hash, test_hash());
+        assert_eq!(*observation.block_height, 42);
+        // Status can establish commitment even when the receipt payload is unusable.
+        assert!(
+            matches!(watchdog(native_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())).await.unwrap(), native_out::TransactionStatus::Committed { block_height } if *block_height == 42)
+        );
+    }
+
+    #[tokio::test]
+    async fn native_receipt_hash_mismatch_has_no_observation() {
+        let TxInfoResult::TxInfoFound { mut info } = committed_result() else {
+            unreachable!()
+        };
+        info.events.tx_hash = [9; 32].into();
+        let (addr, _indexer) = start_fake_indexer(
+            TxInfoResult::TxInfoFound { info },
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .await;
+        let ctx = test_context(None, addr).await;
+        let error = watchdog(native_transaction_receipt(
+            &ctx,
+            RpcRequestContext::unbounded(),
+            test_hash(),
+        ))
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error.error,
+            RpcServerError::BackendDataInvalid { .. }
+        ));
+        assert!(error.observation.is_none());
+    }
+
+    #[tokio::test]
+    async fn native_status_rejects_malformed_scheduler_cardinality() {
+        for mode in [FakeSchedulerMode::EmptyBatch, FakeSchedulerMode::ExtraSlot] {
+            let (scheduler_addr, _scheduler) = start_fake_scheduler(mode).await;
+            let (indexer_addr, _indexer) = start_not_found_indexer().await;
+            let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+            let error = watchdog(native_transaction_status(
+                &ctx,
+                RpcRequestContext::unbounded(),
+                test_hash(),
+            ))
+            .await
+            .unwrap_err();
+            assert!(matches!(error.error, RpcServerError::BackendDataInvalid { reason: thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidCardinality, .. }));
+            assert!(error.observation.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn native_status_refuses_terminal_scheduler_answer_when_indexer_failed() {
+        use thruput_scheduler::{
+            SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
+            SchedulerTransactionStatus as Status,
+        };
+        let (scheduler_addr, _scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::Outcome(SchedulerTransactionOutcome {
+                status: Status::SchedulerTransactionDropped,
+                height: 7.into(),
+                error_source: Source::SchedulerTransactionErrorAuth,
+                error_code: 1,
+            }))
+            .await;
+        let (indexer_addr, _indexer) =
+            start_scripted_indexer(vec![None], Arc::new(AtomicUsize::new(0))).await;
+        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+        let error = watchdog(native_transaction_status(
+            &ctx,
+            RpcRequestContext::unbounded(),
+            test_hash(),
+        ))
+        .await
+        .unwrap_err();
+        assert!(matches!(error.error, RpcServerError::BackendUnavailable(_)));
     }
 
     #[tokio::test]

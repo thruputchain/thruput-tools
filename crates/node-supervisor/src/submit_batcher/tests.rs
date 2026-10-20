@@ -96,6 +96,7 @@ fn item_with_reply(
         .expect("bug: test byte permit should be available");
     (
         Item {
+            attempt: None,
             tx_bytes,
             backend_deadline,
             reply,
@@ -571,6 +572,7 @@ async fn scheduler_failure_is_returned_to_every_batched_request() {
     let (second_reply, second_result) = oneshot::channel();
     ingress_tx
         .try_send(Item {
+            attempt: None,
             tx_bytes: vec![1],
             backend_deadline: Instant::now() + BACKEND_TIMEOUT,
             reply: first_reply,
@@ -582,6 +584,7 @@ async fn scheduler_failure_is_returned_to_every_batched_request() {
         .expect("bug: first test item should enter queue");
     ingress_tx
         .try_send(Item {
+            attempt: None,
             tx_bytes: vec![2],
             backend_deadline: Instant::now() + BACKEND_TIMEOUT,
             reply: second_reply,
@@ -730,4 +733,190 @@ async fn abort_resolves_waiting_request() {
     let result = submit.await.expect("bug: submit task should join");
 
     assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
+}
+
+#[tokio::test]
+async fn native_timeout_while_queued_prevents_later_dispatch() {
+    use thruput_json_rpc_types::error::native::AttemptAdmission;
+    let sink = Arc::new(GatedSink::new());
+    let batcher = SubmitBatcher::spawn_with(sink.clone(), 10, 100, 10, 100);
+    let first = {
+        let batcher = batcher.clone();
+        tokio::spawn(async move {
+            batcher
+                .submit(RpcRequestContext::unbounded(), vec![1])
+                .await
+        })
+    };
+    sink.called.notified().await;
+    let attempt = SubmissionAttempt::default();
+    let result = batcher
+        .submit_native(
+            RpcRequestContext::new(Some(Duration::from_millis(10))),
+            vec![2],
+            attempt.clone(),
+        )
+        .await;
+    assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
+    assert!(matches!(attempt.cancel(), AttemptAdmission::NotAttempted));
+    sink.permits.add_permits(1);
+    first.await.unwrap().unwrap();
+    // A barrier item proves the worker has drained the cancelled item.
+    let barrier = {
+        let batcher = batcher.clone();
+        tokio::spawn(async move {
+            batcher
+                .submit(RpcRequestContext::unbounded(), vec![3])
+                .await
+        })
+    };
+    sink.called.notified().await;
+    sink.permits.add_permits(1);
+    barrier.await.unwrap().unwrap();
+    let bytes: Vec<_> = sink
+        .batches
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|b| b.xdr.0.clone())
+        .collect();
+    assert_eq!(bytes, vec![vec![1], vec![3]]);
+}
+
+#[tokio::test]
+async fn native_timeout_after_dispatch_retains_uncertainty() {
+    use thruput_json_rpc_types::error::native::AttemptAdmission;
+    let sink = Arc::new(GatedSink::new());
+    let batcher = SubmitBatcher::spawn_with(sink.clone(), 10, 100, 10, 100);
+    let attempt = SubmissionAttempt::default();
+    let result = batcher
+        .submit_native(
+            RpcRequestContext::new(Some(Duration::from_millis(20))),
+            vec![1],
+            attempt.clone(),
+        )
+        .await;
+    assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
+    assert_eq!(sink.batches.lock().unwrap().len(), 1);
+    assert!(matches!(attempt.cancel(), AttemptAdmission::Unknown));
+}
+
+async fn native_outcome_batch(
+    outcomes: Vec<SchedGatewaySubmitOutcome>,
+    count: usize,
+) -> (Vec<Result<(), RpcServerError>>, Vec<SubmissionAttempt>) {
+    let (tx, rx) = mpsc::channel(count);
+    let mut replies = Vec::new();
+    let mut attempts = Vec::new();
+    for _ in 0..count {
+        let attempt = SubmissionAttempt::default();
+        let (mut item, reply) = item_with_reply(vec![1], Instant::now() + BACKEND_TIMEOUT);
+        item.attempt = Some(attempt.clone());
+        tx.try_send(item).unwrap();
+        replies.push(reply);
+        attempts.push(attempt);
+    }
+    drop(tx);
+    run(
+        rx,
+        Arc::new(OutcomeSink(outcomes)),
+        count,
+        100,
+        Arc::new(RwLock::new(None)),
+    )
+    .await;
+    let mut results = Vec::new();
+    for reply in replies {
+        results.push(reply.await.unwrap());
+    }
+    (results, attempts)
+}
+
+#[tokio::test]
+async fn native_authoritative_refusals_preserve_rejected_evidence_per_item() {
+    use SchedGatewaySubmitOutcome as O;
+    use thruput_json_rpc_types::error::native::AttemptAdmission;
+    let (results, attempts) = native_outcome_batch(
+        vec![
+            O::SchedGatewaySubmitAuthenticationRejected,
+            O::SchedGatewaySubmitAdmitted,
+            O::SchedGatewaySubmitRetryable,
+            O::SchedGatewaySubmitInternalError,
+        ],
+        4,
+    )
+    .await;
+    assert!(matches!(results[0], Err(RpcServerError::TxRejected(_))));
+    assert!(results[1].is_ok());
+    assert!(matches!(results[2], Err(RpcServerError::Overloaded(_))));
+    assert!(matches!(
+        results[3],
+        Err(RpcServerError::BackendUnavailable(_))
+    ));
+    for index in [0, 2, 3] {
+        assert!(matches!(
+            attempts[index].cancel(),
+            AttemptAdmission::Rejected
+        ));
+    }
+    // An admitted attempt must never acquire evidence of refusal.
+    assert!(matches!(attempts[1].cancel(), AttemptAdmission::Unknown));
+}
+
+#[tokio::test]
+async fn native_malformed_admission_outcomes_retain_unknown_evidence() {
+    use thruput_json_rpc_types::error::native::{AttemptAdmission, BackendDataInvalidReason};
+    for count in [0, 1, 3] {
+        let (results, attempts) = native_outcome_batch(
+            vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted; count],
+            2,
+        )
+        .await;
+        for (result, attempt) in results.into_iter().zip(attempts) {
+            assert!(matches!(
+                result,
+                Err(RpcServerError::BackendDataInvalid {
+                    reason: BackendDataInvalidReason::InvalidCardinality,
+                    ..
+                })
+            ));
+            assert!(matches!(attempt.cancel(), AttemptAdmission::Unknown));
+        }
+    }
+    let (results, attempts) = native_outcome_batch(vec![SchedGatewaySubmitOutcome(9999)], 1).await;
+    assert!(matches!(
+        results[0],
+        Err(RpcServerError::BackendDataInvalid {
+            reason: BackendDataInvalidReason::UnsupportedValue,
+            ..
+        })
+    ));
+    assert!(matches!(attempts[0].cancel(), AttemptAdmission::Unknown));
+}
+
+#[tokio::test]
+async fn native_lost_reply_after_dispatch_retains_unknown_evidence() {
+    use thruput_json_rpc_types::error::native::AttemptAdmission;
+    let sink = Arc::new(GatedSink::new());
+    let batcher = SubmitBatcher::spawn_with(sink.clone(), 10, 100, 10, 100);
+    let attempt = SubmissionAttempt::default();
+    let submit = tokio::spawn({
+        let batcher = batcher.clone();
+        let attempt = attempt.clone();
+        async move {
+            batcher
+                .submit_native(RpcRequestContext::unbounded(), vec![1], attempt)
+                .await
+        }
+    });
+    // The sink has received the packed bytes, but has not produced its reply.
+    sink.called.notified().await;
+    assert_eq!(sink.batches.lock().unwrap().len(), 1);
+    batcher.abort();
+    let result = tokio::time::timeout(Duration::from_secs(1), submit)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
+    assert!(matches!(attempt.cancel(), AttemptAdmission::Unknown));
 }
