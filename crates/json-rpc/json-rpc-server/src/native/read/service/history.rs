@@ -1,7 +1,7 @@
 //! Validate native history at the shared service boundary without reading cursors.
 
 use super::{NativeReadService, input, invalid, out};
-use crate::{RpcServerConfig, RpcServerError, native::read::NativeHistoryPlane};
+use crate::{RpcServerError, native::read::NativeHistoryPlane};
 use jsonrpsee::core::RpcResult;
 use std::cmp::Ordering;
 use thruput_json_rpc_types::{BlockHeight, events, hex::HexBytes};
@@ -90,13 +90,13 @@ fn page(
     latest: &BlockHeight,
     cursor: Option<&HexBytes>,
     limit: Option<u32>,
-    config: &RpcServerConfig,
+    max_cursor_bytes: usize,
 ) -> Result<(), RpcServerError> {
     if **oldest < 0 || latest < oldest || count > limit.unwrap_or(0) as usize {
         return Err(invalid("history page has invalid bounds or cardinality"));
     }
     if next.is_some_and(|next| {
-        next.0.is_empty() || next.0.len() > config.max_cursor_bytes || Some(next) == cursor
+        next.0.is_empty() || next.0.len() > max_cursor_bytes || Some(next) == cursor
     }) {
         return Err(invalid("history page has an invalid or repeated cursor"));
     }
@@ -175,10 +175,12 @@ fn matches_filter(event: &out::EmittedEvent, filter: &input::EventFilter) -> boo
         })
 }
 
-fn validate_events(
+/// Validate an event page against its prepared request before recording backend success.
+/// The request limit must already contain the effective page limit.
+pub fn validate_event_page(
     request: &input::EventQuery,
     result: &out::EventPage,
-    config: &RpcServerConfig,
+    max_cursor_bytes: usize,
 ) -> Result<(), RpcServerError> {
     page(
         result.events.len(),
@@ -187,7 +189,7 @@ fn validate_events(
         &result.latest_indexed_block_height,
         request.cursor.as_ref(),
         request.limit,
-        config,
+        max_cursor_bytes,
     )?;
     retained_anchor(request.start.as_ref(), &result.oldest_indexed_block_height)?;
     let mut identities = std::collections::BTreeSet::new();
@@ -247,6 +249,79 @@ fn validate_refs(
     Ok(())
 }
 
+/// Validate a root-address page before recording backend success.
+/// The request limit must already contain the effective page limit.
+pub fn validate_root_transaction_page(
+    request: &input::RootAddressQuery,
+    result: &out::TransactionRefPage,
+    max_cursor_bytes: usize,
+) -> Result<(), RpcServerError> {
+    page(
+        result.transactions.len(),
+        result.next_cursor.as_ref(),
+        &result.oldest_indexed_block_height,
+        &result.latest_indexed_block_height,
+        request.cursor.as_ref(),
+        request.limit,
+        max_cursor_bytes,
+    )?;
+    retained_anchor(request.start.as_ref(), &result.oldest_indexed_block_height)?;
+    if result.transactions.iter().any(|item| {
+        !in_range(
+            &item.block_height,
+            &result.oldest_indexed_block_height,
+            &result.latest_indexed_block_height,
+            request.start.as_ref(),
+        )
+    }) {
+        return Err(invalid("reference does not satisfy its history range"));
+    }
+    validate_refs(result, request.start.as_ref().and_then(direction))?;
+    Ok(())
+}
+
+/// Validate an exact-block page before recording backend success.
+/// The request limit must already contain the effective page limit.
+pub fn validate_block_transaction_page(
+    request: &input::BlockPageRequest,
+    result: &out::BlockTransactionPage,
+    max_cursor_bytes: usize,
+) -> Result<(), RpcServerError> {
+    page(
+        result.transactions.len(),
+        result.next_cursor.as_ref(),
+        &result.oldest_indexed_block_height,
+        &result.latest_indexed_block_height,
+        request.cursor.as_ref(),
+        request.limit,
+        max_cursor_bytes,
+    )?;
+    if request.cursor.is_some()
+        && (request.block_height < result.oldest_indexed_block_height
+            || request.block_height > result.latest_indexed_block_height)
+    {
+        return Err(invalid(
+            "successful block continuation is outside indexed coverage",
+        ));
+    }
+    if *result.oldest_indexed_block_height < 1
+        || (result.transactions.is_empty() && result.next_cursor.is_some())
+        || result.transactions.iter().any(|item| {
+            item.block_height != request.block_height
+                || !in_range(
+                    &item.block_height,
+                    &result.oldest_indexed_block_height,
+                    &result.latest_indexed_block_height,
+                    None,
+                )
+        })
+    {
+        return Err(invalid("invalid exact-block reference page"));
+    }
+    validate_refs(result, request.start.as_ref().map(|start| start.order))?;
+    Ok(())
+}
+
 impl<C, R: NativeHistoryPlane, V> NativeReadService<C, R, V> {
     /// Scan an indexed event range; an empty page can still have a continuation.
     #[tracing::instrument(skip_all)]
@@ -265,7 +340,7 @@ impl<C, R: NativeHistoryPlane, V> NativeReadService<C, R, V> {
             }
             validate_filters(&request.filters)?;
             let result = self.state.native_events(context, request.clone()).await?;
-            validate_events(&request, &result, &self.config)?;
+            validate_event_page(&request, &result, self.config.max_cursor_bytes)?;
             Ok(result)
         })
         .await
@@ -293,27 +368,7 @@ impl<C, R: NativeHistoryPlane, V> NativeReadService<C, R, V> {
                 .state
                 .native_root_transactions(context, request.clone())
                 .await?;
-            page(
-                result.transactions.len(),
-                result.next_cursor.as_ref(),
-                &result.oldest_indexed_block_height,
-                &result.latest_indexed_block_height,
-                request.cursor.as_ref(),
-                request.limit,
-                &self.config,
-            )?;
-            retained_anchor(request.start.as_ref(), &result.oldest_indexed_block_height)?;
-            if result.transactions.iter().any(|item| {
-                !in_range(
-                    &item.block_height,
-                    &result.oldest_indexed_block_height,
-                    &result.latest_indexed_block_height,
-                    request.start.as_ref(),
-                )
-            }) {
-                return Err(invalid("reference does not satisfy its history range"));
-            }
-            validate_refs(&result, request.start.as_ref().and_then(direction))?;
+            validate_root_transaction_page(&request, &result, self.config.max_cursor_bytes)?;
             Ok(result)
         })
         .await
@@ -341,38 +396,7 @@ impl<C, R: NativeHistoryPlane, V> NativeReadService<C, R, V> {
                 .state
                 .native_block_transactions(context, request.clone())
                 .await?;
-            page(
-                result.transactions.len(),
-                result.next_cursor.as_ref(),
-                &result.oldest_indexed_block_height,
-                &result.latest_indexed_block_height,
-                request.cursor.as_ref(),
-                request.limit,
-                &self.config,
-            )?;
-            if request.cursor.is_some()
-                && (request.block_height < result.oldest_indexed_block_height
-                    || request.block_height > result.latest_indexed_block_height)
-            {
-                return Err(invalid(
-                    "successful block continuation is outside indexed coverage",
-                ));
-            }
-            if *result.oldest_indexed_block_height < 1
-                || (result.transactions.is_empty() && result.next_cursor.is_some())
-                || result.transactions.iter().any(|item| {
-                    item.block_height != request.block_height
-                        || !in_range(
-                            &item.block_height,
-                            &result.oldest_indexed_block_height,
-                            &result.latest_indexed_block_height,
-                            None,
-                        )
-                })
-            {
-                return Err(invalid("invalid exact-block reference page"));
-            }
-            validate_refs(&result, request.start.as_ref().map(|start| start.order))?;
+            validate_block_transaction_page(&request, &result, self.config.max_cursor_bytes)?;
             Ok(result)
         })
         .await

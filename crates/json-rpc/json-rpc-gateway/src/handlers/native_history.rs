@@ -1,9 +1,14 @@
-//! Native history calls retain typed outcomes and reject malformed event pages.
+//! Native history calls retain typed outcomes and reject malformed pages before recording backend success.
 
 use super::{INDEXER, backend_deadline, timed_backend_call};
 use crate::{config::HealthBackend, context::GatewayContext};
 use thruput_hogd_backend::native::history as decode;
-use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
+use thruput_json_rpc_server::{
+    RpcRequestContext, RpcServerError,
+    native::read::{
+        validate_block_transaction_page, validate_event_page, validate_root_transaction_page,
+    },
+};
 use thruput_json_rpc_types::{requests as input, responses as out};
 
 #[tracing::instrument(skip_all, fields(filters_len = request.filters.len(), limit = ?request.limit, has_cursor = request.cursor.is_some()))]
@@ -25,7 +30,13 @@ pub async fn events(
         "get_events",
         INDEXER,
         backend_deadline(context, ctx.config.backend_request_timeout())?,
-        async { client.get_events(&query).await.map(decode::event_page) },
+        async {
+            client.get_events(&query).await.map(|result| {
+                let page = decode::event_page(result)?;
+                validate_event_page(&request, &page, ctx.config.max_cursor_bytes)?;
+                Ok(page)
+            })
+        },
         Result::is_ok,
     )
     .await?
@@ -54,7 +65,11 @@ pub async fn root_transactions(
             client
                 .get_transactions_by_address(&query)
                 .await
-                .map(decode::transaction_page)
+                .map(|result| {
+                    let page = decode::transaction_page(result)?;
+                    validate_root_transaction_page(&request, &page, ctx.config.max_cursor_bytes)?;
+                    Ok(page)
+                })
         },
         Result::is_ok,
     )
@@ -84,7 +99,11 @@ pub async fn block_transactions(
             client
                 .get_transactions_by_block(&query)
                 .await
-                .map(decode::transaction_page)
+                .map(|result| {
+                    let page = decode::transaction_page(result)?;
+                    validate_block_transaction_page(&request, &page, ctx.config.max_cursor_bytes)?;
+                    Ok(page)
+                })
         },
         Result::is_ok,
     )

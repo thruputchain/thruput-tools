@@ -1,4 +1,4 @@
-mod history;
+pub(super) mod history;
 
 use super::{NativeSimulationPlane, NativeStatePlane, StateKey, invalid, projection, rpc_error};
 use crate::{BuildVersion, ChainPlane, RpcRequestContext, RpcServerConfig, RpcServerError};

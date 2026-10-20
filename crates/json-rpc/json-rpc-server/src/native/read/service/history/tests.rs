@@ -1,4 +1,5 @@
 use super::*;
+use crate::RpcServerConfig;
 use thruput_json_rpc_types::{base58::Base58, transaction::TxHash};
 
 fn query() -> input::EventQuery {
@@ -84,55 +85,55 @@ fn event_pages_allow_empty_progress_but_reject_bad_metadata() {
     let config = RpcServerConfig::default();
     let mut result = events();
     result.events.clear();
-    validate_events(&query(), &result, &config).unwrap();
+    validate_event_page(&query(), &result, config.max_cursor_bytes).unwrap();
     let mut request = query();
     request.start = None;
     request.cursor = result.next_cursor.clone();
-    assert!(validate_events(&request, &result, &config).is_err());
+    assert!(validate_event_page(&request, &result, config.max_cursor_bytes).is_err());
     result.next_cursor = None;
-    validate_events(&request, &result, &config).unwrap();
+    validate_event_page(&request, &result, config.max_cursor_bytes).unwrap();
     result.oldest_indexed_block_height = (-1).into();
-    assert!(validate_events(&request, &result, &config).is_err());
+    assert!(validate_event_page(&request, &result, config.max_cursor_bytes).is_err());
     result.oldest_indexed_block_height = 11.into();
-    assert!(validate_events(&request, &result, &config).is_err());
+    assert!(validate_event_page(&request, &result, config.max_cursor_bytes).is_err());
     result = events();
     result.next_cursor = Some(HexBytes(vec![]));
-    assert!(validate_events(&query(), &result, &config).is_err());
+    assert!(validate_event_page(&query(), &result, config.max_cursor_bytes).is_err());
     result.next_cursor = Some(HexBytes(vec![0; 257]));
-    assert!(validate_events(&query(), &result, &config).is_err());
+    assert!(validate_event_page(&query(), &result, config.max_cursor_bytes).is_err());
 }
 
 #[test]
 fn events_require_order_membership_and_declared_bounds() {
     let config = RpcServerConfig::default();
     let mut result = events();
-    validate_events(&query(), &result, &config).unwrap();
+    validate_event_page(&query(), &result, config.max_cursor_bytes).unwrap();
     result.events.reverse();
-    assert!(validate_events(&query(), &result, &config).is_err());
+    assert!(validate_event_page(&query(), &result, config.max_cursor_bytes).is_err());
     let mut request = query();
     request.start = None;
     request.cursor = Some(HexBytes(vec![1]));
-    validate_events(&request, &result, &config).unwrap();
+    validate_event_page(&request, &result, config.max_cursor_bytes).unwrap();
     result.events[1] = result.events[0].clone();
-    assert!(validate_events(&request, &result, &config).is_err());
+    assert!(validate_event_page(&request, &result, config.max_cursor_bytes).is_err());
     result = events();
     result.events[0].event.address = Base58([2; 32].into());
-    assert!(validate_events(&query(), &result, &config).is_err());
+    assert!(validate_event_page(&query(), &result, config.max_cursor_bytes).is_err());
     result = events();
     result.events[0].block_height = 11.into();
-    assert!(validate_events(&query(), &result, &config).is_err());
+    assert!(validate_event_page(&query(), &result, config.max_cursor_bytes).is_err());
     result = events();
     result.events.push(event(0x90));
-    assert!(validate_events(&query(), &result, &config).is_err());
+    assert!(validate_event_page(&query(), &result, config.max_cursor_bytes).is_err());
     request = query();
     request.filters[0].topics = Some(input::TopicFilter {
         topic0: Some(vec![thruput_json_rpc_types::hex::Topic([0; 32])]),
         topic1: None,
         topic2: None,
     });
-    assert!(validate_events(&request, &events(), &config).is_err());
+    assert!(validate_event_page(&request, &events(), config.max_cursor_bytes).is_err());
     request.filters[0].topics.as_mut().unwrap().topic0 = Some(vec![]);
-    validate_events(&request, &events(), &config).unwrap();
+    validate_event_page(&request, &events(), config.max_cursor_bytes).unwrap();
 }
 
 #[test]
@@ -146,7 +147,11 @@ fn successful_range_pages_cannot_silently_clamp_an_explicit_anchor() {
     let mut result = events();
     result.oldest_indexed_block_height = 3.into();
     assert!(matches!(
-        validate_events(&request, &result, &RpcServerConfig::default()),
+        validate_event_page(
+            &request,
+            &result,
+            RpcServerConfig::default().max_cursor_bytes
+        ),
         Err(RpcServerError::BackendDataInvalid { .. })
     ));
     request.start = Some(input::HistoryStart::Descending {
@@ -157,7 +162,11 @@ fn successful_range_pages_cannot_silently_clamp_an_explicit_anchor() {
     result.events.clear();
     result.next_cursor = None;
     assert!(matches!(
-        validate_events(&request, &result, &RpcServerConfig::default()),
+        validate_event_page(
+            &request,
+            &result,
+            RpcServerConfig::default().max_cursor_bytes
+        ),
         Err(RpcServerError::BackendDataInvalid { .. })
     ));
 }
@@ -167,7 +176,14 @@ fn identities_cannot_repeat_at_different_heights() {
     let mut result = events();
     result.events[1] = result.events[0].clone();
     result.events[1].block_height = 10.into();
-    assert!(validate_events(&query(), &result, &RpcServerConfig::default()).is_err());
+    assert!(
+        validate_event_page(
+            &query(),
+            &result,
+            RpcServerConfig::default().max_cursor_bytes
+        )
+        .is_err()
+    );
     let hash = TxHash(Base58([1; 32].into()));
     let refs = out::TransactionRefPage {
         transactions: [9, 10]

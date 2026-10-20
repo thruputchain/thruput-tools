@@ -3,6 +3,9 @@
 
 mod projection;
 mod service;
+pub use service::history::{
+    validate_block_transaction_page, validate_event_page, validate_root_transaction_page,
+};
 pub use service::{NativeReadCapabilities, NativeReadService};
 
 use crate::{RpcRequestContext, RpcServerError, ViewBatchConfig};

@@ -77,6 +77,32 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
     }
     async fn get_events(&self, query: EventQuery) -> Result<EventPageResult, ProgramError> {
         use thruput_indexer::IndexerQueryOutcome as Outcome;
+        if query.limit >= 10 {
+            let page = history_page(query.limit);
+            return Ok(EventPageResult::IndexerQueryOk {
+                page: thruput_indexer::EventPage {
+                    events: VecM(
+                        page.refs
+                            .0
+                            .into_iter()
+                            .map(|item| thruput_xdr::event::IdentifiedEvent {
+                                tx_hash: item.tx_hash,
+                                block_height: item.height,
+                                sequence_number: 0,
+                                emitted_event: thruput_xdr::event::TxEmittedEvent {
+                                    contract_address: [9; 32].into(),
+                                    num_topics: 0,
+                                    serialized_event: BytesM::default(),
+                                },
+                            })
+                            .collect(),
+                    ),
+                    cursor: page.cursor,
+                    latest_block: page.latest_block,
+                    oldest_block: page.oldest_block,
+                },
+            });
+        }
         match query.limit {
             1 => Ok(EventPageResult::Default {
                 outcome: Outcome::IndexerQueryInvalidCursor.0,
@@ -99,6 +125,11 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
         query: AddressTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
         use thruput_indexer::IndexerQueryOutcome as Outcome;
+        if query.limit >= 10 {
+            return Ok(TransactionRefPageResult::IndexerQueryOk {
+                page: history_page(query.limit),
+            });
+        }
         Ok(TransactionRefPageResult::Default {
             outcome: if query.limit == 1 {
                 Outcome::IndexerQueryInvalidCursor.0
@@ -111,6 +142,14 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
         &self,
         query: BlockTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
+        if query.limit >= 10 {
+            let mut page = history_page(query.limit);
+            if query.limit == 11 {
+                // Within indexed coverage, but not the requested block.
+                page.refs.0[0].height = 2.into();
+            }
+            return Ok(TransactionRefPageResult::IndexerQueryOk { page });
+        }
         let height = *query.height;
         if height == 7 || height == 8 {
             use thruput_indexer::IndexerQueryOutcome as Outcome;
@@ -145,6 +184,30 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
                 oldest_block: if height == 4 { 0.into() } else { 1.into() },
             },
         })
+    }
+}
+
+// All pages decode successfully. Their query-dependent defects must be counted
+// as backend errors before the shared service can reject them a second time.
+fn history_page(case: u32) -> thruput_indexer::TransactionRefPage {
+    let hashes = match case {
+        13 => (0..14).collect(), // More rows than the requested limit.
+        14 => vec![3, 1, 2],     // Neither ascending nor descending.
+        _ => vec![7],
+    };
+    thruput_indexer::TransactionRefPage {
+        refs: VecM(
+            hashes
+                .into_iter()
+                .map(|byte| thruput_indexer::TransactionRef {
+                    tx_hash: SHA256Hash::from([byte; 32]),
+                    height: if case == 11 { 5.into() } else { 1.into() },
+                })
+                .collect(),
+        ),
+        cursor: BytesM(if case == 12 { vec![1, 2, 3] } else { vec![] }),
+        latest_block: 4.into(),
+        oldest_block: 1.into(),
     }
 }
 
@@ -236,6 +299,7 @@ async fn block_metrics_count_rejected_values_and_pages_as_errors() {
     }
     check_native_blocks(&ctx, &health).await;
     check_native_history(&ctx, &health).await;
+    check_native_history_page_metrics(&ctx, &health).await;
     server.abort();
 }
 
@@ -357,6 +421,85 @@ async fn check_native_history(ctx: &Arc<GatewayContext>, health: &crate::health:
         ("get_events", "timeout", 1),
         ("get_transactions_by_address", "error", 2),
         ("get_transactions_by_block", "error", 6),
+    ] {
+        assert!(metrics.contains(&format!(
+            "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"{operation}\",outcome=\"{outcome}\"}} {count}\n"
+        )), "{metrics}");
+    }
+}
+
+async fn check_native_history_page_metrics(
+    ctx: &Arc<GatewayContext>,
+    health: &crate::health::GatewayHealth,
+) {
+    use thruput_json_rpc_server::native::read::NativeHistoryPlane;
+    use thruput_json_rpc_types::{hex::HexBytes, requests as input};
+    let backend = crate::backend::GatewayBackend::new(ctx.clone());
+    let context = || RpcRequestContext::new(Some(std::time::Duration::from_secs(5)));
+    for case in 10..=14 {
+        let cursor = Some(HexBytes(vec![1, 2, 3]));
+        let limit = Some(case);
+        let address = thruput_xdr::types::ContractAddress::from([9; 32]).into();
+        let event = input::EventQuery {
+            filters: vec![input::EventFilter {
+                addresses: vec![address],
+                topics: None,
+            }],
+            start: None,
+            cursor: cursor.clone(),
+            limit,
+        };
+        let root = input::RootAddressQuery {
+            address,
+            start: None,
+            cursor: cursor.clone(),
+            limit,
+        };
+        let block = input::BlockPageRequest {
+            block_height: 1.into(),
+            start: None,
+            cursor,
+            limit,
+        };
+        for (method, result) in [
+            (
+                "events",
+                backend.native_events(context(), event).await.map(|_| ()),
+            ),
+            (
+                "root",
+                backend
+                    .native_root_transactions(context(), root)
+                    .await
+                    .map(|_| ()),
+            ),
+            (
+                "block",
+                backend
+                    .native_block_transactions(context(), block)
+                    .await
+                    .map(|_| ()),
+            ),
+        ] {
+            if case == 10 {
+                assert!(result.is_ok(), "{method} valid page: {result:?}");
+            } else {
+                assert!(
+                    matches!(result, Err(RpcServerError::BackendDataInvalid { .. })),
+                    "{method} invalid page case {case}: {result:?}"
+                );
+            }
+        }
+    }
+    let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
+    // Include the legacy/typed-outcome calls made earlier using this context.
+    for (operation, outcome, count) in [
+        ("get_events", "ok", 1),
+        ("get_events", "error", 7),
+        ("get_transactions_by_address", "ok", 1),
+        ("get_transactions_by_address", "error", 6),
+        ("get_transactions_by_block", "ok", 3),
+        ("get_transactions_by_block", "error", 10),
     ] {
         assert!(metrics.contains(&format!(
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"{operation}\",outcome=\"{outcome}\"}} {count}\n"
