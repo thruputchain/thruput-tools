@@ -112,6 +112,12 @@ identifiers or XDR; they are not runnable fixtures.
 The server submits already signed bytes. Success means authoritative admission,
 including an already-pending duplicate, not commitment or execution success.
 
+`getTransactionStatus` preserves scheduler status. Pending, retry and dropped
+responses can also include `recentFailure: { attemptBlockHeight, cause }`, a
+best-effort diagnostic from a recent attempt. This can explain a storage conflict
+without replacing `retry`; it need not describe the scheduler's latest attempt
+and does not authorize resubmission. See [status details](appendix/contract-details.md#status).
+
 Poll `getTransactionStatus({ transactionHash })` for commitment, then retrieve
 `getTransactionReceipt({ transactionHash })`:
 

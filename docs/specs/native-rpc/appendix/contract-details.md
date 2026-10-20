@@ -86,13 +86,15 @@ shows the envelopes. Client evidence and redispatch rules are defined under
 ```ts
 // getTransactionStatus({ transactionHash: Hash })
 type TransactionStatus =
-  | { status: "pending" }
+  | { status: "pending"; recentFailure?: RecentAttemptFailure }
   | { status: "committed"; blockHeight: Height }
-  | { status: "retry"; error: SchedulerError }
-  | { status: "dropped"; error: SchedulerError }
+  | { status: "retry"; error: SchedulerError; recentFailure?: RecentAttemptFailure }
+  | { status: "dropped"; error: SchedulerError; recentFailure?: RecentAttemptFailure }
   | { status: "recentFailure"; attemptBlockHeight: Height; cause: FailureCause }
   | { status: "unknown" }
   | { status: "other" };
+
+type RecentAttemptFailure = { attemptBlockHeight: Height; cause: FailureCause };
 
 type SchedulerError = {
   source: "auth" | "scheduler" | "executor" | "other";
@@ -109,7 +111,11 @@ type FailureCause =
 
 Keep the current typed `ConflictCode` and `ContractRejectCode` vocabulary. Preserve raw scheduler source/code. Do not reduce these diagnostics to a generic failure string. [Owning types](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/json-rpc/json-rpc-types/src/transaction.rs).
 
-Indexed commitment wins. See [shared status precedence](https://github.com/thruputchain/thruput-tools/blob/d0a8cdc93c70a0172ebc2d60cab320a0b03b0f99/crates/x23/hogd-backend/src/status.rs#L39). If the indexer fails, scheduler commitment may still answer; pending may report provisional presence without proving no earlier commitment. If the indexer fails and the scheduler returns retry/dropped/recent diagnostic/miss, propagate the read failure. Never hide it as a negative lifecycle result. `unknown` requires successful retained-source misses. Advisory recentFailure is not final failure. Preserve raw scheduler diagnostics, and treat other/unfamiliar tags as unsupported.
+Indexed commitment wins. Otherwise preserve the scheduler's status and raw source/code. When an indexed attempt diagnostic is available, attach it as `recentFailure` to `pending`, `retry` or `dropped`. Omit the field when unavailable; do not send null. It describes a recently observed failed attempt, which may differ from the attempt behind the scheduler status. If the scheduler misses, retain the standalone `recentFailure` status; `unknown` requires successful misses from both sources.
+
+A diagnostic is best-effort and may expire before the scheduler outcome. Its absence says nothing about failure or success; its presence does not prove historical nonexecution or grant permission to resubmit. Keep it separate from SDK recovery policy. This avoids hiding a detailed storage conflict behind a generic scheduler `retry` for the diagnostic's entire lifetime. Current defaults retain scheduler outcomes for [50 blocks](https://github.com/thruputchain/hogd/blob/16b95ada84417b1524b163923e1d5c74f57f326b/hogd/hog_mempool/scheduler.h#L33), but attempt diagnostics for [5 indexed blocks](https://github.com/thruputchain/hogd/blob/16b95ada84417b1524b163923e1d5c74f57f326b/hogd/hog_indexer/recent_tx_failure_cache.h#L37); these are implementation defaults, not public retention guarantees.
+
+If the indexer fails, scheduler commitment may still answer; pending may report provisional presence without proving no earlier commitment. For retry/dropped or a scheduler miss, propagate the indexer read failure. Never hide it as a negative lifecycle result. Readers preserve unfamiliar nested diagnostic tags as unsupported values with raw evidence; a known scheduler status does not make an unfamiliar diagnostic known. Malformed known diagnostic fields fail decoding. Neither case becomes an ordinary missing diagnostic. The Rust reader classifies an unfamiliar nested diagnostic as an unsupported whole result; its receipt waiter stops with raw evidence and any known commitment. The TS reader preserves the known outer status and the nested unsupported value, so read-only waiting can continue. Neither reader infers a recovery action from an unfamiliar diagnostic.
 
 Commitment is final under Thruput consensus; no confirmation-depth polling is needed. Receipt null, retry, dropped, unknown and passed expiry do not prove historical nonexecution. Known client commitment cannot be downgraded. An authoritative indexedThrough/expiredUncommitted proof needs complete retained coverage and race semantics; defer it.
 
@@ -915,7 +921,7 @@ A generic `retryable` boolean cannot distinguish read retry, same-byte submissio
 | `committed` | Preserve commitment within the same chain instance; obtain receipt separately. Never resubmit to resolve a missing receipt. |
 | `retry` | Preserve source/code; read/reconcile. Exact-byte resubmission needs runtime qualification and all preconditions below. |
 | `dropped` | Stop automatic submission. Surface the reason. Reconcile earlier uncertainty before an explicitly approved replacement. |
-| `recentFailure` | Advisory evidence, not final failure or an instruction to rebuild. Continue reconciliation. |
+| Supported `recentFailure` (standalone or attached) | Advisory evidence, not final failure or an instruction to rebuild. Continue reconciliation; an unfamiliar representation may stop observation with an evidence-bearing unsupported error. |
 | `unknown` or unfamiliar status/error | Preserve evidence and uncertainty. Known transient conditions can be retried under policy; unfamiliar outcomes do not authorize automatic resubmission or replacement. |
 | Receipt with failed execution | Return the committed receipt. A separate success assertion may throw; do not repeat the business action automatically. |
 | Invalid cursor, unavailable history or malformed backend data | Do not advance checkpoint or silently restart/skip. Require correction or explicit recovery. |
