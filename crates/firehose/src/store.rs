@@ -356,12 +356,19 @@ impl Store {
     }
 
     fn check_next(&self, pulled: &EventIndexerPulledBlock) -> Result<(), Error> {
+        Self::check_progress(self.progress.as_ref(), pulled)
+    }
+
+    fn check_progress(
+        progress: Option<&IndexerInitializedProgress>,
+        pulled: &EventIndexerPulledBlock,
+    ) -> Result<(), Error> {
         let value = &pulled.block.payload.consensus_value;
         let origin = &pulled.origin;
         if *origin.first_height < 0 {
             return Err(invalid("negative epoch first height"));
         }
-        if let Some(previous) = &self.progress {
+        if let Some(previous) = progress {
             if previous.contiguous_height.checked_add(1)
                 != Some(value.proposal_header.block_height.clone())
                 || value.prev_hash != previous.last_consensus_hash
@@ -384,7 +391,11 @@ impl Store {
     }
 
     fn advance(&mut self, pulled: &EventIndexerPulledBlock) {
-        self.progress = Some(IndexerInitializedProgress {
+        self.progress = Some(Self::block_progress(pulled));
+    }
+
+    fn block_progress(pulled: &EventIndexerPulledBlock) -> IndexerInitializedProgress {
+        IndexerInitializedProgress {
             origin: pulled.origin.clone(),
             contiguous_height: pulled
                 .block
@@ -394,7 +405,40 @@ impl Store {
                 .block_height
                 .clone(),
             last_consensus_hash: pulled.block.identity.consensus_hash.clone(),
-        });
+        }
+    }
+
+    /// Verify and advance a connection-local bootstrap cursor without writing records.
+    pub fn skip_bootstrap(
+        progress: &mut Option<IndexerInitializedProgress>,
+        pulled: &EventIndexerPulledBlock,
+    ) -> Result<(), Error> {
+        verify(pulled)?;
+        Self::check_progress(progress.as_ref(), pulled)?;
+        *progress = Some(Self::block_progress(pulled));
+        Ok(())
+    }
+
+    /// Durably establish a fresh archive at a verified, caught-up tip.
+    pub fn establish_tip(&mut self, progress: IndexerInitializedProgress) -> Result<(), Error> {
+        if self.progress.is_some() || self.blocks != 0 {
+            return Err(invalid("tip bootstrap requires an empty archive"));
+        }
+        if *progress.origin.first_height < 0
+            || *progress.contiguous_height < *progress.origin.first_height
+        {
+            return Err(invalid("invalid bootstrap tip"));
+        }
+        let floor = (*progress.contiguous_height)
+            .checked_add(1)
+            .ok_or_else(|| invalid("archive floor overflow"))?;
+        let bytes = encode(&progress)?;
+        self.publish_metadata("floor.xdr", &bytes)?;
+        self.bytes += bytes.len() as u64;
+        self.allocated_bytes += allocated_bytes(&self.directory.join("floor.xdr"))?;
+        self.floor = Some(floor);
+        self.progress = Some(progress);
+        Ok(())
     }
 
     /// Verify and durably publish a block. An identical replay returns false.

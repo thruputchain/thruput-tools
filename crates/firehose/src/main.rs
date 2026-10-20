@@ -17,6 +17,10 @@ use tokio::sync::watch;
 
 mod discovery;
 
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod test_blocks;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "hog-firehose-store",
@@ -210,6 +214,7 @@ async fn run_store(
         result = &mut http => (result.map_err(Into::into), true),
     };
     metrics.set_healthy(false);
+    metrics.bootstrapping.set(0);
     let _ = stop.send(true);
     if let Some(task) = tip_task {
         task.abort();
@@ -331,6 +336,7 @@ async fn ingest(
     let mut previous = Instant::now();
     let mut parked_total = 0.;
     loop {
+        metrics.bootstrapping.set(0);
         let connecting = async {
             let result = tokio::time::timeout(
                 Duration::from_secs(5),
@@ -362,9 +368,16 @@ async fn ingest(
             continue;
         };
         let mut parked = false;
+        let mut bootstrap = None;
+        let mut skipped = 0_u64;
+        let bootstrap_start = Instant::now();
         loop {
             let start = Instant::now();
-            let pull = client.pull(protocol, store.cursor(parked));
+            let cursor = bootstrap.clone().map_or_else(
+                || store.cursor(parked),
+                |initialized| IndexerProgress::IndexerProgressInitialized { initialized },
+            );
+            let pull = client.pull(protocol, cursor);
             tokio::pin!(pull);
             let mut ticker = tokio::time::interval(Duration::from_millis(100));
             let result = loop {
@@ -394,6 +407,7 @@ async fn ingest(
                         .with_label_values(&["transport_error"])
                         .inc();
                     metrics.set_healthy(false);
+                    metrics.bootstrapping.set(0);
                     tracing::warn!(%error, "pull transport failed; reconnecting from durable cursor");
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     break;
@@ -405,20 +419,41 @@ async fn ingest(
             }
             match outcome {
                 Outcome::Block => {
-                    // Only CaughtUp may establish a fresh archive's start point.
-                    // NotReady already covers an outbox awaiting initialization.
-                    if matches!(store.cursor(false), IndexerProgress::Default { .. }) {
-                        return Err(Error::Invalid(
-                            "block received before caught-up origin; tip-only bootstrap required"
-                                .into(),
-                        ));
-                    }
                     let EventIndexerPullResult::EventIndexerPullBlock { pulled_block } = result
                     else {
                         return Err(Error::Invalid("invalid block union".into()));
                     };
                     if pulled_block.origin.protocol != protocol {
                         return Err(Error::Invalid("block origin protocol mismatch".into()));
+                    }
+                    if matches!(store.cursor(false), IndexerProgress::Default { .. }) {
+                        let (progress, pulled_block, verified) =
+                            tokio::task::spawn_blocking(move || {
+                                let verified = Store::skip_bootstrap(&mut bootstrap, &pulled_block);
+                                (bootstrap, pulled_block, verified)
+                            })
+                            .await?;
+                        verified?;
+                        bootstrap = progress;
+                        skipped += 1;
+                        metrics.bootstrap_skipped_blocks.inc();
+                        metrics.bootstrapping.set(1);
+                        metrics.set_healthy(true);
+                        metrics.outcomes.with_label_values(&["skipped"]).inc();
+                        if skipped.is_multiple_of(10_000) {
+                            tracing::info!(
+                                skipped,
+                                height = *pulled_block
+                                    .block
+                                    .payload
+                                    .consensus_value
+                                    .proposal_header
+                                    .block_height,
+                                elapsed = bootstrap_start.elapsed().as_secs_f64(),
+                                "bootstrap fast-forward progress"
+                            );
+                        }
+                        continue;
                     }
                     let before = store.bytes;
                     let (updated, pulled_block, appended) =
@@ -471,11 +506,34 @@ async fn ingest(
                     if origin.protocol != protocol {
                         return Err(Error::Invalid("caught-up origin protocol mismatch".into()));
                     }
+                    let tip = bootstrap.take();
+                    if tip
+                        .as_ref()
+                        .is_some_and(|progress| progress.origin != origin)
+                    {
+                        return Err(Error::Invalid(
+                            "caught-up origin differs from bootstrap tip".into(),
+                        ));
+                    }
                     store = tokio::task::spawn_blocking(move || {
-                        store.adopt(&origin)?;
+                        if let Some(progress) = tip {
+                            store.establish_tip(progress)?;
+                        } else {
+                            store.adopt(&origin)?;
+                        }
                         Ok::<_, Error>(store)
                     })
                     .await??;
+                    metrics.bootstrapping.set(0);
+                    if skipped > 0 {
+                        tracing::info!(
+                            skipped,
+                            height = store.height(),
+                            elapsed = bootstrap_start.elapsed().as_secs_f64(),
+                            "bootstrap fast-forward complete"
+                        );
+                        skipped = 0;
+                    }
                     update_store_metrics(metrics, &store);
                     metrics.set_healthy(true);
                     tracing::info!(
@@ -485,12 +543,18 @@ async fn ingest(
                     parked = true;
                 }
                 Outcome::NotReady => {
+                    bootstrap = None;
+                    skipped = 0;
+                    metrics.bootstrapping.set(0);
                     metrics.set_healthy(false);
                     parked = false;
                     tracing::info!(?result, "pull not ready; waiting for outbox initialization");
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
                 Outcome::InternalFailure => {
+                    bootstrap = None;
+                    skipped = 0;
+                    metrics.bootstrapping.set(0);
                     metrics.set_healthy(false);
                     parked = false;
                     tracing::warn!(?result, "pull internal failure; retrying durable cursor");
@@ -622,6 +686,7 @@ mod tests {
     struct Script {
         replies: Mutex<VecDeque<EventIndexerPullResult>>,
         states: Arc<Mutex<Vec<i32>>>,
+        cursors: Arc<Mutex<Vec<IndexerProgress>>>,
     }
 
     #[async_trait::async_trait]
@@ -633,8 +698,12 @@ mod tests {
             assert_eq!(procedure, 10, "procedure 11 must never reach the wire");
             let request: EventIndexerPullRequest = xdrs::txs::decode(data).unwrap();
             self.states.lock().unwrap().push(request.progress.state().0);
+            self.cursors.lock().unwrap().push(request.progress);
             let reply = self.replies.lock().unwrap().pop_front();
             match reply {
+                Some(EventIndexerPullResult::Default { outcome: -999, .. }) => {
+                    Err(RpcError::ConnectFailed)
+                }
                 Some(reply) => Ok(xdrs::txs::encode(&reply).unwrap()),
                 None => std::future::pending().await,
             }
@@ -655,16 +724,30 @@ mod tests {
         Arc<Mutex<Vec<i32>>>,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
     ) {
+        let (endpoint, states, _, task) = server_cursors(replies).await;
+        (endpoint, states, task)
+    }
+
+    async fn server_cursors(
+        replies: Vec<EventIndexerPullResult>,
+    ) -> (
+        String,
+        Arc<Mutex<Vec<i32>>>,
+        Arc<Mutex<Vec<IndexerProgress>>>,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = listener.local_addr().unwrap().to_string();
         let states = Arc::new(Mutex::new(Vec::new()));
+        let cursors = Arc::new(Mutex::new(Vec::new()));
         let mut services = ServiceMap::new();
         services.add_service(Box::new(Script {
             replies: Mutex::new(replies.into()),
             states: states.clone(),
+            cursors: cursors.clone(),
         }));
         let task = RpcServer::new(listener, services).start().await;
-        (endpoint, states, task)
+        (endpoint, states, cursors, task)
     }
 
     #[tokio::test]
@@ -804,39 +887,154 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn block_before_caught_up_leaves_archive_empty() {
-        let hex: String = include_str!("../tests/fixtures/bootstrap.hex")
-            .split_whitespace()
-            .collect();
-        let block: EventIndexerPulledBlock = xdrs::txs::decode(&hex::decode(hex).unwrap()).unwrap();
+    async fn fast_forward_establishes_floor_then_appends_live_block() {
+        let first = test_blocks::fixture();
+        let second = test_blocks::next(&first);
+        let live = test_blocks::next(&second);
+        let protocol = first.origin.protocol;
+        let mut progress = None;
+        Store::skip_bootstrap(&mut progress, &first).unwrap();
+        Store::skip_bootstrap(&mut progress, &second).unwrap();
+        let progress = progress.unwrap();
+        let (endpoint, states, cursors, task) = server_cursors(vec![
+            block_reply(first),
+            block_reply(second),
+            EventIndexerPullResult::EventIndexerPullCaughtUp {
+                origin: progress.origin.clone(),
+            },
+            block_reply(live.clone()),
+        ])
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(&endpoint, dir.path());
+        let metrics = Metrics::new().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        tokio::select! {
+            result = ingest(&config, protocol, store, &metrics, Tail::Off) => {
+                panic!("unexpected exit: {result:?}");
+            }
+            result = tokio::time::timeout(Duration::from_secs(5), async {
+                while cursors.lock().unwrap().len() < 5 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => result.unwrap(),
+        }
+        assert_eq!(*states.lock().unwrap(), [0, 1, 1, 2, 1]);
         assert_eq!(
-            *block
-                .block
-                .payload
-                .consensus_value
-                .proposal_header
-                .block_height,
-            1
+            cursors.lock().unwrap()[3],
+            IndexerProgress::IndexerProgressCaughtUp {
+                initialized: progress.clone(),
+            }
         );
-        let (endpoint, states, task) =
-            server(vec![EventIndexerPullResult::EventIndexerPullBlock {
-                pulled_block: block,
-            }])
-            .await;
+        let floor: thruput_indexer::IndexerInitializedProgress =
+            xdrs::txs::decode(&std::fs::read(dir.path().join("floor.xdr")).unwrap()).unwrap();
+        assert_eq!(floor, progress);
+        assert!(!dir.path().join("origin.xdr").exists());
+        for height in [1, 2] {
+            assert!(!dir.path().join(format!("{height:020}.xdr")).exists());
+        }
+        let recovered = Store::open(dir.path()).unwrap();
+        assert_eq!(recovered.blocks, 1);
+        assert_eq!(recovered.height(), 3);
+        assert_eq!(recovered.floor_height(), Some(3));
+        let mut expected = Some(progress);
+        Store::skip_bootstrap(&mut expected, &live).unwrap();
+        assert_eq!(
+            recovered.cursor(false),
+            IndexerProgress::IndexerProgressInitialized {
+                initialized: expected.unwrap(),
+            }
+        );
+        assert_eq!(metrics.bootstrap_skipped_blocks.get(), 2);
+        assert_eq!(metrics.blocks.get(), 1);
+        assert_eq!(metrics.bootstrapping.get(), 0);
+        assert_eq!(metrics.outcomes.with_label_values(&["skipped"]).get(), 2);
+        assert_eq!(metrics.outcomes.with_label_values(&["block"]).get(), 1);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn verified_skip_is_healthy_while_awaiting_tip() {
+        let first = test_blocks::fixture();
+        let protocol = first.origin.protocol;
+        let (endpoint, _, cursors, task) = server_cursors(vec![block_reply(first)]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(&endpoint, dir.path());
+        let metrics = Metrics::new().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        tokio::select! {
+            result = ingest(&config, protocol, store, &metrics, Tail::Off) => {
+                panic!("unexpected exit: {result:?}");
+            }
+            result = tokio::time::timeout(Duration::from_secs(5), async {
+                while cursors.lock().unwrap().len() < 2 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => result.unwrap(),
+        }
+        assert_eq!(health(State(metrics.clone())).await.0, StatusCode::OK);
+        assert_eq!(metrics.bootstrapping.get(), 1);
+        assert_eq!(metrics.outcomes.with_label_values(&["skipped"]).get(), 1);
+        assert_eq!(metrics.outcomes.with_label_values(&["block"]).get(), 0);
+        assert_eq!(metrics.blocks.get(), 0);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn transient_failure_discards_bootstrap_before_next_pull() {
+        for code in [2, 5] {
+            let first = test_blocks::fixture();
+            let protocol = first.origin.protocol;
+            let (endpoint, _, cursors, task) =
+                server_cursors(vec![block_reply(first), diagnostic(code)]).await;
+            let dir = tempfile::tempdir().unwrap();
+            let config = config(&endpoint, dir.path());
+            let metrics = Metrics::new().unwrap();
+            let store = Store::open(dir.path()).unwrap();
+            tokio::select! {
+                result = ingest(&config, protocol, store, &metrics, Tail::Off) => {
+                    panic!("unexpected exit: {result:?}");
+                }
+                result = tokio::time::timeout(Duration::from_secs(5), async {
+                    while cursors.lock().unwrap().len() < 3 {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }) => result.unwrap(),
+            }
+            assert_eq!(
+                cursors.lock().unwrap()[2],
+                IndexerProgress::Default { state: 0 }
+            );
+            assert_eq!(metrics.bootstrapping.get(), 0);
+            assert!(!metrics.is_healthy());
+            assert!(!dir.path().join("floor.xdr").exists());
+            task.abort();
+        }
+    }
+
+    fn block_reply(pulled_block: EventIndexerPulledBlock) -> EventIndexerPullResult {
+        EventIndexerPullResult::EventIndexerPullBlock { pulled_block }
+    }
+
+    async fn bootstrap_rejected(replies: Vec<EventIndexerPullResult>) {
+        let (endpoint, _, task) = server(replies).await;
         let dir = tempfile::tempdir().unwrap();
         let config = config(&endpoint, dir.path());
         let metrics = Metrics::new().unwrap();
         let store = Store::open(dir.path()).unwrap();
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            ingest(&config, PROTOCOL_VERSION, store, &metrics, Tail::Off),
+            ingest(
+                &config,
+                test_blocks::fixture().origin.protocol,
+                store,
+                &metrics,
+                Tail::Off,
+            ),
         )
         .await
         .unwrap();
-        assert!(
-            matches!(result, Err(Error::Invalid(message)) if message.contains("tip-only bootstrap"))
-        );
-        assert_eq!(*states.lock().unwrap(), [0]);
+        assert!(matches!(result, Err(Error::Invalid(_))));
         let recovered = Store::open(dir.path()).unwrap();
         assert_eq!(recovered.blocks, 0);
         assert_eq!(recovered.bytes, 0);
@@ -847,6 +1045,84 @@ mod tests {
             1,
             "only LOCK may exist"
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn bootstrap_continuity_and_origin_fail_closed() {
+        let first = test_blocks::fixture();
+        let second = test_blocks::next(&first);
+        let mut gap = second.clone();
+        gap.block
+            .payload
+            .consensus_value
+            .proposal_header
+            .block_height += 1;
+        test_blocks::rehash(&mut gap);
+        let mut wrong_parent = second;
+        wrong_parent.block.payload.consensus_value.prev_hash =
+            first.block.payload.consensus_value.prev_hash.clone();
+        test_blocks::rehash(&mut wrong_parent);
+        let mut origin = first.origin.clone();
+        origin.epoch_sequence += 1;
+        for reply in [
+            block_reply(gap),
+            block_reply(wrong_parent),
+            EventIndexerPullResult::EventIndexerPullCaughtUp { origin },
+        ] {
+            bootstrap_rejected(vec![block_reply(first.clone()), reply]).await;
+        }
+        let mut invalid_first = first.clone();
+        invalid_first.origin.first_height += 1;
+        bootstrap_rejected(vec![block_reply(invalid_first)]).await;
+        let mut corrupt = first;
+        corrupt
+            .block
+            .payload
+            .consensus_value
+            .proposal_header
+            .block_height += 1;
+        bootstrap_rejected(vec![block_reply(corrupt)]).await;
+    }
+
+    #[tokio::test]
+    async fn bootstrap_reconnect_discards_skipped_progress() {
+        let first = test_blocks::fixture();
+        let protocol = first.origin.protocol;
+        let (endpoint, states, cursors, task) = server_cursors(vec![
+            block_reply(first.clone()),
+            diagnostic(-999),
+            block_reply(first.clone()),
+            EventIndexerPullResult::EventIndexerPullCaughtUp {
+                origin: first.origin,
+            },
+        ])
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(&endpoint, dir.path());
+        let metrics = Metrics::new().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        tokio::select! {
+            result = ingest(&config, protocol, store, &metrics, Tail::Off) => {
+                panic!("unexpected exit: {result:?}");
+            }
+            result = tokio::time::timeout(Duration::from_secs(5), async {
+                while cursors.lock().unwrap().len() < 5 {
+                    if states.lock().unwrap().len() == 2 {
+                        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => result.unwrap(),
+        }
+        assert_eq!(*states.lock().unwrap(), [0, 1, 0, 1, 2]);
+        assert_eq!(
+            cursors.lock().unwrap()[2],
+            IndexerProgress::Default { state: 0 }
+        );
+        let recovered = Store::open(dir.path()).unwrap();
+        assert_eq!(recovered.height(), 1);
+        assert_eq!(recovered.blocks, 0);
         task.abort();
     }
 
