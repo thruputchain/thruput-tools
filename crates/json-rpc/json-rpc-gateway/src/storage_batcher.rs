@@ -126,6 +126,7 @@ struct Item {
 struct ItemAnswer {
     block_height: BlockHeight,
     item: DbGatewayItemResult,
+    complete_batch: bool,
 }
 
 /// Per-batch processor: pack concurrent reads into one
@@ -180,6 +181,7 @@ impl BatchProcessor for StorageReadProcessor {
                     }
                 }
                 Ok(payload) => {
+                    let complete_batch = payload.items.0.len() == cohort.len();
                     let block_height = payload.block_height;
                     let mut responses = payload.items.0.into_iter();
                     for item in cohort {
@@ -188,6 +190,7 @@ impl BatchProcessor for StorageReadProcessor {
                             .map(|response| ItemAnswer {
                                 block_height: block_height.clone(),
                                 item: response,
+                                complete_batch,
                             })
                             .ok_or_else(|| shared_db_gateway::missing_item_error(DB_GATEWAY));
                         let _ = item.reply.send(answer);
@@ -196,6 +199,16 @@ impl BatchProcessor for StorageReadProcessor {
             }
         }
     }
+}
+
+fn validate_native_answer(answer: &ItemAnswer) -> Result<(), RpcServerError> {
+    if !answer.complete_batch {
+        return Err(RpcServerError::invalid_data(
+            thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidCardinality,
+            "storage batch response count differs from request count",
+        ));
+    }
+    Ok(())
 }
 
 /// Handle returned to the rest of the gateway.  Clone-friendly; each
@@ -314,6 +327,40 @@ impl StorageReadBatcher {
             answer.block_height,
             answer.item,
         )
+    }
+
+    /// Native reads retain and validate the original batch cardinality.
+    pub(crate) async fn native_storage(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+        key: thruput_json_rpc_server::native::read::StateKey,
+    ) -> Result<thruput_json_rpc_types::responses::StorageResult, RpcServerError> {
+        use thruput_json_rpc_server::native::read::StateKey;
+        let (storage_key, routing_key) = match key {
+            StateKey::ContractData(key) => (shared_db_gateway::contract_data_key(key), key),
+            StateKey::FreeNativeTokenBalance => {
+                (StorageKey::FreeNativeTokenBalance, address.0.into_inner())
+            }
+        };
+        let answer = self
+            .read_key(context, address, storage_key, &routing_key)
+            .await?;
+        validate_native_answer(&answer)?;
+        thruput_hogd_backend::native::storage(answer.block_height, answer.item)
+    }
+
+    /// Native authorization reads share queues but never accept a partial batch.
+    pub(crate) async fn native_registered_auth(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<thruput_json_rpc_types::responses::RegisteredAuthResult, RpcServerError> {
+        let answer = self
+            .read_key(context, address, StorageKey::AuthData, address.0.as_ref())
+            .await?;
+        validate_native_answer(&answer)?;
+        thruput_hogd_backend::native::registered_auth(address, answer.block_height, answer.item)
     }
 
     // `routing_key` is only for local AdaptiveBatcher queue routing; it is not
@@ -900,6 +947,47 @@ mod tests {
         }
         for (i, c) in hits.iter().enumerate() {
             assert!(*c > 1500 && *c < 3500, "shard {i} got {c} (expected ~2500)");
+        }
+    }
+    #[tokio::test]
+    async fn native_reads_reject_short_and_extra_batches_before_demux() {
+        use thruput_json_rpc_server::native::read::StateKey;
+        use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
+        for count in [0, 1, 3] {
+            let mock = MockSink::arc();
+            let gate = mock.queue_gate();
+            let batcher = StorageReadBatcher::spawn(
+                &config_for_tests(1, 4, 1000, 100),
+                &(mock.clone() as Arc<dyn StorageReadSink>),
+                GatewayMetrics::for_tests(),
+            );
+            let reads: Vec<_> = (0..2)
+                .map(|index| {
+                    let batcher = batcher.clone();
+                    tokio::spawn(async move {
+                        batcher
+                            .native_storage(
+                                request_context(),
+                                address_zero(),
+                                StateKey::ContractData(key_from_u32(index)),
+                            )
+                            .await
+                    })
+                })
+                .collect();
+            settle().await;
+            gate.send(Ok(payload_at_height(7, vec![not_found_item(); count])))
+                .unwrap();
+            for read in reads {
+                assert!(matches!(
+                    read.await.unwrap(),
+                    Err(RpcServerError::BackendDataInvalid {
+                        reason: BackendDataInvalidReason::InvalidCardinality,
+                        ..
+                    })
+                ));
+            }
+            assert_eq!(mock.seen(), vec![2]);
         }
     }
 }

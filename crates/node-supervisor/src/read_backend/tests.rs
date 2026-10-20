@@ -1032,9 +1032,14 @@ async fn get_storage_at_empty_payload_surfaces_backend_unavailable() {
         .await;
 
     // Assert
+    let error = jsonrpsee::types::ErrorObjectOwned::from(result.unwrap_err());
+    assert_eq!(
+        error.code(),
+        thruput_json_rpc_types::error::codes::BACKEND_UNAVAILABLE
+    );
     assert!(
-        matches!(result, Err(RpcServerError::BackendUnavailable(_))),
-        "empty payload should be BackendUnavailable, got {result:?}"
+        error.data().is_none(),
+        "wire 13 keeps its unstructured failure"
     );
 }
 
@@ -1632,4 +1637,59 @@ async fn connect_to_dead_indexer_port_fails_startup_probe() {
         ),
         "expected indexer startup failure, got {result:?}"
     );
+}
+
+#[tokio::test]
+async fn native_storage_and_auth_use_the_local_db_connection() {
+    use thruput_json_rpc_server::native::read::{NativeStatePlane, StateKey};
+    use thruput_json_rpc_types::{error::native::BackendDataInvalidReason, responses};
+    for mode in [
+        FakeDbGatewayMode::Found,
+        FakeDbGatewayMode::NotFound,
+        FakeDbGatewayMode::EmptyPayload,
+        FakeDbGatewayMode::ItemDefaultError,
+        FakeDbGatewayMode::AuthData,
+    ] {
+        let (addr, task) = start_fake_db_gateway(mode).await;
+        let backend = super::HogdDevStorageReadBackend {
+            db_gateway: make_db_gateway_client(addr).await,
+        };
+        let address = canned_storage_address();
+        match mode {
+            FakeDbGatewayMode::AuthData => {
+                let result = backend
+                    .native_registered_auth(RpcRequestContext::unbounded(), address)
+                    .await
+                    .unwrap();
+                assert_eq!(*result.state_block_height, CANNED_STORAGE_HEIGHT);
+                assert!(result.configuration.is_some());
+            }
+            mode => {
+                let result = backend
+                    .native_storage(
+                        RpcRequestContext::unbounded(),
+                        address,
+                        StateKey::ContractData(CANNED_STORAGE_KEY),
+                    )
+                    .await;
+                match mode {
+                    FakeDbGatewayMode::Found => assert!(matches!(
+                        result.unwrap().item,
+                        Some(responses::StorageItem::Bytestring { .. })
+                    )),
+                    FakeDbGatewayMode::NotFound => assert!(result.unwrap().item.is_none()),
+                    FakeDbGatewayMode::EmptyPayload => assert!(matches!(
+                        result,
+                        Err(RpcServerError::BackendDataInvalid {
+                            reason: BackendDataInvalidReason::InvalidCardinality,
+                            ..
+                        })
+                    )),
+                    FakeDbGatewayMode::ItemDefaultError => assert!(result.is_err()),
+                    _ => unreachable!(),
+                }
+            }
+        }
+        task.abort();
+    }
 }

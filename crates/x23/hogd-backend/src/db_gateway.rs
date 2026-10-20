@@ -7,6 +7,7 @@
 
 use thruput_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
 use thruput_json_rpc_server::{RpcServerError, TipReading};
+use thruput_json_rpc_types::error::native::BackendDataInvalidReason as DataReason;
 use thruput_json_rpc_types::{
     BlockHeight, ContractAddress,
     address_auth::{AddressAuthDataInfo, AddressAuthDataResponse},
@@ -40,23 +41,35 @@ pub fn tip_reading(
                 .into_inner(),
         );
         if expected != &observed {
-            return Err(RpcServerError::BackendUnavailable(format!(
-                "{service}: network hash mismatch: expected {expected}, observed {observed}"
-            )));
+            return Err(RpcServerError::invalid_data(
+                DataReason::InconsistentResult,
+                format!(
+                    "{service}: network hash mismatch: expected {expected}, observed {observed}"
+                ),
+            ));
         }
     }
     if config.storage_cost_model.ext != thruput_xdr::types::ExtensionPoint::_0 {
-        return Err(RpcServerError::BackendUnavailable(format!(
-            "{service}: unsupported storage cost model"
-        )));
+        return Err(RpcServerError::invalid_data(
+            DataReason::UnsupportedValue,
+            format!("{service}: unsupported storage cost model"),
+        ));
     }
-    let effective = NetworkConfigParams::from_network_config(&config.effective_config)
-        .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
+    let effective =
+        NetworkConfigParams::from_network_config(&config.effective_config).map_err(|error| {
+            RpcServerError::invalid_data(DataReason::UnsupportedValue, error.to_string())
+        })?;
     let tip = crate::scheduler::chain_tip(service, &config.tip.value)?;
-    if *tip.height < 0 {
+    if *tip.height == -1 {
         return Err(RpcServerError::BackendUnavailable(format!(
             "{service}: no committed configuration"
         )));
+    }
+    if *tip.height < -1 {
+        return Err(RpcServerError::invalid_data(
+            DataReason::InconsistentResult,
+            format!("{service}: no committed configuration"),
+        ));
     }
     let execution = ExecutionConfig::new(
         tip.clone(),
@@ -88,10 +101,13 @@ pub fn payload(service: &str, result: DbGatewayResult) -> Result<DbGatewayPayloa
                 %service,
                 "DbGateway returned unsupported outer result variant"
             );
-            Err(RpcServerError::BackendUnavailable(format!(
-                "{service} returned an unsupported result variant; regenerate the DbGateway \
+            Err(RpcServerError::invalid_data(
+                DataReason::UnsupportedValue,
+                format!(
+                    "{service} returned an unsupported result variant; regenerate the DbGateway \
                  client for this protocol"
-            )))
+                ),
+            ))
         }
     }
 }
@@ -99,7 +115,10 @@ pub fn payload(service: &str, result: DbGatewayResult) -> Result<DbGatewayPayloa
 /// The error for a batch answer that carries fewer items than the batch
 /// asked for, which leaves a requested key unaccounted for.
 pub fn missing_item_error(service: &str) -> RpcServerError {
-    RpcServerError::BackendUnavailable(format!("{service} response had fewer items than the batch"))
+    RpcServerError::invalid_data(
+        DataReason::InvalidCardinality,
+        format!("{service} response had fewer items than the batch"),
+    )
 }
 
 /// Take the single per-item result of a one-key batch payload, together
@@ -175,7 +194,7 @@ pub fn address_auth_data_read(
 }
 
 /// The stored item one per-item result carries, or `None` for an absent key.
-fn stored_item(
+pub(crate) fn stored_item(
     service: &str,
     item: DbGatewayItemResult,
 ) -> Result<Option<WireStorageItem>, RpcServerError> {
@@ -197,10 +216,13 @@ fn stored_item(
                 %service,
                 "DbGateway returned unsupported per-item result variant"
             );
-            Err(RpcServerError::BackendUnavailable(format!(
-                "{service} returned an unsupported per-item result variant; regenerate the \
+            Err(RpcServerError::invalid_data(
+                DataReason::UnsupportedValue,
+                format!(
+                    "{service} returned an unsupported per-item result variant; regenerate the \
                  DbGateway client for this protocol"
-            )))
+                ),
+            ))
         }
     }
 }

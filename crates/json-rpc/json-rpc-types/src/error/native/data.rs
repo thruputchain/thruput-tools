@@ -93,7 +93,7 @@ pub enum HistoryUnavailableReason {
 }
 
 /// Evidence-backed refinements; omission conveys no finer classification.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum BackendDataInvalidReason {

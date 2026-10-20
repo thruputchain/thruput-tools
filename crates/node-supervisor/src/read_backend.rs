@@ -564,3 +564,5 @@ fn receipt(tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
 
 #[cfg(test)]
 mod tests;
+
+mod native;

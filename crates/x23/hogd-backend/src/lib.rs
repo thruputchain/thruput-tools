@@ -44,3 +44,6 @@ pub mod view;
 /// Re-exported because it appears in consumers' own error types; everything
 /// else is reached through its module.
 pub use intro::IntroOutcome;
+
+/// Strict native read and simulation projections.
+pub mod native;

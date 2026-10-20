@@ -440,3 +440,109 @@ async fn request_deadline_caps_view_gateway_timeout() {
         "request deadline should cap ViewGateway timeout, got {result:?}"
     );
 }
+
+#[tokio::test]
+async fn native_local_simulation_preserves_snapshot_and_deadline() {
+    use thruput_json_rpc_server::native::read::NativeSimulationPlane;
+    use thruput_json_rpc_types::{requests, responses};
+    for mode in [FakeViewGatewayMode::Batch, FakeViewGatewayMode::ViewSlow] {
+        let (addr, task) = start_fake_view_gateway(mode).await;
+        let backend = HogdDevViewBackend::connect_optional(
+            Some(addr),
+            &protocol_text(&PROTOCOL_VERSION),
+            None,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+        let request = requests::SimulateInvocationRequest {
+            address: thruput_json_rpc_types::base58::Base58(
+                thruput_xdr::types::ContractAddress::from([7; 32]),
+            ),
+            entrypoint: HexBytes(vec![8; 8]),
+            calldata: HexBytes(vec![1, 2, 3]),
+            caller: None,
+            assumed_auth: None,
+            gas_limit: Some(100),
+            min_state_block_height: Some(42.into()),
+        };
+        let context = RpcRequestContext::new(Some(Duration::from_millis(50)));
+        let result = backend.simulate(context, request, 100).await;
+        if mode == FakeViewGatewayMode::ViewSlow {
+            assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
+        } else {
+            let result = result.unwrap();
+            assert_eq!(*result.state_block_height, 42);
+            assert_eq!(result.gas_used, 100);
+            assert!(matches!(
+                result.output,
+                responses::InvocationOutput::Return { .. }
+            ));
+        }
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn native_local_batch_preserves_order_and_freshness_evidence() {
+    use thruput_json_rpc_server::{ViewBatchConfig, native::read::NativeSimulationPlane};
+    use thruput_json_rpc_types::{requests as input, responses};
+    let (addr, task) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
+    let backend = HogdDevViewBackend::connect_optional(
+        Some(addr),
+        &protocol_text(&PROTOCOL_VERSION),
+        None,
+        Duration::from_mins(1),
+    )
+    .await
+    .unwrap();
+    for floor in [42, 43] {
+        let request = input::SimulateInvocationsRequest {
+            min_state_block_height: Some(floor.into()),
+            invocations: [3, 4]
+                .into_iter()
+                .map(|weight| input::Invocation {
+                    address: thruput_json_rpc_types::base58::Base58(
+                        thruput_xdr::types::ContractAddress::from([7; 32]),
+                    ),
+                    entrypoint: HexBytes(vec![8; 8]),
+                    calldata: HexBytes(vec![u8::try_from(weight).unwrap()]),
+                    caller: None,
+                    assumed_auth: Some(input::AssumedAuth::SourceAddress {
+                        allowed_keys: 5,
+                        required_weight: weight,
+                    }),
+                    gas_limit: Some(123),
+                })
+                .collect(),
+        };
+        let result = backend
+            .simulate_batch(
+                RpcRequestContext::unbounded(),
+                request,
+                1000,
+                ViewBatchConfig {
+                    max_response_bytes: 256,
+                    ..Default::default()
+                },
+            )
+            .await;
+        if floor == 42 {
+            let result = result.unwrap();
+            assert_eq!(result.results.len(), 2);
+            assert_eq!(*result.state_block_height, 42);
+            for (index, item) in result.results.iter().enumerate() {
+                assert_eq!(item.gas_used, 123);
+                assert!(
+                    matches!(&item.output,responses::InvocationOutput::Return { return_data } if return_data.0 == vec![u8::try_from(index).unwrap() + 3])
+                );
+            }
+        } else {
+            assert!(matches!(
+                result,
+                Err(RpcServerError::ViewHeightUnavailable(_))
+            ));
+        }
+    }
+    task.abort();
+}

@@ -12,7 +12,12 @@
 all-features = true
 
 [advisories]
-ignore = []
+# 0.26.11 contains no certificates; it re-exports the patched 1.x package.
+# Keep this exception paired with the version bans below. Remove it when
+# jsonrpsee moves past rustls-platform-verifier 0.5 (wasm32 dependency).
+ignore = [
+    { id = "RUSTSEC-2026-0383", reason = "webpki-root-certs 0.26.11 re-exports 1.0.10; older certificate bundles are banned below" },
+]
 # Informational advisories (unsound, unmaintained) default to workspace-direct
 # dependencies only.
 unsound = "all"
@@ -62,6 +67,12 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# RUSTSEC-2026-0383: only the certificate-free 0.26.11 compatibility package
+# may remain below 1.0.10. It resolves its parent dependency to patched 1.x.
+deny = [
+    { name = "webpki-root-certs", version = "<0.26.11" },
+    { name = "webpki-root-certs", version = ">0.26.11, <1.0.10" },
+]
 # Internal path dependencies carry no version requirement; every crate here is
 # publish = false, so path wildcards are safe. Registry wildcards stay denied.
 allow-wildcard-paths = true

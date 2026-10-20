@@ -47,6 +47,16 @@ pub enum RpcServerError {
     #[error("backend unavailable: {0}")]
     BackendUnavailable(String),
 
+    /// Backend data cannot satisfy its declared contract. Legacy callers retain
+    /// the unavailable wire error; native read handlers preserve the reason.
+    #[error("backend unavailable: {message}")]
+    BackendDataInvalid {
+        /// Stable classification for native read failures.
+        reason: thruput_json_rpc_types::error::native::BackendDataInvalidReason,
+        /// Diagnostic context; not a machine-readable discriminator.
+        message: String,
+    },
+
     /// Backend request timed out.
     #[error("backend timeout")]
     BackendTimeout,
@@ -61,6 +71,17 @@ pub enum RpcServerError {
 }
 
 impl RpcServerError {
+    /// Preserve a decoder failure without changing the legacy wire error.
+    pub fn invalid_data(
+        reason: thruput_json_rpc_types::error::native::BackendDataInvalidReason,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::BackendDataInvalid {
+            reason,
+            message: message.into(),
+        }
+    }
+
     /// The JSON-RPC error code this error is reported under.
     pub fn code(&self) -> i32 {
         match self {
@@ -71,7 +92,9 @@ impl RpcServerError {
             Self::TxNotFound => codes::TX_NOT_FOUND,
             Self::BlockNotFound => codes::BLOCK_NOT_FOUND,
             Self::InvalidParam(_) => codes::INVALID_PARAMS,
-            Self::BackendUnavailable(_) => codes::BACKEND_UNAVAILABLE,
+            Self::BackendUnavailable(_) | Self::BackendDataInvalid { .. } => {
+                codes::BACKEND_UNAVAILABLE
+            }
             Self::BackendTimeout => codes::BACKEND_TIMEOUT,
             Self::Overloaded(_) => codes::OVERLOADED,
             Self::NotImplemented(_) => codes::NOT_IMPLEMENTED,
