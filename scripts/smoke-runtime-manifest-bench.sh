@@ -394,9 +394,11 @@ case "$BENCH_BUILD_PROFILE" in
         die "unknown BENCH_BUILD_PROFILE=$BENCH_BUILD_PROFILE (expected debug or release)"
         ;;
 esac
-CLI="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/thruput"
-GATEWAY="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/hog-gateway"
-BENCH="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/thruput-bench"
+BUILD_TARGET_DIR="$(cargo metadata --no-deps --format-version 1 --locked \
+    --manifest-path "$REPO_ROOT/Cargo.toml" | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+CLI="$BUILD_TARGET_DIR/$BENCH_BUILD_PROFILE/thruput"
+GATEWAY="$BUILD_TARGET_DIR/$BENCH_BUILD_PROFILE/hog-gateway"
+BENCH="$BUILD_TARGET_DIR/$BENCH_BUILD_PROFILE/thruput-bench"
 
 unset GROUNDHOG_BENCH_GIT_COMMIT GROUNDHOG_BENCH_GIT_DIRTY
 if GROUNDHOG_BENCH_GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)"; then
@@ -474,7 +476,13 @@ log "Creating explicitly seeded benchmark fixture keys"
 for ((index=0; index<fixture_count; index++)); do
     python3 - "$BENCH_ACCOUNT_SEED" "$index" <<'SEED' | "$CLI" --json keys import "bench-$index" > "$WORK/bench-$index.json"
 import hashlib, sys
-print(hashlib.sha256(f"groundhog-bench:{sys.argv[1]}:account-{sys.argv[2]}".encode()).hexdigest())
+seed = hashlib.sha256(f"groundhog-bench:{sys.argv[1]}:account-{sys.argv[2]}".encode()).digest()
+alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+number, encoded = int.from_bytes(seed, "big"), ""
+while number:
+    number, digit = divmod(number, 58)
+    encoded = alphabet[digit] + encoded
+print("1" * (len(seed) - len(seed.lstrip(b"\0"))) + encoded)
 SEED
 done
 python3 - "$WORK" "$fixture_count" <<'ALLOCATIONS'
