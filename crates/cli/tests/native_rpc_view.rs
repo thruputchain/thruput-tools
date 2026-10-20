@@ -1,5 +1,4 @@
 //! Executable CLI coverage for the explicit native simulation path.
-#![cfg(feature = "native-rpc-qualification")]
 
 use std::{
     process::Command,
@@ -32,7 +31,7 @@ impl Fixture {
         Self { dir }
     }
 
-    fn view(&self, native: bool, success: bool) -> Value {
+    fn view(&self, success: bool) -> Value {
         let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
         command
             .args([
@@ -59,9 +58,6 @@ impl Fixture {
             "all_proxy",
         ] {
             command.env_remove(name);
-        }
-        if native {
-            command.arg("--native-rpc-qualification");
         }
         let output = command.output().unwrap();
         assert_eq!(
@@ -130,18 +126,11 @@ async fn server(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_flag_selects_native_and_default_still_uses_wire_13() {
+async fn default_view_uses_native_wire_without_legacy_calls() {
     let response = simulation(&json!({"result":"return","returnData":"0x07"}));
     let (url, handle, calls) = server(discovery(), Ok(response.clone())).await;
     let fixture = Fixture::new(&url);
-    let legacy = fixture.view(false, true);
-    assert_eq!(legacy["data"]["schemaVersion"], 3);
-    assert_eq!(legacy["data"]["height"], "42");
-    assert!(legacy["data"].get("stateBlockHeight").is_none());
-    assert_eq!(calls.lock().unwrap()[0].0, "groundhog_view");
-    assert_eq!(calls.lock().unwrap().len(), 1);
-
-    let native = fixture.view(true, true);
+    let native = fixture.view(true);
     assert_eq!(native["data"]["schemaVersion"], 4);
     assert_eq!(native["data"]["address"], address());
     for field in ["stateBlockHeight", "output", "events", "gasUsed"] {
@@ -152,11 +141,11 @@ async fn explicit_flag_selects_native_and_default_still_uses_wire_13() {
     let recorded = calls.lock().unwrap();
     assert_eq!(
         recorded.iter().map(|call| call.0).collect::<Vec<_>>(),
-        ["groundhog_view", "getVersionInfo", "simulateInvocation"]
+        ["getVersionInfo", "simulateInvocation"]
     );
-    assert_eq!(recorded[1].1, json!({}));
+    assert_eq!(recorded[0].1, json!({}));
     assert_eq!(
-        recorded[2].1,
+        recorded[1].1,
         json!({"address":address(),"entrypoint":"0x0102030405060708","calldata":"0xabcd"})
     );
     handle.stop().unwrap();
@@ -173,7 +162,7 @@ async fn abort_and_fault_exit_unsuccessfully_with_complete_simulation_on_stdout(
     ] {
         let response = simulation(&output);
         let (url, handle, calls) = server(discovery(), Ok(response.clone())).await;
-        let report = Fixture::new(&url).view(true, false);
+        let report = Fixture::new(&url).view(false);
         assert_eq!(report["data"]["schemaVersion"], 4);
         assert_eq!(report["error"]["code"], code);
         assert_eq!(report["error"]["details"]["output"], output);
@@ -190,7 +179,7 @@ async fn unknown_simulation_output_keeps_raw_evidence_and_fails_without_retry() 
     let mut response = simulation(&json!({"result":"future","proof":{"opaque":true}}));
     response["newField"] = json!({"retain":"all"});
     let (url, handle, calls) = server(discovery(), Ok(response.clone())).await;
-    let report = Fixture::new(&url).view(true, false);
+    let report = Fixture::new(&url).view(false);
     assert_eq!(report["data"]["schemaVersion"], 4);
     assert_eq!(report["data"]["evidence"], response);
     assert_eq!(report["error"]["details"], response);
@@ -206,7 +195,7 @@ async fn incompatible_discovery_stops_before_simulation_or_legacy_fallback() {
     missing_method["supportedMethods"] = json!([]);
     for version in [wrong_wire, missing_method, json!({"version":"foreign"})] {
         let (url, handle, calls) = server(version, Ok(Value::Null)).await;
-        let report = Fixture::new(&url).view(true, false);
+        let report = Fixture::new(&url).view(false);
         assert_eq!(report["data"]["schemaVersion"], 4);
         assert!(!report["error"]["message"].as_str().unwrap().is_empty());
         let recorded = calls.lock().unwrap();
@@ -222,7 +211,7 @@ async fn application_error_preserves_code_message_and_data_on_stdout() {
     let error = ErrorObjectOwned::owned(-32050, "simulation backend unavailable", Some(data));
     let expected = json!(error);
     let (url, handle, calls) = server(discovery(), Err(error)).await;
-    let report = Fixture::new(&url).view(true, false);
+    let report = Fixture::new(&url).view(false);
     assert_eq!(report["data"]["schemaVersion"], 4);
     assert_eq!(report["data"]["evidence"]["rpcError"], expected);
     assert_eq!(report["error"]["details"]["rpcError"], expected);

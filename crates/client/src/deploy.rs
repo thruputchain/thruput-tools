@@ -6,9 +6,12 @@
 
 use jsonrpsee::core::client::ClientT;
 use sha2::{Digest, Sha256};
-use thruput_json_rpc_client::PollTransactionReceiptError;
+use thruput_json_rpc_client::native::{
+    NativeClient,
+    receipt::{ReceiptPollConfig, ReceiptPollError},
+};
 use thruput_json_rpc_types::{
-    receipt::{ExecStatus, TransactionReceipt},
+    responses::{ReceiptExecution, TransactionReceipt},
     transaction::TxHash,
 };
 use thruput_signing::default_wallet::{
@@ -22,7 +25,7 @@ use thruput_xdr::{
     types::{ContractAddress, NetworkHash, SHA256Hash},
 };
 
-use crate::{PollOptions, SubmitCallError, SubmittedCall, sign_transaction};
+use crate::{SubmitCallError, SubmittedCall, sign_transaction};
 
 /// A native deployment from `account`'s `DefaultWallet`, with optional funding and
 /// initialization in the same transaction.
@@ -132,7 +135,7 @@ pub struct SignedDeploy {
 }
 
 impl SignedDeploy {
-    /// Canonical signed transaction encoded for `sendRawTransaction`.
+    /// Canonical signed transaction encoded for `sendTransaction`.
     pub fn tx_hex(&self) -> &str {
         &self.tx_hex
     }
@@ -150,7 +153,7 @@ impl SignedDeploy {
     /// Submit exactly these signed bytes once. Errors retain the original hash for reconciliation.
     pub async fn submit<C: ClientT + Sync>(
         &self,
-        client: &C,
+        client: &NativeClient<C>,
     ) -> Result<SubmittedDeploy, SubmitCallError> {
         crate::submit_signed_transaction(client, self.tx_hash, &self.tx_hex).await?;
         Ok(SubmittedDeploy {
@@ -171,33 +174,32 @@ pub struct SubmittedDeploy {
 impl SubmittedDeploy {
     /// Wait for the authoritative receipt, including unsuccessful execution receipts.
     /// Check it with [`verify`](Self::verify). This method never resubmits.
-    pub async fn wait<C: ClientT + Sync>(
+    pub async fn wait<C: ClientT + Sync, F: std::future::Future<Output = ()>>(
         &self,
-        client: &C,
-        options: PollOptions,
-    ) -> Result<TransactionReceipt, PollTransactionReceiptError> {
+        client: &NativeClient<C>,
+        network_hash: thruput_json_rpc_types::NetworkHash,
+        config: ReceiptPollConfig,
+        cancelled: F,
+    ) -> Result<TransactionReceipt, ReceiptPollError> {
         SubmittedCall {
             tx_hash: self.tx_hash,
         }
-        .wait(client, options)
+        .wait(client, network_hash, config, cancelled)
         .await
     }
 
     /// Require `receipt` to belong to this deployment and, when execution succeeded, to
     /// return exactly the predicted address. Unsuccessful execution is not an error here;
-    /// callers inspect `receipt.status`.
+    /// callers inspect `receipt.execution`.
     pub fn verify(&self, receipt: &TransactionReceipt) -> Result<(), DeploymentVerificationError> {
-        if receipt.tx_hash != self.tx_hash {
+        if receipt.transaction_hash != self.tx_hash {
             return Err(DeploymentVerificationError::ReceiptHashMismatch {
                 tx_hash: self.tx_hash,
-                receipt: receipt.tx_hash,
+                receipt: receipt.transaction_hash,
             });
         }
-        if matches!(receipt.status, ExecStatus::Ok)
-            && receipt
-                .return_data
-                .as_ref()
-                .is_none_or(|data| data.as_ref() != self.address.as_ref())
+        if let ReceiptExecution::Return { return_data } = &receipt.execution
+            && return_data.as_ref() != self.address.as_ref()
         {
             return Err(DeploymentVerificationError::AddressMismatch {
                 tx_hash: self.tx_hash,
@@ -262,12 +264,12 @@ mod tests {
 
     fn receipt(tx_hash: TxHash, return_data: Option<Vec<u8>>) -> TransactionReceipt {
         TransactionReceipt {
-            tx_hash,
-            height: BlockHeight::from(1),
-            status: ExecStatus::Ok,
+            transaction_hash: tx_hash,
+            block_height: BlockHeight::from(1),
+            execution: ReceiptExecution::Return {
+                return_data: HexBytes(return_data.unwrap_or_default()),
+            },
             events: vec![],
-            return_data: return_data.map(HexBytes),
-            abort_data: None,
             gas_used: 1,
         }
     }
@@ -357,7 +359,9 @@ mod tests {
             ));
         }
         let reverted = TransactionReceipt {
-            status: ExecStatus::Reverted { message: None },
+            execution: ReceiptExecution::Abort {
+                abort_data: HexBytes(vec![]),
+            },
             ..receipt(tx_hash, None)
         };
         submitted.verify(&reverted).unwrap();

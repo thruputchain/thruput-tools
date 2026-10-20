@@ -150,20 +150,18 @@ the transaction's remaining gas. The default is 25,000,000, which requires
 at least 2.5 HOG in the sending wallet. The CLI checks that balance before
 submitting a call; use `--gas-limit` to set a different budget.
 
-## Native RPC qualification
+## Native RPC
 
-Normal commands use wire 13. To test the native candidate locally, build with
-`cargo build -p thruput-cli --features native-rpc-qualification --locked` and
-start the [candidate listener](../../docs/gateway/runtime-manifest.md#native-rpc-qualification).
-Select its URL in a disposable profile, with the network hash from the validated
-runtime manifest. Add `--native-rpc-qualification` to `call` or `view`.
+Commands use the wire-14 native API. Calls and deployments support both pubkey
+wallet accounts and deployed wallet contracts. They verify the endpoint's methods
+and network, submit once, then wait through read-only status and receipt queries.
+A submission or polling error preserves the transaction hash and available evidence;
+it does not trigger resubmission. `view` simulates an invocation without a signing key.
 
-Native calls currently require a pubkey wallet account. They verify discovery
-and the configured network, submit once, then poll status and receipt without
-resubmitting. Native `view` simulates an invocation and needs no signing key.
-Both commands emit schema-version 4 JSON with the native execution or output,
-events and metered gas. Other commands and invocations without the flag keep
-their existing behavior. This feature does not activate the public wire-14 API.
+Call and view JSON reports contain nested execution or output, events and metered
+gas. Gas measures work; it is not a token burn. For an end-to-end check against a
+compatible local runtime, run the ignored `native_rpc_qualification` integration test
+with `THRUPUT_DEVNODE_BINARY` set to its absolute path.
 
 ## Using cargo directly
 
@@ -623,7 +621,7 @@ The preview and dry-run report sender, network hash, code hash, deployment nonce
 predicted address, expiry, funding amount, initializer and gas budgets. Dry-run
 does not submit. Wallet creation and faucet funding remain separate actions.
 
-Deploy JSON schema version 6 includes `nativeDeployment` for native transactions.
+Deploy JSON schema version 8 includes `nativeDeployment` for native transactions.
 If submission or confirmation cannot be verified, the failure includes the
 original `txHash`, `signedTx`, `predictedAddress`, endpoint, funding and initializer details.
 Inspect that transaction before taking further action. A timeout or `unknown`
@@ -681,11 +679,11 @@ metadata, so cached metadata does not require usable private key bytes. Omitting
 
 ### `thruput storage`
 
-Read one latest committed raw storage item via `groundhog_getStorageAt`.
+Read one latest committed raw storage item via `getStorage`.
 This is the low-level address/key state inspection command; it does not
 execute contract code and does not require a signing key. Use `thruput call`
 for signed state-changing invocation. Use `thruput view` for sandboxed
-contract simulation through `groundhog_view`.
+contract simulation through `simulateInvocation`.
 
 ```bash
 thruput storage my-counter 0x0000000000000000000000000000000000000000000000000000000000000000
@@ -695,7 +693,7 @@ thruput storage my-counter 0x424242424242424242424242424242424242424242424242424
 ```
 
 The output includes the snapshot block height even when the item is absent,
-so scripts can compare it with `groundhog_chainTip` freshness.
+so scripts can compare it with `getChainTip` freshness.
 
 ### Remote RPC overrides
 
@@ -878,12 +876,12 @@ The startup JSON reports the actual manifest path. Profile `runtime_manifest`
 settings or `THRUPUT_RUNTIME_MANIFEST` can also select it. Keep the RPC endpoint
 and manifest paired; distinct identities do not require a new RPC method.
 
-The local-only `groundhog_fundAccount` accepts an exact positive raw amount,
+The local-only `dev_fundAccount` accepts an exact positive raw amount,
 recipient, caller nonce and public faucet address. Persist the request before
 sending. After a timeout, retry that request; changing the amount or nonce can
 create a second transfer. Admission returns the hash and exact signed bytes;
 execution requires an authoritative receipt. Unresolved errors return retained
-`txHash` and `signedTransaction` evidence, which does not prove admission or
+`transactionHash` and `signedTransaction` evidence, which does not prove admission or
 execution. The CLI saves this evidence and reports the hash and attempt path if
 receipt lookup fails. Inspect the hash with `thruput tx show`, then retry the
 original recipient and amount. The existing airdrop remains fixed

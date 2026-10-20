@@ -76,46 +76,63 @@ impl Query {
             address = address(),
         )).unwrap();
         let server = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            let (mut stream, _) = loop {
-                match listener.accept() {
-                    Ok(connection) => break connection,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "query never reached RPC");
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(error) => panic!("RPC accept failed: {error}"),
-                }
-            };
-            // Darwin inherits the listener's nonblocking flag on accepted sockets.
-            stream.set_nonblocking(false).unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut reader = BufReader::new(&mut stream);
-            let mut length = 0;
+            let deadline = Instant::now() + Duration::from_mins(1);
+            let mut query_request = None;
             loop {
-                let mut line = String::new();
-                assert!(reader.read_line(&mut line).unwrap() > 0);
-                if line == "\r\n" {
-                    break;
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "query never reached RPC");
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("RPC accept failed: {error}"),
+                    }
+                };
+                // Darwin inherits the listener's nonblocking flag on accepted sockets.
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
                 }
-                if let Some((name, value)) = line.split_once(':')
-                    && name.eq_ignore_ascii_case("content-length")
-                {
-                    length = value.trim().parse::<usize>().unwrap();
+                let mut bytes = vec![0; length];
+                reader.read_exact(&mut bytes).unwrap();
+                let request: Value = serde_json::from_slice(&bytes).unwrap();
+                let method = request["method"].as_str().unwrap();
+                let mut reply = match method {
+                    "getVersionInfo" => {
+                        json!({"result":{"wireFormat":"14.0.0","implementation":"test","supportedMethods":["getBalance","getStorage","simulateInvocation","getTransactionStatus","getTransactionReceipt","getTransactionsByRootAddress","getEvents"]}})
+                    }
+                    "getTransactionReceipt" => json!({"result":null}),
+                    _ => {
+                        query_request = Some(request.clone());
+                        response.clone()
+                    }
+                };
+                reply["jsonrpc"] = "2.0".into();
+                reply["id"] = request["id"].clone();
+                let body = reply.to_string();
+                if method != "getVersionInfo" {
+                    thread::sleep(delay);
+                }
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                if method != "getVersionInfo" && method != "getTransactionStatus" {
+                    return query_request.unwrap();
                 }
             }
-            let mut bytes = vec![0; length];
-            reader.read_exact(&mut bytes).unwrap();
-            let request: Value = serde_json::from_slice(&bytes).unwrap();
-            let mut reply = response;
-            reply["jsonrpc"] = "2.0".into();
-            reply["id"] = request["id"].clone();
-            let body = reply.to_string();
-            thread::sleep(delay);
-            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
-            request
         });
         Self { root, server }
     }
@@ -146,11 +163,11 @@ fn address() -> String {
 }
 
 fn balance(raw: &str) -> Value {
-    json!({"result": {"address": address(), "rawBalance": raw, "height": "34"}})
+    json!({"result": {"address": address(), "rawBalance": raw, "stateBlockHeight": "34"}})
 }
 
 fn view(output: Value) -> Value {
-    let mut response = json!({"result": {"events": [], "height": "12", "gasUsed": "7"}});
+    let mut response = json!({"result": {"events": [], "stateBlockHeight": "12", "gasUsed": "7"}});
     response["result"]["output"] = output;
     response
 }
@@ -275,32 +292,32 @@ fn inspection_commands_render_complete_empty_and_pending_results() {
     for (args, result, method, title) in [
         (
             vec!["storage", "counter", &storage_key],
-            json!({"item":null,"blockHeight":"12"}),
-            "groundhog_getStorageAt",
+            json!({"item":null,"stateBlockHeight":"12"}),
+            "getStorage",
             "Storage",
         ),
         (
             vec!["tx", "show", &hash],
             json!({"status":"pending"}),
-            "groundhog_getTransactionStatus",
+            "getTransactionStatus",
             "Transaction",
         ),
         (
             vec!["tx", "list"],
-            json!({"refs":[],"cursor":"0xaabb","latestBlock":"12","oldestBlock":"0"}),
-            "groundhog_getTransactionsByAddress",
+            json!({"transactions":[],"nextCursor":"0xaabb","latestIndexedBlockHeight":"12","oldestIndexedBlockHeight":"0"}),
+            "getTransactionsByRootAddress",
             "Transaction history",
         ),
         (
             vec!["events", "list", "counter"],
-            json!({"events":[],"cursor":"0x","latestBlock":"12","oldestBlock":"0"}),
-            "groundhog_getEvents",
+            json!({"events":[],"nextCursor":null,"latestIndexedBlockHeight":"12","oldestIndexedBlockHeight":"0"}),
+            "getEvents",
             "Events",
         ),
         (
             vec!["token", "transfers", "counter"],
-            json!({"events":[],"cursor":"0x","latestBlock":"12","oldestBlock":"0"}),
-            "groundhog_getEvents",
+            json!({"events":[],"nextCursor":null,"latestIndexedBlockHeight":"12","oldestIndexedBlockHeight":"0"}),
+            "getEvents",
             "Token transfers",
         ),
     ] {
@@ -322,7 +339,7 @@ fn inspection_commands_render_complete_empty_and_pending_results() {
 
 #[test]
 fn balance_progress_finishes_before_full_precision_result_and_survives_resize() {
-    for raw in ["0", "340282366920938463463374607431768211455"] {
+    for raw in ["0", "170141183460469231731687303715884105727"] {
         let query = Query::new(balance(raw), SLOW);
         let mut pty = Pty::spawn(query.command(&["balance"]));
         pty.until(|pty| pty.progress_rows > 0);
@@ -337,7 +354,7 @@ fn balance_progress_finishes_before_full_precision_result_and_survives_resize() 
             assert!(compact.contains(value), "missing {value}: {history}");
         }
         assert!(history.contains("PREEXISTING-SHELL-LINE"));
-        query.finish("groundhog_getBalance");
+        query.finish("getBalance");
     }
 }
 
@@ -346,42 +363,37 @@ fn view_cards_distinguish_raw_returns_aborts_faults_and_events() {
     for (output, title, detail) in [
         (
             json!({"result":"return", "returnData":"0x0102"}),
-            "View succeeded",
+            "Simulation succeeded",
             "0x0102",
         ),
         (
             json!({"result":"return", "returnData":"0x"}),
-            "View succeeded",
-            "Return (hex)",
+            "Simulation succeeded",
+            "Return",
         ),
         (
             json!({"result":"abort", "abortData":"0xdeadbeef"}),
-            "View aborted",
+            "Simulation aborted",
             "0xdeadbeef",
         ),
-        (json!({"result":"fault"}), "View faulted", "Height"),
+        (
+            json!({"result":"fault"}),
+            "Simulation faulted",
+            "State block height",
+        ),
     ] {
         let mut response = view(output);
         response["result"]["events"] =
-            json!([{"contractAddress": address(), "topics": [], "data": "0xcafe"}]);
+            json!([{"address": address(), "topics": [], "data": "0xcafe"}]);
         let query = Query::new(response, SLOW);
         let mut pty = Pty::spawn(query.command(VIEW));
-        assert!(
-            pty.finish().success(),
-            "view outcomes retain the existing exit status"
-        );
+        assert_eq!(pty.finish().success(), title == "Simulation succeeded");
         assert!(pty.progress_rows > 0);
         let history = pty.history();
-        for value in [title, detail, "Event 0", "data=0xcafe", "Entrypoint"] {
+        for value in [title, detail, "Event 0", "data=0xcafe", "Method"] {
             assert!(history.contains(value), "missing {value}: {history}");
         }
-        if title == "View aborted" {
-            assert!(
-                history.find("View aborted").unwrap()
-                    < history.find("Could not decode abort data").unwrap()
-            );
-        }
-        query.finish("groundhog_view");
+        query.finish("simulateInvocation");
     }
 }
 
@@ -407,33 +419,28 @@ fn named_view_shows_decoded_value_and_method() {
     assert!(pty.finish().success(), "{}", pty.history());
     let history = pty.history();
     assert!(history.contains("Method"));
-    assert!(history.contains("Value"));
-    assert!(!history.contains("Return (hex)"));
+    assert!(history.contains("Return"));
     let compact: String = history
         .chars()
         .filter(|c| !c.is_whitespace() && *c != '│')
         .collect();
-    assert!(compact.contains("Value:\"7\""), "{history}");
-    query.finish("groundhog_view");
+    assert!(compact.contains("Return:\"7\""), "{history}");
+    query.finish("simulateInvocation");
 }
 
 #[test]
 fn rpc_errors_and_invalid_balances_stop_progress_without_success_cards() {
     for (args, reply, method) in [
-        (
-            vec!["balance"],
-            balance("not-a-number"),
-            "groundhog_getBalance",
-        ),
+        (vec!["balance"], balance("not-a-number"), "getBalance"),
         (
             vec!["balance"],
             json!({"error":{"code":-32000,"message":"node unavailable"}}),
-            "groundhog_getBalance",
+            "getBalance",
         ),
         (
             VIEW.to_vec(),
             json!({"error":{"code":-32000,"message":"node unavailable"}}),
-            "groundhog_view",
+            "simulateInvocation",
         ),
     ] {
         let query = Query::new(reply, SLOW);
@@ -451,29 +458,37 @@ fn rpc_errors_and_invalid_balances_stop_progress_without_success_cards() {
 fn query_json_quiet_and_plain_modes_preserve_stream_contracts() {
     for flag in ["--json", "--quiet", "--no-ui"] {
         for (args, reply, method) in [
-            (vec!["balance"], balance("0"), "groundhog_getBalance"),
+            (vec!["balance"], balance("0"), "getBalance"),
             (
                 VIEW.to_vec(),
                 view(json!({"result":"abort", "abortData":"0xdeadbeef"})),
-                "groundhog_view",
+                "simulateInvocation",
             ),
         ] {
             let query = Query::new(reply, Duration::ZERO);
             let mut command = query.command(&args);
             let output = command.arg(flag).output().unwrap();
-            assert!(output.status.success());
+            assert_eq!(output.status.success(), args[0] == "balance");
             if flag == "--json" {
                 let json: Value = serde_json::from_slice(&output.stdout).unwrap();
-                assert_eq!(json["ok"], true);
+                assert_eq!(json["ok"], args[0] == "balance");
                 assert!(output.stderr.is_empty());
             } else {
                 assert!(output.stdout.is_empty());
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(!stderr.contains('\x1b'));
-                if args[0] == "view" {
-                    assert!(stderr.contains("View aborted"));
-                } else if flag == "--quiet" {
-                    assert!(stderr.is_empty());
+                if flag == "--quiet" {
+                    if args[0] == "view" {
+                        assert!(
+                            stderr.contains("failed to read the exception selector"),
+                            "{stderr}"
+                        );
+                        assert!(!stderr.contains("Simulation aborted"), "{stderr}");
+                    } else {
+                        assert!(stderr.is_empty(), "{stderr}");
+                    }
+                } else if args[0] == "view" {
+                    assert!(stderr.contains("Simulation aborted"), "{stderr}");
                 } else {
                     assert!(stderr.contains("Balance: 0 HOG"));
                 }

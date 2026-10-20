@@ -7,6 +7,9 @@ use jsonrpsee::{
     types::ErrorObjectOwned,
 };
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
+use thruput_json_rpc_client::native::receipt::{ReceiptPollCause, ReceiptPollError};
+use thruput_json_rpc_types::NetworkHash;
 use thruput_json_rpc_types::{BlockHeight, responses::EmittedEvent, transaction::TxHash};
 use thruput_signing::{LocalSigner, PubkeyAccount, Signer};
 use thruput_xdr::types::{
@@ -114,21 +117,9 @@ async fn endpoint(
     )
 }
 
-#[test]
-fn qualification_rejects_legacy_wallet_and_missing_pin_without_connecting() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let mut account = sender();
-    account.native_account = None;
-    let error = prepare_context(&account, "not a URL", &rt).unwrap_err();
-    assert!(
-        matches!(error,CliError::NativeRpcFailure{evidence,..} if evidence["preflightReason"]=="unsupportedWallet")
-    );
-    account = sender();
-    account.network_hash = None;
-    let error = prepare_context(&account, "not a URL", &rt).unwrap_err();
-    assert!(
-        matches!(error,CliError::NativeRpcFailure{evidence,..} if evidence["preflightReason"]=="missingNetworkPin")
-    );
+fn profile(url: &str) -> crate::config::ResolvedProfile {
+    serde_json::from_value(json!({"name":"fixture", "rpc_url":url, "contracts":{}, "wallets":{}}))
+        .unwrap()
 }
 
 #[test]
@@ -142,7 +133,7 @@ fn preparation_checks_native_discovery_identity_and_expiry() {
             Ok(json!({"blockHeight":"42","blockHash":NetworkHash::from(SHA256Hash::from([7;32]))})),
         ),
     ]));
-    let (context, expiry) = prepare_context(&sender(), &url, &rt).unwrap();
+    let (context, expiry) = prepare_context(&sender(), &profile(&url), &url, &rt).unwrap();
     assert_eq!(context.network_hash, network());
     assert_eq!(expiry, 1042);
     assert_eq!(
@@ -426,7 +417,7 @@ fn poll_error_preserves_sticky_commitment_and_original_lookup_error() {
         )),
         source: original.clone(),
     };
-    let error = poll_error(&ReceiptPollError {
+    let error = native_rpc::poll_error(&ReceiptPollError {
         cause: ReceiptPollCause::Timeout,
         evidence: Box::new(ReceiptEvidence {
             network_hash: NetworkHash::from(network().into_inner()),
@@ -454,6 +445,26 @@ fn poll_error_preserves_sticky_commitment_and_original_lookup_error() {
         json!({"status":"committed","blockHeight":"42"})
     );
     assert_eq!(evidence["lastLookupError"]["rpcError"], json!(original));
+}
+
+#[tokio::test]
+async fn invalid_poll_configuration_does_not_send() {
+    let prepared = prepared();
+    let (client, _, handle, calls) = endpoint(vec![("getVersionInfo", Ok(discovery()))]).await;
+    let failure = submit_and_wait(
+        &client,
+        &prepared,
+        ReceiptPollConfig {
+            interval: std::time::Duration::ZERO,
+            ..ReceiptPollConfig::default()
+        },
+        std::future::pending(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failure.phase, SubmissionPhase::NotSent);
+    assert!(calls.lock().unwrap().is_empty());
+    handle.stop().unwrap();
 }
 
 #[tokio::test]
@@ -495,8 +506,10 @@ async fn cancellation_before_preflight_is_not_sent_and_makes_no_rpc_call() {
     clippy::too_many_lines,
     reason = "Keep both submission cancellation boundaries and their evidence assertions together"
 )]
-async fn cancellation_during_send_or_receipt_preserves_attempt_phase_without_retrying() {
+async fn cancellation_during_preflight_send_or_receipt_preserves_phase_without_retrying() {
     for (gate_method, expected_phase, expected_wire) in [
+        ("getVersionInfo", SubmissionPhase::NotSent, "notSent"),
+        ("getNetworkInfo", SubmissionPhase::NotSent, "notSent"),
         ("sendTransaction", SubmissionPhase::Uncertain, "uncertain"),
         (
             "getTransactionReceipt",
@@ -510,19 +523,12 @@ async fn cancellation_during_send_or_receipt_preserves_attempt_phase_without_ret
         let reached = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let mut module = RpcModule::new(calls.clone());
-        module
-            .register_method("getVersionInfo", |_, calls, _| {
-                calls.lock().unwrap().push(("getVersionInfo", json!({})));
-                discovery()
-            })
-            .unwrap();
-        module
-            .register_method("getNetworkInfo", |_, calls, _| {
-                calls.lock().unwrap().push(("getNetworkInfo", json!({})));
-                network_result()
-            })
-            .unwrap();
-        for method in ["sendTransaction", "getTransactionReceipt"] {
+        for method in [
+            "getVersionInfo",
+            "getNetworkInfo",
+            "sendTransaction",
+            "getTransactionReceipt",
+        ] {
             let reached = reached.clone();
             let release = release.clone();
             module
@@ -538,10 +544,13 @@ async fn cancellation_during_send_or_receipt_preserves_attempt_phase_without_ret
                             reached.notify_one();
                             release.notified().await;
                         }
-                        Ok::<_, ErrorObjectOwned>(if method == "sendTransaction" {
-                            json!({"transactionHash": hash, "admission": "accepted"})
-                        } else {
-                            Value::Null
+                        Ok::<_, ErrorObjectOwned>(match method {
+                            "getVersionInfo" => discovery(),
+                            "getNetworkInfo" => network_result(),
+                            "sendTransaction" => {
+                                json!({"transactionHash": hash, "admission": "accepted"})
+                            }
+                            _ => Value::Null,
                         })
                     }
                 })
@@ -577,7 +586,7 @@ async fn cancellation_during_send_or_receipt_preserves_attempt_phase_without_ret
                 .iter()
                 .filter(|(method, _)| *method == "sendTransaction")
                 .count(),
-            1
+            usize::from(expected_phase != SubmissionPhase::NotSent)
         );
         assert_eq!(
             calls
@@ -605,7 +614,7 @@ async fn cancellation_during_send_or_receipt_preserves_attempt_phase_without_ret
 
 #[tokio::test]
 async fn signal_registration_failure_is_not_cancellation() {
-    let mut signal = std::pin::pin!(signal_cancellation(std::future::ready(Err(
+    let mut signal = std::pin::pin!(native_rpc::signal_cancellation(std::future::ready(Err(
         std::io::Error::other("registration failed")
     ))));
     let state = std::future::poll_fn(|cx| Poll::Ready(signal.as_mut().poll(cx))).await;
@@ -625,4 +634,34 @@ fn human_failure_observations_include_safe_commitment_and_status() {
     assert_eq!(fields[2].0, "Last status");
     assert!(fields[2].1.starts_with("committed"));
     assert!(!fields[2].1.contains('\u{1b}'));
+}
+
+#[test]
+fn native_rpc_accepts_contract_wallets_without_reinterpreting_their_address() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (_, url, handle, calls) = rt.block_on(endpoint(vec![
+        ("getVersionInfo", Ok(discovery())),
+        ("getNetworkInfo", Ok(network_result())),
+        (
+            "getChainTip",
+            Ok(json!({"blockHeight":"42","blockHash":NetworkHash::from(SHA256Hash::from([7;32]))})),
+        ),
+    ]));
+    let mut sender = sender();
+    sender.native_account = None;
+    sender.wallet_address = XdrAddress::from([0x37; 32]);
+    let (context, expiry) = prepare_context(&sender, &profile(&url), &url, &rt).unwrap();
+    assert_eq!(context.entrypoints.source, "legacy_default");
+    assert_eq!(expiry, 1042);
+    assert!(
+        matches!(sender.wallet(context.entrypoints.do_action), thruput_client::Wallet::Legacy { address, .. } if address == sender.wallet_address)
+    );
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(method, _)| !method.starts_with("groundhog_"))
+    );
+    handle.stop().unwrap();
 }

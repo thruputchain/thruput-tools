@@ -318,7 +318,7 @@ MissingNetworkHash
 
 InvalidNetworkHash
   code: invalid_network_hash
-  hint text: network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, optionally 0x-prefixed, as `groundhog_networkInfo` reports it
+  hint text: network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, optionally 0x-prefixed, as `getNetworkInfo` reports it
 
 InvalidHogAmount
   code: invalid_hog_amount
@@ -403,24 +403,14 @@ InvalidEventSpec
 RuntimeInit
   code: runtime_init_failed
 
-CallGasBalanceInsufficient
-  code: call_gas_balance_insufficient
-  hint text: add HOG to the wallet or lower `--gas-limit` if the contract needs less gas
-  details: wallet, availableRaw, requiredRaw
-
 RpcMethodFailed
   code: rpc_method_failed
   hint text: check the RPC endpoint and node logs for details
 
 NativeRpcFailure
   code: native_rpc_failure
-  hint text: check the candidate endpoint and retained evidence before choosing a recovery action
+  hint text: check the endpoint and retained evidence before choosing a recovery action
   details: computed
-
-RpcCapabilityUnsupported
-  code: rpc_capability_unsupported
-  hint text: use a full local devnode or a compatible remote RPC that supports the required RPC method
-  details: method, message
 
 LocalFundingAttempt
   code: local_funding_attempt
@@ -489,33 +479,6 @@ TransferToSelf
   hint text: select a different recipient or use `--from` to select another source wallet
   details: address
 
-ReceiptTimeout
-  code: receipt_timeout
-  hint format: inspect with `thruput tx show {}` using the same profile and RPC endpoint as the original submission before submitting the operation again. Unknown is inconclusive; check the sending wallet's HOG balance on the same network before resubmitting. Local logs: node terminal or redirected output; use `--verbose` on future starts (restarting loses ephemeral state).
-
-TransactionInvalid
-  code: transaction_invalid
-  hint text: check the transaction arguments and signing wallet, then submit a new transaction
-  details: txHash, reason
-
-TransactionRecentFailure
-  code: transaction_recent_failure
-  hint: computed
-  details: txHash, attemptHeight, cause
-
-TransactionRetry
-  code: transaction_retry
-  hint text: resubmit the same transaction; the mempool does not retry it automatically
-  details: txHash, error
-
-TransactionDropped
-  code: transaction_dropped
-  hint text: modify the transaction before resubmitting; inspect its error source and code
-  details: txHash, error
-
-ReceiptPollingExhausted
-  code: receipt_polling_exhausted
-
 CallEncode
   code: call_encode
   hint text: check the reported argument path and use structured JSON for composite contract values
@@ -571,11 +534,6 @@ PackageMetadataInvalid
   code: package_metadata_invalid
   hint format: set `{key}` under `[package.metadata.thruput]` in the package's Cargo.toml to a positive byte count: an integer, or a string such as "128K" or "0x20000"
   details: package, key, message
-
-TransactionRejectedBeforeSubmission
-  code: transaction_rejected_before_submission
-  hint: computed
-  details: computed
 
 ToolchainCatalog
   code: toolchain_catalog_error

@@ -1,5 +1,4 @@
-//! Executable one-page history commands against a native-only candidate endpoint.
-#![cfg(feature = "native-rpc-qualification")]
+//! Executable one-page history commands against a native endpoint.
 
 use jsonrpsee::{
     RpcModule,
@@ -60,7 +59,6 @@ fn command(url: &str, args: &[&str], success: bool) -> Value {
     command
         .args(["--json", "--non-interactive"])
         .args(args)
-        .arg("--native-rpc-qualification")
         .current_dir(dir.path())
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("NO_PROXY", "*")

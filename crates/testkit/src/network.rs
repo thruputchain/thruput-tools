@@ -144,17 +144,18 @@ impl Network {
         let client = HttpClientBuilder::default()
             .build(rpc_url)
             .map_err(|e| TestkitError::rpc("connect", e))?;
-        thruput_client::validate_network(&client, &manifest.network_hash.to_network_hash())
-            .await
-            .map_err(|error| match error {
-                thruput_client::NetworkError::Rpc(error) => TestkitError::rpc("networkInfo", error),
-                mismatch @ thruput_client::NetworkError::Mismatch { .. } => {
-                    TestkitError::Manifest {
-                        field: "networkHash",
-                        detail: format!("{mismatch} at {rpc_url}"),
-                    }
-                }
-            })?;
+        thruput_client::validate_network(
+            &thruput_client::NativeClient::new(client.clone()),
+            &manifest.network_hash.to_network_hash(),
+        )
+        .await
+        .map_err(|error| match error {
+            thruput_client::NativeRpcError::NetworkMismatch { .. } => TestkitError::Manifest {
+                field: "networkHash",
+                detail: format!("{error} at {rpc_url}"),
+            },
+            error => TestkitError::rpc("getNetworkInfo", error),
+        })?;
         Ok(Self {
             inner: Arc::new(NetworkInner {
                 rpc_url: Some(rpc_url.to_owned()),

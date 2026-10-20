@@ -2,7 +2,6 @@ use serde_json::json;
 use std::borrow::Cow;
 use thiserror::Error;
 use thruput_cli_macros::ErrorMeta;
-use thruput_json_rpc_types::error::TxInvalidDetail;
 
 use crate::terminal::render_shell_arg;
 
@@ -483,7 +482,7 @@ pub enum CliError {
     #[error("profile network_hash {value:?} is not 64 lowercase hexadecimal digits")]
     #[hint(
         "network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, \
-         optionally 0x-prefixed, as `groundhog_networkInfo` reports it"
+         optionally 0x-prefixed, as `getNetworkInfo` reports it"
     )]
     InvalidNetworkHash { value: String },
     #[error("invalid HOG amount `{input}`: {message}")]
@@ -615,18 +614,6 @@ pub enum CliError {
     #[error("failed to initialize async runtime: {0}")]
     #[code("runtime_init_failed")]
     RuntimeInit(String),
-    #[error(
-        "wallet {wallet} has {} HOG, below the {} HOG required by this call's gas limit",
-        crate::hog::format_amount(*available_raw),
-        crate::hog::format_amount(u128::from(*required_raw))
-    )]
-    #[hint("add HOG to the wallet or lower `--gas-limit` if the contract needs less gas")]
-    #[details(wallet, available_raw, required_raw)]
-    CallGasBalanceInsufficient {
-        wallet: String,
-        available_raw: u128,
-        required_raw: u64,
-    },
     #[error("{method} failed: {message}")]
     #[hint("check the RPC endpoint and node logs for details")]
     RpcMethodFailed {
@@ -634,20 +621,11 @@ pub enum CliError {
         message: String,
     },
     #[error("native RPC: {message}")]
-    #[hint("check the candidate endpoint and retained evidence before choosing a recovery action")]
+    #[hint("check the endpoint and retained evidence before choosing a recovery action")]
     #[details(expr = Some(evidence.clone()))]
     NativeRpcFailure {
         message: String,
         evidence: serde_json::Value,
-    },
-    #[error("RPC endpoint does not support {method}: {message}")]
-    #[hint(
-        "use a full local devnode or a compatible remote RPC that supports the required RPC method"
-    )]
-    #[details]
-    RpcCapabilityUnsupported {
-        method: &'static str,
-        message: String,
     },
     #[error("local funding attempt: {0}")]
     #[hint(
@@ -787,50 +765,6 @@ pub enum CliError {
     #[hint("select a different recipient or use `--from` to select another source wallet")]
     #[details]
     TransferToSelf { address: String },
-    #[error(
-        "transaction {tx_hash} submitted but no receipt after {seconds}s; last observed status: {last_status}"
-    )]
-    #[hint(
-        "inspect with `thruput tx show {}` using the same profile and RPC endpoint as the \
-         original submission before submitting the operation again. Unknown is inconclusive; \
-         check the sending wallet's HOG balance on the same network before resubmitting. \
-         Local logs: node terminal or redirected output; use `--verbose` on future starts \
-         (restarting loses ephemeral state).",
-        render_shell_arg(tx_hash)
-    )]
-    ReceiptTimeout {
-        tx_hash: String,
-        seconds: u64,
-        last_status: &'static str,
-    },
-    #[error("transaction {tx_hash} was rejected: {reason}")]
-    #[hint("check the transaction arguments and signing wallet, then submit a new transaction")]
-    #[details]
-    TransactionInvalid { tx_hash: String, reason: String },
-    #[error("transaction {tx_hash} failed at height {attempt_height}: {cause}")]
-    #[hint(expr = Some(recent_failure_hint(cause)))]
-    #[details]
-    TransactionRecentFailure {
-        tx_hash: String,
-        attempt_height: i64,
-        cause: thruput_json_rpc_types::transaction::TransactionFailureCause,
-    },
-    #[error("transaction {tx_hash} needs resubmission: {error:?}")]
-    #[hint("resubmit the same transaction; the mempool does not retry it automatically")]
-    #[details]
-    TransactionRetry {
-        tx_hash: String,
-        error: thruput_json_rpc_types::transaction::SchedulerTransactionError,
-    },
-    #[error("transaction {tx_hash} was dropped: {error:?}")]
-    #[hint("modify the transaction before resubmitting; inspect its error source and code")]
-    #[details]
-    TransactionDropped {
-        tx_hash: String,
-        error: thruput_json_rpc_types::transaction::SchedulerTransactionError,
-    },
-    #[error("internal error: receipt polling exhausted unexpectedly")]
-    ReceiptPollingExhausted,
     #[error("{path}: {message}")]
     #[hint(
         "check the reported argument path and use structured JSON for composite contract values"
@@ -894,15 +828,6 @@ pub enum CliError {
         key: &'static str,
         /// Why the value was rejected.
         message: String,
-    },
-    /// The RPC endpoint's pre-submission check refused the transaction with a
-    /// structured reason, before it reached the chain.
-    #[error("transaction rejected before submission: {detail}")]
-    #[hint(expr = Some(pre_submission_hint(detail)))]
-    #[details(expr = serde_json::to_value(detail).ok())]
-    TransactionRejectedBeforeSubmission {
-        /// The bound the transaction breaks.
-        detail: TxInvalidDetail,
     },
     /// The requested version, target, or host runtime is not supported by the catalog.
     #[error("toolchain catalog error: {0}")]
@@ -987,60 +912,6 @@ fn faucet_service_hint(retry_after_seconds: Option<u64>) -> Cow<'static, str> {
         "wait for the advertised retry interval, then retry the same command"
     } else {
         "check the faucet response and selected profile, then retry"
-    })
-}
-
-/// Hint for an advisory failure of a recent proposal attempt.
-fn recent_failure_hint(
-    cause: &thruput_json_rpc_types::transaction::TransactionFailureCause,
-) -> Cow<'static, str> {
-    use thruput_json_rpc_types::transaction::{ConflictCode, TransactionFailureCause};
-    Cow::Borrowed(match cause {
-        TransactionFailureCause::DbConflict { conflict }
-            if matches!(
-                conflict.code,
-                ConflictCode::BoundsExceeded | ConflictCode::InsufficientFunds
-            ) =>
-        {
-            "check the signing wallet balance and run `thruput airdrop` before retrying; \
-             a commit attempt reported insufficient storage-token bounds"
-        }
-        TransactionFailureCause::ContractRejected { .. } => {
-            "check the rejected contract attachment and deployment inputs; rebuild artifacts for \
-             the target chain if needed; this failure is advisory, so check transaction status \
-             before submitting a replacement"
-        }
-        _ => {
-            "the failure is advisory and the transaction may be retried; check its status \
-              before submitting a replacement"
-        }
-    })
-}
-
-/// Hint for a pre-submission rejection, naming the bound the transaction
-/// breaks.
-fn pre_submission_hint(detail: &TxInvalidDetail) -> Cow<'static, str> {
-    Cow::Borrowed(match detail {
-        TxInvalidDetail::Rv32CodeTooLarge { .. } => {
-            "the artifact's code section is larger than the target chain's \
-             `max_rv32_code_bytes`; reduce code size — common causes are \
-             formatted panics pulling in `core::fmt` and large generic \
-             instantiations — or deploy to a chain configured for it"
-        }
-        TxInvalidDetail::Rv32MemoryTooLarge { .. } => {
-            "the artifact declares more guest data memory than the target \
-             chain's `max_rv32_memory_bytes`; lower \
-             `[package.metadata.thruput] initial_memory_bytes` and rebuild, \
-             or deploy to a chain configured for it"
-        }
-        TxInvalidDetail::ContractTooLarge { .. } => {
-            "the artifact is larger than the target chain's per-contract size \
-             cap; reduce the artifact size or deploy to a chain configured for it"
-        }
-        _ => {
-            "the transaction breaks a bound the chain enforces before execution; \
-             correct the attached contracts and resubmit"
-        }
     })
 }
 

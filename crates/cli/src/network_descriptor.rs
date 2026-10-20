@@ -1,9 +1,10 @@
-use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_client::native::NativeClient;
 use thruput_json_rpc_types::network_descriptor::{
     AirdropDescriptor, NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION,
     NetworkDescriptor,
 };
-use thruput_json_rpc_types::network_info::NetworkInfo;
+use thruput_json_rpc_types::requests::EmptyRequest;
+use thruput_json_rpc_types::responses::NetworkInfo;
 use thruput_signing::WALLET_DEPLOY_ENTRYPOINT;
 use thruput_xdr::contract::ContractEntrypointID;
 
@@ -32,6 +33,7 @@ pub(crate) struct WalletSigningContext {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteAirdropDescriptor {
+    pub(crate) network_hash: thruput_json_rpc_types::NetworkHash,
     pub(crate) network_id: String,
     pub(crate) genesis_hash: String,
     pub(crate) policy: AirdropDescriptor,
@@ -56,11 +58,7 @@ pub(crate) fn resolve_native_signing_context(
     }
     Ok(WalletSigningContext {
         network_hash: validated_signing_network_hash(configured, &network_info)?,
-        entrypoints: WalletEntrypoints {
-            deploy: thruput_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
-            do_action: thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
-            source: "native_default_wallet",
-        },
+        entrypoints: native_entrypoints(),
     })
 }
 
@@ -103,6 +101,14 @@ pub(crate) fn fetch_remote_airdrop_descriptor(
     remote_airdrop_descriptor(rpc_url, descriptor)
 }
 
+pub(crate) fn native_entrypoints() -> WalletEntrypoints {
+    WalletEntrypoints {
+        deploy: thruput_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
+        do_action: thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
+        source: "native_default_wallet",
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn parse_remote_airdrop_descriptor(
     rpc_url: &str,
@@ -137,6 +143,7 @@ fn remote_airdrop_descriptor(
     let raw_amount = parse_positive_raw_amount("airdrop.rawAmount", &policy.raw_amount)?;
 
     Ok(RemoteAirdropDescriptor {
+        network_hash: descriptor.network_hash,
         network_id: descriptor.network_id,
         genesis_hash: descriptor.genesis_hash.to_string(),
         policy,
@@ -213,13 +220,14 @@ fn fetch_rpc_network_info(
     rpc_url: &str,
 ) -> Result<NetworkInfo, CliError> {
     runtime.block_on(async {
-        crate::http_client::rpc_client(rpc_url)?
-            .network_info()
+        let client = NativeClient::new(crate::http_client::rpc_client(rpc_url)?);
+        thruput_client::check_endpoint(&client, &["getNetworkInfo"])
             .await
-            .map_err(|error| CliError::RpcMethodFailed {
-                method: "networkInfo",
-                message: error.to_string(),
-            })
+            .map_err(|error| crate::native_rpc::rpc_error(&error))?;
+        crate::native_rpc::known(
+            "getNetworkInfo",
+            client.get_network_info(EmptyRequest {}).await,
+        )
     })
 }
 
@@ -383,9 +391,11 @@ mod tests {
     #[test]
     fn hosted_descriptor_rejects_rpc_network_hash_mismatch() {
         let descriptor = descriptor();
-        let network_info = NetworkInfo::new(thruput_json_rpc_types::NetworkHash::from(
-            thruput_xdr::types::SHA256Hash::from([0x99; 32]),
-        ));
+        let network_info = NetworkInfo {
+            network_hash: thruput_json_rpc_types::NetworkHash::from(
+                thruput_xdr::types::SHA256Hash::from([0x99; 32]),
+            ),
+        };
 
         let error = validate_network_info(&descriptor, &network_info)
             .expect_err("bug: RPC and faucet network hashes must match");
@@ -397,7 +407,9 @@ mod tests {
     fn hosted_signing_returns_the_validated_rpc_network_hash() {
         let descriptor = descriptor();
         let configured = thruput_xdr::types::NetworkHash::from(descriptor.network_hash.0);
-        let network_info = NetworkInfo::new(descriptor.network_hash);
+        let network_info = NetworkInfo {
+            network_hash: descriptor.network_hash,
+        };
 
         let network_hash = validated_signing_network_hash(Some(&configured), &network_info)
             .expect("bug: matching signing identity should resolve");
@@ -407,7 +419,9 @@ mod tests {
 
     #[test]
     fn hosted_signing_uses_discovered_identity_without_a_profile_pin() {
-        let network_info = NetworkInfo::new(descriptor().network_hash);
+        let network_info = NetworkInfo {
+            network_hash: descriptor().network_hash,
+        };
         let hash = validated_signing_network_hash(None, &network_info).unwrap();
         assert_eq!(hash.as_ref(), &[0x42; 32]);
     }
@@ -417,7 +431,9 @@ mod tests {
         let descriptor = descriptor();
         let configured =
             thruput_xdr::types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from([0x99; 32]));
-        let network_info = NetworkInfo::new(descriptor.network_hash);
+        let network_info = NetworkInfo {
+            network_hash: descriptor.network_hash,
+        };
 
         let error = validated_signing_network_hash(Some(&configured), &network_info)
             .expect_err("bug: stale signing identity should fail before signing");

@@ -514,7 +514,7 @@ fn run_integration_against_node(
     let contract_address = submitted.contract_address.ok_or_else(|| {
         CliError::Other(format!(
             "integration deploy did not produce a contract address: {:?}",
-            submitted.receipt.status
+            submitted.receipt.execution
         ))
     })?;
     print.status(format_args!(

@@ -1,12 +1,9 @@
 use std::time::Duration;
 
-use thruput_json_rpc_client::{
-    PollTransactionReceiptError, poll_transaction_receipt_with_client_config,
-    submit_transaction_with_client,
-};
+use thruput_client::{NativeClient, ReceiptPollConfig};
 use thruput_json_rpc_types::hex::HexBytes;
-use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
+use thruput_json_rpc_types::transaction::TxHash;
 use thruput_signing::{
     DEFAULT_TX_GAS_LIMIT, SchemeSigner, SignTransactionParams, Signer as _,
     encode_signed_transaction_xdr, sign_transaction, transaction_hash,
@@ -22,15 +19,14 @@ use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_over
 use crate::hog;
 
 use crate::result::{CommandError, CommandResult};
-use crate::terminal::{render_shell_arg, terminal_safe};
+use crate::terminal::terminal_safe;
 use crate::transfer_json::{
-    TRANSFER_JSON_SCHEMA_VERSION, TransferCommittedReport, TransferConfirmation,
-    TransferDryRunReport, TransferReportCommon, TransferUnconfirmedReport,
+    TRANSFER_JSON_SCHEMA_VERSION, TransferCommittedReport, TransferDryRunReport,
+    TransferFailureReport, TransferReportCommon,
 };
 use crate::tx_utils::{
-    command_error_for_exec_status, format_tx_hash, is_conclusive_send_error,
-    is_unsupported_rpc_method_error, nonce_from_timestamp, print_receipt_data,
-    resolve_block_expiry_height, rpc_error_message, summarize_exec_status,
+    command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_receipt_data,
+    resolve_block_expiry_height, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -38,7 +34,6 @@ use crate::{CliError, Print};
 struct PreparedTransfer {
     profile: String,
     rpc_url: String,
-    rpc_url_cli_override: bool,
     sender: thruput_xdr::types::ContractAddress,
     sender_wallet: Option<String>,
     signer_public_key: thruput_xdr::types::PublicKey,
@@ -50,13 +45,13 @@ struct PreparedTransfer {
     tx_hash: TxHash,
     expiry_height: i64,
     signed_transaction: Vec<u8>,
+    network_hash: NetworkHash,
 }
 
 #[derive(Debug)]
 struct TransferPlan {
     profile: String,
     rpc_url: String,
-    rpc_url_cli_override: bool,
     sender: thruput_xdr::types::ContractAddress,
     sender_wallet: Option<String>,
     signer_public_key: thruput_xdr::types::PublicKey,
@@ -120,28 +115,39 @@ pub fn run(
         "Submitting transfer and waiting for receipt",
         true,
     );
-    let outcome = submit_and_confirm(&prepared)?;
+    let outcome = submit_and_confirm(&prepared);
     let _ = task.finish();
     match outcome {
-        LiveOutcome::Committed(receipt) => print_committed(&prepared, receipt, cmd, print),
-        LiveOutcome::ProcessingFailure(status) => {
-            print_processing_failure(&prepared, status, cmd, print)
+        Ok(receipt) => print_committed(&prepared, receipt, cmd, print),
+        Err(error) => {
+            let evidence = error.details_json().unwrap_or(serde_json::Value::Null);
+            let phase = crate::native_rpc::submission_phase(&error)
+                .unwrap_or(crate::native_rpc::SubmissionPhase::NotSent);
+            print.warn(terminal_safe(&error.to_string()));
+            print.detail("transaction", format_tx_hash(&prepared.tx_hash));
+            for (label, value) in crate::native_rpc::failure_observations(phase, &evidence) {
+                print.detail(label, value);
+            }
+            if phase != crate::native_rpc::SubmissionPhase::NotSent {
+                print.note("The transaction may still commit. Inspect its status and receipt before resubmitting.");
+            }
+            print.json(&CommandResult::failure_with_error(
+                cmd,
+                TransferFailureReport {
+                    common: report_common(
+                        &prepared,
+                        false,
+                        phase != crate::native_rpc::SubmissionPhase::NotSent,
+                    ),
+                    network_hash: prepared.network_hash.clone().into_inner().into(),
+                    submission: phase,
+                    evidence,
+                },
+                CommandError::from_cli_error(&error),
+            ))?;
+            Err(CliError::CommandReportedFailure)
         }
-        LiveOutcome::Unavailable {
-            transaction_status,
-            reason,
-        } => print_unavailable(&prepared, transaction_status, reason, cmd, print),
     }
-}
-
-#[derive(Debug)]
-enum LiveOutcome {
-    Committed(TransactionReceipt),
-    ProcessingFailure(TransactionStatus),
-    Unavailable {
-        transaction_status: Option<TransactionStatus>,
-        reason: &'static str,
-    },
 }
 
 fn prepare_plan(
@@ -196,7 +202,6 @@ fn prepare_plan(
     Ok(TransferPlan {
         profile: profile.name,
         rpc_url,
-        rpc_url_cli_override: profile.rpc_url_cli_override,
         sender,
         sender_wallet: resolved_sender.wallet_name,
         signer_public_key: resolved_sender.signer.public_key(),
@@ -226,7 +231,6 @@ fn sign_plan(plan: TransferPlan) -> Result<PreparedTransfer, CliError> {
     Ok(PreparedTransfer {
         profile: plan.profile,
         rpc_url: plan.rpc_url,
-        rpc_url_cli_override: plan.rpc_url_cli_override,
         sender: plan.sender,
         sender_wallet: plan.sender_wallet,
         signer_public_key: plan.signer_public_key,
@@ -238,6 +242,7 @@ fn sign_plan(plan: TransferPlan) -> Result<PreparedTransfer, CliError> {
         tx_hash: plan.tx_hash,
         expiry_height: plan.expiry_height,
         signed_transaction,
+        network_hash: plan.network_hash,
     })
 }
 
@@ -280,91 +285,28 @@ fn print_dry_run(
     print.json(&CommandResult::new(cmd, report))
 }
 
-fn submit_and_confirm(prepared: &PreparedTransfer) -> Result<LiveOutcome, CliError> {
+fn submit_and_confirm(prepared: &PreparedTransfer) -> Result<TransactionReceipt, CliError> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     rt.block_on(async {
-        let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
+        let cancelled = crate::native_rpc::install_interrupt_listener().await;
+        let client = NativeClient::new(crate::http_client::rpc_client(&prepared.rpc_url)?);
         let signed_transaction = format!("0x{}", hex::encode(&prepared.signed_transaction));
-        match submit_transaction_with_client(&client, &signed_transaction).await {
-            Ok(server_hash) if server_hash != prepared.tx_hash => {
-                return Ok(LiveOutcome::Unavailable {
-                    transaction_status: None,
-                    reason: "the RPC returned a transaction hash that did not match the locally computed hash",
-                });
-            }
-            Err(source) if is_unsupported_rpc_method_error(&source) =>
-            {
-                return Err(CliError::RpcCapabilityUnsupported {
-                    method: "sendRawTransaction",
-                    message: rpc_error_message(&source),
-                });
-            }
-            Err(source) if is_conclusive_send_error(&source) =>
-            {
-                return Err(CliError::RpcMethodFailed {
-                    method: "sendRawTransaction",
-                    message: rpc_error_message(&source),
-                });
-            }
-            Ok(_) | Err(_) => {}
-        }
-
-        poll_local_hash(prepared, &client).await
+        let (attempts, interval) = receipt_poll_config();
+        crate::native_rpc::submit_and_wait(
+            &client,
+            prepared.tx_hash,
+            &signed_transaction,
+            &prepared.network_hash,
+            ReceiptPollConfig {
+                timeout: interval.saturating_mul(u32::try_from(attempts).unwrap_or(u32::MAX)),
+                interval,
+            },
+            cancelled,
+        )
+        .await
+        .map_err(|failure| failure.error)
     })
-}
-
-async fn poll_local_hash(
-    prepared: &PreparedTransfer,
-    client: &(impl jsonrpsee::core::client::ClientT + Sync),
-) -> Result<LiveOutcome, CliError> {
-    let (max_attempts, poll_interval) = receipt_poll_config();
-    match poll_transaction_receipt_with_client_config(
-        client,
-        prepared.tx_hash,
-        max_attempts,
-        poll_interval,
-    )
-    .await
-    {
-        Ok(receipt) if receipt.tx_hash != prepared.tx_hash => Ok(LiveOutcome::Unavailable {
-            transaction_status: None,
-            reason: "the RPC returned a receipt whose hash did not match the locally computed hash",
-        }),
-        Ok(receipt) => Ok(LiveOutcome::Committed(receipt)),
-        Err(PollTransactionReceiptError::TransactionStatus { status, .. })
-            if matches!(
-                status,
-                TransactionStatus::Invalid { .. }
-                    | TransactionStatus::Retry { .. }
-                    | TransactionStatus::Dropped { .. }
-            ) =>
-        {
-            Ok(LiveOutcome::ProcessingFailure(status))
-        }
-        Err(PollTransactionReceiptError::TransactionStatus { status, .. }) => {
-            let transaction_status =
-                matches!(status, TransactionStatus::RecentFailure { .. }).then_some(status);
-            Ok(LiveOutcome::Unavailable {
-                transaction_status,
-                reason: "the transaction did not produce a receipt before polling ended",
-            })
-        }
-        Err(PollTransactionReceiptError::GetTransactionReceipt { .. }) => {
-            Ok(LiveOutcome::Unavailable {
-                transaction_status: None,
-                reason: "the receipt RPC failed during confirmation polling",
-            })
-        }
-        Err(PollTransactionReceiptError::ReceiptTimeout { .. }) => Ok(LiveOutcome::Unavailable {
-            transaction_status: None,
-            reason: "the transaction did not produce a receipt before polling ended",
-        }),
-        Err(_) => Ok(LiveOutcome::Unavailable {
-            transaction_status: None,
-            reason: "transaction confirmation ended without a receipt",
-        }),
-    }
 }
 
 fn receipt_poll_config() -> (usize, Duration) {
@@ -392,37 +334,35 @@ fn print_committed(
     print: &Print,
 ) -> Result<(), CliError> {
     let tx_hash = format_tx_hash(&prepared.tx_hash);
-    let status_summary = terminal_safe(&summarize_exec_status(&receipt.status));
+    let status_summary = terminal_safe(&summarize_exec_status(&receipt.execution));
     let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
     print.group(
-        if matches!(receipt.status, ExecStatus::Ok) {
+        if matches!(receipt.execution, ReceiptExecution::Return { .. }) {
             crate::print::Outcome::Success
         } else {
             crate::print::Outcome::Error
         },
         "Transfer",
         |print| {
-            if matches!(receipt.status, ExecStatus::Ok) {
+            if matches!(receipt.execution, ReceiptExecution::Return { .. }) {
                 print.success(format_args!("Transferred {} HOG.", prepared.amount));
             } else {
                 print.warn(format_args!("Transfer {status_summary}"));
             }
             print.detail("recipient", format_contract_address(&prepared.recipient));
             print.detail("tx", &tx_hash);
-            print.detail("height", *receipt.height);
+            print.detail("height", *receipt.block_height);
             print_receipt_data(&receipt, decoded_abort.as_ref(), print);
         },
     );
 
-    let command_error = command_error_for_exec_status(&receipt.status);
+    let command_error = command_error_for_exec_status(&receipt.execution);
     let report = TransferCommittedReport {
         common: report_common(prepared, false, true),
-        height: receipt.height,
-        status: receipt.status,
+        block_height: receipt.block_height,
+        execution: receipt.execution,
         events: receipt.events,
         gas_used: receipt.gas_used,
-        return_data: receipt.return_data,
-        abort_data: receipt.abort_data,
         abort: crate::abort_json::AbortReport::from_decode(decoded_abort.as_ref()),
     };
     if let Some(error) = command_error {
@@ -430,103 +370,6 @@ fn print_committed(
         return Err(CliError::CommandReportedFailure);
     }
     print.json(&CommandResult::new(cmd, report))
-}
-
-fn print_processing_failure(
-    prepared: &PreparedTransfer,
-    status: TransactionStatus,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    let tx_hash = format_tx_hash(&prepared.tx_hash);
-    let (confirmation, code, message, next_step) = match &status {
-        TransactionStatus::Retry { .. } => (
-            TransferConfirmation::Retry,
-            "transaction_retry",
-            "transaction processing failed and needs resubmission",
-            "resubmit the transaction; the mempool will not retry it automatically",
-        ),
-        TransactionStatus::Dropped { .. } => (
-            TransferConfirmation::Dropped,
-            "transaction_dropped",
-            "transaction processing failed permanently",
-            "modify the transaction before resubmitting",
-        ),
-        _ => (
-            TransferConfirmation::Invalid,
-            "transaction_invalid",
-            "transaction was rejected before commitment",
-            "check the transaction arguments and signing wallet",
-        ),
-    };
-    let reason = match &status {
-        TransactionStatus::Invalid { reason } => terminal_safe(reason),
-        TransactionStatus::Retry { error } | TransactionStatus::Dropped { error } => {
-            format!("{message}: {error:?}")
-        }
-        _ => message.to_owned(),
-    };
-    let (title, action) = if matches!(status, TransactionStatus::Invalid { .. }) {
-        ("Transfer rejected", "was rejected")
-    } else {
-        ("Transfer failed", "failed")
-    };
-    print.group(crate::print::Outcome::Error, title, |print| {
-        print.warn(format_args!("Transfer {action}: {reason}"));
-        print.detail("tx", &tx_hash);
-        print.detail("next step", next_step);
-    });
-    let report = TransferUnconfirmedReport {
-        common: report_common(prepared, false, true),
-        confirmation,
-        transaction_status: Some(status.clone()),
-    };
-    let error = CommandError::new(
-        code,
-        message,
-        serde_json::to_value(status).unwrap_or(serde_json::Value::Null),
-    );
-    print.json(&CommandResult::failure_with_error(cmd, report, error))?;
-    Err(CliError::CommandReportedFailure)
-}
-
-fn print_unavailable(
-    prepared: &PreparedTransfer,
-    transaction_status: Option<TransactionStatus>,
-    reason: &'static str,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    let tx_hash = format_tx_hash(&prepared.tx_hash);
-    print.group(crate::print::Outcome::Unconfirmed, "Transfer", |print| {
-        print.warn(format_args!(
-            "Transaction confirmation unavailable: {reason}."
-        ));
-        print.detail("tx", &tx_hash);
-        print.warn("the transaction may still commit; do not blindly resubmit it");
-        let mut next = format!(
-            "thruput tx show {tx_hash} --profile={}",
-            render_shell_arg(&prepared.profile),
-        );
-        if prepared.rpc_url_cli_override {
-            use std::fmt::Write as _;
-            let _ = write!(next, " --rpc-url={}", render_shell_arg(&prepared.rpc_url));
-        }
-        print.status(format_args!("  next: {next}"));
-    });
-
-    let report = TransferUnconfirmedReport {
-        common: report_common(prepared, false, true),
-        confirmation: TransferConfirmation::Unavailable,
-        transaction_status,
-    };
-    let error = CommandError::new(
-        "transaction_confirmation_unavailable",
-        "transaction confirmation is unavailable",
-        serde_json::json!({ "reason": reason }),
-    );
-    print.json(&CommandResult::failure_with_error(cmd, report, error))?;
-    Err(CliError::CommandReportedFailure)
 }
 
 fn report_common(

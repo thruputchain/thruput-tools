@@ -3,10 +3,13 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use thruput_json_rpc_client::{AirdropApiClient, LocalFundingApiClient};
+use thruput_client::{NativeClient, ReceiptPollConfig};
+use thruput_json_rpc_client::native::{NativeClientError, receipt::poll_receipt};
 use thruput_json_rpc_types::{
-    airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, LocalFundingErrorData},
-    receipt::ExecStatus,
+    airdrop::{FundAccountRequest, LocalFundingErrorData},
+    error::native::{DecodedError, ErrorData},
+    requests,
+    responses::{AirdropAttempt, AirdropExecution, ReceiptExecution, TransactionReceipt},
 };
 use thruput_xdr::types::NetworkHash;
 
@@ -32,7 +35,7 @@ use crate::tx_utils::{ensure_tx_success, format_tx_hash};
 use crate::{CliError, Print};
 
 /// Schema version of the `airdrop --json` data payload.
-pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 4;
+pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 5;
 const DEFAULT_AIRDROP_HOG: &str = "10";
 
 #[derive(Debug)]
@@ -62,6 +65,7 @@ pub(crate) struct PreparedRemoteAirdrop {
     pub(crate) recipient_input: String,
     pub(crate) recipient_wallet: String,
     client_nonce: String,
+    network_hash: thruput_json_rpc_types::NetworkHash,
     airdrop_policy: thruput_json_rpc_types::network_descriptor::AirdropDescriptor,
     amount_hog: String,
     attempt_path: PathBuf,
@@ -316,52 +320,9 @@ fn run_local_airdrop(
     let (path, _lock, request) = retain_local_funding_request(prepared)?;
     let runtime =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    let (tx_hash, receipt) = runtime.block_on(async {
-        let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
-        let response = match client.fund_account(request.clone()).await {
-            Ok(response) => response,
-            Err(error) => {
-                if let jsonrpsee::core::client::Error::Call(call) = &error
-                    && call.code() == thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
-                    && let Some(data) = call.data()
-                {
-                    let evidence: LocalFundingErrorData = serde_json::from_str(data.get())
-                        .map_err(|e| CliError::LocalFundingAttempt(e.to_string()))?;
-                    retain_local_funding_evidence(&path, &evidence)?;
-                }
-                return Err(local_funding_recovery_error(
-                    &path,
-                    CliError::RpcMethodFailed {
-                        method: "groundhog_fundAccount",
-                        message: error.to_string(),
-                    },
-                )?);
-            }
-        };
-        if response.recipient != request.recipient || response.raw_amount != request.raw_amount {
-            return Err(CliError::LocalFundingAttempt(
-                "funding response does not match the retained request".into(),
-            ));
-        }
-        // Retain acknowledged evidence before the next await or fallible observation.
-        retain_local_funding_evidence(
-            &path,
-            &LocalFundingErrorData::new(response.tx_hash, response.signed_transaction.clone()),
-        )?;
-        let receipt = thruput_json_rpc_client::poll_transaction_receipt_with_client_config(
-            &client,
-            response.tx_hash,
-            thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
-            thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
-        )
-        .await
-        .map_err(|error| CliError::LocalFundingUnresolved {
-            tx_hash: format_tx_hash(&response.tx_hash),
-            attempt_path: path.display().to_string(),
-            message: crate::tx_utils::map_poll_receipt_error(error).to_string(),
-        })?;
-        Ok::<_, CliError>((response.tx_hash, receipt))
-    })?;
+    let (tx_hash, receipt) = runtime
+        .block_on(request_local_airdrop(prepared, &path, &request))
+        .inspect_err(|error| print_funding_recovery(task.print(), error))?;
     // A receipt closes this attempt even when execution failed. Uncertain outcomes keep it.
     remove_attempt(&path)?;
     let tx_hash = format_tx_hash(&tx_hash);
@@ -375,7 +336,7 @@ fn run_local_airdrop(
             if print.has_human_ui() {
                 print.detail("Recipient", &prepared.recipient_wallet);
                 print.detail("Amount", format_args!("{} HOG", prepared.amount_hog));
-                print.detail("Height", *receipt.height);
+                print.detail("Height", *receipt.block_height);
             }
         },
     );
@@ -399,11 +360,83 @@ fn run_local_airdrop(
                 "role": prepared.faucet_role,
             },
             "txHash": tx_hash,
-            "height": receipt.height.to_string(),
-            "status": receipt.status,
+            "height": receipt.block_height.to_string(),
+            "execution": receipt.execution,
             "observations": observations,
         }),
     ))
+}
+
+async fn request_local_airdrop(
+    prepared: &PreparedLocalAirdrop,
+    path: &Path,
+    request: &FundAccountRequest,
+) -> Result<
+    (
+        thruput_json_rpc_types::transaction::TxHash,
+        TransactionReceipt,
+    ),
+    CliError,
+> {
+    let mut cancelled = crate::native_rpc::install_interrupt_listener().await;
+    let client = NativeClient::new(crate::http_client::rpc_client(&prepared.rpc_url)?);
+    tokio::select! {
+        biased;
+        () = &mut cancelled => return Err(funding_cancelled(path, "notSent")),
+        result = funding_preflight(&client, &prepared.network_hash, "dev_fundAccount") => result?,
+    }
+    let funding_request = requests::FundAccountRequest {
+        recipient: request.recipient,
+        faucet: request.faucet,
+        raw_amount: prepared.raw_amount,
+        client_nonce: request.client_nonce.clone(),
+    };
+    let response = tokio::select! {
+        biased;
+        () = &mut cancelled => return Err(funding_cancelled(path, "uncertain")),
+        result = client.fund_account(funding_request) => result,
+    };
+    if let Err(error) = &response {
+        retain_native_funding_error(path, error).map_err(|retention_error| {
+            let mut evidence = crate::native_rpc::client_evidence(error);
+            evidence["retentionError"] = json!(retention_error.to_string());
+            funding_recovery_error(
+                path,
+                &crate::native_rpc::failure(error.to_string(), evidence),
+            )
+        })?;
+    }
+    let response = crate::native_rpc::known("dev_fundAccount", response)
+        .map_err(|error| funding_recovery_error(path, &error))?;
+    let raw_response = json!(response);
+    let response_error = |error: CliError| {
+        funding_recovery_error(
+            path,
+            &crate::native_rpc::failure(error.to_string(), json!({"result": raw_response})),
+        )
+    };
+    if response.recipient != request.recipient || response.raw_amount != prepared.raw_amount {
+        return Err(response_error(CliError::LocalFundingAttempt(
+            "funding response does not match the retained request".into(),
+        )));
+    }
+    // Retain acknowledged evidence before the next await or fallible observation.
+    retain_local_funding_evidence(
+        path,
+        &LocalFundingErrorData::new(response.transaction_hash, response.signed_transaction),
+    )
+    .map_err(response_error)?;
+    let receipt = poll_receipt(
+        &client,
+        prepared.network_hash.clone().into_inner().into(),
+        response.transaction_hash,
+        None,
+        ReceiptPollConfig::default(),
+        cancelled,
+    )
+    .await
+    .map_err(|error| funding_recovery_error(path, &crate::native_rpc::poll_error(&error)))?;
+    Ok::<_, CliError>((response.transaction_hash, receipt))
 }
 
 fn retain_local_funding_evidence(
@@ -445,26 +478,96 @@ fn retain_local_funding_evidence(
     write_attempt(path, &attempt).map_err(unresolved)
 }
 
-fn local_funding_recovery_error(path: &Path, error: CliError) -> Result<CliError, CliError> {
-    Ok(
-        match read_attempt::<LocalFundingAttempt>(path)?.and_then(|attempt| attempt.transaction) {
-            Some(evidence) => CliError::LocalFundingUnresolved {
-                tx_hash: format_tx_hash(&evidence.tx_hash),
-                attempt_path: path.display().to_string(),
-                message: error.to_string(),
-            },
-            None => error,
-        },
+fn retain_native_funding_error(path: &Path, error: &NativeClientError) -> Result<(), CliError> {
+    if let NativeClientError::Application { data, .. } = error
+        && let DecodedError::Known { data, .. } = data.as_ref()
+        && let ErrorData::LocalFundingUnresolved {
+            transaction_hash,
+            signed_transaction,
+            ..
+        } = data.as_ref()
+    {
+        retain_local_funding_evidence(
+            path,
+            &LocalFundingErrorData::new(*transaction_hash, signed_transaction.clone()),
+        )?;
+    }
+    Ok(())
+}
+
+async fn funding_preflight<C: jsonrpsee::core::client::ClientT + Sync>(
+    client: &NativeClient<C>,
+    network_hash: &NetworkHash,
+    funding_method: &str,
+) -> Result<(), CliError> {
+    thruput_client::check_endpoint(
+        client,
+        &[
+            funding_method,
+            "getNetworkInfo",
+            "getTransactionReceipt",
+            "getTransactionStatus",
+        ],
     )
+    .await
+    .map_err(|error| crate::native_rpc::rpc_error(&error))?;
+    thruput_client::validate_network(client, network_hash)
+        .await
+        .map_err(|error| crate::native_rpc::rpc_error(&error))?;
+    Ok(())
+}
+
+fn funding_cancelled(path: &Path, phase: &str) -> CliError {
+    funding_recovery_error(
+        path,
+        &crate::native_rpc::failure(
+            "airdrop cancelled",
+            json!({"cancelled": true, "fundingRequest": phase}),
+        ),
+    )
+}
+
+fn print_funding_recovery(print: &Print, error: &CliError) {
+    let Some(evidence) = error.details_json() else {
+        return;
+    };
+    let Some(path) = evidence["attemptPath"].as_str() else {
+        return;
+    };
+    print.detail("Retained attempt", path);
+    if let Some(hash) = evidence["transactionHash"]
+        .as_str()
+        .or_else(|| evidence["result"]["transactionHash"].as_str())
+        .or_else(|| evidence["rpcError"]["data"]["transactionHash"].as_str())
+    {
+        print.detail("Transaction evidence", hash);
+    }
+    if let Some(seconds) = evidence["result"]["retryAfterSeconds"].as_str() {
+        print.detail("Retry after", format_args!("{seconds} seconds"));
+    }
+    print.detail(
+        "Recovery",
+        "Keep this attempt. Rerun the same command with the same amount to reconcile it.",
+    );
+}
+
+fn funding_recovery_error(path: &Path, error: &CliError) -> CliError {
+    let mut evidence = error.details_json().unwrap_or_else(|| json!({}));
+    evidence["attemptPath"] = json!(path.display().to_string());
+    let message = match error {
+        CliError::NativeRpcFailure { message, .. } => message.clone(),
+        _ => error.to_string(),
+    };
+    crate::native_rpc::failure(message, evidence)
 }
 
 fn ensure_local_airdrop_success(
     prepared: &PreparedLocalAirdrop,
-    receipt: &thruput_json_rpc_types::receipt::TransactionReceipt,
+    receipt: &TransactionReceipt,
     tx_hash: &str,
 ) -> Result<(), CliError> {
     let decoded_abort = crate::tx_utils::decode_receipt_abort(receipt, None);
-    if matches!(receipt.status, ExecStatus::Reverted { .. })
+    if matches!(receipt.execution, ReceiptExecution::Abort { .. })
         && crate::codec::is_erc20_too_large(decoded_abort.as_ref())
     {
         return Err(insufficient_local_faucet_error(
@@ -546,7 +649,7 @@ fn prepare_local_airdrop_plan(
         thruput_json_rpc_types::ContractAddress::from(faucet.wallet_address),
     )?;
     let funding_projection = local_funding_projection(
-        &faucet_balance.raw_balance,
+        &faucet_balance.raw_balance.to_string(),
         &manifest.bootstrap.storage_cost_model,
         raw_amount,
         1,
@@ -574,7 +677,7 @@ fn prepare_local_airdrop_plan(
         raw_amount,
         faucet_role: faucet.role,
         faucet_wallet,
-        faucet_balance_height: faucet_balance.height,
+        faucet_balance_height: faucet_balance.state_block_height,
         funding_projection,
         network_hash: faucet.network_hash,
     })
@@ -602,7 +705,7 @@ fn observe_post_airdrop_balance(label: &str, rpc_url: &str, address: &str, print
         .map(thruput_json_rpc_types::ContractAddress::from)
         .and_then(|address| fetch_balance_blocking(rpc_url, address))
         .and_then(|balance| {
-            let raw = balance.raw_balance.parse::<u128>().map_err(|error| {
+            let raw = u128::try_from(balance.raw_balance).map_err(|error| {
                 CliError::Other(format!(
                     "invalid raw balance `{}` from RPC: {error}",
                     balance.raw_balance
@@ -611,13 +714,13 @@ fn observe_post_airdrop_balance(label: &str, rpc_url: &str, address: &str, print
             print.status(format_args!(
                 "{label}: {} HOG at block {}",
                 hog::format_amount(raw),
-                *balance.height
+                *balance.state_block_height
             ));
             Ok(json!({
                 "status": "observed",
-                "rawBalance": balance.raw_balance,
+                "rawBalance": balance.raw_balance.to_string(),
                 "balanceHog": hog::format_amount(raw),
-                "height": balance.height.to_string(),
+                "height": balance.state_block_height.to_string(),
             }))
         });
 
@@ -640,60 +743,17 @@ fn run_remote_airdrop(
         "Requesting remote airdrop to {}...",
         prepared.recipient_wallet
     ));
-    let request: AirdropRequest = serde_json::from_value(json!({
+    let request: requests::AirdropRequest = serde_json::from_value(json!({
         "recipient": prepared.recipient_wallet,
         "clientNonce": prepared.client_nonce,
     }))
     .map_err(|error| CliError::Other(format!("invalid retained airdrop request: {error}")))?;
     let runtime =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    let response = runtime.block_on(async {
-        crate::http_client::rpc_client(&prepared.rpc_url)?
-            .request_airdrop(request)
-            .await
-            .map_err(|error| CliError::RpcMethodFailed {
-                method: "requestAirdrop",
-                message: error.to_string(),
-            })
-    })?;
-    let recipient = response.recipient();
-    if recipient.0 != parse_contract_address(&prepared.recipient_wallet)? {
-        return Err(CliError::NetworkDescriptorMismatch {
-            field: "airdrop.recipient",
-            expected: prepared.recipient_wallet.clone(),
-            actual: format_contract_address(&recipient.0),
-        });
-    }
-    validate_remote_airdrop_amount(&prepared.airdrop_policy.raw_amount, response.raw_amount())?;
-    let (tx_hash, height, status, raw_amount) = match response {
-        AirdropAttemptResponse::Pending {
-            retry_after_seconds,
-            ..
-        } => {
-            return Err(CliError::Other(format!(
-                "remote airdrop is pending - retry the same command to continue; retry after {retry_after_seconds}s"
-            )));
-        }
-        AirdropAttemptResponse::Succeeded {
-            raw_amount,
-            tx_hash,
-            height,
-            status,
-            ..
-        } => (tx_hash, height, status, raw_amount),
-        _ => {
-            return Err(CliError::Other(
-                "remote faucet returned an unsupported airdrop attempt status".into(),
-            ));
-        }
-    };
-    if !matches!(status, ExecStatus::Ok) {
-        return Err(CliError::Other(
-            "remote airdrop transaction did not commit successfully".into(),
-        ));
-    }
+    let (tx_hash, height, execution, raw_amount) = runtime
+        .block_on(request_remote_airdrop(prepared, &request))
+        .inspect_err(|error| print_funding_recovery(task.print(), error))?;
     let tx_hash = format_tx_hash(&tx_hash);
-    remove_remote_airdrop_attempt(prepared)?;
     let _ = task.finish();
     print.group(
         crate::print::Outcome::Success,
@@ -702,7 +762,7 @@ fn run_remote_airdrop(
             print.status(format_args!("Airdrop sent: {tx_hash}"));
             if print.has_human_ui() {
                 print.detail("Recipient", &prepared.recipient_wallet);
-                print.detail("Raw amount", &raw_amount);
+                print.detail("Raw amount", raw_amount);
                 print.detail("Height", *height);
             }
         },
@@ -717,7 +777,7 @@ fn run_remote_airdrop(
             "recipientWallet": prepared.recipient_wallet,
             "faucetUrl": prepared.faucet_url,
             "rpcUrl": prepared.rpc_url,
-            "rawAmount": raw_amount,
+            "rawAmount": raw_amount.to_string(),
             "policy": {
                 "rawAmount": prepared.airdrop_policy.raw_amount,
                 "amountHog": prepared.amount_hog,
@@ -728,9 +788,121 @@ fn run_remote_airdrop(
             },
             "txHash": tx_hash,
             "height": height.to_string(),
-            "status": status,
+            "execution": execution,
         }),
     ))
+}
+
+async fn request_remote_airdrop(
+    prepared: &PreparedRemoteAirdrop,
+    request: &requests::AirdropRequest,
+) -> Result<
+    (
+        thruput_json_rpc_types::transaction::TxHash,
+        thruput_json_rpc_types::BlockHeight,
+        ReceiptExecution,
+        u128,
+    ),
+    CliError,
+> {
+    let mut cancelled = crate::native_rpc::install_interrupt_listener().await;
+    let client = NativeClient::new(crate::http_client::rpc_client(&prepared.rpc_url)?);
+    let signing_network = NetworkHash::from(prepared.network_hash.0);
+    tokio::select! {
+        biased;
+        () = &mut cancelled => return Err(funding_cancelled(&prepared.attempt_path, "notSent")),
+        result = funding_preflight(&client, &signing_network, "faucet_requestAirdrop") => result?,
+    }
+    let response = tokio::select! {
+        biased;
+        () = &mut cancelled => return Err(funding_cancelled(&prepared.attempt_path, "uncertain")),
+        result = client.request_airdrop(request.clone()) => crate::native_rpc::known("faucet_requestAirdrop", result)
+            .map_err(|error| funding_recovery_error(&prepared.attempt_path, &error))?,
+    };
+    let response_error = |error: CliError| {
+        funding_recovery_error(
+            &prepared.attempt_path,
+            &crate::native_rpc::failure(error.to_string(), json!({"result":response})),
+        )
+    };
+    let (recipient, raw_amount) = match &response {
+        AirdropAttempt::Pending {
+            recipient,
+            raw_amount,
+            ..
+        }
+        | AirdropAttempt::Succeeded {
+            recipient,
+            raw_amount,
+            ..
+        } => (recipient, *raw_amount),
+        _ => {
+            return Err(crate::native_rpc::failure(
+                "unsupported airdrop outcome",
+                json!({"result": response}),
+            ));
+        }
+    };
+    if *recipient != request.recipient {
+        return Err(response_error(CliError::NetworkDescriptorMismatch {
+            field: "airdrop.recipient",
+            expected: prepared.recipient_wallet.clone(),
+            actual: format_contract_address(&recipient.0),
+        }));
+    }
+    validate_remote_airdrop_amount(&prepared.airdrop_policy.raw_amount, &raw_amount.to_string())
+        .map_err(response_error)?;
+    match response {
+        AirdropAttempt::Pending {
+            transaction_hash: Some(hash),
+            ..
+        } => {
+            // The funding call is never repeated; only read the supplied transaction.
+            let receipt = poll_receipt(
+                &client,
+                prepared.network_hash,
+                hash,
+                None,
+                ReceiptPollConfig::default(),
+                cancelled,
+            )
+            .await
+            .map_err(|error| {
+                funding_recovery_error(
+                    &prepared.attempt_path,
+                    &crate::native_rpc::poll_error(&error),
+                )
+            })?;
+            remove_remote_airdrop_attempt(prepared)?;
+            ensure_tx_success("airdrop", &receipt, &format_tx_hash(&hash))?;
+            Ok((hash, receipt.block_height, receipt.execution, raw_amount))
+        }
+        AirdropAttempt::Pending { .. } => Err(funding_recovery_error(
+            &prepared.attempt_path,
+            &crate::native_rpc::failure(
+                "remote airdrop is pending without a transaction hash",
+                json!({"result":response}),
+            ),
+        )),
+        AirdropAttempt::Succeeded {
+            transaction_hash,
+            block_height,
+            execution: AirdropExecution::Return { return_data },
+            ..
+        } => {
+            remove_remote_airdrop_attempt(prepared)?;
+            Ok((
+                transaction_hash,
+                block_height,
+                ReceiptExecution::Return { return_data },
+                raw_amount,
+            ))
+        }
+        _ => Err(crate::native_rpc::failure(
+            "unsupported airdrop outcome",
+            json!({"result":response}),
+        )),
+    }
 }
 
 fn validate_remote_airdrop_amount(expected: &str, actual: &str) -> Result<(), CliError> {
@@ -851,6 +1023,7 @@ fn prepare_remote_airdrop_with_descriptor(
         recipient_input: recipient.to_owned(),
         recipient_wallet,
         client_nonce: loaded_attempt.attempt.client_nonce,
+        network_hash: descriptor.network_hash,
         airdrop_policy: descriptor.policy.clone(),
         amount_hog: descriptor.amount_hog.clone(),
         attempt_path: loaded_attempt.path,
@@ -967,7 +1140,7 @@ fn print_dry_run(
                         "address": prepared.faucet_wallet,
                         "role": prepared.faucet_role,
                     },
-                    "plannedRequests": ["groundhog_fundAccount"],
+                    "plannedRequests": ["dev_fundAccount"],
                 }),
             ))?;
         }
@@ -993,7 +1166,7 @@ fn print_dry_run(
                     "faucetUrl": prepared.faucet_url,
                     "rpcUrl": prepared.rpc_url,
                     "plannedRequests": [
-                        "groundhog_requestAirdrop"
+                        "faucet_requestAirdrop"
                     ],
                 }),
             ))?;
@@ -1030,7 +1203,7 @@ fn print_remote_dry_run(
             "rpcUrl": prepared.rpc_url,
             "plannedRequests": [
                 "GET /v1/network",
-                "groundhog_requestAirdrop"
+                "faucet_requestAirdrop"
             ],
             "idempotencyKey": "profile + recipient + networkId + genesisHash + clientNonce",
         }),
@@ -1044,8 +1217,10 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
+    use serde_json::json;
     use serial_test::serial;
     use thruput_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
+    use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
 
     use super::{
         PreparedAirdrop, PreparedLocalAirdrop, RemoteAirdropAttempt, ensure_local_airdrop_success,
@@ -1082,6 +1257,18 @@ mod tests {
                 unsafe { std::env::remove_var(self.key) };
             }
         }
+    }
+
+    #[test]
+    fn funding_recovery_retains_evidence_without_repeating_error_prefix() {
+        let error =
+            crate::native_rpc::failure("receipt unavailable", json!({"transactionHash":"saved"}));
+        let error =
+            super::funding_recovery_error(std::path::Path::new("/tmp/attempt.json"), &error);
+        assert_eq!(error.to_string(), "native RPC: receipt unavailable");
+        let evidence = error.details_json().unwrap();
+        assert_eq!(evidence["transactionHash"], "saved");
+        assert_eq!(evidence["attemptPath"], "/tmp/attempt.json");
     }
 
     #[test]
@@ -1506,9 +1693,7 @@ mod tests {
     fn non_reverted_too_large_airdrop_preserves_transaction_status() {
         let prepared = prepared_local_airdrop();
         let mut receipt = reverted_too_large_receipt();
-        receipt.status = thruput_json_rpc_types::receipt::ExecStatus::DeterministicError {
-            kind: "outOfGas".into(),
-        };
+        receipt.execution = ReceiptExecution::Fault {};
 
         let error = ensure_local_airdrop_success(&prepared, &receipt, "0x44")
             .expect_err("bug: deterministic error should remain a transaction failure");
@@ -1518,7 +1703,7 @@ mod tests {
                 .to_string()
                 .contains("insufficient actionable balance")
         );
-        assert!(error.to_string().contains("deterministic execution error"));
+        assert!(error.to_string().contains("fault"));
     }
 
     #[test]
@@ -1566,22 +1751,14 @@ mod tests {
         }
     }
 
-    fn reverted_too_large_receipt() -> thruput_json_rpc_types::receipt::TransactionReceipt {
-        thruput_json_rpc_types::receipt::TransactionReceipt {
-            tx_hash: thruput_json_rpc_types::transaction::TxHash(
-                thruput_json_rpc_types::base58::Base58(thruput_xdr::types::SHA256Hash::from(
-                    [0x44; 32],
-                )),
-            ),
-            height: thruput_json_rpc_types::BlockHeight::from(43),
-            status: thruput_json_rpc_types::receipt::ExecStatus::Reverted { message: None },
-            return_data: None,
-            abort_data: Some(thruput_json_rpc_types::hex::HexBytes(
-                erc20_too_large_abort(),
-            )),
-            events: Vec::new(),
-            gas_used: 1_500,
-        }
+    fn reverted_too_large_receipt() -> TransactionReceipt {
+        serde_json::from_value(json!({
+            "transactionHash": thruput_encoding::encode(&[0x44;32]),
+            "blockHeight": "43", "execution": { "result":"abort",
+                "abortData": format!("0x{}",hex::encode(erc20_too_large_abort())) },
+            "events":[], "gasUsed":"1500",
+        }))
+        .unwrap()
     }
 
     fn erc20_too_large_abort() -> Vec<u8> {

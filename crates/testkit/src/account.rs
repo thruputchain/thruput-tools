@@ -435,13 +435,18 @@ pub(crate) fn prepare_call(
 
 pub(crate) async fn submit_signed(network: &Network, tx_hash: TxHash, tx_hex: &str) -> Result<()> {
     let client = network.require_client("sendRawTransaction")?;
-    thruput_client::submit_signed_transaction(client, tx_hash, tx_hex)
-        .await
-        .map_err(|error| TestkitError::Submission {
-            tx_hash,
-            signed_transaction: tx_hex.to_owned(),
-            detail: error.to_string(),
-        })
+    thruput_client::submit_signed_transaction(
+        &thruput_client::NativeClient::new(client.clone()),
+        tx_hash,
+        tx_hex,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| TestkitError::Submission {
+        tx_hash,
+        signed_transaction: tx_hex.to_owned(),
+        detail: error.to_string(),
+    })
 }
 
 pub(crate) fn verify_deployment_receipt(
@@ -450,14 +455,25 @@ pub(crate) fn verify_deployment_receipt(
     tx_hex: &str,
     receipt: &TransactionReceipt,
 ) -> Result<()> {
-    thruput_client::SubmittedDeploy { tx_hash, address }
-        .verify(receipt)
-        .map_err(|error| TestkitError::UnverifiedDeployment {
+    if receipt.tx_hash != tx_hash {
+        return Err(TestkitError::ReceiptHashMismatch { expected: tx_hash });
+    }
+    if matches!(
+        receipt.status,
+        thruput_json_rpc_types::receipt::ExecStatus::Ok
+    ) && receipt
+        .return_data
+        .as_ref()
+        .is_none_or(|data| data.as_ref() != address.as_ref())
+    {
+        return Err(TestkitError::UnverifiedDeployment {
             tx_hash,
             predicted_address: address,
             signed_transaction: tx_hex.to_owned(),
-            detail: error.to_string(),
-        })
+            detail: "successful deployment did not return the predicted address".into(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

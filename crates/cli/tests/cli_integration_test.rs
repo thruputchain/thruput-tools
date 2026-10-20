@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 #[cfg(unix)]
-use thruput_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use thruput_json_rpc_client::{HttpClientBuilder, native::NativeClient};
+#[cfg(unix)]
+use thruput_json_rpc_types::{requests::EmptyRequest, responses::DecodedResponse};
 
 mod support;
 #[cfg(unix)]
@@ -2104,19 +2106,25 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     let tip = tokio::runtime::Runtime::new()
         .expect("bug: tokio runtime should start")
         .block_on(async {
-            let client = HttpClientBuilder::default()
-                .build(&rpc_url)
-                .expect("bug: JSON-RPC client should build");
+            let client = NativeClient::new(
+                HttpClientBuilder::default()
+                    .build(&rpc_url)
+                    .expect("bug: JSON-RPC client should build"),
+            );
             assert_eq!(
-                client.network_info().await.unwrap().network_hash.as_ref(),
+                match client.get_network_info(EmptyRequest {}).await.unwrap() {
+                    DecodedResponse::Known(info) => info.network_hash.into_inner(),
+                    other => panic!("unexpected network info: {other:?}"),
+                }
+                .as_ref(),
                 &[0xab; 32]
             );
-            client
-                .chain_tip()
-                .await
-                .expect("bug: CLI-started supervisor should serve chainTip")
+            match client.get_chain_tip(EmptyRequest {}).await.unwrap() {
+                DecodedResponse::Known(tip) => tip,
+                other => panic!("unexpected chain tip: {other:?}"),
+            }
         });
-    assert_eq!(*tip.height, 0);
+    assert_eq!(*tip.block_height, 0);
 
     let pid = read_pid_file(&pid_path);
     let journal_path = data_dir.join("groundhog-funding.json");
@@ -2144,9 +2152,13 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
         assert_eq!(std::fs::read(&journal_path).unwrap(), journal);
     }
     tokio::runtime::Runtime::new().unwrap().block_on(async {
-        let client = HttpClientBuilder::default().build(&rpc_url).unwrap();
+        let client = NativeClient::new(HttpClientBuilder::default().build(&rpc_url).unwrap());
         assert_eq!(
-            client.network_info().await.unwrap().network_hash.as_ref(),
+            match client.get_network_info(EmptyRequest {}).await.unwrap() {
+                DecodedResponse::Known(info) => info.network_hash.into_inner(),
+                other => panic!("unexpected network info: {other:?}"),
+            }
+            .as_ref(),
             &[0xab; 32]
         );
     });
@@ -4325,7 +4337,7 @@ fn storage_help_mentions_read_only_storage() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("groundhog_getStorageAt"));
+    assert!(stdout.contains("getStorage"));
     assert!(stdout.contains("--profile"));
 }
 
@@ -5403,8 +5415,8 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(thruput_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 7);
-    assert_eq!(stdout["data"]["schemaVersion"], 7);
+    assert_eq!(thruput_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 8);
+    assert_eq!(stdout["data"]["schemaVersion"], 8);
     for old_key in ["dry_run", "rpc_url", "artifact_kind", "signed_tx"] {
         assert!(stdout["data"].get(old_key).is_none(), "found {old_key}");
     }
@@ -6243,7 +6255,7 @@ fn airdrop_dry_run_json_uses_default_wallet_when_recipient_is_omitted() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "airdrop");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["recipient"], "alice");
@@ -6392,61 +6404,239 @@ fn airdrop_default_submits_without_recipient_signer() {
     }
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_airdrop_interrupt_stops_preflight_or_retains_write_uncertainty() {
+    for during_write in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config_home = tmp.path().join("config");
+        let cache_home = tmp.path().join("cache");
+        std::fs::create_dir_all(&project).unwrap();
+        let recipient = thruput_encoding::encode(&[0xaa; 32]);
+        let faucet = advertised_dev_wallet_address(0);
+        let listener = MockListener::bind();
+        let rpc_url = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let manifest = write_runtime_manifest(&project, 0, &faucet, None);
+        std::fs::write(project.join("thruput.toml"), format!(
+            "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
+            serve_balance(&listener, deadline, &faucet, "200012006", 41);
+            let (mut stream, mut request) =
+                read_jsonrpc_request(&listener, deadline, "getNetworkInfo");
+            assert_eq!(request["method"], "getNetworkInfo");
+            if during_write {
+                send_jsonrpc_response(
+                    stream,
+                    &request["id"],
+                    serde_json::json!({"networkHash":TEST_NETWORK_HASH}),
+                );
+                (stream, request) = read_jsonrpc_request(&listener, deadline, "dev_fundAccount");
+                assert_eq!(request["method"], "dev_fundAccount");
+            }
+            ready_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(CLI_ACTION_TIMEOUT);
+            drop(stream);
+            assert_no_follow_up_rpc(&listener);
+        });
+        let mut command = thruput();
+        command
+            .args(["--json", "airdrop", &recipient, "--force"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_CACHE_HOME", &cache_home);
+        let child = tokio::process::Command::from(command)
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        tokio::time::timeout(Duration::from_secs(30), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            Command::new("/bin/kill")
+                .args(["-INT", &pid.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
+            .await
+            .unwrap()
+            .unwrap();
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(report["error"]["details"]["cancelled"], true);
+        assert_eq!(
+            report["error"]["details"]["fundingRequest"],
+            if during_write { "uncertain" } else { "notSent" }
+        );
+        let path = report["error"]["details"]["attemptPath"].as_str().unwrap();
+        assert!(std::path::Path::new(path).exists());
+    }
+}
+
 #[test]
 fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    let config_home = tmp.path().join("config");
-    let cache_home = tmp.path().join("cache");
-    std::fs::create_dir_all(&project).unwrap();
-    let owner = generate_key_public_key(&config_home, "alice");
-    let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
-        thruput_signing::strkey::parse_public_key(&owner).unwrap(),
-        0,
-    );
-    let recipient = thruput_encoding::encode(account.address().as_ref());
-    let faucet = advertised_dev_wallet_address(0);
-    let listener = MockListener::bind();
-    let addr = listener.local_addr().unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let rpc_url = format!("http://{addr}");
-    let manifest = write_runtime_manifest(&project, 0, &faucet, None);
-    std::fs::write(project.join("thruput.toml"), format!(
-        "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
-    let server = thread::spawn(move || {
-        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
-        serve_balance(&listener, deadline, &faucet, "200012006", 41);
-        let signed = serve_local_funding_transaction_with_receipt_failure(
-            &listener, deadline, &faucet, &recipient, true,
+    for json_output in [true, false] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config_home = tmp.path().join("config");
+        let cache_home = tmp.path().join("cache");
+        std::fs::create_dir_all(&project).unwrap();
+        let owner = generate_key_public_key(&config_home, "alice");
+        let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
+            thruput_signing::strkey::parse_public_key(&owner).unwrap(),
+            0,
         );
-        assert_no_follow_up_rpc(&listener);
-        signed
-    });
-    let output = thruput()
-        .args(["--json", "airdrop", "--force"])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("XDG_CACHE_HOME", &cache_home)
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let signed = server.join().unwrap();
-    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    let hash = thruput_encoding::encode(
-        thruput_signing::transaction_hash(&signed.tx)
-            .unwrap()
-            .as_ref(),
-    );
-    assert_eq!(report["error"]["code"], "local_funding_unresolved");
-    assert_eq!(report["error"]["details"]["txHash"], hash);
-    let path = report["error"]["details"]["attemptPath"].as_str().unwrap();
-    let attempt: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    assert_eq!(attempt["transaction"]["txHash"], hash);
-    assert_eq!(
-        attempt["transaction"]["signedTransaction"],
-        format!("0x{}", hex::encode(xdrs::txs::encode(&signed).unwrap()))
-    );
-    assert!(attempt["request"]["clientNonce"].is_string());
+        let recipient = thruput_encoding::encode(account.address().as_ref());
+        let faucet = advertised_dev_wallet_address(0);
+        let listener = MockListener::bind();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let rpc_url = format!("http://{addr}");
+        let manifest = write_runtime_manifest(&project, 0, &faucet, None);
+        std::fs::write(project.join("thruput.toml"), format!(
+        "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
+            serve_balance(&listener, deadline, &faucet, "200012006", 41);
+            let signed = serve_local_funding_transaction_with_receipt_failure(
+                &listener, deadline, &faucet, &recipient, true,
+            );
+            assert_no_follow_up_rpc(&listener);
+            signed
+        });
+        let mut command = thruput();
+        if json_output {
+            command.arg("--json");
+        }
+        let output = command
+            .args(["airdrop", "--force"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_CACHE_HOME", &cache_home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let signed = server.join().unwrap();
+        let hash = thruput_encoding::encode(
+            thruput_signing::transaction_hash(&signed.tx)
+                .unwrap()
+                .as_ref(),
+        );
+        if !json_output {
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(stderr.contains(&hash), "{stderr}");
+            assert!(stderr.contains("Retained attempt"), "{stderr}");
+            assert!(
+                stderr.contains("same command with the same amount"),
+                "{stderr}"
+            );
+            continue;
+        }
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(report["error"]["code"], "native_rpc_failure");
+        assert_eq!(report["error"]["details"]["transactionHash"], hash);
+        let path = report["error"]["details"]["attemptPath"].as_str().unwrap();
+        let attempt: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(attempt["transaction"]["txHash"], hash);
+        assert_eq!(
+            attempt["transaction"]["signedTransaction"],
+            format!("0x{}", hex::encode(xdrs::txs::encode(&signed).unwrap()))
+        );
+        assert!(attempt["request"]["clientNonce"].is_string());
+    }
+}
+
+#[test]
+fn local_airdrop_invalid_signed_evidence_is_preserved_without_journaling() {
+    for corruption in ["xdr", "hash", "error"] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config_home = tmp.path().join("config");
+        let cache_home = tmp.path().join("cache");
+        std::fs::create_dir_all(&project).unwrap();
+        let owner = generate_key_public_key(&config_home, "alice");
+        let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
+            thruput_signing::strkey::parse_public_key(&owner).unwrap(),
+            0,
+        );
+        let recipient = thruput_encoding::encode(account.address().as_ref());
+        let faucet = advertised_dev_wallet_address(0);
+        let listener = MockListener::bind();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let rpc_url = format!("http://{addr}");
+        let manifest = write_runtime_manifest(&project, 0, &faucet, None);
+        std::fs::write(project.join("thruput.toml"), format!(
+        "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
+            serve_balance(&listener, deadline, &faucet, "200012006", 41);
+            let signed = serve_local_funding_transaction_outcome(
+                &listener,
+                deadline,
+                &faucet,
+                &recipient,
+                false,
+                Some(corruption),
+            );
+            assert_no_follow_up_rpc(&listener);
+            signed
+        });
+        let output = thruput()
+            .args(["--json", "airdrop", "--force"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_CACHE_HOME", &cache_home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let signed = server.join().unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        let result = &report["error"]["details"]["result"];
+        assert_eq!(report["error"]["code"], "native_rpc_failure");
+        if corruption == "xdr" {
+            assert_eq!(result["signedTransaction"], "0x00");
+        } else if corruption == "error" {
+            let details = &report["error"]["details"];
+            assert_eq!(details["rpcError"]["code"], -32031);
+            assert_eq!(details["rpcError"]["data"]["signedTransaction"], "0x00");
+            assert_eq!(
+                details["rpcError"]["data"]["transactionHash"],
+                thruput_encoding::encode(
+                    thruput_signing::transaction_hash(&signed.tx)
+                        .unwrap()
+                        .as_ref()
+                )
+            );
+            assert!(details["retentionError"].is_string());
+        } else {
+            assert_eq!(
+                result["transactionHash"],
+                thruput_encoding::encode(&[0x91; 32])
+            );
+            assert_eq!(
+                result["signedTransaction"],
+                format!("0x{}", hex::encode(xdrs::txs::encode(&signed).unwrap()))
+            );
+        }
+        let path = report["error"]["details"]["attemptPath"].as_str().unwrap();
+        let journal: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(journal.get("transaction").is_none());
+    }
 }
 
 #[test]
@@ -6670,7 +6860,7 @@ fn local_airdrop_json_warns_when_projected_faucet_balance_is_below_ten_hog() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["warnings"][0]["level"], "warn");
     assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
-    assert_eq!(payload["data"]["schemaVersion"], 4);
+    assert_eq!(payload["data"]["schemaVersion"], 5);
 }
 
 #[test]
@@ -6703,13 +6893,66 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["mode"], "remote");
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["recipientWallet"], recipient);
     assert_eq!(stdout["data"]["rawAmount"], "25000000");
     assert_eq!(
         stdout["data"]["txHash"],
         thruput_encoding::encode(&[0x22; 32])
     );
+}
+
+#[test]
+fn hosted_airdrop_pending_only_polls_when_a_hash_is_known() {
+    for (has_hash, json_output) in [(true, true), (false, true), (false, false)] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config_home = tmp.path().join("config-home");
+        let cache_home = tmp.path().join("cache-home");
+        std::fs::create_dir_all(&project).unwrap();
+        let recipient = thruput_encoding::encode(&[0xaa; 32]);
+        let (rpc_url, rpc_server) = spawn_airdrop_rpc_outcome(&recipient, Some(has_hash));
+        let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+        write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+        add_faucet_to_default_profile(&project, &faucet_url);
+        let mut command = thruput();
+        if json_output {
+            command.arg("--json");
+        }
+        let output = command
+            .args(["airdrop", "alice", "--force"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_CACHE_HOME", &cache_home)
+            .output()
+            .unwrap();
+        descriptor_server.join().unwrap();
+        rpc_server.join().unwrap();
+        assert_eq!(
+            output.status.success(),
+            has_hash,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !json_output {
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(stderr.contains("Retained attempt"), "{stderr}");
+            assert!(stderr.contains("Retry after"), "{stderr}");
+            assert!(
+                stderr.contains("same command with the same amount"),
+                "{stderr}"
+            );
+        } else if has_hash {
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["data"]["execution"]["result"], "return");
+        } else {
+            let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(
+                report["error"]["details"]["result"]["attemptStatus"],
+                "pending"
+            );
+        }
+    }
 }
 
 #[test]
@@ -6974,7 +7217,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "transfer");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(data["schemaVersion"], 4);
+    assert_eq!(data["schemaVersion"], 5);
     assert_eq!(data["profile"], "default");
     assert_eq!(data["rpcUrl"], rpc_url);
     assert_eq!(data["dryRun"], true);
@@ -7185,7 +7428,7 @@ fn initialized_devnet_profile_discovers_signing_identity_for_all_transaction_com
             String::from_utf8_lossy(&output.stderr)
         );
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let field = if command == "transfer" {
+        let field = if command == "transfer" || command == "call" {
             "signedTransaction"
         } else {
             "signedTx"
@@ -7602,13 +7845,8 @@ fn transfer_live_reports_selected_saved_wallet_for_each_report_shape() {
     );
     assert!(!unavailable.output.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&unavailable.output.stdout).unwrap();
-    assert_eq!(stdout["data"]["confirmation"], "unavailable");
-    assert_eq!(stdout["data"]["senderWallet"], "trading");
-    assert_eq!(
-        stdout["data"]["sender"],
-        thruput_encoding::encode(&[0xb2; 32])
-    );
     assert_eq!(stdout["data"]["txHash"], unavailable.local_hash);
+    assert_eq!(stdout["data"]["evidence"]["submission"], "uncertain");
 }
 
 #[test]
@@ -7644,11 +7882,16 @@ fn transfer_live_success_returns_matching_receipt_and_events() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "transfer");
     assert_transfer_live_common(data, &run.local_hash, None);
-    assert_eq!(data["height"], "43");
-    assert_eq!(data["status"], serde_json::json!({ "result": "ok" }));
+    assert_eq!(data["blockHeight"], "43");
+    assert_eq!(
+        data["execution"],
+        serde_json::json!({"result":"return","returnData":"0x0506"})
+    );
     assert_eq!(data["gasUsed"], "1500");
+    let mut event = event;
+    native_event_fixture(&mut event);
     assert_eq!(data["events"], serde_json::json!([event]));
-    assert_eq!(data["returnData"], "0x0506");
+    assert_eq!(data["execution"]["returnData"], "0x0506");
     for absent in [
         "abortData",
         "confirmation",
@@ -7727,19 +7970,30 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
         assert_eq!(stdout["ok"], false);
         assert_eq!(stdout["error"]["code"], expected_code);
         assert_transfer_live_common(&stdout["data"], &run.local_hash, None);
-        assert_eq!(stdout["data"]["height"], "43");
-        assert_eq!(stdout["data"]["status"], status);
-        assert_eq!(stdout["data"]["events"], serde_json::json!([event]));
-        assert_eq!(stdout["data"]["returnData"], "0x0102");
-        assert_eq!(stdout["data"]["abortData"], "0x0304");
-        // 0x0304 is too short to carry an abort selector, so decoding fails.
-        assert!(
-            stdout["data"]["abortDecodeError"]
-                .as_str()
-                .is_some_and(|error| error.contains("selector")),
-            "abortDecodeError: {}",
-            stdout["data"]["abortDecodeError"]
+        assert_eq!(stdout["data"]["blockHeight"], "43");
+        let mut expected_event = event;
+        native_event_fixture(&mut expected_event);
+        assert_eq!(
+            stdout["data"]["events"],
+            serde_json::json!([expected_event])
         );
+        if status["result"] == "reverted" {
+            assert_eq!(
+                stdout["data"]["execution"],
+                serde_json::json!({"result":"abort","abortData":"0x0304"})
+            );
+            assert!(
+                stdout["data"]["abortDecodeError"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("selector"))
+            );
+        } else {
+            assert_eq!(
+                stdout["data"]["execution"],
+                serde_json::json!({"result":"fault"})
+            );
+            assert!(stdout["data"].get("abortDecodeError").is_none());
+        }
         for absent in [
             "abortException",
             "abortValue",
@@ -7783,7 +8037,7 @@ fn transfer_live_decodes_standard_exception_abort() {
     assert!(!run.output.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
-    assert_eq!(stdout["data"]["abortData"], abort_hex);
+    assert_eq!(stdout["data"]["execution"]["abortData"], abort_hex);
     assert_eq!(stdout["data"]["abortException"], "ERC20Error");
     assert_eq!(stdout["data"]["abortExceptionCrate"], "thruput-erc20-if");
     assert_eq!(stdout["data"]["abortExceptionVersion"], "0.1");
@@ -7792,8 +8046,8 @@ fn transfer_live_decodes_standard_exception_abort() {
 }
 
 #[test]
-fn transfer_live_terminal_invalid_is_conclusive_command_failure() {
-    let status = serde_json::json!({ "status": "invalid", "reason": "expired" });
+fn transfer_live_unknown_status_preserves_raw_evidence() {
+    let status = serde_json::json!({"status":"futureStatus","reason":"expired"});
     let run = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
@@ -7801,53 +8055,27 @@ fn transfer_live_terminal_invalid_is_conclusive_command_failure() {
         },
         true,
     );
-
     assert!(!run.output.status.success());
-    assert!(run.output.stderr.is_empty());
-    let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
-    assert_eq!(stdout["ok"], false);
-    assert_eq!(stdout["error"]["code"], "transaction_invalid");
-    assert_eq!(stdout["data"]["confirmation"], "invalid");
-    assert_eq!(stdout["data"]["transactionStatus"], status);
-    assert_transfer_live_common(&stdout["data"], &run.local_hash, None);
-    assert_transfer_unconfirmed_omissions(&stdout["data"]);
-
-    let human = run_transfer_live_mock(
-        TransferRpcMock {
-            submit: TransferSubmitMock::MatchingHash,
-            poll: Some(TransferPollMock::Status(serde_json::json!({
-                "status": "invalid",
-                "reason": "expired",
-            }))),
-        },
-        false,
+    let report: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+    assert_eq!(report["error"]["code"], "native_rpc_failure");
+    assert_eq!(report["data"]["txHash"], run.local_hash);
+    assert_eq!(report["data"]["profile"], "default");
+    assert_eq!(report["data"]["sender"], advertised_dev_wallet_address(0));
+    assert_eq!(
+        report["data"]["recipient"],
+        thruput_encoding::encode(&[0xab; 32])
     );
-    let stderr = String::from_utf8(human.stderr).unwrap();
-    assert!(!stderr.contains("may still commit"));
-    assert!(!stderr.contains("blindly resubmit"));
+    assert_eq!(report["data"]["rawAmount"], "15000000");
+    assert_eq!(report["data"]["submitted"], true);
+    assert_eq!(report["data"]["evidence"]["submission"], "acknowledged");
+    assert_eq!(report["data"]["evidence"]["cause"]["result"], status);
 }
 
 #[test]
-fn transfer_live_poll_failures_are_unavailable_command_failures() {
-    let recent = serde_json::json!({
-        "status": "recentFailure",
-        "attemptHeight": "43",
-        "cause": { "kind": "dbConflict", "conflict": {
-            "address": thruput_encoding::encode(&[0x77; 32]),
-            "key": "0x0102",
-            "code": "boundsExceeded",
-        } },
-    });
-    for (poll, expected_status) in [
-        (
-            TransferPollMock::Status(recent.clone()),
-            Some(recent.clone()),
-        ),
-        (
-            TransferPollMock::Status(serde_json::json!({ "status": "unknown" })),
-            None,
-        ),
-        (TransferPollMock::ReceiptError(-32050), None),
+fn transfer_live_poll_failures_preserve_native_evidence() {
+    for poll in [
+        TransferPollMock::Status(serde_json::json!({"status":"unknown"})),
+        TransferPollMock::ReceiptError(-32050),
     ] {
         let run = run_transfer_live_mock_with_hash(
             TransferRpcMock {
@@ -7856,207 +8084,111 @@ fn transfer_live_poll_failures_are_unavailable_command_failures() {
             },
             true,
         );
-
         assert!(!run.output.status.success());
-        assert!(run.output.stderr.is_empty());
-        let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
-        assert_eq!(
-            stdout["error"]["code"],
-            "transaction_confirmation_unavailable"
-        );
-        assert_eq!(stdout["data"]["confirmation"], "unavailable");
-        assert_transfer_live_common(&stdout["data"], &run.local_hash, None);
-        assert_transfer_unconfirmed_omissions(&stdout["data"]);
-        match expected_status {
-            Some(status) => assert_eq!(stdout["data"]["transactionStatus"], status),
-            None => assert!(stdout["data"].get("transactionStatus").is_none()),
-        }
+        let report: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+        assert_eq!(report["error"]["code"], "native_rpc_failure");
+        assert_eq!(report["data"]["txHash"], run.local_hash);
+        assert_eq!(report["data"]["evidence"]["submission"], "acknowledged");
+        assert!(report["data"]["evidence"]["cause"].is_object());
     }
 }
 
 #[test]
-fn transfer_live_lost_submission_response_polls_local_hash() {
-    let success = run_transfer_live_mock(
+fn transfer_live_lost_submission_response_retains_hash_without_retry_or_poll() {
+    let run = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::DropResponse,
-            poll: Some(TransferPollMock::Receipt {
-                status: serde_json::json!({ "result": "ok" }),
-                events: serde_json::json!([]),
-                return_data: None,
-                abort_data: None,
-                mismatched_hash: false,
-            }),
+            poll: None,
         },
         true,
     );
-    assert!(
-        success.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&success.stderr)
-    );
-
-    let unavailable = run_transfer_live_mock_with_hash(
-        TransferRpcMock {
-            submit: TransferSubmitMock::DropResponse,
-            poll: Some(TransferPollMock::Status(
-                serde_json::json!({ "status": "unknown" }),
-            )),
-        },
-        true,
-    );
-    assert!(!unavailable.output.status.success());
-    let stdout: serde_json::Value = serde_json::from_slice(&unavailable.output.stdout).unwrap();
-    assert_eq!(
-        stdout["error"]["code"],
-        "transaction_confirmation_unavailable"
-    );
-    assert_eq!(stdout["data"]["submitted"], true);
-    assert_transfer_live_common(&stdout["data"], &unavailable.local_hash, None);
-    assert!(stdout["data"].get("transactionStatus").is_none());
-    assert_transfer_unconfirmed_omissions(&stdout["data"]);
+    assert!(!run.output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+    assert_eq!(report["error"]["code"], "native_rpc_failure");
+    assert_eq!(report["data"]["txHash"], run.local_hash);
+    assert_eq!(report["data"]["evidence"]["submission"], "uncertain");
+    assert!(report["data"]["evidence"]["cause"]["transportError"].is_string());
 }
 
 #[test]
-fn transfer_live_classifies_send_errors_by_numeric_code() {
-    for code in [-32602, -32000, -32001, -32053] {
-        let output = run_transfer_live_mock(
-            TransferRpcMock {
-                submit: TransferSubmitMock::Error(code),
-                poll: None,
-            },
-            true,
-        );
-        assert!(!output.status.success(), "code {code} should fail");
-        assert!(output.stdout.is_empty());
-        let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(stderr["error"]["code"], "rpc_method_failed");
-    }
-
-    for code in [-32601, -32052] {
-        let output = run_transfer_live_mock(
-            TransferRpcMock {
-                submit: TransferSubmitMock::Error(code),
-                poll: None,
-            },
-            true,
-        );
-        assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(stderr["error"]["code"], "rpc_capability_unsupported");
-        assert!(
-            stderr["error"]["hint"]
-                .as_str()
-                .unwrap()
-                .contains("compatible remote RPC")
-        );
-    }
-
-    for code in [-32050, -32051, -32123] {
+fn transfer_live_preserves_send_errors_without_inferring_admission() {
+    for code in [
+        -32602, -32601, -32000, -32001, -32050, -32051, -32052, -32053, -32123,
+    ] {
         let run = run_transfer_live_mock_with_hash(
             TransferRpcMock {
                 submit: TransferSubmitMock::Error(code),
-                poll: Some(TransferPollMock::Status(
-                    serde_json::json!({ "status": "unknown" }),
-                )),
+                poll: None,
             },
             true,
         );
-        let output = run.output;
-        assert!(
-            !output.status.success(),
-            "code {code} should poll then fail"
-        );
-        assert!(output.stderr.is_empty());
-        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(stdout["data"]["txHash"], run.local_hash);
-        assert_eq!(
-            stdout["error"]["code"],
-            "transaction_confirmation_unavailable"
-        );
+        assert!(!run.output.status.success());
+        assert!(run.output.stderr.is_empty());
+        let report: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+        assert_eq!(report["error"]["code"], "native_rpc_failure");
+        assert_eq!(report["data"]["txHash"], run.local_hash);
+        let evidence = &report["data"]["evidence"];
+        assert_eq!(evidence["cause"]["rpcError"]["code"], code);
+        assert_eq!(evidence["submission"], "uncertain");
+        assert!(evidence.get("admission").is_none());
     }
 }
 
 #[test]
 fn transfer_live_hash_mismatches_never_report_commitment() {
-    let server_mismatch = run_transfer_live_mock_with_hash(
-        TransferRpcMock {
-            submit: TransferSubmitMock::MismatchedHash,
-            poll: None,
-        },
-        true,
-    );
-    assert!(!server_mismatch.output.status.success());
-    let stdout: serde_json::Value = serde_json::from_slice(&server_mismatch.output.stdout).unwrap();
-    assert_eq!(stdout["data"]["confirmation"], "unavailable");
-    assert_eq!(stdout["data"]["submitted"], true);
-    assert_transfer_live_common(&stdout["data"], &server_mismatch.local_hash, None);
-    assert_ne!(stdout["data"]["txHash"], format!("0x{}", "ff".repeat(32)));
-    assert!(stdout["data"].get("transactionStatus").is_none());
-    assert_transfer_unconfirmed_omissions(&stdout["data"]);
-
-    let receipt_mismatch = run_transfer_live_mock_with_hash(
-        TransferRpcMock {
-            submit: TransferSubmitMock::MatchingHash,
-            poll: Some(TransferPollMock::Receipt {
-                status: serde_json::json!({ "result": "ok" }),
+    for (submit, poll, phase) in [
+        (TransferSubmitMock::MismatchedHash, None, "uncertain"),
+        (
+            TransferSubmitMock::MatchingHash,
+            Some(TransferPollMock::Receipt {
+                status: serde_json::json!({"result":"ok"}),
                 events: serde_json::json!([]),
                 return_data: None,
                 abort_data: None,
                 mismatched_hash: true,
             }),
-        },
-        true,
-    );
-    assert!(!receipt_mismatch.output.status.success());
-    let stdout: serde_json::Value =
-        serde_json::from_slice(&receipt_mismatch.output.stdout).unwrap();
-    assert_eq!(stdout["data"]["confirmation"], "unavailable");
-    assert_transfer_live_common(&stdout["data"], &receipt_mismatch.local_hash, None);
-    assert_ne!(stdout["data"]["txHash"], format!("0x{}", "ee".repeat(32)));
-    assert!(stdout["data"].get("transactionStatus").is_none());
-    assert_transfer_unconfirmed_omissions(&stdout["data"]);
+            "acknowledged",
+        ),
+    ] {
+        let run = run_transfer_live_mock_with_hash(TransferRpcMock { submit, poll }, true);
+        assert!(!run.output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+        assert_eq!(report["data"]["txHash"], run.local_hash);
+        assert_eq!(report["data"]["evidence"]["submission"], phase);
+        assert!(report["data"].get("blockHeight").is_none());
+        assert!(report["data"].get("execution").is_none());
+    }
 }
 
 #[test]
-fn transfer_live_human_unavailable_warns_against_resubmission() {
-    let output = run_transfer_live_mock(
+fn transfer_live_human_submission_error_retains_hash() {
+    let run = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::Error(-32051),
-            poll: Some(TransferPollMock::Status(
-                serde_json::json!({ "status": "unknown" }),
-            )),
+            poll: None,
         },
         false,
     );
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("may still commit"));
-    assert!(stderr.contains("do not blindly resubmit"));
-    assert!(stderr.contains("thruput tx show"));
-    assert!(stderr.contains("--profile=default"));
-    assert!(!stderr.contains("--rpc-url"));
-    assert!(!stderr.contains("signed transaction"));
+    assert!(!run.output.status.success());
+    assert!(run.output.stdout.is_empty());
+    let stderr = String::from_utf8(run.output.stderr).unwrap();
+    assert!(stderr.contains(&run.local_hash), "{stderr}");
+    assert!(stderr.contains("mock send error"), "{stderr}");
 }
 
 #[test]
-fn transfer_live_human_unavailable_quotes_cli_rpc_override() {
+fn transfer_live_human_error_does_not_echo_rpc_query_credentials() {
     let run = run_transfer_live_mock_with_rpc_override(
         TransferRpcMock {
             submit: TransferSubmitMock::Error(-32051),
-            poll: Some(TransferPollMock::Status(
-                serde_json::json!({ "status": "unknown" }),
-            )),
+            poll: None,
         },
         false,
         "?key=x&network=test",
     );
-
     assert!(!run.output.status.success());
     let stderr = String::from_utf8(run.output.stderr).unwrap();
-    assert!(stderr.contains(&format!("--rpc-url='{}'", run.rpc_url)));
+    assert!(!stderr.contains("key=x"), "{stderr}");
 }
 
 #[test]
@@ -8104,7 +8236,7 @@ fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
     assert!(!failure.output.status.success());
     assert!(failure.output.stdout.is_empty());
     let stderr = String::from_utf8(failure.output.stderr).unwrap();
-    assert!(stderr.contains("Transfer reverted: denied"));
+    assert!(stderr.contains("Transfer aborted"));
     assert!(stderr.contains(&format!("tx: {}", failure.local_hash)));
     assert!(stderr.contains("height: 43"));
     assert!(stderr.contains("abort data: 0x0102"));
@@ -8131,7 +8263,8 @@ fn transfer_live_human_output_escapes_untrusted_status_text() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains(r"denied\n\u{1b}[31m"));
+    assert!(stderr.contains("Transfer aborted"));
+    assert!(!stderr.contains("denied"));
     assert!(!stderr.contains('\u{1b}'));
 }
 
@@ -8155,26 +8288,12 @@ fn transfer_live_human_output_escapes_conclusive_backend_error() {
     assert!(!stderr.contains('\u{1b}'));
 }
 
-fn assert_transfer_unconfirmed_omissions(data: &serde_json::Value) {
-    for absent in [
-        "height",
-        "status",
-        "events",
-        "returnData",
-        "abortData",
-        "expiryHeight",
-        "signedTransaction",
-    ] {
-        assert!(data.get(absent).is_none(), "{absent} should be omitted");
-    }
-}
-
 fn assert_transfer_live_common(
     data: &serde_json::Value,
     local_hash: &str,
     sender_wallet: Option<&str>,
 ) {
-    assert_eq!(data["schemaVersion"], 4);
+    assert_eq!(data["schemaVersion"], 5);
     assert_eq!(data["profile"], "default");
     assert!(
         data["rpcUrl"]
@@ -8244,7 +8363,7 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 7);
+    assert_eq!(stdout["data"]["schemaVersion"], 8);
     assert_eq!(stdout["data"]["artifactKind"], "rv32");
     assert_eq!(
         stdout["data"]["artifactPath"].as_str().unwrap(),
@@ -8374,11 +8493,11 @@ fn assert_deploy_estimate(
             Instant::now() + CLI_ACTION_TIMEOUT,
             "chainConfig",
         );
-        assert_eq!(request["method"], "groundhog_chainConfig");
-        let result = if available {
+        assert_eq!(request["method"], "getChainConfig");
+        let mut result = if available {
             serde_json::json!({
                 "execution": {
-                    "observedTip": { "height": "7", "blockHash": thruput_json_rpc_types::NetworkHashText::from([0x11; 32]) },
+                    "observedTip": { "blockHeight": "7", "blockHash": thruput_json_rpc_types::NetworkHashText::from([0x11; 32]) },
                     "configHash": thruput_json_rpc_types::NetworkHashText::from([0x22; 32]),
                     "effectiveLimits": {
                         "maxContractSizeBytes": 1_000_000,
@@ -8396,6 +8515,13 @@ fn assert_deploy_estimate(
         } else {
             serde_json::json!({})
         };
+        result["stated"] = serde_json::json!({});
+        if let Some(limits) = result
+            .pointer_mut("/execution/effectiveLimits")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            limits.retain(|_, value| !value.is_null());
+        }
         send_jsonrpc_response(stream, &request["id"], result);
     });
     let output = thruput()
@@ -8420,13 +8546,13 @@ fn assert_deploy_estimate(
                 String::from_utf8_lossy(&output.stderr)
             );
             let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(json["data"]["schemaVersion"], 1);
+            assert_eq!(json["data"]["schemaVersion"], 2);
             assert_eq!(json["data"]["artifactBytes"], artifact.len().to_string());
             assert_eq!(
                 json["data"]["minimumFundingRaw"],
                 (230 + artifact.len() * 2).to_string()
             );
-            assert_eq!(json["data"]["execution"]["observedTip"]["height"], "7");
+            assert_eq!(json["data"]["execution"]["observedTip"]["blockHeight"], "7");
             assert!(json["data"].get("signedTx").is_none());
             assert!(output.stderr.is_empty());
         }
@@ -8853,8 +8979,8 @@ fn deploy_live_json_submits_and_returns_receipt() {
     assert_eq!(stdout["data"]["address"], expected_address);
     assert_eq!(stdout["data"]["addressSource"], "receipt");
     assert_eq!(stdout["data"]["gasUsed"], "1500");
-    assert_eq!(stdout["data"]["height"], "42");
-    assert_eq!(stdout["data"]["status"]["result"], "ok");
+    assert_eq!(stdout["data"]["blockHeight"], "42");
+    assert_eq!(stdout["data"]["execution"]["result"], "return");
     assert!(stdout["data"].get("returnData").is_none());
     assert!(stdout["data"].get("abortData").is_none());
     assert!(stdout["data"]["transactionDetail"].is_null());
@@ -8870,11 +8996,7 @@ fn deploy_live_json_fails_with_receipt_context() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_failed_deploy_receipt(42),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, sample_failed_deploy_receipt(42));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
@@ -8899,10 +9021,10 @@ fn deploy_live_json_fails_with_receipt_context() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "deploy");
     assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
-    assert_eq!(stdout["data"]["height"], "42");
-    assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
-    assert_eq!(stdout["data"]["returnData"], "0x0102");
-    assert_eq!(stdout["data"]["abortData"], "0x0304");
+    assert_eq!(stdout["data"]["blockHeight"], "42");
+    assert_eq!(stdout["data"]["execution"]["result"], "fault");
+    assert!(stdout["data"]["execution"].get("returnData").is_none());
+    assert!(stdout["data"]["execution"].get("abortData").is_none());
     assert!(
         thruput_encoding::decode_fixed::<32>(stdout["data"]["txHash"].as_str().unwrap()).is_ok()
     );
@@ -8915,11 +9037,8 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_insufficient_funding_deploy_receipt(42),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_insufficient_funding_deploy_receipt(42));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
@@ -8943,9 +9062,9 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 7);
-    assert_eq!(stdout["data"]["height"], "42");
-    assert_eq!(stdout["data"]["status"]["result"], "reverted");
+    assert_eq!(stdout["data"]["schemaVersion"], 8);
+    assert_eq!(stdout["data"]["blockHeight"], "42");
+    assert_eq!(stdout["data"]["execution"]["result"], "abort");
     assert_eq!(stdout["error"]["code"], "transaction_insufficient_funds");
     assert_eq!(
         stdout["error"]["details"]["reason"],
@@ -8957,7 +9076,7 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
     }));
     assert_ne!(stdout["error"]["code"], "transaction_reverted");
     assert!(
-        stdout["data"]["abortData"]
+        stdout["data"]["execution"]["abortData"]
             .as_str()
             .is_some_and(|value| value.starts_with("0x"))
     );
@@ -8970,11 +9089,8 @@ fn deploy_live_human_reports_selected_wallet_funding_commands() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_insufficient_funding_deploy_receipt(42),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_insufficient_funding_deploy_receipt(42));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
@@ -9007,11 +9123,7 @@ fn deploy_live_human_fails_after_printing_receipt_context() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_failed_deploy_receipt(42),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, sample_failed_deploy_receipt(42));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
@@ -9032,27 +9144,26 @@ fn deploy_live_human_fails_after_printing_receipt_context() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("warning: Deploy failed with deterministic execution error"));
+    assert!(stderr.contains("warning: Deploy failed with a deterministic execution fault"));
     assert!(stderr.lines().any(|line| {
         line.trim()
             .strip_prefix("tx: ")
             .is_some_and(|hash| thruput_encoding::decode_fixed::<32>(hash).is_ok())
     }));
     assert!(stderr.contains("height: 42"));
-    assert!(stderr.contains("return data: 0x0102"), "stderr: {stderr}");
-    assert!(stderr.contains("abort data: 0x0304"), "stderr: {stderr}");
+    assert!(!stderr.contains("return data:"), "stderr: {stderr}");
+    assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
     assert!(stderr.contains("gas used: 4242"), "stderr: {stderr}");
 }
 
 #[test]
-fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
+fn deploy_live_json_reports_native_receipt_without_optional_legacy_requests() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) =
-        spawn_deploy_rpc_with_detail(42, DevDetailRpcResponse::Result(sample_detail_result(42)));
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
@@ -9079,15 +9190,9 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
     );
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["transactionDetail"]["gasConsumed"], "12450");
-    assert_eq!(
-        stdout["data"]["transactionDetail"]["storageDeltas"][0]["kind"],
-        "bytestringSet"
-    );
-    assert_eq!(
-        stdout["data"]["transactionDetail"]["trace"]["status"]["result"],
-        "return"
-    );
+    assert_eq!(stdout["data"]["execution"]["result"], "return");
+    assert_eq!(stdout["data"]["gasUsed"], "1500");
+    assert!(stdout["data"].get("transactionDetail").is_none());
 }
 
 #[test]
@@ -9180,11 +9285,11 @@ fn view_json_returns_raw_output() {
     assert_eq!(stdout["warnings"], serde_json::json!([]));
     assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["contract"], address);
-    assert_eq!(stdout["data"]["entrypointId"], entrypoint);
+    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["entrypoint"], entrypoint);
     assert_eq!(stdout["data"]["calldata"], calldata);
     assert_eq!(stdout["data"]["caller"], serde_json::Value::Null);
-    assert_eq!(stdout["data"]["height"], "12");
+    assert_eq!(stdout["data"]["stateBlockHeight"], "12");
     assert_eq!(stdout["data"]["output"]["result"], "return");
     assert_eq!(stdout["data"]["output"]["returnData"], "0x0102");
     assert_eq!(stdout["data"]["gasUsed"], "4321");
@@ -9242,7 +9347,7 @@ fn view_json_resolves_contract_alias_and_from_address() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "view");
-    assert_eq!(stdout["data"]["contract"], address);
+    assert_eq!(stdout["data"]["address"], address);
     assert_eq!(stdout["data"]["caller"], caller);
 }
 
@@ -9425,7 +9530,7 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
 }
 
 #[test]
-fn view_json_surfaces_abort_as_success_body() {
+fn view_json_surfaces_abort_as_failed_command_with_result() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -9452,13 +9557,13 @@ fn view_json_surfaces_abort_as_success_body() {
     rpc_server.join().unwrap();
 
     assert!(
-        output.status.success(),
+        !output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stderr.is_empty());
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["data"]["output"]["result"], "abort");
     assert_eq!(stdout["data"]["output"]["abortData"], "0x0a0b");
     assert_eq!(stdout["data"]["returnValue"], serde_json::Value::Null);
@@ -9467,7 +9572,7 @@ fn view_json_surfaces_abort_as_success_body() {
 }
 
 #[test]
-fn view_json_surfaces_fault_as_success_body() {
+fn view_json_surfaces_fault_as_failed_command_with_result() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -9493,13 +9598,13 @@ fn view_json_surfaces_fault_as_success_body() {
     rpc_server.join().unwrap();
 
     assert!(
-        output.status.success(),
+        !output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stderr.is_empty());
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["data"]["output"]["result"], "fault");
     assert_eq!(stdout["data"]["returnValue"], serde_json::Value::Null);
 }
@@ -9542,12 +9647,10 @@ fn view_human_prints_event_details() {
     assert!(output.stdout.is_empty());
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("View succeeded"));
-    assert!(stderr.contains("gas used: 4321"), "{stderr}");
-    assert!(stderr.contains("events: 1"));
-    assert!(stderr.contains(&format!(
-        "    [0] {address} topic0={topic} data={event_data}"
-    )));
+    assert!(stderr.contains("Simulation succeeded"));
+    assert!(stderr.contains("Gas used: 4321"), "{stderr}");
+    assert!(stderr.contains("Event 0"));
+    assert!(stderr.contains(&format!("{address} topic0={topic} data={event_data}")));
 }
 
 #[test]
@@ -9580,11 +9683,11 @@ fn storage_json_reads_latest_item() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "storage");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["address"], address);
     assert_eq!(stdout["data"]["key"], key);
-    assert_eq!(stdout["data"]["blockHeight"], "12");
+    assert_eq!(stdout["data"]["stateBlockHeight"], "12");
     assert_eq!(stdout["data"]["item"]["kind"], "bytestring");
     assert_eq!(
         stdout["data"]["item"]["bytes"],
@@ -9627,13 +9730,13 @@ fn balance_json_uses_default_wallet_when_target_is_omitted() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "balance");
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["target"], "alice");
     assert_eq!(stdout["data"]["address"], address);
     assert_eq!(stdout["data"]["rawBalance"], "123456789");
     assert_eq!(stdout["data"]["balanceHog"], "12.3456789");
-    assert_eq!(stdout["data"]["height"], "34");
+    assert_eq!(stdout["data"]["stateBlockHeight"], "34");
 }
 
 #[test]
@@ -9830,7 +9933,7 @@ fn storage_json_uses_profile_runtime_manifest_with_global_dev_key() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["blockHeight"], "12");
+    assert_eq!(stdout["data"]["stateBlockHeight"], "12");
 }
 
 #[test]
@@ -9868,7 +9971,7 @@ fn storage_json_cli_rpc_url_overrides_profile_rpc_url() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["blockHeight"], "12");
+    assert_eq!(stdout["data"]["stateBlockHeight"], "12");
 }
 
 #[test]
@@ -10162,19 +10265,19 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["contract"], contract);
+    assert_eq!(stdout["data"]["address"], contract);
     assert_eq!(stdout["data"]["method"], "0x0123456789abcdef");
-    assert_eq!(stdout["data"]["entrypointId"], "0x0123456789abcdef");
+    assert_eq!(stdout["data"]["entrypoint"], "0x0123456789abcdef");
     assert_eq!(stdout["data"]["calldata"], "0x0102");
     assert_eq!(stdout["data"]["selector"]["source"], "explicit_entrypoint");
     assert!(stdout["data"]["selector"]["interface"].is_null());
     assert!(
-        stdout["data"]["signedTx"]
+        stdout["data"]["signedTransaction"]
             .as_str()
             .unwrap()
             .starts_with("0x")
     );
-    let signed_tx = decode_signed_tx(stdout["data"]["signedTx"].as_str().unwrap());
+    let signed_tx = decode_signed_tx(stdout["data"]["signedTransaction"].as_str().unwrap());
     assert_eq!(signed_tx.tx.invocation.gas_limit, 25_000_000);
     let inner: Vec<u8> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata.0).unwrap();
     let (_, _, target_gas, _): (
@@ -10225,10 +10328,10 @@ fn call_dry_run_uses_hosted_descriptor_entrypoint() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["walletEntrypointId"], "0x19846d750fad81d6");
+    assert_eq!(stdout["data"]["walletEntrypoint"], "0x19846d750fad81d6");
     assert_eq!(stdout["data"]["walletEntrypointSource"], "legacy_default");
     assert_eq!(
-        signed_tx_entrypoint(stdout["data"]["signedTx"].as_str().unwrap()),
+        signed_tx_entrypoint(stdout["data"]["signedTransaction"].as_str().unwrap()),
         "0x19846d750fad81d6"
     );
 }
@@ -10274,7 +10377,7 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signedTx"]
+    let signed_tx = stdout["data"]["signedTransaction"]
         .as_str()
         .expect("bug: dry-run output includes signed tx");
 
@@ -10294,26 +10397,29 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
     listener.set_nonblocking(true).unwrap();
     let rpc_server = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
-        assert_eq!(request["method"], "groundhog_chainTip");
+        let (stream, request) = read_after_network_check(&listener, deadline, "chainTip");
+        assert_eq!(request["method"], "getChainTip");
         send_jsonrpc_response(
             stream,
             &request["id"],
             serde_json::json!({
-                "height": "42",
+                "blockHeight": "42",
                 "blockHash": "1".repeat(32),
             }),
         );
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
-        assert_eq!(request["method"], "groundhog_getBalance");
-        assert_eq!(request["params"][0], thruput_encoding::encode(&[0xaa; 32]));
+        assert_eq!(request["method"], "getBalance");
+        assert_eq!(
+            request["params"]["address"],
+            thruput_encoding::encode(&[0xaa; 32])
+        );
         send_jsonrpc_response(
             stream,
             &request["id"],
             serde_json::json!({
                 "address": thruput_encoding::encode(&[0xaa; 32]),
                 "rawBalance": "10000000",
-                "height": "42",
+                "stateBlockHeight": "42",
             }),
         );
         assert_no_follow_up_rpc(&listener);
@@ -10340,31 +10446,13 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
     assert!(output.stdout.is_empty());
     let result: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(result["ok"], false);
-    assert_eq!(result["error"]["code"], "call_gas_balance_insufficient");
+    assert_eq!(result["error"]["code"], "native_rpc_failure");
     assert_eq!(
-        result["error"]["details"]["wallet"],
-        thruput_encoding::encode(&[0xaa; 32])
+        result["error"]["details"]["preflightReason"],
+        "insufficientCapacity"
     );
-    assert_eq!(result["error"]["details"]["availableRaw"], 10_000_000);
-    assert_eq!(result["error"]["details"]["requiredRaw"], 25_000_000);
-    assert!(
-        result["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("1 HOG")
-    );
-    assert!(
-        result["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("2.5 HOG")
-    );
-    assert!(
-        result["error"]["hint"]
-            .as_str()
-            .unwrap()
-            .contains("--gas-limit")
-    );
+    assert_eq!(result["error"]["details"]["availableRaw"], "10000000");
+    assert_eq!(result["error"]["details"]["requiredRaw"], "25000000");
 }
 
 #[test]
@@ -10380,8 +10468,7 @@ fn call_human_raw_return_uses_child_bytes_for_native_and_legacy_wallets() {
                 child.clone()
             };
             receipt["returnData"] = serde_json::json!(format!("0x{}", hex::encode(returned)));
-            let (rpc, server) =
-                spawn_transaction_rpc(42, receipt, DevDetailRpcResponse::MethodNotFound);
+            let (rpc, server) = spawn_transaction_rpc(42, receipt);
             let owner = write_project_config_with_alice_wallet(tmp.path(), &rpc, &config);
             if native {
                 let account = thruput_signing::PubkeyAccount::from_public_key_bytes(
@@ -10415,30 +10502,21 @@ fn call_human_raw_return_uses_child_bytes_for_native_and_legacy_wallets() {
             server.join().unwrap();
             let text = String::from_utf8(output.stderr).unwrap();
             assert!(output.status.success(), "{text}");
-            let line = text
-                .lines()
-                .find(|line| line.trim_start().starts_with("return:"));
-            if child.is_empty() {
-                assert!(line.is_none(), "{text}");
-            } else {
-                assert_eq!(line.map(str::trim), Some("return: 0xdeadbeef"), "{text}");
-            }
+            let expected = format!("0x{}", hex::encode(child));
+            assert!(text.contains("Child return"), "{text}");
+            assert!(text.contains(&expected), "{text}");
         }
     }
 }
 
 #[test]
-fn call_live_human_appends_transaction_detail_sections() {
+fn call_live_human_reports_native_receipt_without_optional_legacy_requests() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_call_receipt(42),
-        DevDetailRpcResponse::Result(sample_detail_result(42)),
-    );
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, sample_call_receipt(42));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
@@ -10459,49 +10537,13 @@ fn call_live_human_appends_transaction_detail_sections() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Call succeeded"));
-    assert!(stderr.contains("Storage deltas (1):"));
-    assert!(stderr.contains("Events (1):"));
-    assert!(stderr.contains("Return: 0x0102"));
-    assert!(stderr.contains("Gas: 12,450 / 1,000,000,000"));
-}
-
-#[test]
-fn call_live_human_warns_when_transaction_detail_fails() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_call_receipt(42),
-        DevDetailRpcResponse::Error {
-            code: -32000,
-            message: "detail backend unavailable",
-        },
-    );
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let contract = thruput_encoding::encode(&[0x11; 32]);
-    let output = thruput()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
+    assert!(stderr.contains("Event 0"));
+    assert!(stderr.contains("data=0x1234"));
     assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        stderr.contains("Gas used") && stderr.contains("1500"),
+        "{stderr}"
     );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Call succeeded"));
-    assert!(stderr.contains("warning: transaction detail unavailable"));
-    assert!(stderr.contains("detail backend unavailable"));
+    assert!(!stderr.contains("transaction detail"));
 }
 
 #[test]
@@ -10512,11 +10554,8 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
 
     let advertised_wallet = advertised_dev_wallet_address(0);
     let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, None);
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_deterministic_error_call_receipt(42),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_deterministic_error_call_receipt(42));
     std::fs::write(
         project.join("thruput.toml"),
         format!(
@@ -10549,32 +10588,18 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
-    assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
+    assert_eq!(stdout["data"]["execution"]["result"], "fault");
     assert_eq!(stdout["data"]["gasUsed"], "1500");
     assert_eq!(
-        stdout["data"]["diagnostics"]["wallet"]["address"],
+        stdout["data"]["walletAddress"],
         rpc_address_from_hex_fixture(&advertised_wallet)
     );
+    assert_eq!(stdout["data"]["walletEntrypoint"], "0xc3edb11fdd6d5d58");
     assert_eq!(
-        stdout["data"]["diagnostics"]["wallet"]["entrypointId"],
-        "0xc3edb11fdd6d5d58"
-    );
-    assert_eq!(
-        stdout["data"]["diagnostics"]["wallet"]["entrypointSource"],
+        stdout["data"]["walletEntrypointSource"],
         "native_default_wallet"
     );
-    assert_eq!(
-        stdout["data"]["diagnostics"]["target"]["entrypointId"],
-        "0x0123456789abcdef"
-    );
-    assert_eq!(
-        stdout["data"]["diagnostics"]["transactionDetail"]["rpcMethod"],
-        "groundhog_dev_getTransactionDetail"
-    );
-    assert_eq!(
-        stdout["data"]["diagnostics"]["transactionDetail"]["available"],
-        false
-    );
+    assert_eq!(stdout["data"]["entrypoint"], "0x0123456789abcdef");
 }
 
 #[test]
@@ -10584,11 +10609,8 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_deterministic_error_call_receipt(42),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_deterministic_error_call_receipt(42));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
@@ -10612,15 +10634,9 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
     assert!(output.stderr.is_empty());
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
-    assert_eq!(
-        stdout["data"]["diagnostics"]["wallet"]["entrypointId"],
-        "0x19846d750fad81d6"
-    );
-    assert_eq!(
-        stdout["data"]["diagnostics"]["wallet"]["entrypointSource"],
-        "legacy_default"
-    );
+    assert_eq!(stdout["data"]["execution"]["result"], "fault");
+    assert_eq!(stdout["data"]["walletEntrypoint"], "0x19846d750fad81d6");
+    assert_eq!(stdout["data"]["walletEntrypointSource"], "legacy_default");
 }
 
 #[test]
@@ -10630,11 +10646,8 @@ fn call_live_human_fails_after_printing_receipt_context() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_deterministic_error_call_receipt(42),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_deterministic_error_call_receipt(42));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
@@ -10650,19 +10663,16 @@ fn call_live_human_fails_after_printing_receipt_context() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("warning: Call failed with a deterministic execution fault"));
-    assert!(stderr.contains(&format!("contract: {contract}")));
-    let tx_hash = stderr
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("tx: "))
-        .expect("transaction diagnostic should contain its hash");
-    assert!(thruput_encoding::decode_fixed::<32>(tx_hash).is_ok());
-    assert!(stderr.contains("height: 42"));
-    assert!(stderr.contains("gas used: 1500"), "stderr: {stderr}");
-    assert!(stderr.contains(&format!(
-        "wallet: {}",
-        thruput_encoding::encode(&[0xaa; 32])
-    )));
+    assert!(stderr.contains("Call failed"), "{stderr}");
+    assert!(stderr.contains(&contract), "{stderr}");
+    assert!(stderr.contains("Transaction"), "{stderr}");
+    assert!(stderr.contains("Block height"), "{stderr}");
+    assert!(stderr.contains("42"), "{stderr}");
+    assert!(stderr.contains("1500"), "{stderr}");
+    assert!(
+        stderr.contains(&thruput_encoding::encode(&[0xaa; 32])),
+        "{stderr}"
+    );
 }
 
 fn write_counter_with_exception_spec(project: &std::path::Path, selector: u64) {
@@ -10733,11 +10743,8 @@ fn call_native_decodes_forwarded_aborts_and_preserves_unknown_bytes() {
             let project = tmp.path();
             let config_home = project.join("config-home");
             generate_key_public_key(&config_home, "alice");
-            let (rpc_url, rpc_server) = spawn_transaction_rpc(
-                42,
-                sample_reverted_call_receipt(42, abort),
-                DevDetailRpcResponse::MethodNotFound,
-            );
+            let (rpc_url, rpc_server) =
+                spawn_transaction_rpc(42, sample_reverted_call_receipt(42, abort));
             // An unsaved single-key identity uses the native wallet path.
             std::fs::write(project.join("thruput.toml"), format!(
                 "default_profile = 'default'\n[profile.default]\ndefault_key = 'alice'\nrpc_url = '{rpc_url}'\nnetwork_hash = '{TEST_NETWORK_HASH}'\n"
@@ -10766,10 +10773,10 @@ fn call_native_decodes_forwarded_aborts_and_preserves_unknown_bytes() {
                 let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
                 assert_eq!(report["error"]["code"], "transaction_reverted");
                 assert_eq!(
-                    report["data"]["diagnostics"]["wallet"]["entrypointSource"],
+                    report["data"]["walletEntrypointSource"],
                     "native_default_wallet"
                 );
-                assert_eq!(report["data"]["abortData"], abort);
+                assert_eq!(report["data"]["execution"]["abortData"], abort);
                 if let Some(value) = &expected {
                     assert_eq!(&report["data"]["abortValue"], value);
                     assert!(report["data"].get("abortDecodeError").is_none());
@@ -10780,16 +10787,13 @@ fn call_native_decodes_forwarded_aborts_and_preserves_unknown_bytes() {
             } else {
                 assert!(output.stdout.is_empty());
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                assert!(stderr.contains("Call reverted"), "{stderr}");
+                assert!(stderr.contains("Call failed"), "{stderr}");
                 if let Some(value) = &expected {
-                    assert!(
-                        stderr.contains(&format!("abort value: {value}")),
-                        "{stderr}"
-                    );
+                    assert!(stderr.contains(&format!("Abort: {value}")), "{stderr}");
                     assert!(!stderr.contains("abort data:"), "{stderr}");
                 } else {
-                    assert!(stderr.contains(&format!("abort data: {abort}")), "{stderr}");
-                    assert!(stderr.contains("abort decode error:"), "{stderr}");
+                    assert!(stderr.contains(abort), "{stderr}");
+                    assert!(stderr.contains("warning:"), "{stderr}");
                 }
             }
         }
@@ -10804,11 +10808,8 @@ fn call_live_json_decodes_library_abort() {
     std::fs::create_dir_all(&project).unwrap();
 
     let abort_hex = library_abort_hex("NonNegativeIntUnderflow");
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_reverted_call_receipt(42, &abort_hex),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, &abort_hex));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
@@ -10836,8 +10837,8 @@ fn call_live_json_decodes_library_abort() {
     assert_eq!(stdout["error"]["code"], "transaction_reverted");
     assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert!(stdout["data"].get("abort_exception").is_none());
-    assert_eq!(stdout["data"]["status"]["result"], "reverted");
-    assert_eq!(stdout["data"]["abortData"], abort_hex);
+    assert_eq!(stdout["data"]["execution"]["result"], "abort");
+    assert_eq!(stdout["data"]["execution"]["abortData"], abort_hex);
     assert_eq!(stdout["data"]["abortException"], "LibraryExn");
     assert_eq!(stdout["data"]["abortExceptionCrate"], "thruput-sdk");
     assert_eq!(stdout["data"]["abortExceptionVersion"], "1");
@@ -10862,11 +10863,8 @@ fn call_live_json_decodes_erc20_permit_abort() {
     ))
     .expect("bug: ERC20 permit exception should encode");
     let abort_hex = format!("0x{}", hex::encode(&abort_data));
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_reverted_call_receipt(42, &abort_hex),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, &abort_hex));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
@@ -10892,8 +10890,8 @@ fn call_live_json_decodes_erc20_permit_abort() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_reverted");
-    assert_eq!(stdout["data"]["status"]["result"], "reverted");
-    assert_eq!(stdout["data"]["abortData"], abort_hex);
+    assert_eq!(stdout["data"]["execution"]["result"], "abort");
+    assert_eq!(stdout["data"]["execution"]["abortData"], abort_hex);
     assert_eq!(stdout["data"]["abortException"], "ERC20PermitError");
     assert_eq!(
         stdout["data"]["abortExceptionCrate"],
@@ -10912,11 +10910,8 @@ fn call_live_human_prints_decoded_abort() {
     std::fs::create_dir_all(&project).unwrap();
 
     let abort_hex = library_abort_hex("NonNegativeIntUnderflow");
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_reverted_call_receipt(42, &abort_hex),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, &abort_hex));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
@@ -10932,19 +10927,12 @@ fn call_live_human_prints_decoded_abort() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("warning: Call reverted\n"),
-        "stderr: {stderr}"
-    );
+    assert!(stderr.contains("Call failed"), "stderr: {stderr}");
     // The raw buffer is elided when it decodes, like the success path's
     // return data.
     assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
     assert!(
-        stderr.contains("abort type: LibraryExn (thruput-sdk, v1)"),
-        "stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("abort value: {\"case\":\"NonNegativeIntUnderflow\"}"),
+        stderr.contains("Abort: {\"case\":\"NonNegativeIntUnderflow\"}"),
         "stderr: {stderr}"
     );
 }
@@ -10956,11 +10944,7 @@ fn call_live_json_omits_abort_fields_on_success() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_call_receipt(42),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, sample_call_receipt(42));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
@@ -10986,7 +10970,7 @@ fn call_live_json_omits_abort_fields_on_success() {
     rpc_server.join().unwrap();
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["data"]["status"]["result"], "ok");
+    assert_eq!(stdout["data"]["execution"]["result"], "return");
     assert!(stdout["data"].get("abortException").is_none());
     assert!(stdout["data"].get("abortValue").is_none());
     assert!(stdout["data"].get("abortDecodeError").is_none());
@@ -11001,11 +10985,8 @@ fn call_live_json_reports_abort_decode_error() {
 
     // Selector 0 is reserved and matches no exception; the payload byte
     // is parsed off after the selector and reported separately.
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_reverted_call_receipt(42, "0x00ab"),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, "0x00ab"));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
@@ -11028,7 +11009,7 @@ fn call_live_json_reports_abort_decode_error() {
     assert!(!output.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
-    assert_eq!(stdout["data"]["abortData"], "0x00ab");
+    assert_eq!(stdout["data"]["execution"]["abortData"], "0x00ab");
     assert_eq!(stdout["data"]["abortValue"], serde_json::Value::Null);
     let decode_error = stdout["data"]["abortDecodeError"].as_str().unwrap();
     assert!(
@@ -11046,11 +11027,8 @@ fn call_live_human_reports_abort_decode_error() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(
-        42,
-        sample_reverted_call_receipt(42, "0x00ab"),
-        DevDetailRpcResponse::MethodNotFound,
-    );
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, "0x00ab"));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
@@ -11065,9 +11043,9 @@ fn call_live_human_reports_abort_decode_error() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("abort data: 0x00ab"), "stderr: {stderr}");
+    assert!(stderr.contains("0x00ab"), "stderr: {stderr}");
     assert!(
-        stderr.contains("abort decode error: abort selector 0x0000000000000000"),
+        stderr.contains("abort selector 0x0000000000000000"),
         "stderr: {stderr}"
     );
 }
@@ -11756,13 +11734,15 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "tx.show");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["profile"], "devnet");
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["txHash"], hash);
     assert_eq!(stdout["data"]["status"]["status"], "committed");
-    assert_eq!(stdout["data"]["status"]["height"], "42");
-    assert_eq!(stdout["data"]["receipt"], receipt);
+    assert_eq!(stdout["data"]["status"]["blockHeight"], "42");
+    assert_eq!(stdout["data"]["receipt"], native_receipt_fixture(receipt));
+    let mut event = event;
+    native_event_fixture(&mut event);
     assert_eq!(stdout["data"]["receipt"]["events"][0], event);
 }
 
@@ -11786,7 +11766,7 @@ fn tx_show_committed_height_handles_indexer_catching_up() {
             let (rpc_url, rpc_server) = spawn_tx_show_rpc(
                 &hash,
                 TxShowRpcResponse::Result(
-                    serde_json::json!({"status": "committed", "height": "42"}),
+                    serde_json::json!({"status": "committed", "blockHeight": "42"}),
                 ),
                 Some(TxShowRpcResponse::Result(receipt.clone())),
             );
@@ -11809,15 +11789,15 @@ fn tx_show_committed_height_handles_indexer_catching_up() {
                 let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
                 assert_eq!(
                     stdout["data"]["status"],
-                    serde_json::json!({"status": "committed", "height": "42"})
+                    serde_json::json!({"status": "committed", "blockHeight": "42"})
                 );
-                assert_eq!(stdout["data"]["receipt"], receipt);
+                assert_eq!(stdout["data"]["receipt"], native_receipt_fixture(receipt));
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                assert!(stderr.contains("status: committed"));
-                assert!(stderr.contains("height: 42"));
+                assert!(stderr.contains(r#""status":"committed""#));
+                assert!(stderr.contains(r#""blockHeight":"42""#));
                 if receipt_available {
-                    assert!(stderr.contains("receipt height: 42"));
+                    assert!(stderr.contains("receipt block height: 42"));
                 } else {
                     assert!(stderr.contains("receipt: unavailable"));
                 }
@@ -11914,25 +11894,23 @@ fn tx_show_human_output_includes_raw_committed_receipt_data() {
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("status: committed"));
-    assert!(stderr.contains("height: 43"));
-    assert!(stderr.contains(&format!("receipt hash: {hash}")));
-    assert!(stderr.contains("receipt height: 43"));
-    assert!(stderr.contains(r"execution: reverted: bad\ncall"));
-    assert!(stderr.contains(r#"event: {"contractAddress""#));
-    assert!(stderr.contains("return data: 0xccdd"));
+    assert!(stderr.contains(r#""status":"committed""#));
+    assert!(stderr.contains(&format!("hash: {hash}")));
+    assert!(stderr.contains("receipt block height: 43"));
+    assert!(stderr.contains(r#""result":"abort""#));
+    assert!(stderr.contains(r#"event: {"address""#));
     assert!(stderr.contains("abort data: 0xeeff"));
+    assert!(!stderr.contains("return data:"));
 }
 
 #[test]
-fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
+fn tx_show_known_statuses_still_read_receipts() {
     let hash = thruput_encoding::encode(&[0xbc; 32]);
     let statuses = [
         serde_json::json!({ "status": "pending" }),
-        serde_json::json!({ "status": "invalid", "reason": "bad transaction" }),
         serde_json::json!({
             "status": "recentFailure",
-            "attemptHeight": "17",
+            "attemptBlockHeight": "17",
             "cause": { "kind": "dbConflict", "conflict": {
                 "address": thruput_encoding::encode(&[0x11; 32]),
                 "key": "0xaabb",
@@ -11942,15 +11920,10 @@ fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
         serde_json::json!({ "status": "retry", "error": { "source": "scheduler", "code": 1 } }),
         serde_json::json!({ "status": "dropped", "error": { "source": "auth", "code": 2 } }),
         serde_json::json!({ "status": "unknown" }),
-        serde_json::json!({ "status": "futureStatus", "futureField": 1 }),
     ];
 
     for (index, status) in statuses.into_iter().enumerate() {
-        let expected_status = if status["status"] == "futureStatus" {
-            serde_json::json!({ "status": "other" })
-        } else {
-            status.clone()
-        };
+        let expected_status = status.clone();
         let tmp = TempDir::new().unwrap();
         let (rpc_url, rpc_server) =
             spawn_tx_show_rpc(&hash, TxShowRpcResponse::Result(status), None);
@@ -11998,11 +11971,11 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
     assert_eq!(
         stdout["data"],
         serde_json::json!({
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "profile": "default",
             "rpcUrl": rpc_url,
             "txHash": hash,
-            "status": { "status": "committed", "height": "51" },
+            "status": { "status": "committed", "blockHeight": "51" },
             "receipt": null,
         })
     );
@@ -12039,11 +12012,8 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
     assert_eq!(
         stdout["data"]["receipt"],
         serde_json::json!({
-            "txHash": hash,
-            "height": "52",
-            "gasUsed": "1500",
-            "status": { "result": "ok" },
-            "events": [],
+            "transactionHash":hash, "blockHeight":"52", "gasUsed":"1500",
+            "execution":{"result":"return","returnData":"0x"}, "events":[],
         })
     );
     assert!(stdout["data"]["receipt"].get("returnData").is_none());
@@ -12063,7 +12033,7 @@ fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
         (
             serde_json::json!({ "status": "unknown" }),
             None,
-            "status: unknown (not found in scheduler outcomes or indexer)",
+            r#""status":"unknown""#,
             "status: invalid",
         ),
     ] {
@@ -12083,8 +12053,8 @@ fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
         assert!(stderr.contains(expected));
         assert!(!stderr.contains(forbidden));
         if expected == "receipt: unavailable" {
-            assert!(stderr.contains("status: committed"));
-            assert!(stderr.contains("height: 53"));
+            assert!(stderr.contains(r#""status":"committed""#));
+            assert!(stderr.contains(r#""blockHeight":"53""#));
         }
     }
 }
@@ -12120,7 +12090,7 @@ fn tx_show_uses_profile_rpc_url_without_cli_override() {
 #[test]
 fn tx_show_rejects_receipt_hash_and_height_mismatches() {
     let hash = thruput_encoding::encode(&[0xde; 32]);
-    for (name, receipt) in [
+    for (_name, receipt) in [
         (
             "hash",
             serde_json::json!({
@@ -12161,18 +12131,18 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+        assert_eq!(stderr["error"]["code"], "native_rpc_failure");
         assert!(
             stderr["error"]["message"]
                 .as_str()
                 .unwrap()
-                .contains(&format!("receipt {name}"))
+                .contains("inconsistent transaction receipt")
         );
     }
 }
 
 #[test]
-fn tx_show_maps_only_unsupported_rpc_codes_to_capability_error() {
+fn tx_show_preserves_rpc_error_codes_without_recovery_classification() {
     let hash = thruput_encoding::encode(&[0xef; 32]);
     for code in [-32601, -32052] {
         let tmp = TempDir::new().unwrap();
@@ -12190,15 +12160,12 @@ fn tx_show_maps_only_unsupported_rpc_codes_to_capability_error() {
 
         assert!(!output.status.success());
         let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(stderr["error"]["code"], "rpc_capability_unsupported");
-        assert_eq!(stderr["error"]["details"]["method"], "getTransactionStatus");
-        assert!(
-            stderr["error"]["hint"]
-                .as_str()
-                .unwrap()
-                .contains("full local devnode")
+        assert_eq!(stderr["error"]["code"], "native_rpc_failure");
+        assert_eq!(stderr["error"]["details"]["rpcError"]["code"], code);
+        assert_eq!(
+            stderr["error"]["details"]["rpcError"]["message"],
+            "unsupported\nmethod"
         );
-        assert!(!stderr["error"]["message"].as_str().unwrap().contains('\n'));
     }
 
     for code in [-32602, -32050, -32051, -32053, -32099] {
@@ -12215,7 +12182,7 @@ fn tx_show_maps_only_unsupported_rpc_codes_to_capability_error() {
             .unwrap();
         rpc_server.join().unwrap();
         let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+        assert_eq!(stderr["error"]["code"], "native_rpc_failure");
     }
 
     let output = thruput()
@@ -12230,7 +12197,7 @@ fn tx_show_maps_only_unsupported_rpc_codes_to_capability_error() {
         .output()
         .unwrap();
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+    assert_eq!(stderr["error"]["code"], "native_rpc_failure");
 }
 
 #[test]
@@ -12319,11 +12286,8 @@ fn tx_show_receipt_rpc_errors_remain_failures() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "rpc_capability_unsupported");
-    assert_eq!(
-        stderr["error"]["details"]["method"],
-        "getTransactionReceipt"
-    );
+    assert_eq!(stderr["error"]["code"], "native_rpc_failure");
+    assert_eq!(stderr["error"]["details"]["rpcError"]["code"], -32052);
 }
 
 #[test]
@@ -12392,11 +12356,10 @@ fn tx_show_human_output_escapes_untrusted_status_text() {
         .unwrap();
     rpc_server.join().unwrap();
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("status: invalid"));
-    assert!(stderr.contains(r"bad\nreason\u{1b}[31m\u{202e}spoof"));
+    assert!(stderr.contains("unsupported getTransactionStatus"));
     assert!(!stderr.contains('\u{1b}'));
     assert!(!stderr.contains('\u{202e}'));
 }
@@ -12600,13 +12563,14 @@ fn tx_list_rejects_page_larger_than_requested_limit() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+    assert_eq!(stderr["error"]["code"], "native_rpc_failure");
     assert!(
         stderr["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("returned 2 references for requested limit 1")
+            .contains("native root history exceeded the requested page limit")
     );
+    assert_eq!(stderr["error"]["details"]["requestedLimit"], 1);
 }
 
 #[test]
@@ -12631,16 +12595,7 @@ fn tx_list_accepts_empty_exhausted_page() {
     );
 
     let output = thruput()
-        .args([
-            "--json",
-            "tx",
-            "list",
-            &address,
-            "--cursor",
-            "0x",
-            "--rpc-url",
-            &rpc_url,
-        ])
+        .args(["--json", "tx", "list", &address, "--rpc-url", &rpc_url])
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -12842,7 +12797,7 @@ fn tx_list_rejects_address_resolution_failures_before_rpc() {
 }
 
 #[test]
-fn tx_list_classifies_capability_and_other_rpc_errors() {
+fn tx_list_preserves_rpc_errors() {
     let address = thruput_encoding::encode(&[0x82; 32]);
     let query = serde_json::json!({
         "address": address,
@@ -12851,13 +12806,7 @@ fn tx_list_classifies_capability_and_other_rpc_errors() {
         "cursor": "0x",
         "limit": 50,
     });
-    for (code, expected) in [
-        (-32601, "rpc_capability_unsupported"),
-        (-32052, "rpc_capability_unsupported"),
-        (-32050, "rpc_method_failed"),
-        (-32051, "rpc_method_failed"),
-        (-32053, "rpc_method_failed"),
-    ] {
+    for code in [-32601, -32052, -32050, -32051, -32053] {
         let tmp = TempDir::new().unwrap();
         let (rpc_url, rpc_server) = spawn_tx_list_rpc(
             query.clone(),
@@ -12872,19 +12821,12 @@ fn tx_list_classifies_capability_and_other_rpc_errors() {
 
         assert!(!output.status.success());
         let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(stderr["error"]["code"], expected);
-        if expected == "rpc_capability_unsupported" {
-            assert_eq!(
-                stderr["error"]["details"]["method"],
-                "getTransactionsByAddress"
-            );
-            assert!(
-                stderr["error"]["hint"]
-                    .as_str()
-                    .unwrap()
-                    .contains("full local devnode")
-            );
-        }
+        assert_eq!(stderr["error"]["code"], "native_rpc_failure");
+        assert_eq!(stderr["error"]["details"]["rpcError"]["code"], code);
+        assert_eq!(
+            stderr["error"]["details"]["rpcError"]["message"],
+            "mock list error"
+        );
     }
 }
 
@@ -13818,10 +13760,10 @@ fn events_list_rejects_page_larger_than_requested_limit() {
 
     assert!(!output.status.success());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+    assert_eq!(stderr["error"]["code"], "native_rpc_failure");
     assert_eq!(
         stderr["error"]["message"],
-        "getEvents failed: invalid response: returned 2 events for requested limit 1"
+        "native RPC: getEvents failed: invalid response: returned 2 events for requested limit 1"
     );
 }
 
@@ -13833,7 +13775,7 @@ fn events_list_rejects_oversized_event_shapes() {
         (
             vec![topic.clone(); 4],
             format!("0x{}", "a3".repeat(1025)),
-            "event at height 12 sequence 4 returned 4 topics; maximum is 3".to_owned(),
+            "at most three event topics".to_owned(),
         ),
         (
             vec![],
@@ -14103,13 +14045,9 @@ fn events_list_human_output_distinguishes_empty_page_states() {
 }
 
 #[test]
-fn events_list_classifies_capability_and_ordinary_rpc_errors() {
+fn events_list_preserves_rpc_errors() {
     let contract = thruput_encoding::encode(&[0xc1; 32]);
-    for (code, expected_code) in [
-        (-32601, "rpc_capability_unsupported"),
-        (-32052, "rpc_capability_unsupported"),
-        (-32050, "rpc_method_failed"),
-    ] {
+    for code in [-32601, -32052, -32050] {
         let tmp = TempDir::new().unwrap();
         let (rpc_url, rpc_server) = spawn_events_rpc(
             serde_json::json!({
@@ -14134,12 +14072,12 @@ fn events_list_classifies_capability_and_ordinary_rpc_errors() {
 
         assert!(!output.status.success());
         let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(stderr["error"]["code"], expected_code);
-        if expected_code == "rpc_capability_unsupported" {
-            assert_eq!(stderr["error"]["details"]["method"], "getEvents");
-        } else {
-            assert!(stderr["error"]["details"].is_null());
-        }
+        assert_eq!(stderr["error"]["code"], "native_rpc_failure");
+        assert_eq!(stderr["error"]["details"]["rpcError"]["code"], code);
+        assert_eq!(
+            stderr["error"]["details"]["rpcError"]["message"],
+            "mock event error"
+        );
     }
 }
 
@@ -14709,6 +14647,69 @@ enum TxListRpcResponse {
     Error(i32, &'static str),
 }
 
+fn native_history_query(mut query: serde_json::Value) -> serde_json::Value {
+    let cursor = query.as_object_mut().unwrap().remove("cursor").unwrap();
+    let order = query.as_object_mut().unwrap().remove("order").unwrap();
+    let anchor = query.as_object_mut().unwrap().remove("anchor").unwrap();
+    if cursor == "0x" {
+        query["start"] = serde_json::json!({"order":order,"anchor":anchor});
+    } else {
+        query["cursor"] = cursor;
+    }
+    if let Some(filters) = query
+        .get_mut("filters")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for filter in filters {
+            if let Some(addresses) = filter.as_object_mut().unwrap().remove("contractAddresses") {
+                filter["addresses"] = addresses;
+            }
+        }
+    }
+    query
+}
+
+fn native_history_page(mut page: serde_json::Value) -> serde_json::Value {
+    for (old, new) in [
+        ("refs", "transactions"),
+        ("latestBlock", "latestIndexedBlockHeight"),
+        ("oldestBlock", "oldestIndexedBlockHeight"),
+        ("cursor", "nextCursor"),
+    ] {
+        if let Some(value) = page.as_object_mut().unwrap().remove(old) {
+            page[new] = if old == "cursor" && value == "0x" {
+                serde_json::Value::Null
+            } else {
+                value
+            };
+        }
+    }
+    for field in ["transactions", "events"] {
+        if let Some(entries) = page
+            .get_mut(field)
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for entry in entries {
+                for (old, new) in [("txHash", "transactionHash"), ("height", "blockHeight")] {
+                    if let Some(value) = entry.as_object_mut().unwrap().remove(old) {
+                        entry[new] = value;
+                    }
+                }
+                if let Some(event) = entry.get_mut("event") {
+                    native_event_fixture(event);
+                }
+            }
+        }
+    }
+    page
+}
+
+fn native_event_fixture(event: &mut serde_json::Value) {
+    if let Some(address) = event.as_object_mut().unwrap().remove("contractAddress") {
+        event["address"] = address;
+    }
+}
+
 fn spawn_tx_list_rpc(
     expected_query: serde_json::Value,
     response: TxListRpcResponse,
@@ -14720,11 +14721,11 @@ fn spawn_tx_list_rpc(
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) =
             read_jsonrpc_request(&listener, deadline, "getTransactionsByAddress");
-        assert_eq!(request["method"], "groundhog_getTransactionsByAddress");
-        assert_eq!(request["params"], serde_json::json!([expected_query]));
+        assert_eq!(request["method"], "getTransactionsByRootAddress");
+        assert_eq!(request["params"], native_history_query(expected_query));
         match response {
             TxListRpcResponse::Result(result) => {
-                send_jsonrpc_response(stream, &request["id"], result);
+                send_jsonrpc_response(stream, &request["id"], native_history_page(result));
             }
             TxListRpcResponse::Error(code, message) => {
                 send_jsonrpc_error_response(stream, &request["id"], code, message);
@@ -14751,11 +14752,11 @@ fn spawn_events_rpc(
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getEvents");
-        assert_eq!(request["method"], "groundhog_getEvents");
-        assert_eq!(request["params"], serde_json::json!([expected_query]));
+        assert_eq!(request["method"], "getEvents");
+        assert_eq!(request["params"], native_history_query(expected_query));
         match response {
             EventRpcResponse::Result(result) => {
-                send_jsonrpc_response(stream, &request["id"], result);
+                send_jsonrpc_response(stream, &request["id"], native_history_page(result));
             }
             EventRpcResponse::Error(code, message) => {
                 send_jsonrpc_error_response(stream, &request["id"], code, message);
@@ -14784,16 +14785,31 @@ fn spawn_tx_show_rpc(
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionStatus");
-        assert_eq!(request["method"], "groundhog_getTransactionStatus");
-        assert_eq!(request["params"], serde_json::json!([tx_hash]));
+        assert_eq!(request["method"], "getTransactionStatus");
+        assert_eq!(
+            request["params"],
+            serde_json::json!({"transactionHash":tx_hash})
+        );
+        let read_receipt = matches!(&status, TxShowRpcResponse::Result(value) if matches!(value["status"].as_str(), Some("pending" | "committed" | "retry" | "dropped" | "recentFailure" | "unknown")));
         send_tx_show_response(stream, &request["id"], status);
 
-        if let Some(receipt) = receipt {
+        if read_receipt {
+            let receipt = receipt.unwrap_or(TxShowRpcResponse::Result(serde_json::Value::Null));
             let (stream, request) =
                 read_jsonrpc_request(&listener, deadline, "getTransactionReceipt");
-            assert_eq!(request["method"], "groundhog_getTransactionReceipt");
-            assert_eq!(request["params"], serde_json::json!([tx_hash]));
-            send_tx_show_response(stream, &request["id"], receipt);
+            assert_eq!(request["method"], "getTransactionReceipt");
+            assert_eq!(
+                request["params"],
+                serde_json::json!({"transactionHash":tx_hash})
+            );
+            match receipt {
+                TxShowRpcResponse::Result(value) => {
+                    send_jsonrpc_response(stream, &request["id"], native_receipt_fixture(value));
+                }
+                error @ TxShowRpcResponse::Error(..) => {
+                    send_tx_show_response(stream, &request["id"], error);
+                }
+            }
         }
         assert_no_follow_up_rpc(&listener);
     });
@@ -14806,7 +14822,17 @@ fn send_tx_show_response(
     response: TxShowRpcResponse,
 ) {
     match response {
-        TxShowRpcResponse::Result(result) => send_jsonrpc_response(stream, request_id, result),
+        TxShowRpcResponse::Result(mut result) => {
+            if let Some(fields) = result.as_object_mut() {
+                if let Some(height) = fields.remove("height") {
+                    fields.insert("blockHeight".into(), height);
+                }
+                if let Some(height) = fields.remove("attemptHeight") {
+                    fields.insert("attemptBlockHeight".into(), height);
+                }
+            }
+            send_jsonrpc_response(stream, request_id, result);
+        }
         TxShowRpcResponse::Error(code, message) => {
             send_jsonrpc_error_response(stream, request_id, code, message);
         }
@@ -14854,6 +14880,21 @@ fn read_jsonrpc_request(
     let mut body = vec![0; content_length];
     reader.read_exact(&mut body).unwrap();
     let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    if request["method"] == "getVersionInfo" {
+        assert_eq!(request["params"], serde_json::json!({}));
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "wireFormat":"14.0.0", "implementation":"fixture",
+                "supportedMethods":["getVersionInfo","getNetworkInfo","getChainTip","getChainConfig",
+                    "getBalance","getStorage","simulateInvocation","sendTransaction",
+                    "getTransactionStatus","getTransactionReceipt","getTransactionsByRootAddress",
+                    "getTransactionsByBlock","getEvents","faucet_requestAirdrop","dev_fundAccount"]
+            }),
+        );
+        return read_jsonrpc_request(listener, deadline, label);
+    }
     (stream, request)
 }
 
@@ -14943,7 +14984,7 @@ fn spawn_network_info_rpc(network_hash: &str) -> (String, thread::JoinHandle<()>
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
-        assert_eq!(request["method"], "groundhog_networkInfo");
+        assert_eq!(request["method"], "getNetworkInfo");
         send_jsonrpc_response(
             stream,
             &request["id"],
@@ -15014,7 +15055,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
-        if request["method"] == "groundhog_networkInfo" {
+        while request["method"] == "getNetworkInfo" {
             send_jsonrpc_response(
                 stream,
                 &request["id"],
@@ -15025,13 +15066,13 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
             );
             (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         }
-        assert_eq!(request["method"], "groundhog_chainTip");
+        assert_eq!(request["method"], "getChainTip");
 
         send_jsonrpc_response(
             stream,
             &request["id"],
             serde_json::json!({
-                "height": height.to_string(),
+                "blockHeight": height.to_string(),
                 "blockHash": "1".repeat(32),
             }),
         );
@@ -15042,7 +15083,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
             match listener.accept() {
                 Ok(_) => {
                     panic!(
-                        "unexpected additional RPC request after groundhog_chainTip; dry-run \
+                        "unexpected additional RPC request after getChainTip; dry-run \
                          should not broadcast"
                     );
                 }
@@ -15061,6 +15102,14 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
 }
 
 fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
+    spawn_airdrop_rpc_outcome(recipient, None)
+}
+
+// None is an immediate success; Some selects pending with/without a known hash.
+fn spawn_airdrop_rpc_outcome(
+    recipient: &str,
+    pending_hash: Option<bool>,
+) -> (String, thread::JoinHandle<()>) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -15068,7 +15117,7 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
-        assert_eq!(request["method"], "groundhog_networkInfo");
+        assert_eq!(request["method"], "getNetworkInfo");
         send_jsonrpc_response(
             stream,
             &request["id"],
@@ -15078,9 +15127,19 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
             }),
         );
 
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getNetworkInfo");
+        assert_eq!(request["method"], "getNetworkInfo");
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "networkHash": TEST_NETWORK_HASH,
+                "genesisHash": thruput_encoding::encode(&[0x42;32]),
+            }),
+        );
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "requestAirdrop");
-        assert_eq!(request["method"], "groundhog_requestAirdrop");
-        let mut fields = request["params"][0]
+        assert_eq!(request["method"], "faucet_requestAirdrop");
+        let mut fields = request["params"]
             .as_object()
             .unwrap()
             .keys()
@@ -15088,24 +15147,36 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
             .collect::<Vec<_>>();
         fields.sort_unstable();
         assert_eq!(fields, ["clientNonce", "recipient"]);
-        assert_eq!(request["params"][0]["recipient"], recipient);
+        assert_eq!(request["params"]["recipient"], recipient);
         assert_eq!(
-            request["params"][0]["clientNonce"].as_str().map(str::len),
+            request["params"]["clientNonce"].as_str().map(str::len),
             Some(34)
         );
-        send_jsonrpc_response(
-            stream,
-            &request["id"],
-            serde_json::json!({
-                "attemptStatus": "succeeded",
-                "recipient": recipient,
-                "rawAmount": "25000000",
-                "txHash": thruput_encoding::encode(&[0x22; 32]),
-                "height": "42",
-                "gasUsed": "1500",
-                "status": { "result": "ok" },
-            }),
-        );
+        let hash = thruput_encoding::encode(&[0x22; 32]);
+        let response = match pending_hash {
+            None => serde_json::json!({"attemptStatus":"succeeded","recipient":recipient,
+                "rawAmount":"25000000","transactionHash":hash,"blockHeight":"42",
+                "execution":{"result":"return","returnData":"0x"}}),
+            Some(true) => serde_json::json!({"attemptStatus":"pending","recipient":recipient,
+                "rawAmount":"25000000","transactionHash":hash,"retryAfterSeconds":"2"}),
+            Some(false) => serde_json::json!({"attemptStatus":"pending","recipient":recipient,
+                "rawAmount":"25000000","retryAfterSeconds":"2"}),
+        };
+        send_jsonrpc_response(stream, &request["id"], response);
+        if pending_hash == Some(true) {
+            let (stream, request) =
+                read_jsonrpc_request(&listener, deadline, "getTransactionReceipt");
+            assert_eq!(request["method"], "getTransactionReceipt");
+            assert_eq!(request["params"]["transactionHash"], hash);
+            send_jsonrpc_response(
+                stream,
+                &request["id"],
+                serde_json::json!({
+                    "transactionHash":hash, "blockHeight":"42", "gasUsed":"1", "events":[],
+                    "execution":{"result":"return","returnData":"0x"},
+                }),
+            );
+        }
         assert_no_follow_up_rpc(&listener);
     });
     (format!("http://{addr}"), handle)
@@ -15187,11 +15258,39 @@ fn serve_local_funding_transaction_with_receipt_failure(
     recipient: &str,
     fail_receipt: bool,
 ) -> thruput_xdr::transaction::SignedTransaction {
+    serve_local_funding_transaction_outcome(
+        listener,
+        deadline,
+        faucet,
+        recipient,
+        fail_receipt,
+        None,
+    )
+}
+
+fn serve_local_funding_transaction_outcome(
+    listener: &TcpListener,
+    deadline: Instant,
+    faucet: &str,
+    recipient: &str,
+    fail_receipt: bool,
+    invalid_evidence: Option<&str>,
+) -> thruput_xdr::transaction::SignedTransaction {
+    let (stream, request) = read_jsonrpc_request(listener, deadline, "getNetworkInfo");
+    assert_eq!(request["method"], "getNetworkInfo");
+    send_jsonrpc_response(
+        stream,
+        &request["id"],
+        serde_json::json!({
+            "networkHash": TEST_NETWORK_HASH,
+            "genesisHash": thruput_encoding::encode(&[0x42;32]),
+        }),
+    );
     let (stream, request) = read_jsonrpc_request(listener, deadline, "fundAccount");
-    assert_eq!(request["method"], "groundhog_fundAccount");
-    assert_eq!(request["params"][0]["faucet"], faucet);
-    assert_eq!(request["params"][0]["recipient"], recipient);
-    assert_eq!(request["params"][0]["rawAmount"], "100000000");
+    assert_eq!(request["method"], "dev_fundAccount");
+    assert_eq!(request["params"]["faucet"], faucet);
+    assert_eq!(request["params"]["recipient"], recipient);
+    assert_eq!(request["params"]["rawAmount"], "100000000");
     let sponsor = thruput_signing::derive_default_dev_account_signer(0);
     let network = thruput_json_rpc_types::NetworkHashText::try_from(TEST_NETWORK_HASH)
         .unwrap()
@@ -15225,21 +15324,50 @@ fn serve_local_funding_transaction_with_receipt_failure(
             .unwrap()
             .as_ref(),
     );
+    if invalid_evidence == Some("error") {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "jsonrpc":"2.0", "id":request["id"], "error": { "code":-32031,
+                "message":"retained funding", "data": {"kind":"localFundingUnresolved",
+                    "transactionHash":tx_hash, "signedTransaction":"0x00" } },
+        }))
+        .unwrap();
+        let mut stream = stream;
+        write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",body.len()).unwrap();
+        stream.write_all(&body).unwrap();
+        stream.flush().unwrap();
+        return signed_tx;
+    }
+    let response_hash = if invalid_evidence == Some("hash") {
+        thruput_encoding::encode(&[0x91; 32])
+    } else {
+        tx_hash.clone()
+    };
+    let signed_bytes = if invalid_evidence == Some("xdr") {
+        "0x00".into()
+    } else {
+        format!("0x{}", hex::encode(xdrs::txs::encode(&signed_tx).unwrap()))
+    };
     send_jsonrpc_response(
         stream,
         &request["id"],
-        serde_json::json!({ "recipient":recipient, "rawAmount":"100000000", "txHash":tx_hash, "signedTransaction":format!("0x{}",hex::encode(xdrs::txs::encode(&signed_tx).unwrap())) }),
+        serde_json::json!({
+            "recipient":recipient, "rawAmount":"100000000", "transactionHash":response_hash,
+            "signedTransaction": signed_bytes,
+        }),
     );
+    if invalid_evidence.is_some() {
+        return signed_tx;
+    }
     let (stream, request) = read_jsonrpc_request(listener, deadline, "getTransactionReceipt");
-    assert_eq!(request["method"], "groundhog_getTransactionReceipt");
-    assert_eq!(request["params"][0], tx_hash);
+    assert_eq!(request["method"], "getTransactionReceipt");
+    assert_eq!(request["params"]["transactionHash"], tx_hash);
     if fail_receipt {
         send_jsonrpc_error_response(stream, &request["id"], -32050, "receipt read unavailable");
     } else {
         send_jsonrpc_response(
             stream,
             &request["id"],
-            serde_json::json!({ "txHash":tx_hash,"height":"43","gasUsed":"1500","status":{"result":"ok"},"events":[] }),
+            serde_json::json!({ "transactionHash":tx_hash,"blockHeight":"43","gasUsed":"1500","execution":{"result":"return","returnData":"0x"},"events":[] }),
         );
     }
     signed_tx
@@ -15254,22 +15382,22 @@ fn serve_balance(
 ) {
     let address = rpc_address_from_hex_fixture(address);
     let (stream, request) = read_jsonrpc_request(listener, deadline, "getBalance");
-    assert_eq!(request["method"], "groundhog_getBalance");
-    assert_eq!(request["params"][0], address);
+    assert_eq!(request["method"], "getBalance");
+    assert_eq!(request["params"]["address"], address);
     send_jsonrpc_response(
         stream,
         &request["id"],
         serde_json::json!({
             "address": address,
             "rawBalance": raw_balance,
-            "height": height.to_string(),
+            "stateBlockHeight": height.to_string(),
         }),
     );
 }
 
 fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
     let (mut stream, mut request) = read_jsonrpc_request(listener, deadline, "chainTip");
-    if request["method"] == "groundhog_networkInfo" {
+    if request["method"] == "getNetworkInfo" {
         send_jsonrpc_response(
             stream,
             &request["id"],
@@ -15277,12 +15405,12 @@ fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
         );
         (stream, request) = read_jsonrpc_request(listener, deadline, "chainTip");
     }
-    assert_eq!(request["method"], "groundhog_chainTip");
+    assert_eq!(request["method"], "getChainTip");
     send_jsonrpc_response(
         stream,
         &request["id"],
         serde_json::json!({
-            "height": height.to_string(),
+            "blockHeight": height.to_string(),
             "blockHash": "1".repeat(32),
         }),
     );
@@ -15301,15 +15429,15 @@ fn spawn_balance_then_chain_tip_rpc(
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
-        assert_eq!(request["method"], "groundhog_getBalance");
-        assert_eq!(request["params"][0], address);
+        assert_eq!(request["method"], "getBalance");
+        assert_eq!(request["params"]["address"], address);
         send_jsonrpc_response(
             stream,
             &request["id"],
             serde_json::json!({
                 "address": address,
                 "rawBalance": raw_balance,
-                "height": height.to_string(),
+                "stateBlockHeight": height.to_string(),
             }),
         );
 
@@ -15371,7 +15499,6 @@ struct TransferRpcMock {
 struct TransferMockRun {
     output: std::process::Output,
     local_hash: String,
-    rpc_url: String,
 }
 
 fn run_transfer_live_mock(mock: TransferRpcMock, json: bool) -> std::process::Output {
@@ -15415,16 +15542,12 @@ fn run_transfer_live_mock_with_rpc_override(
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .env("THRUPUT_TEST_RECEIPT_POLL_ATTEMPTS", "1")
-        .env("THRUPUT_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
+        .env("THRUPUT_TEST_RECEIPT_POLL_INTERVAL_MS", "100")
         .output()
         .unwrap();
     let local_hash = local_hash_rx.recv().unwrap();
     rpc_server.join().unwrap();
-    TransferMockRun {
-        output,
-        local_hash,
-        rpc_url: effective_rpc_url,
-    }
+    TransferMockRun { output, local_hash }
 }
 
 fn run_saved_wallet_transfer_live_mock(
@@ -15461,16 +15584,65 @@ fn run_saved_wallet_transfer_live_mock(
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("THRUPUT_TEST_RECEIPT_POLL_ATTEMPTS", "1")
-        .env("THRUPUT_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
+        .env("THRUPUT_TEST_RECEIPT_POLL_INTERVAL_MS", "100")
         .output()
         .unwrap();
     let local_hash = local_hash_rx.recv().unwrap();
     rpc_server.join().unwrap();
-    TransferMockRun {
-        output,
-        local_hash,
-        rpc_url,
+    TransferMockRun { output, local_hash }
+}
+
+fn read_after_network_check(
+    listener: &TcpListener,
+    deadline: Instant,
+    label: &str,
+) -> (std::net::TcpStream, serde_json::Value) {
+    let (stream, request) = read_jsonrpc_request(listener, deadline, label);
+    if request["method"] == "getNetworkInfo" {
+        assert_eq!(request["params"], serde_json::json!({}));
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({"networkHash":TEST_NETWORK_HASH}),
+        );
+        read_jsonrpc_request(listener, deadline, label)
+    } else {
+        (stream, request)
     }
+}
+
+fn native_receipt_fixture(mut receipt: serde_json::Value) -> serde_json::Value {
+    if receipt.is_null() {
+        return receipt;
+    }
+    for (old, new) in [("txHash", "transactionHash"), ("height", "blockHeight")] {
+        if let Some(value) = receipt.as_object_mut().unwrap().remove(old) {
+            receipt[new] = value;
+        }
+    }
+    let status = receipt.as_object_mut().unwrap().remove("status").unwrap();
+    let returned = receipt
+        .as_object_mut()
+        .unwrap()
+        .remove("returnData")
+        .filter(|v| !v.is_null())
+        .unwrap_or(serde_json::json!("0x"));
+    let aborted = receipt
+        .as_object_mut()
+        .unwrap()
+        .remove("abortData")
+        .filter(|v| !v.is_null())
+        .unwrap_or(serde_json::json!("0x"));
+    receipt["execution"] = match status["result"].as_str() {
+        Some("ok") => serde_json::json!({"result":"return","returnData":returned}),
+        Some("reverted") => serde_json::json!({"result":"abort","abortData":aborted}),
+        Some("deterministicError") => serde_json::json!({"result":"fault"}),
+        _ => status,
+    };
+    for event in receipt["events"].as_array_mut().unwrap() {
+        native_event_fixture(event);
+    }
+    receipt
 }
 
 fn spawn_transfer_rpc(
@@ -15484,7 +15656,7 @@ fn spawn_transfer_rpc(
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
-        if request["method"] == "groundhog_networkInfo" {
+        if request["method"] == "getNetworkInfo" {
             send_jsonrpc_response(
                 stream,
                 &request["id"],
@@ -15492,19 +15664,19 @@ fn spawn_transfer_rpc(
             );
             (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         }
-        assert_eq!(request["method"], "groundhog_chainTip");
+        assert_eq!(request["method"], "getChainTip");
         send_jsonrpc_response(
             stream,
             &request["id"],
             serde_json::json!({
-                "height": "42",
+                "blockHeight": "42",
                 "blockHash": "1".repeat(32),
             }),
         );
 
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "sendRawTransaction");
-        assert_eq!(request["method"], "groundhog_sendRawTransaction");
-        let signed_hex = request["params"][0].as_str().unwrap();
+        let (stream, request) = read_after_network_check(&listener, deadline, "sendTransaction");
+        assert_eq!(request["method"], "sendTransaction");
+        let signed_hex = request["params"]["signedTransaction"].as_str().unwrap();
         let signed_tx = decode_signed_tx(signed_hex);
         let local_hash = thruput_encoding::encode(
             thruput_signing::transaction_hash(&signed_tx.tx)
@@ -15530,15 +15702,20 @@ fn spawn_transfer_rpc(
         );
         assert_eq!(raw_amount, 15_000_000);
 
+        let accepted = matches!(mock.submit, TransferSubmitMock::MatchingHash);
         match mock.submit {
             TransferSubmitMock::MatchingHash => {
-                send_jsonrpc_response(stream, &request["id"], serde_json::json!(local_hash));
+                send_jsonrpc_response(
+                    stream,
+                    &request["id"],
+                    serde_json::json!({"transactionHash":local_hash,"admission":"accepted"}),
+                );
             }
             TransferSubmitMock::MismatchedHash => {
                 send_jsonrpc_response(
                     stream,
                     &request["id"],
-                    serde_json::json!(thruput_encoding::encode(&[0xff; 32])),
+                    serde_json::json!({"transactionHash":thruput_encoding::encode(&[0xff;32]),"admission":"accepted"}),
                 );
             }
             TransferSubmitMock::Error(code) => {
@@ -15550,7 +15727,7 @@ fn spawn_transfer_rpc(
             TransferSubmitMock::DropResponse => drop(stream),
         }
 
-        if let Some(poll) = mock.poll {
+        if let Some(poll) = mock.poll.filter(|_| accepted) {
             serve_transfer_poll(&listener, deadline, &local_hash, poll);
             assert_no_follow_up_rpc(&listener);
         } else {
@@ -15567,8 +15744,8 @@ fn serve_transfer_poll(
     poll: TransferPollMock,
 ) {
     let (stream, request) = read_jsonrpc_request(listener, deadline, "getTransactionReceipt");
-    assert_eq!(request["method"], "groundhog_getTransactionReceipt");
-    assert_eq!(request["params"][0], local_hash);
+    assert_eq!(request["method"], "getTransactionReceipt");
+    assert_eq!(request["params"]["transactionHash"], local_hash);
     match poll {
         TransferPollMock::Receipt {
             status,
@@ -15594,14 +15771,14 @@ fn serve_transfer_poll(
             if let Some(value) = abort_data {
                 receipt["abortData"] = serde_json::json!(value);
             }
-            send_jsonrpc_response(stream, &request["id"], receipt);
+            send_jsonrpc_response(stream, &request["id"], native_receipt_fixture(receipt));
         }
         TransferPollMock::Status(status) => {
             send_jsonrpc_response(stream, &request["id"], serde_json::Value::Null);
             let (stream, request) =
                 read_jsonrpc_request(listener, deadline, "getTransactionStatus");
-            assert_eq!(request["method"], "groundhog_getTransactionStatus");
-            assert_eq!(request["params"][0], local_hash);
+            assert_eq!(request["method"], "getTransactionStatus");
+            assert_eq!(request["params"]["transactionHash"], local_hash);
             send_jsonrpc_response(stream, &request["id"], status);
         }
         TransferPollMock::ReceiptError(code) => {
@@ -15723,16 +15900,16 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
 
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getStorageAt");
-        assert_eq!(request["method"], "groundhog_getStorageAt");
-        assert_eq!(request["params"][0], expected_address);
-        assert_eq!(request["params"][1], expected_key);
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getStorage");
+        assert_eq!(request["method"], "getStorage");
+        assert_eq!(request["params"]["address"], expected_address);
+        assert_eq!(request["params"]["key"], expected_key);
 
         send_jsonrpc_response(
             stream,
             &request["id"],
             serde_json::json!({
-                "blockHeight": "12",
+                "stateBlockHeight": "12",
                 "item": {
                     "kind": "bytestring",
                     "bytes": "0x6c6f63616c2d6e6f64652d73746f72616765",
@@ -15767,8 +15944,8 @@ fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinH
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
-        assert_eq!(request["method"], "groundhog_getBalance");
-        assert_eq!(request["params"][0], expected_address);
+        assert_eq!(request["method"], "getBalance");
+        assert_eq!(request["params"]["address"], expected_address);
 
         send_jsonrpc_response(
             stream,
@@ -15776,7 +15953,7 @@ fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinH
             serde_json::json!({
                 "address": expected_address,
                 "rawBalance": raw_balance,
-                "height": "34",
+                "stateBlockHeight": "34",
             }),
         );
     });
@@ -15870,8 +16047,11 @@ fn spawn_view_rpc_inner_with_events(
     calldata: &str,
     caller: Option<&str>,
     output: serde_json::Value,
-    events: serde_json::Value,
+    mut events: serde_json::Value,
 ) -> (String, thread::JoinHandle<()>) {
+    for event in events.as_array_mut().unwrap() {
+        native_event_fixture(event);
+    }
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -15883,14 +16063,14 @@ fn spawn_view_rpc_inner_with_events(
 
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "view");
-        assert_eq!(request["method"], "groundhog_view");
-        assert_eq!(request["params"][0]["contract"], expected_address);
-        assert_eq!(request["params"][0]["entrypoint"], expected_entrypoint);
-        assert_eq!(request["params"][0]["calldata"], expected_calldata);
+        let (stream, request) = read_after_network_check(&listener, deadline, "view");
+        assert_eq!(request["method"], "simulateInvocation");
+        assert_eq!(request["params"]["address"], expected_address);
+        assert_eq!(request["params"]["entrypoint"], expected_entrypoint);
+        assert_eq!(request["params"]["calldata"], expected_calldata);
         match expected_caller {
-            Some(caller) => assert_eq!(request["params"][0]["caller"], caller),
-            None => assert!(request["params"][0].get("caller").is_none()),
+            Some(caller) => assert_eq!(request["params"]["caller"], caller),
+            None => assert!(request["params"].get("caller").is_none()),
         }
 
         send_jsonrpc_response(
@@ -15899,7 +16079,7 @@ fn spawn_view_rpc_inner_with_events(
             serde_json::json!({
                 "output": output,
                 "events": events,
-                "height": "12",
+                "stateBlockHeight": "12",
                 "gasUsed": "4321",
             }),
         );
@@ -16163,36 +16343,22 @@ fn signed_tx_deploy_contract_kind(tx_hex: &str) -> &'static str {
     }
 }
 
-enum DevDetailRpcResponse {
-    MethodNotFound,
-    Error { code: i32, message: &'static str },
-    Result(serde_json::Value),
-}
-
 fn mock_tx_hash() -> String {
     thruput_json_rpc_types::NetworkHashText::from([0xaa; 32]).to_string()
 }
 
 /// Mock RPC server that handles the full deploy flow:
-/// `chainTip` → `sendRawTransaction` → `getTransactionReceipt`.
+/// Native preflight, send once, then read the receipt.
 ///
 /// Returns a 32-byte dummy address (`0xbb..bb`) as the deploy `return_data` so the live
 /// path exercises the receipt-based address extraction.
 fn spawn_deploy_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
-    spawn_deploy_rpc_with_detail(height, DevDetailRpcResponse::MethodNotFound)
-}
-
-fn spawn_deploy_rpc_with_detail(
-    height: i64,
-    detail_response: DevDetailRpcResponse,
-) -> (String, thread::JoinHandle<()>) {
-    spawn_transaction_rpc(height, sample_deploy_receipt(height), detail_response)
+    spawn_transaction_rpc(height, sample_deploy_receipt(height))
 }
 
 fn spawn_transaction_rpc(
     height: i64,
     mut receipt: serde_json::Value,
-    detail_response: DevDetailRpcResponse,
 ) -> (String, thread::JoinHandle<()>) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
@@ -16205,55 +16371,48 @@ fn spawn_transaction_rpc(
 
         // Contract calls check the sender balance before submission; deploys do not.
         let (mut stream, mut request) =
-            read_jsonrpc_request(&listener, deadline, "getBalance or sendRawTransaction");
-        if request["method"] == "groundhog_getBalance" {
-            let address = request["params"][0].as_str().unwrap();
+            read_after_network_check(&listener, deadline, "getBalance or sendTransaction");
+        if request["method"] == "getBalance" {
+            let address = request["params"]["address"].as_str().unwrap();
             send_jsonrpc_response(
                 stream,
                 &request["id"],
                 serde_json::json!({
                     "address": address,
                     "rawBalance": "100000000",
-                    "height": height.to_string(),
+                    "stateBlockHeight": height.to_string(),
                 }),
             );
-            (stream, request) = read_jsonrpc_request(&listener, deadline, "sendRawTransaction");
+            (stream, request) = read_after_network_check(&listener, deadline, "sendTransaction");
         }
-        assert_eq!(request["method"], "groundhog_sendRawTransaction");
+        assert_eq!(request["method"], "sendTransaction");
         assert!(
-            request["params"][0].as_str().unwrap().starts_with("0x"),
-            "sendRawTransaction should receive 0x-prefixed tx hex"
+            request["params"]["signedTransaction"]
+                .as_str()
+                .unwrap()
+                .starts_with("0x"),
+            "sendTransaction should receive 0x-prefixed tx hex"
         );
-        let signed_tx = decode_signed_tx(request["params"][0].as_str().unwrap());
+        let signed_tx = decode_signed_tx(request["params"]["signedTransaction"].as_str().unwrap());
         let tx_hash = thruput_encoding::encode(
             thruput_signing::transaction_hash(&signed_tx.tx)
                 .unwrap()
                 .as_ref(),
         );
         receipt["txHash"] = serde_json::json!(tx_hash);
-        send_jsonrpc_response(stream, &request["id"], serde_json::json!(tx_hash));
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({"transactionHash":tx_hash,"admission":"accepted"}),
+        );
 
         // 3. getTransactionReceipt
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionReceipt");
-        assert_eq!(request["method"], "groundhog_getTransactionReceipt");
-        assert_eq!(request["params"][0], tx_hash);
-        send_jsonrpc_response(stream, &request["id"], receipt);
+        assert_eq!(request["method"], "getTransactionReceipt");
+        assert_eq!(request["params"]["transactionHash"], tx_hash);
+        send_jsonrpc_response(stream, &request["id"], native_receipt_fixture(receipt));
 
-        // 4. groundhog_dev_getTransactionDetail
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionDetail");
-        assert_eq!(request["method"], "groundhog_dev_getTransactionDetail");
-        assert_eq!(request["params"][0], tx_hash);
-        match detail_response {
-            DevDetailRpcResponse::MethodNotFound => {
-                send_jsonrpc_error_response(stream, &request["id"], -32601, "Method not found");
-            }
-            DevDetailRpcResponse::Error { code, message } => {
-                send_jsonrpc_error_response(stream, &request["id"], code, message);
-            }
-            DevDetailRpcResponse::Result(result) => {
-                send_jsonrpc_response(stream, &request["id"], result);
-            }
-        }
+        assert_no_follow_up_rpc(&listener);
     });
 
     (format!("http://{addr}"), handle)
@@ -16368,37 +16527,6 @@ fn library_abort_hex(case_name: &str) -> String {
     let mut bytes = xdrs::cxs::encode(&library.selector).expect("selector should encode");
     bytes.extend_from_slice(&xdrs::cxs::encode(&discriminant).expect("discriminant should encode"));
     format!("0x{}", hex::encode(bytes))
-}
-
-fn sample_detail_result(height: i64) -> serde_json::Value {
-    let contract_address = thruput_encoding::encode(&[0x11; 32]);
-    serde_json::json!({
-        "receipt": sample_call_receipt(height),
-        "gasConsumed": "12450",
-        "gasLimit": "1000000000",
-        "storageDeltas": [{
-            "address": contract_address,
-            "key": "0xabcdef",
-            "kind": "bytestringSet",
-            "summary": "BytestringSet -> 0x9876",
-            "flags": 0,
-            "deltaXdr": "0x9876",
-        }],
-        "trace": {
-            "invocation": {
-                "address": contract_address,
-                "entrypoint": "0x0123456789abcdef",
-                "gasLimit": "1000000000",
-                "calldata": "0x0102",
-            },
-            "systemCalls": [],
-            "storageWrites": [],
-            "status": {
-                "result": "return",
-                "buffer": "0x0102",
-            },
-        },
-    })
 }
 
 fn issuer_event_fixture() -> Vec<serde_json::Value> {
@@ -16546,19 +16674,16 @@ fn transfer_live_scheduler_failures_preserve_json_outcome() {
         assert!(run.output.stderr.is_empty());
         let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
         assert_eq!(stdout["ok"], false);
-        assert_eq!(stdout["error"]["code"], format!("transaction_{tag}"));
-        assert_eq!(stdout["data"]["confirmation"], tag);
-        assert_eq!(stdout["data"]["transactionStatus"], status);
+        assert_eq!(stdout["error"]["code"], "native_rpc_failure");
+        assert_eq!(stdout["data"]["evidence"]["submission"], "acknowledged");
+        assert_eq!(stdout["data"]["evidence"]["lastStatus"], status);
     }
 }
 
 #[test]
-fn tx_show_scheduler_failures_render_next_steps() {
+fn tx_show_scheduler_failures_preserve_diagnostics_without_recovery_advice() {
     let hash = thruput_encoding::encode(&[0xbc; 32]);
-    for (tag, next_step) in [
-        ("retry", "resubmit the transaction"),
-        ("dropped", "modify the transaction"),
-    ] {
+    for tag in ["retry", "dropped"] {
         let tmp = TempDir::new().unwrap();
         let (rpc_url, rpc_server) = spawn_tx_show_rpc(
             &hash,
@@ -16575,9 +16700,12 @@ fn tx_show_scheduler_failures_render_next_steps() {
         rpc_server.join().unwrap();
         assert!(output.status.success());
         let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(stderr.contains(&format!("status: {tag}")), "{stderr}");
-        assert!(stderr.contains("error source: scheduler"), "{stderr}");
-        assert!(stderr.contains("error code: 3"), "{stderr}");
-        assert!(stderr.contains(next_step), "{stderr}");
+        assert!(
+            stderr.contains(&format!("\"status\":\"{tag}\"")),
+            "{stderr}"
+        );
+        assert!(stderr.contains(r#""source":"scheduler""#), "{stderr}");
+        assert!(stderr.contains(r#""code":3"#), "{stderr}");
+        assert!(!stderr.contains("resubmit"), "{stderr}");
     }
 }

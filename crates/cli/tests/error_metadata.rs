@@ -15,7 +15,6 @@ use std::path::PathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 use thruput_cli::error::CliError;
-use thruput_json_rpc_types::error::TxInvalidDetail;
 
 const SNAPSHOT_PATH: &str = "tests/snapshots/error-metadata.txt";
 
@@ -154,32 +153,6 @@ fn computed_details_payloads_carry_their_keys() {
         }),
         "the faucet payload renames service_code and omits the message the display carries"
     );
-    assert_eq!(
-        details_of(&CliError::TransactionRecentFailure {
-            tx_hash: "0xab".to_owned(),
-            attempt_height: 17,
-            cause: thruput_json_rpc_types::transaction::TransactionFailureCause::ContractRejected {
-                contract_index: 2,
-                code: thruput_json_rpc_types::transaction::ContractRejectCode::InvalidProgram,
-            },
-        }),
-        json!({
-            "txHash": "0xab",
-            "attemptHeight": 17,
-            "cause": { "kind": "contractRejected", "contractIndex": 2, "code": "invalidProgram" },
-        }),
-    );
-
-    // This one delegates to the detail's own serialization, so its keys vary
-    // by rejection reason and `json-rpc-types` owns their shape.
-    let rejected = details_of(&CliError::TransactionRejectedBeforeSubmission {
-        detail: TxInvalidDetail::TooManyContracts {
-            attached: 5,
-            max: 4,
-        },
-    });
-    assert_eq!(rejected["reason"], "tooManyContracts");
-    assert_eq!(rejected["attached"], 5);
 }
 
 fn details_of(error: &CliError) -> Value {

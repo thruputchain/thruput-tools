@@ -177,7 +177,17 @@ async fn malformed_discovery_preserves_original_parse_error_without_fallback() {
     .await;
     match check_endpoint(&client, &[]).await.unwrap_err() {
         NativeRpcError::InvalidDiscovery { source } => {
-            assert!(matches!(*source, NativeClientError::Transport(_)));
+            let NativeClientError::InvalidResponse {
+                method,
+                raw,
+                source,
+            } = *source
+            else {
+                panic!("malformed discovery must preserve its raw result");
+            };
+            assert_eq!(method, "getVersionInfo");
+            assert_eq!(raw["version"], "stellar");
+            assert!(source.to_string().contains("wireFormat"));
         }
         other => panic!("unexpected {other:?}"),
     }
@@ -231,7 +241,7 @@ async fn native_admission_and_failed_receipt_submit_exactly_once() {
         ("sendTransaction",Ok(json!({"transactionHash":hash,"admission":"accepted"}))),
         ("getTransactionReceipt",Ok(json!({"transactionHash":hash,"blockHeight":"42","execution":{"result":"abort","abortData":"0x0102"},"events":[],"gasUsed":"200"}))),
     ]).await;
-    let admitted = signed.submit_native(&client).await.unwrap();
+    let admitted = signed.submit(&client).await.unwrap();
     assert_eq!(admitted.tx_hash, hash);
     let receipt = admitted
         .wait(
@@ -268,8 +278,8 @@ async fn native_submission_preserves_unknown_result_and_canonical_hash() {
     let signed = signed();
     let raw = json!({"transactionHash":signed.tx_hash(),"admission":"futureAdmission","extra":{"keep":true}});
     let (client, handle, calls) = endpoint(vec![("sendTransaction", Ok(raw.clone()))]).await;
-    match signed.submit_native(&client).await.unwrap_err() {
-        NativeSubmitError::Unsupported {
+    match signed.submit(&client).await.unwrap_err() {
+        SubmitCallError::Unsupported {
             tx_hash,
             raw: actual,
         } => {
@@ -292,7 +302,7 @@ async fn native_submission_does_not_accept_a_different_hash() {
     )])
     .await;
     assert!(
-        matches!(signed.submit_native(&client).await,Err(NativeSubmitError::HashMismatch{tx_hash,returned:actual}) if tx_hash==signed.tx_hash() && actual==returned)
+        matches!(signed.submit(&client).await,Err(SubmitCallError::HashMismatch{tx_hash,returned:actual}) if tx_hash==signed.tx_hash() && actual==returned)
     );
     assert_eq!(calls.lock().unwrap().len(), 1);
     handle.stop().unwrap();
@@ -306,10 +316,23 @@ async fn malformed_native_acknowledgement_stays_uncertain_and_is_not_retried() {
         Ok(json!({"transactionHash":signed.tx_hash(),"admission":42})),
     )])
     .await;
-    match signed.submit_native(&client).await.unwrap_err() {
-        NativeSubmitError::Rpc { tx_hash, source } => {
+    match signed.submit(&client).await.unwrap_err() {
+        SubmitCallError::Rpc { tx_hash, source } => {
             assert_eq!(tx_hash, signed.tx_hash());
-            assert!(matches!(*source, NativeClientError::Transport(_)));
+            let NativeClientError::InvalidResponse {
+                method,
+                raw,
+                source,
+            } = *source
+            else {
+                panic!("malformed acknowledgement must preserve its raw result");
+            };
+            assert_eq!(method, "sendTransaction");
+            assert_eq!(
+                *raw,
+                json!({"transactionHash":signed.tx_hash(),"admission":42})
+            );
+            assert!(source.to_string().contains("string"));
         }
         other => panic!("unexpected {other:?}"),
     }
@@ -323,8 +346,8 @@ async fn native_submission_keeps_the_original_application_error() {
     let data = json!({"kind":"backendUnavailable","admission":"unknown","transactionHash":signed.tx_hash(),"newField":"retained"});
     let original = ErrorObjectOwned::owned(-32050, "lost backend response", Some(data.clone()));
     let (client, handle, calls) = endpoint(vec![("sendTransaction", Err(original))]).await;
-    match signed.submit_native(&client).await.unwrap_err() {
-        NativeSubmitError::Rpc { tx_hash, source } => {
+    match signed.submit(&client).await.unwrap_err() {
+        SubmitCallError::Rpc { tx_hash, source } => {
             assert_eq!(tx_hash, signed.tx_hash());
             let NativeClientError::Application { source, .. } = *source else {
                 panic!("expected application error")
@@ -350,7 +373,7 @@ async fn cancelled_native_wait_retains_hash_without_resubmitting() {
         Ok(json!({"transactionHash":signed.tx_hash(),"admission":"accepted"})),
     )])
     .await;
-    let admitted = signed.submit_native(&client).await.unwrap();
+    let admitted = signed.submit(&client).await.unwrap();
     let error = admitted
         .wait(
             &client,
@@ -390,4 +413,48 @@ async fn missing_discovery_is_incompatible_but_backend_failure_remains_a_call_er
         assert_eq!(calls.lock().unwrap().len(), 1);
         handle.stop().unwrap();
     }
+}
+
+#[tokio::test]
+async fn timed_out_wait_retains_canonical_hash_and_network_without_resubmitting() {
+    let signed = signed();
+    let (client, handle, calls) = endpoint(vec![
+        (
+            "sendTransaction",
+            Ok(json!({"transactionHash":signed.tx_hash(),"admission":"accepted"})),
+        ),
+        ("getTransactionReceipt", Ok(Value::Null)),
+        ("getTransactionStatus", Ok(json!({"status":"unknown"}))),
+    ])
+    .await;
+    let admitted = signed.submit(&client).await.unwrap();
+    let network = NetworkHash::from(SHA256Hash::from([9; 32]));
+    let error = admitted
+        .wait(
+            &client,
+            network,
+            ReceiptPollConfig {
+                timeout: std::time::Duration::from_millis(1),
+                ..ReceiptPollConfig::default()
+            },
+            std::future::pending(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.evidence.transaction_hash, signed.tx_hash());
+    assert_eq!(error.evidence.network_hash, network);
+    assert!(matches!(
+        error.cause,
+        thruput_json_rpc_client::native::receipt::ReceiptPollCause::Timeout
+    ));
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(method, _)| *method == "sendTransaction")
+            .count(),
+        1
+    );
+    handle.stop().unwrap();
 }

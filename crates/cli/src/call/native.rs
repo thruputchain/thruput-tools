@@ -1,18 +1,14 @@
-//! Native call preparation and reports for explicitly selected qualification runs.
+//! Native call preparation, submission evidence and execution reports.
 
-use std::{future::Future, pin::Pin, task::Poll};
+use std::future::Future;
 
 use jsonrpsee::core::client::ClientT;
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::{Value, json};
-use thruput_client::native::NativeSubmitError;
-use thruput_json_rpc_client::native::{
-    NativeClient,
-    receipt::{ReceiptPollCause, ReceiptPollConfig, ReceiptPollError},
-};
+use thruput_json_rpc_client::native::{NativeClient, receipt::ReceiptPollConfig};
 use thruput_json_rpc_types::{
-    ContractAddress, NetworkHash,
+    ContractAddress,
     hex::HexBytes,
     requests::AddressQuery,
     responses::{DecodedResponse, ReceiptExecution, TransactionReceipt},
@@ -24,8 +20,8 @@ use crate::{
     abort_json::AbortReport,
     account_resolution::ResolvedTransactionSender,
     codec::{decode_abort, decode_return, parse_contract_address},
-    native_rpc,
-    network_descriptor::{WalletEntrypoints, WalletSigningContext},
+    native_rpc::{self, failure_observations},
+    network_descriptor::WalletSigningContext,
     result::{CommandError, CommandResult},
 };
 
@@ -41,50 +37,39 @@ const REQUIRED_METHODS: &[&str] = &[
 
 pub(super) fn prepare_context(
     sender: &ResolvedTransactionSender,
+    profile: &crate::config::ResolvedProfile,
     url: &str,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<(WalletSigningContext, i64), CliError> {
-    if sender.native_account.is_none() {
-        return Err(native_rpc::failure(
-            "native RPC qualification currently requires a pubkey wallet account",
-            json!({"preflightReason":"unsupportedWallet"}),
-        ));
-    }
-    let expected = sender.network_hash.as_ref().ok_or_else(|| native_rpc::failure(
-        "native RPC qualification requires an independent network hash in the profile or runtime manifest",
-        json!({"preflightReason":"missingNetworkPin"}),
-    ))?;
+    let context = match (&sender.native_account, &sender.network_hash) {
+        (Some(_), Some(network_hash)) => WalletSigningContext {
+            network_hash: network_hash.clone(),
+            entrypoints: crate::network_descriptor::native_entrypoints(),
+        },
+        _ => sender.signing_context(profile, runtime)?,
+    };
+    let expected = &context.network_hash;
     let client = NativeClient::new(crate::http_client::rpc_client(url)?);
     let expiry = runtime.block_on(async {
         verify_endpoint(&client, expected).await?;
-        thruput_client::native::resolve_block_expiry_height(
+        thruput_client::resolve_block_expiry_height(
             &client,
             crate::tx_utils::DEFAULT_BLOCK_EXPIRY_OFFSET,
         )
         .await
         .map_err(|error| native_rpc::rpc_error(&error))
     })?;
-    Ok((
-        WalletSigningContext {
-            network_hash: expected.clone(),
-            entrypoints: WalletEntrypoints {
-                deploy: thruput_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
-                do_action: thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
-                source: "native_default_wallet",
-            },
-        },
-        expiry,
-    ))
+    Ok((context, expiry))
 }
 
 async fn verify_endpoint<C: ClientT + Sync>(
     client: &NativeClient<C>,
     expected: &thruput_xdr::types::NetworkHash,
 ) -> Result<(), CliError> {
-    thruput_client::native::check_endpoint(client, REQUIRED_METHODS)
+    thruput_client::check_endpoint(client, REQUIRED_METHODS)
         .await
         .map_err(|error| native_rpc::rpc_error(&error))?;
-    thruput_client::native::validate_network(client, expected)
+    thruput_client::validate_network(client, expected)
         .await
         .map_err(|error| native_rpc::rpc_error(&error))?;
     Ok(())
@@ -146,56 +131,7 @@ async fn fetch_balance<C: ClientT + Sync>(
     Ok(())
 }
 
-/// Local progress through the one submission attempt, independent of server
-/// admission evidence. Uncertain means no valid acknowledgement was observed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-enum SubmissionPhase {
-    NotSent,
-    Uncertain,
-    Acknowledged,
-}
-
-#[derive(Debug)]
-struct CallFailure {
-    phase: SubmissionPhase,
-    error: CliError,
-}
-
-impl CallFailure {
-    fn cancelled(phase: SubmissionPhase, prepared: &PreparedCall) -> Self {
-        Self {
-            phase,
-            error: native_rpc::failure(
-                "contract call cancelled",
-                json!({
-                    "transactionHash": prepared.signed.tx_hash(),
-                    "cause": {"kind": "cancelled"},
-                }),
-            ),
-        }
-    }
-}
-
-async fn signal_cancellation(signal: impl Future<Output = std::io::Result<()>>) {
-    if let Err(error) = signal.await {
-        tracing::warn!(%error, "unable to install interrupt handler");
-        // Signal registration failure is not a user cancellation.
-        std::future::pending::<()>().await;
-    }
-}
-
-async fn install_interrupt_listener() -> Pin<Box<dyn Future<Output = ()> + Send>> {
-    let mut signal: Pin<Box<dyn Future<Output = ()> + Send>> =
-        Box::pin(signal_cancellation(tokio::signal::ctrl_c()));
-    // ctrl_c installs its process handler on first poll, before any RPC work.
-    let ready = std::future::poll_fn(|cx| Poll::Ready(signal.as_mut().poll(cx).is_ready())).await;
-    if ready {
-        Box::pin(std::future::ready(()))
-    } else {
-        signal
-    }
-}
+use crate::native_rpc::{SubmissionFailure as CallFailure, SubmissionPhase};
 
 #[tracing::instrument(skip_all)]
 pub(super) fn execute(
@@ -213,7 +149,7 @@ pub(super) fn execute(
     );
     let task = crate::print::progress::Task::start(print, "Submitting contract call", true);
     let result = runtime.block_on(async {
-        let cancelled = install_interrupt_listener().await;
+        let cancelled = native_rpc::install_interrupt_listener().await;
         submit_and_wait(&client, prepared, ReceiptPollConfig::default(), cancelled).await
     });
     let warnings = task.finish();
@@ -276,139 +212,15 @@ where
     C: ClientT + Sync,
     F: Future<Output = ()>,
 {
-    tokio::pin!(cancelled);
-    tokio::select! {
-        biased;
-        () = &mut cancelled => return Err(CallFailure::cancelled(SubmissionPhase::NotSent, prepared)),
-        result = verify_endpoint(client, &prepared.network_hash) => result.map_err(|error| CallFailure {
-            phase: SubmissionPhase::NotSent,
-            error,
-        })?,
-    }
-    let mut started = false;
-    let submission = {
-        let send = async {
-            started = true;
-            prepared.signed.submit_native(client).await
-        };
-        tokio::select! {
-            biased;
-            () = &mut cancelled => None,
-            result = send => Some(result),
-        }
-    };
-    let submitted = match submission {
-        Some(result) => result.map_err(|error| CallFailure {
-            phase: if matches!(error, NativeSubmitError::Encoding { .. }) {
-                SubmissionPhase::NotSent
-            } else {
-                SubmissionPhase::Uncertain
-            },
-            error: submit_error(&error),
-        })?,
-        None => {
-            return Err(CallFailure::cancelled(
-                if started {
-                    SubmissionPhase::Uncertain
-                } else {
-                    SubmissionPhase::NotSent
-                },
-                prepared,
-            ));
-        }
-    };
-    submitted
-        .wait(
-            client,
-            NetworkHash::from(prepared.network_hash.clone().into_inner()),
-            config,
-            &mut cancelled,
-        )
-        .await
-        .map_err(|error| CallFailure {
-            phase: SubmissionPhase::Acknowledged,
-            error: poll_error(&error),
-        })
-}
-
-fn failure_observations(phase: SubmissionPhase, evidence: &Value) -> Vec<(&'static str, String)> {
-    let phase = match phase {
-        SubmissionPhase::NotSent => "not sent",
-        SubmissionPhase::Uncertain => "outcome uncertain",
-        SubmissionPhase::Acknowledged => "admission acknowledged",
-    };
-    let mut fields = vec![("Submission", phase.to_owned())];
-    if let Some(height) = evidence
-        .get("commitment")
-        .and_then(|value| value.get("blockHeight"))
-        .and_then(Value::as_str)
-    {
-        fields.push((
-            "Committed block height",
-            crate::terminal::terminal_safe(height),
-        ));
-    }
-    if let Some(status) = evidence
-        .get("lastStatus")
-        .and_then(|value| value.get("status"))
-        .and_then(Value::as_str)
-    {
-        fields.push(("Last status", crate::terminal::terminal_safe(status)));
-    }
-    fields
-}
-
-fn submit_error(error: &NativeSubmitError) -> CliError {
-    let evidence = match error {
-        NativeSubmitError::Rpc { tx_hash, source } => {
-            json!({"transactionHash":tx_hash,"cause":native_rpc::client_evidence(source)})
-        }
-        NativeSubmitError::Unsupported { tx_hash, raw } => {
-            json!({"transactionHash":tx_hash,"result":raw})
-        }
-        NativeSubmitError::HashMismatch { tx_hash, returned } => {
-            json!({"transactionHash":tx_hash,"returnedTransactionHash":returned})
-        }
-        NativeSubmitError::Encoding { tx_hash, .. }
-        | NativeSubmitError::ResponseRepresentation { tx_hash } => {
-            json!({"transactionHash":tx_hash})
-        }
-        _ => json!({"unsupportedSubmissionError":error.to_string()}),
-    };
-    native_rpc::failure(error.to_string(), evidence)
-}
-
-fn poll_error(error: &ReceiptPollError) -> CliError {
-    let cause = match &error.cause {
-        ReceiptPollCause::Timeout => json!({"kind":"timeout"}),
-        ReceiptPollCause::Cancelled => json!({"kind":"cancelled"}),
-        ReceiptPollCause::Lookup(source) => {
-            json!({"kind":"lookup","error":native_rpc::client_evidence(source)})
-        }
-        ReceiptPollCause::Unsupported { method, raw } => {
-            json!({"kind":"unsupported","method":method,"result":raw})
-        }
-        ReceiptPollCause::Invalid { message, raw } => {
-            json!({"kind":"invalid","message":message,"result":raw})
-        }
-        _ => json!({"kind":"unsupported","message":error.cause.to_string()}),
-    };
-    let commitment = error.evidence.commitment.as_ref().map(|known| {
-        json!({
-            "networkHash":known.network_hash,
-            "transactionHash":known.transaction_hash,
-            "blockHeight":known.block_height.to_string(),
-        })
-    });
-    let evidence = json!({
-        "transactionHash":error.evidence.transaction_hash,
-        "networkHash":error.evidence.network_hash,
-        "commitment":commitment,
-        "lastStatus":error.evidence.last_status,
-        "lastLookupError":error.evidence.last_lookup_error.as_ref().map(native_rpc::client_evidence),
-        "cause":cause,
-    });
-    native_rpc::failure(error.to_string(), evidence)
+    native_rpc::submit_and_wait(
+        client,
+        prepared.signed.tx_hash(),
+        prepared.signed.tx_hex(),
+        &prepared.network_hash,
+        config,
+        cancelled,
+    )
+    .await
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -418,6 +230,9 @@ struct NativeCallCommon {
     rpc_url: String,
     address: ContractAddress,
     wallet_address: ContractAddress,
+    wallet_entrypoint: String,
+    wallet_entrypoint_source: String,
+    network_hash: thruput_json_rpc_types::NetworkHash,
     method: String,
     entrypoint: HexBytes,
     calldata: HexBytes,
@@ -426,12 +241,15 @@ struct NativeCallCommon {
 impl NativeCallCommon {
     fn new(prepared: &PreparedCall) -> Result<Self, CliError> {
         Ok(Self {
-            schema_version: 4,
+            schema_version: super::CALL_JSON_SCHEMA_VERSION,
             rpc_url: prepared.rpc_url.clone(),
             address: ContractAddress::from(parse_contract_address(&prepared.contract_address_hex)?),
             wallet_address: ContractAddress::from(parse_contract_address(
                 &prepared.wallet_address_hex,
             )?),
+            wallet_entrypoint: prepared.wallet_entrypoint_id.clone(),
+            wallet_entrypoint_source: prepared.wallet_entrypoint_source.to_owned(),
+            network_hash: prepared.network_hash.clone().into_inner().into(),
             method: prepared.method.clone(),
             entrypoint: HexBytes(prepared.resolved.entrypoint.into_inner().to_vec()),
             calldata: HexBytes(prepared.calldata.clone()),
@@ -604,6 +422,7 @@ fn print_response(report: &NativeCallReport, print: &Print) {
     let mut fields = vec![
         ("Address".into(), report.common.address.to_string()),
         ("Method".into(), report.common.method.clone()),
+        ("Wallet".into(), report.common.wallet_address.to_string()),
         (
             "Transaction".into(),
             crate::tx_utils::format_tx_hash(&report.receipt.transaction_hash),

@@ -1,17 +1,15 @@
-#[cfg(feature = "native-rpc-qualification")]
 mod native;
 
 use std::borrow::Cow;
 use std::path::Path;
 
-use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_client::native::NativeClient;
 use thruput_json_rpc_types::ContractAddress;
 use thruput_json_rpc_types::base58::FixedIdentifier;
 use thruput_json_rpc_types::events::{BlockAnchor, IterationOrder, PaginationCursor};
-use thruput_json_rpc_types::receipt::TransactionReceipt;
-use thruput_json_rpc_types::transaction::{
-    AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash,
-};
+use thruput_json_rpc_types::requests::TransactionQuery;
+use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt, TransactionStatus};
+use thruput_json_rpc_types::transaction::{AddressTransactionQuery, TransactionRefPage, TxHash};
 
 use crate::account_resolution::resolve_address_target_or_default_wallet;
 use crate::checks::{Finding, FindingLevel};
@@ -23,10 +21,7 @@ use crate::terminal::terminal_safe;
 use crate::tx_json::{
     TX_LIST_JSON_SCHEMA_VERSION, TX_SHOW_JSON_SCHEMA_VERSION, TxListReport, TxShowReport,
 };
-use crate::tx_utils::{
-    format_tx_hash, is_unsupported_rpc_method_error, print_receipt_data, rpc_error_message,
-    summarize_exec_status,
-};
+use crate::tx_utils::format_tx_hash;
 use crate::{CliError, Print};
 
 const ROOT_HISTORY_WARNING: &str = "history includes root invocations only; incoming wallet-wrapped transfers may not appear for recipients";
@@ -51,7 +46,12 @@ pub fn show(
     let _ = task.finish();
     let decoded_abort = receipt
         .as_ref()
-        .and_then(|receipt| crate::tx_utils::decode_receipt_abort(receipt, None));
+        .and_then(|receipt| match &receipt.execution {
+            ReceiptExecution::Abort { abort_data } => {
+                Some(crate::codec::decode_abort(&abort_data.0, None))
+            }
+            _ => None,
+        });
 
     if !print.is_json() && !print.is_quiet() {
         print.group(crate::print::Outcome::Information, "Transaction", |print| {
@@ -78,7 +78,6 @@ pub fn show(
     ))
 }
 
-/// List one page of root-invocation transaction history for an address.
 #[expect(clippy::too_many_arguments)]
 pub fn list(
     target_input: Option<&str>,
@@ -90,69 +89,9 @@ pub fn list(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    list_with_rpc(
-        HistoryRpc::Legacy,
-        target_input,
-        limit_input,
-        cursor_input,
-        project_start,
-        profile_name,
-        overrides,
-        cmd,
-        print,
-    )
-}
-
-/// List one page through the explicitly selected native candidate endpoint.
-#[cfg(feature = "native-rpc-qualification")]
-#[expect(clippy::too_many_arguments)]
-pub fn list_native(
-    target_input: Option<&str>,
-    limit_input: Option<&str>,
-    cursor_input: Option<&str>,
-    project_start: &Path,
-    profile_name: Option<&str>,
-    overrides: &ProfileOverrides,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    list_with_rpc(
-        HistoryRpc::Native,
-        target_input,
-        limit_input,
-        cursor_input,
-        project_start,
-        profile_name,
-        overrides,
-        cmd,
-        print,
-    )
-}
-
-#[derive(Clone, Copy)]
-enum HistoryRpc {
-    Legacy,
-    #[cfg(feature = "native-rpc-qualification")]
-    Native,
-}
-
-#[expect(clippy::too_many_arguments)]
-fn list_with_rpc(
-    rpc: HistoryRpc,
-    target_input: Option<&str>,
-    limit_input: Option<&str>,
-    cursor_input: Option<&str>,
-    project_start: &Path,
-    profile_name: Option<&str>,
-    overrides: &ProfileOverrides,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
     let limit = parse_history_limit(limit_input)?;
     let cursor = parse_transaction_cursor(cursor_input)?;
-    #[cfg(feature = "native-rpc-qualification")]
-    if matches!(rpc, HistoryRpc::Native)
-        && let Some(input) = cursor_input
+    if let Some(input) = cursor_input
         && cursor.0.is_empty()
     {
         return Err(CliError::InvalidTransactionCursor {
@@ -177,15 +116,11 @@ fn list_with_rpc(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let task = crate::print::progress::Task::start(print, "Reading transaction history", true);
-    let page = rt.block_on(async {
-        match rpc {
-            HistoryRpc::Legacy => fetch_transaction_page(&rpc_url, query).await,
-            #[cfg(feature = "native-rpc-qualification")]
-            HistoryRpc::Native => {
-                native::fetch_transaction_page(&rpc_url, query, cursor_input.is_some()).await
-            }
-        }
-    })?;
+    let page = rt.block_on(native::fetch_transaction_page(
+        &rpc_url,
+        query,
+        cursor_input.is_some(),
+    ))?;
     let _ = task.finish();
 
     if !print.is_json() {
@@ -235,28 +170,6 @@ fn parse_transaction_cursor(input: Option<&str>) -> Result<PaginationCursor, Cli
     })
 }
 
-async fn fetch_transaction_page(
-    rpc_url: &str,
-    query: AddressTransactionQuery,
-) -> Result<TransactionRefPage, CliError> {
-    let requested_limit = query.limit;
-    let client = crate::http_client::rpc_client(rpc_url)?;
-    let page = client
-        .get_transactions_by_address(query)
-        .await
-        .map_err(|error| map_rpc_error("getTransactionsByAddress", &error))?;
-    if u32::try_from(page.refs.len()).map_or(true, |len| len > requested_limit) {
-        return Err(CliError::RpcMethodFailed {
-            method: "getTransactionsByAddress",
-            message: format!(
-                "invalid response: returned {} references for requested limit {requested_limit}",
-                page.refs.len(),
-            ),
-        });
-    }
-    Ok(page)
-}
-
 fn parse_tx_hash(input: &str) -> Result<TxHash, CliError> {
     let bytes = thruput_xdr::types::SHA256Hash::decode_base58(input).map_err(|error| {
         CliError::InvalidTransactionHash {
@@ -272,56 +185,36 @@ async fn fetch_transaction(
     rpc_url: &str,
     tx_hash: TxHash,
 ) -> Result<(TransactionStatus, Option<TransactionReceipt>), CliError> {
-    let client = crate::http_client::rpc_client(rpc_url)?;
-    let status = client
-        .get_transaction_status(tx_hash)
+    let client = NativeClient::new(crate::http_client::rpc_client(rpc_url)?);
+    thruput_client::check_endpoint(&client, &["getTransactionStatus", "getTransactionReceipt"])
         .await
-        .map_err(|error| map_rpc_error("getTransactionStatus", &error))?;
-    let committed_height = match &status {
-        TransactionStatus::Committed { height } => Some(height.clone()),
-        _ => None,
-    };
-    let Some(committed_height) = committed_height else {
-        return Ok((status, None));
-    };
-
-    let receipt = client
-        .get_transaction_receipt(tx_hash)
-        .await
-        .map_err(|error| map_rpc_error("getTransactionReceipt", &error))?;
+        .map_err(|error| crate::native_rpc::rpc_error(&error))?;
+    let status = crate::native_rpc::known(
+        "getTransactionStatus",
+        client
+            .get_transaction_status(TransactionQuery {
+                transaction_hash: tx_hash,
+            })
+            .await,
+    )?;
+    let receipt = crate::native_rpc::known(
+        "getTransactionReceipt",
+        client
+            .get_transaction_receipt(TransactionQuery {
+                transaction_hash: tx_hash,
+            })
+            .await,
+    )?;
     if let Some(receipt) = &receipt {
-        if receipt.tx_hash != tx_hash {
-            return Err(CliError::RpcMethodFailed {
-                method: "getTransactionReceipt",
-                message: format!(
-                    "invalid response: receipt hash {} does not match requested hash {}",
-                    format_tx_hash(&receipt.tx_hash),
-                    format_tx_hash(&tx_hash),
-                ),
-            });
-        }
-        if receipt.height != committed_height {
-            return Err(CliError::RpcMethodFailed {
-                method: "getTransactionReceipt",
-                message: format!(
-                    "invalid response: receipt height {} does not match committed status height {}",
-                    *receipt.height, *committed_height,
-                ),
-            });
+        let inconsistent_height = matches!(&status, TransactionStatus::Committed { block_height } if block_height != &receipt.block_height);
+        if receipt.transaction_hash != tx_hash || inconsistent_height {
+            return Err(crate::native_rpc::failure(
+                "inconsistent transaction receipt",
+                serde_json::json!({"transactionHash":tx_hash,"status":status,"receipt":receipt}),
+            ));
         }
     }
     Ok((status, receipt))
-}
-
-pub(crate) fn map_rpc_error(
-    method: &'static str,
-    error: &jsonrpsee::core::client::Error,
-) -> CliError {
-    let message = rpc_error_message(error);
-    if is_unsupported_rpc_method_error(error) {
-        return CliError::RpcCapabilityUnsupported { method, message };
-    }
-    CliError::RpcMethodFailed { method, message }
 }
 
 fn print_show(
@@ -332,65 +225,17 @@ fn print_show(
     print: &Print,
 ) {
     print.detail("hash", format_tx_hash(tx_hash));
-    match status {
-        TransactionStatus::Pending => print.detail("status", "pending"),
-        TransactionStatus::Committed { height } => {
-            print.detail("status", "committed");
-            print.detail("height", **height);
-        }
-        TransactionStatus::Invalid { reason } => {
-            print.detail("status", "invalid");
-            print.detail("reason", terminal_safe(reason));
-        }
-        TransactionStatus::RecentFailure {
-            attempt_height,
-            cause,
-        } => {
-            print.detail("status", "recent failure (advisory)");
-            print.detail("attempt height", **attempt_height);
-            if let Ok(cause) = serde_json::to_string(cause) {
-                print.detail("cause", terminal_safe(&cause));
-            }
-        }
-        TransactionStatus::Retry { error } | TransactionStatus::Dropped { error } => {
-            let retry = matches!(status, TransactionStatus::Retry { .. });
-            print.detail("status", if retry { "retry" } else { "dropped" });
-            if let Ok(source) = serde_json::to_string(&error.source) {
-                print.detail("error source", source.trim_matches('"'));
-            }
-            print.detail("error code", error.code);
-            print.detail(
-                "next step",
-                if retry {
-                    "resubmit the transaction; the mempool will not retry it automatically"
-                } else {
-                    "modify the transaction before resubmitting"
-                },
-            );
-        }
-        TransactionStatus::Unknown => {
-            print.detail(
-                "status",
-                "unknown (not found in scheduler outcomes or indexer)",
-            );
-        }
-        TransactionStatus::Other => print.detail("status", "other (update the CLI)"),
-        _ => print.detail("status", "unsupported (update the CLI)"),
+    if let Ok(value) = serde_json::to_string(status) {
+        print.detail("status", terminal_safe(&value));
     }
-
-    if matches!(status, TransactionStatus::Committed { .. }) {
-        let Some(receipt) = receipt else {
-            print.detail("receipt", "unavailable");
-            return;
-        };
-        print.detail("receipt", "available");
-        print.detail("receipt hash", format_tx_hash(&receipt.tx_hash));
-        print.detail("receipt height", *receipt.height);
-        print.detail(
-            "execution",
-            terminal_safe(&summarize_exec_status(&receipt.status)),
-        );
-        print_receipt_data(receipt, decoded_abort, print);
+    if let Some(receipt) = receipt {
+        print.detail("receipt block height", *receipt.block_height);
+        if let Ok(value) = serde_json::to_string(&receipt.execution) {
+            print.detail("execution", terminal_safe(&value));
+        }
+        crate::tx_utils::print_receipt_data(receipt, decoded_abort, print);
+    } else {
+        print.detail("receipt", "unavailable");
     }
 }
 

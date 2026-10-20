@@ -107,7 +107,7 @@ async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
                 .args(["call", &target, "0x0102030405060708", "0x", "--dry-run"])
                 .output()
                 .unwrap(),
-            "signedTx",
+            "signedTransaction",
             thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
         ),
         (
@@ -183,16 +183,25 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
     let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", server.local_addr().unwrap());
     let mut module = RpcModule::new(state.clone());
-    module.register_method("groundhog_networkInfo", |_, _, _| json!({"networkHash":NETWORK, "genesisHash":thruput_encoding::encode(&[0x42; 32])})).unwrap();
+    module.register_method("getVersionInfo", |_, _, _| json!({"wireFormat":"14.0.0", "implementation":"test", "supportedMethods":["getVersionInfo","getBalance","getNetworkInfo","getChainTip","sendTransaction","getTransactionStatus","getTransactionReceipt"]})).unwrap();
     module
         .register_method(
-            "groundhog_chainTip",
-            |_, _, _| json!({"height":"42","blockHash":thruput_encoding::encode(&[0; 32])}),
+            "getTransactionStatus",
+            |_, _, _| json!({"status":"unknown"}),
+        )
+        .unwrap();
+
+    module.register_method("getNetworkInfo", |_, _, _| json!({"networkHash":NETWORK, "genesisHash":thruput_encoding::encode(&[0x42; 32])})).unwrap();
+    module
+        .register_method(
+            "getChainTip",
+            |_, _, _| json!({"blockHeight":"42","blockHash":thruput_encoding::encode(&[0; 32])}),
         )
         .unwrap();
     module
-        .register_method("groundhog_sendRawTransaction", |params, state, _| {
-            let (bytes,): (String,) = params.parse()?;
+        .register_method("sendTransaction", |params, state, _| {
+            let request: thruput_json_rpc_types::requests::SendTransactionRequest = params.parse()?;
+            let bytes = format!("0x{}", hex::encode(request.signed_transaction.0));
             let (hash, _) = identity(&signed(&bytes));
             state.submissions.lock().unwrap().push(bytes);
             match state.outcome {
@@ -211,31 +220,31 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
                     "scheduler connection lost after dispatch",
                     None::<()>,
                 )),
-                Outcome::SendHashMismatch => Ok(thruput_encoding::encode(&[0xbb; 32])),
-                _ => Ok(hash),
+                Outcome::SendHashMismatch => Ok(json!({"transactionHash":thruput_encoding::encode(&[0xbb;32]),"admission":"accepted"})),
+                _ => Ok(json!({"transactionHash":hash,"admission":"accepted"})),
             }
         })
         .unwrap();
-    module.register_method("groundhog_getTransactionReceipt", |_, state, _| {
+    module.register_method("getTransactionReceipt", |_, state, _| {
         state.receipt_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if matches!(state.outcome, Outcome::LookupError) { return Err(ErrorObjectOwned::owned(-32000, "receipt unavailable", None::<()>)); }
         let signed = signed(state.submissions.lock().unwrap().first().unwrap());
         let (hash, address) = identity(&signed);
         let returned = format!("0x{}", hex::encode(thruput_encoding::decode_fixed::<32>(&address).unwrap()));
-        let mut receipt = json!({"txHash":hash,"height":"43","status":{"result":"ok"},"events":[],"gasUsed":"99","returnData":returned});
+        let mut receipt = json!({"transactionHash":hash,"blockHeight":"43","execution":{"result":"return","returnData":returned},"events":[],"gasUsed":"99"});
         match state.outcome {
-            Outcome::ReceiptHashMismatch => receipt["txHash"] = json!(thruput_encoding::encode(&[0xbb; 32])),
-            Outcome::MissingReturn => { receipt.as_object_mut().unwrap().remove("returnData"); },
-            Outcome::ShortReturn => receipt["returnData"] = json!("0x01"),
-            Outcome::WrongAddress => receipt["returnData"] = json!(format!("0x{}", "bb".repeat(32))),
-            Outcome::Reverted => { receipt["status"] = json!({"result":"reverted"}); receipt.as_object_mut().unwrap().remove("returnData"); },
+            Outcome::ReceiptHashMismatch => receipt["transactionHash"] = json!(thruput_encoding::encode(&[0xbb; 32])),
+            Outcome::MissingReturn => { receipt["execution"].as_object_mut().unwrap().remove("returnData"); },
+            Outcome::ShortReturn => receipt["execution"]["returnData"] = json!("0x01"),
+            Outcome::WrongAddress => receipt["execution"]["returnData"] = json!(format!("0x{}", "bb".repeat(32))),
+            Outcome::Reverted => { receipt["execution"] = json!({"result":"abort","abortData":"0x"}); receipt["execution"].as_object_mut().unwrap().remove("returnData"); },
             Outcome::FundingRejected | Outcome::InitializerRejected => {
                 let abort = if matches!(state.outcome, Outcome::FundingRejected) {
                     xdrs::cxs::encode(&(<thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR, thruput_erc20_if::ERC20Error::TooLarge)).unwrap()
                 } else { xdrs::cxs::encode(&(42u64, 7u64)).unwrap() };
-                receipt["status"] = json!({"result":"reverted"});
-                receipt["abortData"] = json!(format!("0x{}", hex::encode(abort)));
-                receipt.as_object_mut().unwrap().remove("returnData");
+                receipt["execution"] = json!({"result":"abort","abortData":"0x"});
+                receipt["execution"]["abortData"] = json!(format!("0x{}", hex::encode(abort)));
+                receipt["execution"].as_object_mut().unwrap().remove("returnData");
             },
             _ => {}
         }
@@ -573,7 +582,7 @@ async fn zero_funding_and_initializer_are_preserved_in_dry_run_and_recovery() {
                 vec![0xab, 0xcd]
             ))
         );
-        assert_eq!(data["schemaVersion"], 7);
+        assert_eq!(data["schemaVersion"], 8);
         assert_eq!(data["nativeDeployment"]["fundingRawAmount"], "0");
         assert_eq!(
             data["nativeDeployment"]["initializer"]["entrypointId"],
@@ -593,7 +602,7 @@ async fn zero_funding_and_initializer_are_preserved_in_dry_run_and_recovery() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_deploy_reports_definitive_rejections_without_reconciliation() {
+async fn native_deploy_preserves_rpc_rejections_without_repeating_submission() {
     use thruput_json_rpc_types::error::codes;
     for code in [
         codes::INVALID_PARAMS,
@@ -606,23 +615,14 @@ async fn native_deploy_reports_definitive_rejections_without_reconciliation() {
         let fixture = Fixture::new(&url);
         let output = fixture.deploy(&["--fund", "5"]);
         assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        let report: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert!(output.stderr.is_empty());
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["error"]["code"], "native_rpc_failure");
         assert_eq!(
-            report["error"]["code"],
-            if code == -32601 {
-                "rpc_capability_unsupported"
-            } else {
-                "rpc_method_failed"
-            }
+            report["error"]["details"]["cause"]["rpcError"]["code"],
+            code
         );
-        assert!(
-            report["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("definite pre-admission rejection")
-        );
-        assert!(!String::from_utf8_lossy(&output.stderr).contains("reconcile"));
+        assert!(report["error"]["details"]["cause"]["rpcError"]["data"].is_null());
         assert_eq!(state.submissions.lock().unwrap().len(), 1);
         assert_eq!(
             state
@@ -667,6 +667,11 @@ async fn native_deploy_preserves_identity_and_never_saves_alias_for_unverified_r
         assert_eq!(report["data"]["txHash"], hash, "{outcome:?}: {report}");
         assert_eq!(report["data"]["predictedAddress"], address);
         assert_eq!(report["data"]["signedTx"], submitted[0]);
+        if matches!(outcome, Outcome::ShortReturn | Outcome::WrongAddress) {
+            assert_eq!(report["data"]["confirmation"], "committed");
+            assert_eq!(report["data"]["receipt"]["execution"]["result"], "return");
+            assert!(report["data"]["receipt"]["blockHeight"].is_string());
+        }
         assert_eq!(
             report["data"]["nativeDeployment"]["fundingRawAmount"],
             "50000000"
