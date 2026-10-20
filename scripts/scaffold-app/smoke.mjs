@@ -112,7 +112,11 @@ try {
     work,
   );
   console.log("Installing generated app dependencies");
-  await run("npm", ["install"]);
+  // Qualify a packed SDK candidate before its coordinated release, when supplied.
+  const sdkPackage = env.THRUPUT_SDK_PACKAGE;
+  await run("npm", sdkPackage
+    ? ["install", "--no-save", resolve(sdkPackage)]
+    : ["install"]);
   console.log("Checking missing-deployment diagnostics");
   const missingDeployment = start(process.execPath, ["scripts/dev.mjs"]);
   assert.notEqual(await missingDeployment.closed, 0);
@@ -141,6 +145,9 @@ try {
   });
 
   const nodeArgs = ["node", "--port", "0", "--json", "--non-interactive"];
+  if (env.SMOKE_RAMDB_BYTES) nodeArgs.push("--ramdb-bytes", env.SMOKE_RAMDB_BYTES);
+  if (env.SMOKE_STARTUP_TIMEOUT_SECS)
+    nodeArgs.push("--startup-timeout-secs", env.SMOKE_STARTUP_TIMEOUT_SECS);
   if (env.THRUPUT_DEVNODE_BINARY)
     nodeArgs.push(
       "--hog-devnode-binary",
@@ -293,8 +300,10 @@ try {
   let views = 0;
   await page.route("**/rpc", async (route) => {
     const request = route.request().postDataJSON();
-    if (request.method === "groundhog_sendRawTransaction") submissions++;
-    if (request.method !== "groundhog_view") return route.continue();
+    assert.equal(Array.isArray(request), false, "this smoke uses individual RPC calls");
+    assert.equal(request.method.startsWith("groundhog_"), false, "native SDK must use native methods");
+    if (request.method === "sendTransaction") submissions++;
+    if (request.method !== "simulateInvocation") return route.continue();
     views++;
     const response = await route.fetch();
     const body = await response.json();

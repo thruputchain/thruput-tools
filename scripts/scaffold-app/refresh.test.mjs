@@ -20,7 +20,7 @@ test("a current view returns immediately and schedules no further reads", async 
   let reads = 0;
   const value = await refreshCounter(async () => {
     reads++;
-    return { height: 6n, value: 2n };
+    return { stateBlockHeight: 6n, value: 2n };
   }, 6n);
   assert.equal(value, 2n);
   await delay(250);
@@ -39,7 +39,7 @@ test("stale views are read sequentially until the receipt height is visible", as
     const height = heights[reads++];
     active--;
     // Even a stale view with the expected value must not end the refresh.
-    return { height, value: 2n };
+    return { stateBlockHeight: height, value: 2n };
   }, 6n);
   assert.equal(value, 2n);
   assert.equal(reads, 3);
@@ -51,7 +51,7 @@ test("stale views are read sequentially until the receipt height is visible", as
 test("newer snapshots and heights beyond Number precision are accepted", async () => {
   const height = 9_007_199_254_740_993n;
   const value = await refreshCounter(
-    async () => ({ height: height + 1n, value: 7n }),
+    async () => ({ stateBlockHeight: height + 1n, value: 7n }),
     height,
   );
   assert.equal(value, 7n);
@@ -71,7 +71,7 @@ test("a view that stays behind times out and stops reading", async () => {
   let reads = 0;
   await assert.rejects(refreshCounter(async () => {
     reads++;
-    return { height: 5n, value: 1n };
+    return { stateBlockHeight: 5n, value: 1n };
   }, 6n, 20), /did not catch up/);
   const finished = reads;
   await delay(250);

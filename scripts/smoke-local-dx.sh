@@ -20,6 +20,9 @@
 #   SMOKE_PROTOCOL_RS_PATH=/path/to/protocol-rs  # defaults to sdk_rs sibling
 #   CARGO_TARGET_DIR=/absolute/path/to/build-output
 #   SMOKE_NETWORK_HASH=<32-byte network hash in unprefixed base58>
+#   SMOKE_CHECKOUT_CLIENT=1  # use this checkout's unpublished Rust client
+#   SMOKE_RAMDB_BYTES=128M  # optional local runtime capacity override
+#   SMOKE_STARTUP_TIMEOUT_SECS=60  # optional readiness budget
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
@@ -593,6 +596,9 @@ else
 fi
 
 WORK="$(mktemp -d)"
+if [[ "${SMOKE_CHECKOUT_CLIENT:-0}" == "1" ]]; then
+    "$REPO_ROOT/scripts/use-checkout-client.sh" "$WORK"
+fi
 export XDG_CONFIG_HOME="$WORK/config"
 export XDG_CACHE_HOME="$WORK/cache"
 NODE_DATA_DIR="$WORK/node-data"
@@ -603,6 +609,12 @@ NODE_BASE_ARGS=(
     --hog-devnode-binary "$DEVNODE_BINARY"
     --data-dir "$NODE_DATA_DIR"
 )
+if [[ -n "${SMOKE_RAMDB_BYTES:-}" ]]; then
+    NODE_BASE_ARGS+=(--ramdb-bytes "$SMOKE_RAMDB_BYTES")
+fi
+if [[ -n "${SMOKE_STARTUP_TIMEOUT_SECS:-}" ]]; then
+    NODE_BASE_ARGS+=(--startup-timeout-secs "$SMOKE_STARTUP_TIMEOUT_SECS")
+fi
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_BASE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"

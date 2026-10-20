@@ -49,7 +49,7 @@ for (const endpoint of ["/", "/thruput", "/tenant/rpc?token=a%2Fb&network=local"
     });
     assert.equal(process.exitCode, undefined, "dev server should start successfully");
 
-    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "groundhog_chainInfo" });
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getNetworkInfo", params: {} });
     const response = await fetch(`http://127.0.0.1:${server.httpServer.address().port}/rpc`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

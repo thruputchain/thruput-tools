@@ -27,7 +27,7 @@ function App() {
       .then(async (connected) => {
         const result = await Counter.v0_1.get.view({
           client: connected.client,
-          contract: connected.contract,
+          address: connected.contract,
           caller: connected.wallet.account.address,
         });
         if (active) {
@@ -75,11 +75,11 @@ function App() {
           (signal) =>
             Counter.v0_1.get.view({
               client: session.client,
-              contract: session.contract,
+              address: session.contract,
               caller: session.wallet.account.address,
               signal,
             }),
-          receipt.height,
+          receipt.blockHeight,
         );
         setValue(current);
         setMessage("Transaction executed successfully.");
@@ -92,7 +92,7 @@ function App() {
       setMessage("");
       setError(
         cause instanceof TransactionObservationError
-          ? `Confirmation unknown for ${toBase58(cause.txHash)}. Inspect this transaction before submitting again.`
+          ? `Confirmation unknown for ${toBase58(cause.transactionHash)}. Inspect this transaction before submitting again.`
           : cause instanceof Error
             ? cause.message
             : "The operation failed.",
