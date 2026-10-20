@@ -205,7 +205,7 @@ fn native_report_retains_root_receipt_and_decodes_single_child_return() {
     assert!(report.execution_failure().is_none());
     let value = serde_json::to_value(CommandResult::new("call", report)).unwrap();
     let data = &value["data"];
-    assert_eq!(data["schemaVersion"], 3);
+    assert_eq!(data["schemaVersion"], 4);
     assert_eq!(data["blockHeight"], "9007199254740993");
     assert_eq!(data["gasUsed"], u64::MAX.to_string());
     assert_eq!(data["childReturnData"], "0x07");

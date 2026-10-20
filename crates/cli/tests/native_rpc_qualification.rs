@@ -171,7 +171,7 @@ async fn exercise(
         ])
         .await?;
     require(
-        call["command"] == "call" && call["data"]["schemaVersion"] == 3,
+        call["command"] == "call" && call["data"]["schemaVersion"] == 4,
         "native call JSON envelope/schema mismatch",
     )?;
     let receipt: output::TransactionReceipt = serde_json::from_value(call["data"].clone())?;
@@ -225,7 +225,7 @@ async fn exercise(
 
 fn check_view(report: &Value, before: &output::BalanceResult) -> TestResult {
     require(
-        report["command"] == "view" && report["data"]["schemaVersion"] == 3,
+        report["command"] == "view" && report["data"]["schemaVersion"] == 4,
         "native view JSON envelope/schema mismatch",
     )?;
     let simulation: output::SimulationResult = serde_json::from_value(report["data"].clone())?;
