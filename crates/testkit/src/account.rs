@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use thruput_client::{CallRequest, DeployRequest, Wallet};
-use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
 use thruput_json_rpc_types::transaction::TxHash;
 use thruput_signing::default_wallet::DeploymentCode;
 use thruput_signing::{DEFAULT_TX_GAS_LIMIT, PubkeyAccount};
@@ -96,21 +96,6 @@ pub(crate) struct PreparedDeploy {
 }
 
 impl PreparedDeploy {
-    pub(crate) fn from_registration(
-        network: Network,
-        attempt: &ArtifactPendingRegistration,
-    ) -> Self {
-        Self {
-            network,
-            owner: attempt.owner,
-            address: attempt.address,
-            tx_hash: attempt.tx_hash,
-            registered: true,
-            tx_hex: attempt.tx_hex.clone(),
-            effects: attempt.effects.clone(),
-        }
-    }
-
     pub(crate) fn pending_registration(&self) -> ArtifactPendingRegistration {
         ArtifactPendingRegistration {
             tx_hash: self.tx_hash,
@@ -156,8 +141,8 @@ impl SubmittedDeploy {
         if let Some(receipt) = &self.cached_receipt {
             return Err(TestkitError::TransactionNotPending {
                 tx_hash: format!("{:?}", self.tx_hash),
-                status: thruput_json_rpc_types::transaction::TransactionStatus::Committed {
-                    height: receipt.height.clone(),
+                status: thruput_json_rpc_types::responses::TransactionStatus::Committed {
+                    block_height: receipt.block_height.clone(),
                 },
             });
         }
@@ -179,14 +164,16 @@ impl SubmittedDeploy {
                     tx_hash: self.tx_hash,
                     predicted_address: self.address,
                     signed_transaction: self.tx_hex.clone(),
-                    detail: error.to_string(),
+                    detail: error.to_string().into(),
+                    source: Some(Box::new(error)),
+                    receipt: None,
                 })?,
         };
         verify_deployment_receipt(self.tx_hash, self.address, &self.tx_hex, &receipt)?;
-        if !matches!(receipt.status, ExecStatus::Ok) {
+        if !matches!(receipt.execution, ReceiptExecution::Return { .. }) {
             self.finish_registration(false).await;
             return Err(TestkitError::Deploy {
-                detail: format!("{:?}", receipt.status),
+                detail: format!("{:?}", receipt.execution),
             });
         }
         self.finish_registration(true).await;
@@ -434,19 +421,16 @@ pub(crate) fn prepare_call(
 }
 
 pub(crate) async fn submit_signed(network: &Network, tx_hash: TxHash, tx_hex: &str) -> Result<()> {
-    let client = network.require_client("sendRawTransaction")?;
-    thruput_client::submit_signed_transaction(
-        &thruput_client::NativeClient::new(client.clone()),
-        tx_hash,
-        tx_hex,
-    )
-    .await
-    .map(|_| ())
-    .map_err(|error| TestkitError::Submission {
-        tx_hash,
-        signed_transaction: tx_hex.to_owned(),
-        detail: error.to_string(),
-    })
+    let client = network.require_client("sendTransaction")?;
+    thruput_client::submit_signed_transaction(client, tx_hash, tx_hex)
+        .await
+        .map(|_| ())
+        .map_err(|error| TestkitError::Submission {
+            tx_hash,
+            signed_transaction: tx_hex.to_owned(),
+            detail: error.to_string(),
+            source: Box::new(error),
+        })
 }
 
 pub(crate) fn verify_deployment_receipt(
@@ -455,22 +439,22 @@ pub(crate) fn verify_deployment_receipt(
     tx_hex: &str,
     receipt: &TransactionReceipt,
 ) -> Result<()> {
-    if receipt.tx_hash != tx_hash {
-        return Err(TestkitError::ReceiptHashMismatch { expected: tx_hash });
+    if receipt.transaction_hash != tx_hash {
+        return Err(TestkitError::ReceiptHashMismatch {
+            expected: tx_hash,
+            receipt: Box::new(receipt.clone()),
+        });
     }
-    if matches!(
-        receipt.status,
-        thruput_json_rpc_types::receipt::ExecStatus::Ok
-    ) && receipt
-        .return_data
-        .as_ref()
-        .is_none_or(|data| data.as_ref() != address.as_ref())
+    if let ReceiptExecution::Return { return_data } = &receipt.execution
+        && return_data.as_ref() != address.as_ref()
     {
         return Err(TestkitError::UnverifiedDeployment {
             tx_hash,
             predicted_address: address,
             signed_transaction: tx_hex.to_owned(),
             detail: "successful deployment did not return the predicted address".into(),
+            source: None,
+            receipt: Some(Box::new(receipt.clone())),
         });
     }
     Ok(())
@@ -480,8 +464,8 @@ pub(crate) fn verify_deployment_receipt(
 mod tests {
     use thruput_json_rpc_types::BlockHeight;
     use thruput_json_rpc_types::base58::Base58;
-    use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-    use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+    use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
+    use thruput_json_rpc_types::{responses::TransactionStatus, transaction::TxHash};
     use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
     use crate::artifact::{PendingRegistration, RegistrationOwner};
@@ -510,12 +494,12 @@ mod tests {
             Network::offline(),
             &attempt,
             TransactionReceipt {
-                tx_hash,
-                height: BlockHeight::from(7),
-                status: ExecStatus::Ok,
+                transaction_hash: tx_hash,
+                block_height: BlockHeight::from(7),
+                execution: ReceiptExecution::Return {
+                    return_data: thruput_json_rpc_types::hex::HexBytes(vec![]),
+                },
                 events: Vec::new(),
-                return_data: None,
-                abort_data: None,
                 gas_used: 1_500,
             },
         );
@@ -527,10 +511,56 @@ mod tests {
         assert!(matches!(
             error,
             TestkitError::TransactionNotPending {
-                status: TransactionStatus::Committed { height },
+                status: TransactionStatus::Committed { block_height: height },
                 ..
             } if height == BlockHeight::from(7)
         ));
+    }
+
+    #[test]
+    fn deployment_validation_retains_conflicting_commitment_and_return_bytes() {
+        let expected = TxHash(Base58(SHA256Hash::from([1; 32])));
+        let observed = TransactionReceipt {
+            transaction_hash: expected,
+            block_height: 7.into(),
+            execution: ReceiptExecution::Return {
+                return_data: thruput_json_rpc_types::hex::HexBytes(vec![9; 32]),
+            },
+            events: vec![],
+            gas_used: 42,
+        };
+        let error = super::verify_deployment_receipt(
+            expected,
+            ContractAddress::from([2; 32]),
+            "0x01",
+            &observed,
+        )
+        .unwrap_err();
+        let TestkitError::UnverifiedDeployment {
+            receipt: Some(receipt),
+            ..
+        } = error
+        else {
+            panic!("missing observed receipt")
+        };
+        assert_eq!(*receipt.block_height, 7);
+        assert!(
+            matches!(receipt.execution, ReceiptExecution::Return { return_data } if return_data.0 == vec![9; 32])
+        );
+        let mut mismatched = observed;
+        mismatched.transaction_hash = TxHash(Base58(SHA256Hash::from([3; 32])));
+        let error = super::verify_deployment_receipt(
+            expected,
+            ContractAddress::from([2; 32]),
+            "0x01",
+            &mismatched,
+        )
+        .unwrap_err();
+        let TestkitError::ReceiptHashMismatch { receipt, .. } = error else {
+            panic!("missing conflicting receipt")
+        };
+        assert_eq!(receipt.transaction_hash, mismatched.transaction_hash);
+        assert_eq!(*receipt.block_height, 7);
     }
 
     #[test]

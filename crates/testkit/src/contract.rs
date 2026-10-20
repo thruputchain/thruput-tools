@@ -15,9 +15,9 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 
 use thruput_contract_util::semver::try_major_version_from_string;
-use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use thruput_json_rpc_types::responses::InvocationOutput;
+use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
 use thruput_json_rpc_types::transaction::TxHash;
-use thruput_json_rpc_types::view::RootInvocationOutput;
 use thruput_signing::default_wallet::decode_default_wallet_call_return;
 use thruput_xdr::types::ContractAddress;
 
@@ -49,8 +49,8 @@ impl SubmittedContractCall {
     /// Wait for the receipt and require successful execution.
     pub async fn await_receipt(&self) -> Result<TransactionReceipt> {
         let receipt = self.transaction.await_receipt().await?;
-        match receipt.status {
-            ExecStatus::Ok => Ok(receipt),
+        match receipt.execution {
+            ReceiptExecution::Return { .. } => Ok(receipt),
             ref status => Err(TestkitError::Reverted {
                 method: self.method.clone(),
                 status: format!("{status:?}"),
@@ -304,7 +304,7 @@ impl Contract {
             .view_call(self.address, self.selector(method)?, &calldata, caller)
             .await?;
         match response.output {
-            RootInvocationOutput::Return { return_data } => decode_return(&return_data.0),
+            InvocationOutput::Return { return_data } => decode_return(&return_data.0),
             other => Err(TestkitError::NoReturn {
                 kind: "view",
                 detail: format!("{other:?}"),
@@ -320,10 +320,13 @@ fn decode_call_return<R>(receipt: &TransactionReceipt) -> Result<R>
 where
     R: for<'r> ReadXDR<'r>,
 {
-    let data = receipt
-        .return_data
-        .as_ref()
-        .map_or(&[][..], |data| data.as_ref());
+    let ReceiptExecution::Return { return_data } = &receipt.execution else {
+        return Err(TestkitError::NoReturn {
+            kind: "call",
+            detail: format!("{:?}", receipt.execution),
+        });
+    };
+    let data = return_data.as_ref();
     let bytes = decode_default_wallet_call_return(data).map_err(TestkitError::decode)?;
     decode_return(&bytes)
 }
@@ -347,7 +350,7 @@ mod tests {
     use crate::nonce::NonceNamespace;
 
     use thruput_json_rpc_types::BlockHeight;
-    use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+    use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
     use thruput_json_rpc_types::transaction::TxHash;
     use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
     use thruput_xdr::types::SHA256Hash;
@@ -359,12 +362,12 @@ mod tests {
 
     fn receipt(return_data: Option<Vec<u8>>) -> TransactionReceipt {
         TransactionReceipt {
-            tx_hash: TxHash(Base58(SHA256Hash::from([1; 32]))),
-            height: BlockHeight::from(1),
-            status: ExecStatus::Ok,
+            transaction_hash: TxHash(Base58(SHA256Hash::from([1; 32]))),
+            block_height: BlockHeight::from(1),
+            execution: ReceiptExecution::Return {
+                return_data: HexBytes(return_data.unwrap_or_default()),
+            },
             events: Vec::new(),
-            return_data: return_data.map(HexBytes),
-            abort_data: None,
             gas_used: 1,
         }
     }

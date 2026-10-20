@@ -6,7 +6,7 @@
 //! with [`AgentContext::caller`](crate::AgentContext::caller) to hold it in a
 //! typed contract client, store it in a struct, or move it into a spawned task.
 
-use thruput_json_rpc_types::receipt::TransactionReceipt;
+use thruput_json_rpc_types::responses::TransactionReceipt;
 use thruput_xdr::contract::ContractEntrypointID;
 use thruput_xdr::types::ContractAddress;
 
