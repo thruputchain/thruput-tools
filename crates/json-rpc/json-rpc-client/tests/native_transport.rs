@@ -11,8 +11,7 @@ use jsonrpsee::{
 use serde_json::{Value, json, value::RawValue};
 use thruput_json_rpc_api::native::{METHOD_NAMES, NativeApi};
 use thruput_json_rpc_client::{
-    DecodedError, DecodedResponse, HttpClient, HttpClientBuilder,
-    native::{NativeClient, NativeClientError},
+    DecodedError, DecodedResponse, HttpClient, HttpClientBuilder, NativeClient, NativeClientError,
 };
 use thruput_json_rpc_server::native::NativeModule;
 use thruput_json_rpc_types::requests::{AddressQuery, EmptyRequest, TransactionQuery};

@@ -10,7 +10,7 @@ use crate::{
 };
 use std::collections::HashSet;
 use std::time::Duration;
-use thruput_json_rpc_client::poll_receipt;
+use thruput_json_rpc_client::receipt::poll_receipt;
 use thruput_json_rpc_types::{
     receipt::{ExecStatus, TransactionReceipt},
     runtime_manifest::RuntimeManifest,

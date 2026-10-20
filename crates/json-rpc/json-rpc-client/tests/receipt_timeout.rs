@@ -1,6 +1,7 @@
-use jsonrpsee::{RpcModule, server::Server, types::ErrorObjectOwned};
 use std::{collections::VecDeque, sync::Mutex, time::Duration};
-use thruput_json_rpc_client::{PollTransactionReceiptError, poll_transaction_receipt_with_config};
+use thruput_json_rpc_client::receipt::{
+    ReceiptPollConfig, ReceiptPollError, ReceiptSource, poll_receipt,
+};
 use thruput_json_rpc_types::{
     BlockHeight,
     base58::Base58,
@@ -8,56 +9,67 @@ use thruput_json_rpc_types::{
     transaction::{TransactionStatus, TxHash},
 };
 
+struct Source {
+    statuses: Mutex<VecDeque<Option<TransactionStatus>>>,
+    receipt_calls: Mutex<usize>,
+    receipt_after: Option<usize>,
+}
+
+impl ReceiptSource for Source {
+    type Error = std::io::Error;
+
+    async fn transaction_receipt(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionReceipt>, Self::Error> {
+        let mut calls = self.receipt_calls.lock().unwrap();
+        let receipt = self
+            .receipt_after
+            .filter(|after| *calls >= *after)
+            .map(|_| TransactionReceipt {
+                tx_hash,
+                height: BlockHeight::from(42),
+                status: ExecStatus::Ok,
+                events: vec![],
+                return_data: None,
+                abort_data: None,
+                gas_used: 1_500,
+            });
+        *calls += 1;
+        Ok(receipt)
+    }
+
+    async fn transaction_status(
+        &self,
+        _tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, Self::Error> {
+        self.statuses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap()
+            .map(Some)
+            .ok_or_else(|| std::io::Error::other("status unavailable"))
+    }
+}
+
 async fn poll(
     statuses: Vec<Option<TransactionStatus>>,
     receipt_after: Option<usize>,
-) -> Result<TransactionReceipt, PollTransactionReceiptError> {
+) -> Result<TransactionReceipt, ReceiptPollError<std::io::Error>> {
     let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x33; 32])));
     let attempts = statuses.len();
-    let mut module = RpcModule::new(Mutex::new((VecDeque::from(statuses), 0usize)));
-    module
-        .register_method("groundhog_getTransactionStatus", |_, state, _| {
-            state
-                .lock()
-                .unwrap()
-                .0
-                .pop_front()
-                .unwrap()
-                .ok_or_else(|| ErrorObjectOwned::owned(-32601, "status unavailable", None::<()>))
-        })
-        .unwrap();
-    module
-        .register_method("groundhog_getTransactionReceipt", move |_, state, _| {
-            let mut state = state.lock().unwrap();
-            let receipt =
-                receipt_after
-                    .filter(|after| state.1 >= *after)
-                    .map(|_| TransactionReceipt {
-                        tx_hash,
-                        height: BlockHeight::from(42),
-                        status: ExecStatus::Ok,
-                        events: vec![],
-                        return_data: None,
-                        abort_data: None,
-                        gas_used: 1_500,
-                    });
-            state.1 += 1;
-            receipt
-        })
-        .unwrap();
-    let server = Server::builder().build("127.0.0.1:0").await.unwrap();
-    let addr = server.local_addr().unwrap();
-    let handle = server.start(module);
-    let result = poll_transaction_receipt_with_config(
-        &format!("http://{addr}"),
+    let source = Source {
+        statuses: Mutex::new(VecDeque::from(statuses)),
+        receipt_calls: Mutex::new(0),
+        receipt_after,
+    };
+    poll_receipt(
+        &source,
         tx_hash,
-        attempts,
-        Duration::from_millis(1),
+        ReceiptPollConfig::attempts(attempts, Duration::from_millis(1)),
     )
-    .await;
-    handle.stop().unwrap();
-    handle.stopped().await;
-    result
+    .await
 }
 
 #[tokio::test]
@@ -73,7 +85,7 @@ async fn timeout_reports_latest_unknown_after_pending() {
     .unwrap_err();
     assert!(matches!(
         error,
-        PollTransactionReceiptError::ReceiptTimeout {
+        ReceiptPollError::Timeout {
             attempts: 2,
             last_status: Some(TransactionStatus::Unknown),
             ..
@@ -88,7 +100,7 @@ async fn status_errors_retain_last_successful_observation() {
         .unwrap_err();
     assert!(matches!(
         error,
-        PollTransactionReceiptError::ReceiptTimeout {
+        ReceiptPollError::Timeout {
             last_status: Some(TransactionStatus::Pending),
             ..
         }
@@ -100,7 +112,7 @@ async fn unsupported_status_times_out_without_observation() {
     let error = poll(vec![None, None], None).await.unwrap_err();
     assert!(matches!(
         error,
-        PollTransactionReceiptError::ReceiptTimeout {
+        ReceiptPollError::Timeout {
             last_status: None,
             ..
         }
@@ -130,7 +142,7 @@ async fn invalid_still_stops_polling() {
     .unwrap_err();
     assert!(matches!(
         error,
-        PollTransactionReceiptError::TransactionStatus {
+        ReceiptPollError::Status {
             status: TransactionStatus::Invalid { .. },
             ..
         }
@@ -152,7 +164,7 @@ async fn scheduler_processing_failures_stop_polling_before_a_later_receipt() {
     ] {
         let expected = serde_json::to_value(&status).unwrap();
         let error = poll(vec![Some(status), None], Some(1)).await.unwrap_err();
-        let PollTransactionReceiptError::TransactionStatus { status, .. } = error else {
+        let ReceiptPollError::Status { status, .. } = error else {
             panic!("unexpected error: {error:?}")
         };
         assert_eq!(serde_json::to_value(status).unwrap(), expected);

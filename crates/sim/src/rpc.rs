@@ -9,7 +9,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use thruput_json_rpc_client::{ReceiptPollConfig, ReceiptPollError, ReceiptSource};
+use thruput_json_rpc_client::receipt::{ReceiptPollConfig, ReceiptPollError, ReceiptSource};
 use thruput_json_rpc_types::{
     ContractAddress,
     block::ChainTip,

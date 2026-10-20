@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use thruput_json_rpc_client::poll_receipt;
+use thruput_json_rpc_client::receipt::poll_receipt;
 
 use sha2::{Digest, Sha256};
 use thruput_json_rpc_types::{

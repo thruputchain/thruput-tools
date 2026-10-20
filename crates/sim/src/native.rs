@@ -370,7 +370,7 @@ async fn wait_funding_receipt(
     client: &thruput_json_rpc_client::HttpClient,
     hash: thruput_json_rpc_types::transaction::TxHash,
 ) -> Result<(), SimError> {
-    let receipt = thruput_json_rpc_client::poll_receipt(
+    let receipt = thruput_json_rpc_client::receipt::poll_receipt(
         &crate::rpc::SimReceiptSource(client),
         hash,
         crate::rpc::receipt_poll_config(Duration::from_secs(30)),

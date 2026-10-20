@@ -1178,10 +1178,10 @@ mod tests {
         .unwrap();
         let waiting = pool.clone();
         let task = tokio::spawn(async move {
-            thruput_json_rpc_client::poll_receipt(
+            thruput_json_rpc_client::receipt::poll_receipt(
                 &crate::rpc::SimReceiptSource(&waiting),
                 TxHash(Base58(SHA256Hash::from([2; 32]))),
-                thruput_json_rpc_client::ReceiptPollConfig::within(
+                thruput_json_rpc_client::receipt::ReceiptPollConfig::within(
                     Duration::from_secs(2),
                     Duration::from_millis(200),
                 ),

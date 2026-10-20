@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use thruput_json_rpc_client::poll_receipt;
+use thruput_json_rpc_client::receipt::poll_receipt;
 use thruput_json_rpc_types::{
     base58::FixedIdentifier,
     receipt::{ExecStatus, TransactionReceipt},

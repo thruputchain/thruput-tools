@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use jsonrpsee::server::{Server, ServerHandle};
-use thruput_json_rpc_api::GroundhogApiServer;
-use thruput_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
+use thruput_json_rpc_api::{GroundhogApiClient, GroundhogApiServer};
+use thruput_json_rpc_client::{HttpClient, HttpClientBuilder};
 use thruput_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
     RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,

@@ -315,8 +315,8 @@ fn submit_and_confirm(prepared: &PreparedTransfer) -> Result<TransactionReceipt,
 }
 
 fn receipt_poll_config() -> (usize, Duration) {
-    let mut attempts = thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS;
-    let mut interval = thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL;
+    let mut attempts = thruput_json_rpc_client::receipt::DEFAULT_RECEIPT_POLL_ATTEMPTS;
+    let mut interval = thruput_json_rpc_client::receipt::DEFAULT_RECEIPT_POLL_INTERVAL;
     if cfg!(debug_assertions) {
         if let Ok(value) = std::env::var("THRUPUT_TEST_RECEIPT_POLL_ATTEMPTS")
             && let Ok(value) = value.parse::<usize>()
