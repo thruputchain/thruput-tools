@@ -1,4 +1,4 @@
-//! Explicit native transport registration, separate from production wire 13.
+//! Public native transport registration and capability discovery.
 
 use std::sync::{Arc, OnceLock};
 
@@ -119,13 +119,13 @@ impl<S> FinalizedNativeModule<S> {
     }
 }
 
-/// Native read-only backend semantics; production activation is separate.
+/// Native read-only backend semantics.
 pub mod read;
 
-/// Native transaction producers and evidence, not registered by production binaries.
+/// Native transaction producers and evidence.
 pub mod transaction;
 
-/// Composition of implemented native handlers without production activation.
+/// Composition of configured native handlers.
 pub mod service;
 
 /// Optional faucet and local funding semantics.

@@ -43,7 +43,7 @@ into a runbook:
 
 ```sh
 curl -fsS -H 'content-type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"groundhog_version","params":[]}' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getVersionInfo","params":{}}' \
   "$GATEWAY_RPC_URL" | jq .
 ```
 

@@ -1,7 +1,6 @@
 use crate::error::RpcErrorInfo;
 
-/// Native allocations. Do not import these into serving handlers before the
-/// coordinated wire-major switch. Framework size errors retain their own codes.
+/// Native allocations. Framework size errors retain their own codes.
 pub mod codes {
     /// Invalid named request or continuation token.
     pub const INVALID_PARAMS: i32 = -32602;
@@ -276,4 +275,44 @@ pub(super) fn kind_allowed(method: &str, kind: &str) -> bool {
                 method,
                 "getEvents" | "getTransactionsByRootAddress" | "getTransactionsByBlock"
             ))
+}
+
+/// Bounded outcome labels for native application and framework errors.
+pub const fn outcome_for_code(code: i32) -> &'static str {
+    match code {
+        codes::INVALID_PARAMS | -32700 | -32600 | -32005 | -32007 => "invalid_params",
+        codes::TRANSACTION_INVALID => "tx_invalid",
+        codes::TRANSACTION_REJECTED => "tx_rejected",
+        codes::STATE_HEIGHT_UNAVAILABLE => "state_height_unavailable",
+        codes::HISTORY_UNAVAILABLE => "history_unavailable",
+        codes::FUNDING_ATTEMPT_STOPPED => "funding_attempt_stopped",
+        codes::LOCAL_FUNDING_UNRESOLVED => "local_funding_unresolved",
+        codes::BACKEND_UNAVAILABLE => "backend_unavailable",
+        codes::BACKEND_TIMEOUT => "backend_timeout",
+        codes::OVERLOADED | -32006 | -32009 => "overloaded",
+        codes::BACKEND_DATA_INVALID => "backend_data_invalid",
+        -32601 => "not_implemented",
+        _ => "internal_error",
+    }
+}
+
+#[cfg(test)]
+mod metric_tests {
+    use super::*;
+
+    #[test]
+    fn native_codes_have_bounded_specific_labels() {
+        for info in ERROR_INFOS {
+            assert_ne!(
+                outcome_for_code(info.code),
+                "internal_error",
+                "{}",
+                info.name
+            );
+        }
+        assert_eq!(outcome_for_code(-32013), "history_unavailable");
+        assert_eq!(outcome_for_code(-32054), "backend_data_invalid");
+        assert_eq!(outcome_for_code(-32601), "not_implemented");
+        assert_eq!(outcome_for_code(i32::MIN), "internal_error");
+    }
 }

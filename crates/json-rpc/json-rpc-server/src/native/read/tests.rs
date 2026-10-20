@@ -652,7 +652,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
         handle.stop().unwrap();
         handle.stopped().await;
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "13.0.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.0.0");
 }
 
 #[test]

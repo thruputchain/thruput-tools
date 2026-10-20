@@ -176,7 +176,7 @@ fn all_kinds_codes_and_declared_methods_have_consistent_schemas() {
     }
     assert!(err::method_error_codes("futureMethod").is_none());
     assert!(err::method_data_schema("getBalance", -32031).is_none());
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "13.0.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.0.0");
 }
 
 #[test]

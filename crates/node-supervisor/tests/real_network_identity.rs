@@ -2,17 +2,15 @@
 
 use std::time::Duration;
 
+use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
-use thruput_json_rpc_api::{GroundhogApiClient, LocalFundingApiClient};
+use thruput_json_rpc_api::params::NamedParams;
 use thruput_json_rpc_types::{
-    ContractAddress, NetworkHashText,
-    airdrop::{ClientNonce, FundAccountRequest},
-    base58::Base58,
-    bootstrap_manifest::BootstrapManifestAllocation,
-    receipt::ExecStatus,
-    runtime_manifest::RuntimeManifestChainState,
-    transaction::TxHash,
+    ContractAddress, NetworkHashText, airdrop::ClientNonce, base58::Base58,
+    bootstrap_manifest::BootstrapManifestAllocation, requests::FundAccountRequest,
+    runtime_manifest::RuntimeManifestChainState, transaction::TxHash,
 };
+use thruput_json_rpc_types::{requests as input, responses as output};
 use thruput_node_supervisor::{
     BlockDriverConfig, HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle,
 };
@@ -50,20 +48,30 @@ fn client(node: &NodeSupervisorHandle) -> HttpClient {
         .unwrap()
 }
 
-async fn balance(client: &HttpClient, address: ContractAddress) -> u128 {
+async fn balance(client: &HttpClient, address: ContractAddress) -> i128 {
     client
-        .get_balance(address)
+        .request::<output::BalanceResult, _>(
+            "getBalance",
+            NamedParams(input::AddressQuery { address }),
+        )
         .await
         .unwrap()
         .raw_balance
-        .parse()
-        .unwrap()
 }
 
 async fn receipt(client: &HttpClient, hash: TxHash) {
     let receipt = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if let Some(receipt) = client.get_transaction_receipt(hash).await.unwrap() {
+            if let Some(receipt) = client
+                .request::<output::ReceiptResult, _>(
+                    "getTransactionReceipt",
+                    NamedParams(input::TransactionQuery {
+                        transaction_hash: hash,
+                    }),
+                )
+                .await
+                .unwrap()
+            {
                 break receipt;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -71,7 +79,10 @@ async fn receipt(client: &HttpClient, hash: TxHash) {
     })
     .await
     .unwrap();
-    assert!(matches!(receipt.status, ExecStatus::Ok), "{receipt:?}");
+    assert!(
+        matches!(receipt.execution, output::ReceiptExecution::Return { .. }),
+        "{receipt:?}"
+    );
 }
 
 async fn check_identity(node: &NodeSupervisorHandle, expected: &NetworkHashText) {
@@ -83,7 +94,10 @@ async fn check_identity(node: &NodeSupervisorHandle, expected: &NetworkHashText)
     );
     assert_eq!(
         client(node)
-            .network_info()
+            .request::<output::NetworkInfo, _>(
+                "getNetworkInfo",
+                NamedParams(input::EmptyRequest {})
+            )
             .await
             .unwrap()
             .network_hash
@@ -97,12 +111,15 @@ async fn fund(node: &NodeSupervisorHandle, recipient: ContractAddress) {
     let client = client(node);
     let before = balance(&client, recipient).await;
     let response = client
-        .fund_account(FundAccountRequest {
-            recipient,
-            faucet: manifest.bootstrap_accounts[0].wallet_address,
-            raw_amount: "10000000".into(),
-            client_nonce: ClientNonce::new(vec![1]).unwrap(),
-        })
+        .request::<output::FundingSubmission, _>(
+            "dev_fundAccount",
+            NamedParams(FundAccountRequest {
+                recipient,
+                faucet: manifest.bootstrap_accounts[0].wallet_address,
+                raw_amount: 10_000_000,
+                client_nonce: ClientNonce::new(vec![1]).unwrap(),
+            }),
+        )
         .await
         .unwrap();
     node.manual_block_producer()
@@ -110,7 +127,7 @@ async fn fund(node: &NodeSupervisorHandle, recipient: ContractAddress) {
         .produce_block()
         .await
         .unwrap();
-    receipt(&client, response.tx_hash).await;
+    receipt(&client, response.transaction_hash).await;
     assert_eq!(balance(&client, recipient).await, before + 10_000_000);
 }
 
@@ -185,9 +202,13 @@ async fn distinct_domains_and_persistent_identity() {
     // The identical payload succeeds on A; only the signature domain differs on B.
     assert_eq!(
         a_client
-            .send_raw_transaction(a_signed.clone())
+            .request::<output::SendTransactionResult, _>(
+                "sendTransaction",
+                NamedParams(serde_json::json!({"signedTransaction": a_signed.clone()}))
+            )
             .await
-            .unwrap(),
+            .unwrap()
+            .transaction_hash,
         hash
     );
     a.manual_block_producer()
@@ -198,7 +219,12 @@ async fn distinct_domains_and_persistent_identity() {
     receipt(&a_client, hash).await;
     let sender_before = balance(&b_client, sender_address).await;
     let recipient_before = balance(&b_client, recipient_address).await;
-    let wrong_domain = b_client.send_raw_transaction(a_signed).await;
+    let wrong_domain = b_client
+        .request::<output::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": a_signed})),
+        )
+        .await;
     assert!(
         matches!(&wrong_domain, Err(jsonrpsee::core::ClientError::Call(error))
         if error.message().contains("authentication")),
@@ -211,7 +237,12 @@ async fn distinct_domains_and_persistent_identity() {
         .unwrap();
     assert!(
         b_client
-            .get_transaction_receipt(hash)
+            .request::<output::ReceiptResult, _>(
+                "getTransactionReceipt",
+                NamedParams(input::TransactionQuery {
+                    transaction_hash: hash
+                })
+            )
             .await
             .unwrap()
             .is_none()
@@ -222,7 +253,17 @@ async fn distinct_domains_and_persistent_identity() {
         recipient_before
     );
     eprintln!("A-domain transaction on B: {wrong_domain:?}; no receipt or balance effects");
-    assert_eq!(b_client.send_raw_transaction(b_signed).await.unwrap(), hash);
+    assert_eq!(
+        b_client
+            .request::<output::SendTransactionResult, _>(
+                "sendTransaction",
+                NamedParams(serde_json::json!({"signedTransaction": b_signed}))
+            )
+            .await
+            .unwrap()
+            .transaction_hash,
+        hash
+    );
     b.manual_block_producer()
         .unwrap()
         .produce_block()
@@ -233,7 +274,11 @@ async fn distinct_domains_and_persistent_identity() {
     let recipient_after = balance(&b_client, recipient_address).await;
     assert!(sender_after <= sender_before - 1_000_000);
     assert_eq!(recipient_after, recipient_before + 1_000_000);
-    let height = *b_client.chain_tip().await.unwrap().height;
+    let height = *b_client
+        .request::<output::ChainTip, _>("getChainTip", NamedParams(input::EmptyRequest {}))
+        .await
+        .unwrap()
+        .block_height;
     assert!(height >= 3);
     b.stop().await.unwrap();
     a.stop().await.unwrap();
@@ -258,7 +303,14 @@ async fn distinct_domains_and_persistent_identity() {
         Some(RuntimeManifestChainState::Recovered)
     );
     let restarted_client = client(&restarted);
-    assert!(*restarted_client.chain_tip().await.unwrap().height >= height);
+    assert!(
+        *restarted_client
+            .request::<output::ChainTip, _>("getChainTip", NamedParams(input::EmptyRequest {}))
+            .await
+            .unwrap()
+            .block_height
+            >= height
+    );
     receipt(&restarted_client, hash).await;
     assert_eq!(
         balance(&restarted_client, sender_address).await,
@@ -270,7 +322,14 @@ async fn distinct_domains_and_persistent_identity() {
     );
     // Also validate retained faucet signatures on restart, then continue the chain.
     fund(&restarted, recipient_address).await;
-    assert!(*restarted_client.chain_tip().await.unwrap().height > height);
+    assert!(
+        *restarted_client
+            .request::<output::ChainTip, _>("getChainTip", NamedParams(input::EmptyRequest {}))
+            .await
+            .unwrap()
+            .block_height
+            > height
+    );
     eprintln!(
         "B-domain transfer committed; custom hash, receipts, balances and funding survived restart at height {height}"
     );

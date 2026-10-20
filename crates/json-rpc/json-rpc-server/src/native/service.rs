@@ -87,7 +87,7 @@ impl NativeCapabilities {
 /// Shared native service over caller-owned backend connections.
 ///
 /// This assembles discovery, state, simulation, history and transaction lifecycle methods.
-/// It does not bind a socket or change either production binary's registration.
+/// Binaries select configured planes and bind the resulting module to a listener.
 #[derive(Debug)]
 pub struct NativeService<S, C, R, V, F = ()> {
     reads: NativeReadService<C, R, V>,

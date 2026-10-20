@@ -25,9 +25,34 @@ use crate::backend::GatewayBackend;
 use crate::config::{GatewayConfig, HealthBackend};
 use crate::context::GatewayContext;
 use thruput_bundle_identity::{BundleIdentity, BundleSubject};
-use thruput_json_rpc_api::GroundhogApiServer;
-use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use thruput_json_rpc_server::{
+    RpcServerConfig,
+    native::service::{NativeCapabilities, NativeService},
+};
 use thruput_json_rpc_types::{NetworkHashText, SHA256Hash};
+
+fn native_capabilities(config: &GatewayConfig) -> NativeCapabilities {
+    NativeCapabilities::new(
+        true,
+        config.indexer_address.is_some(),
+        config.db_gateway_address.is_some(),
+        config.view_gateway_address.is_some(),
+    )
+}
+
+fn native_module(
+    api: NativeService<GatewayBackend, GatewayBackend, GatewayBackend, GatewayBackend>,
+    funding: Option<airdrop::HostedAirdrop>,
+) -> Result<jsonrpsee::RpcModule<()>, jsonrpsee::core::RegisterMethodError> {
+    match funding {
+        Some(funding) => Ok(api
+            .with_funding(funding)
+            .into_module()?
+            .into_rpc()
+            .remove_context()),
+        None => Ok(api.into_module()?.into_rpc().remove_context()),
+    }
+}
 
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 const BUILD_VERSION: thruput_build_info::BuildVersion = thruput_build_info::build_version!();
@@ -288,15 +313,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_view_gas_limit(ctx.config.view_gas_limit)
         .with_view_timeout_ms(ctx.config.view_timeout_ms)
         .with_view_batch(ctx.config.view_batch);
-    let api_impl = GroundhogRpcServer::unified(
-        GatewayBackend::new(ctx.clone()),
-        network_info,
+    let backend = GatewayBackend::new(ctx.clone());
+    let api = NativeService::new(
+        backend.clone(),
+        backend.clone(),
+        backend.clone(),
+        backend,
+        network_info.network_hash,
         rpc_config,
-        BuildInfo::new(BUILD_VERSION.crate_version(), BUILD_VERSION.source_commit()),
+        BUILD_VERSION,
+        native_capabilities(&ctx.config),
     )
     .with_bundle_identity(&bundle_identity);
-    let mut rpc = api_impl.into_rpc().remove_context();
-    airdrop::merge_rpc(&mut rpc, airdrop)?;
+    let rpc = native_module(api, airdrop)?;
     let handle = server.start(rpc);
 
     tracing::info!("hog-gateway listening");
@@ -689,6 +718,50 @@ mod tests {
             config.faucet_url.as_deref(),
             Some("https://faucet.devnet.example")
         );
+    }
+
+    #[test]
+    fn native_registration_follows_configured_sources() {
+        for mask in 0..8 {
+            let config = GatewayConfig {
+                indexer_address: (mask & 1 != 0).then(|| "indexer:1".into()),
+                db_gateway_address: (mask & 2 != 0).then(|| "db:1".into()),
+                view_gateway_address: (mask & 4 != 0).then(|| "view:1".into()),
+                ..GatewayConfig::default()
+            };
+            let methods = native_capabilities(&config).method_names();
+            for method in [
+                "getVersionInfo",
+                "getNetworkInfo",
+                "getServerLimits",
+                "sendTransaction",
+            ] {
+                assert!(methods.contains(&method));
+            }
+            for method in [
+                "getTransactionReceipt",
+                "getTransactionStatus",
+                "getBlockByHeight",
+                "getEvents",
+                "getTransactionsByRootAddress",
+                "getTransactionsByBlock",
+            ] {
+                assert_eq!(methods.contains(&method), mask & 1 != 0, "{method}: {mask}");
+            }
+            for method in [
+                "getChainTip",
+                "getChainConfig",
+                "getStorage",
+                "getBalance",
+                "getRegisteredAuth",
+            ] {
+                assert_eq!(methods.contains(&method), mask & 2 != 0, "{method}: {mask}");
+            }
+            for method in ["simulateInvocation", "simulateInvocations"] {
+                assert_eq!(methods.contains(&method), mask & 4 != 0, "{method}: {mask}");
+            }
+            assert!(!methods.iter().any(|name| name.starts_with("groundhog_")));
+        }
     }
 
     impl Drop for NotifyOnDrop {

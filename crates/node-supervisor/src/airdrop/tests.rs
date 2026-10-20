@@ -175,13 +175,23 @@ async fn registered_http_small_array_waits_without_raising_execution_limit() {
             .await
             .unwrap();
         let address = server.local_addr().unwrap();
-        let handle = server.start(AirdropApiServer::into_rpc(rpc.clone()));
+        let mut module = jsonrpsee::RpcModule::new(rpc.clone());
+        module
+            .register_async_method("faucet_requestAirdrop", |params, funding, _| async move {
+                let request = thruput_json_rpc_server::params::parse_named(&params)?;
+                thruput_json_rpc_server::native::funding::NativeFundingPlane::request_airdrop(
+                    &*funding, request,
+                )
+                .await
+            })
+            .unwrap();
+        let handle = server.start(module);
         let body = serde_json::to_string(
             &(1..=20)
                 .map(|id| {
                     serde_json::json!({
-                        "jsonrpc": "2.0", "id": id, "method": "groundhog_requestAirdrop",
-                        "params": [test_request(id, id)]
+                        "jsonrpc": "2.0", "id": id, "method": "faucet_requestAirdrop",
+                        "params": test_request(id, id)
                     })
                 })
                 .collect::<Vec<_>>(),

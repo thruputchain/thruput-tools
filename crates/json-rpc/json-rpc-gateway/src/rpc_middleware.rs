@@ -5,7 +5,7 @@ use jsonrpsee::{
     core::server::MethodResponse,
     types::Request,
 };
-use thruput_json_rpc_types::error::outcome_for_code;
+use thruput_json_rpc_types::error::native::outcome_for_code;
 use tracing::Instrument;
 
 use crate::metrics::GatewayMetrics;
@@ -247,7 +247,7 @@ mod tests {
             .scope(trace.clone(), async {
                 let service = RpcTracingService::new(MockRpcService::default());
                 service
-                    .call(Request::borrowed("groundhog_chainTip", None, Id::Number(1)))
+                    .call(Request::borrowed("getChainTip", None, Id::Number(1)))
                     .await;
                 service
                     .call(Request::borrowed("untrusted_method", None, Id::Number(2)))
@@ -262,15 +262,12 @@ mod tests {
         let spans = exporter.0.lock().unwrap();
         let method = spans
             .iter()
-            .find(|span| span.name == "groundhog_chainTip")
+            .find(|span| span.name == "getChainTip")
             .unwrap();
         assert_eq!(method.span_kind, SpanKind::Server);
         assert!(method.parent_span_is_remote);
         assert_eq!(method.parent_span_id.to_string(), "0123456789abcdef");
-        for (key, value) in [
-            ("rpc.system", "jsonrpc"),
-            ("rpc.method", "groundhog_chainTip"),
-        ] {
+        for (key, value) in [("rpc.system", "jsonrpc"), ("rpc.method", "getChainTip")] {
             assert!(
                 method
                     .attributes
@@ -312,7 +309,7 @@ mod tests {
         ) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
             let this = self.clone();
             async move {
-                if req.method_name() == "groundhog_chainTip"
+                if req.method_name() == "getChainTip"
                     && let Some(gate) = &this.gate
                 {
                     gate.acquire().await.unwrap().forget();
@@ -321,7 +318,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(req.method_name().to_owned());
-                if req.method_name() == "groundhog_chainTip" {
+                if req.method_name() == "getChainTip" {
                     MethodResponse::response(
                         req.id().into_owned(),
                         ResponsePayload::success("ok"),
@@ -400,12 +397,12 @@ mod tests {
         let service = RpcMetricsService::new(MockRpcService::default(), metrics.clone());
 
         service
-            .call(Request::borrowed("groundhog_chainTip", None, Id::Number(1)))
+            .call(Request::borrowed("getChainTip", None, Id::Number(1)))
             .await;
 
         let batch = Batch::from(vec![
             Ok(BatchEntry::Call(Request::borrowed(
-                "groundhog_chainTip",
+                "getChainTip",
                 None,
                 Id::Number(2),
             ))),
@@ -421,13 +418,13 @@ mod tests {
         let body = metrics.gather(&snapshot).expect("metrics should encode");
 
         assert!(body.contains(
-            "groundhog_gateway_rpc_requests_total{method=\"groundhog_chainTip\",outcome=\"ok\"} 2"
+            "groundhog_gateway_rpc_requests_total{method=\"getChainTip\",outcome=\"ok\"} 2"
         ));
         assert!(body.contains(
             "groundhog_gateway_rpc_requests_total{method=\"unknown\",outcome=\"not_implemented\"} 1"
         ));
         assert!(body.contains("groundhog_gateway_rpc_batch_size_bucket{le=\"2\"} 1"));
-        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 0"));
+        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"getChainTip\"} 0"));
     }
 
     #[tokio::test]
@@ -453,12 +450,12 @@ mod tests {
             .service(inner.clone());
         let batch = Batch::from(vec![
             Ok(BatchEntry::Call(Request::borrowed(
-                "groundhog_chainTip",
+                "getChainTip",
                 None,
                 Id::Null,
             ))),
             Ok(BatchEntry::Notification(
-                serde_json::from_str(r#"{"jsonrpc":"2.0","method":"groundhog_chainTip"}"#).unwrap(),
+                serde_json::from_str(r#"{"jsonrpc":"2.0","method":"getChainTip"}"#).unwrap(),
             )),
             Err(BatchEntryErr::new(
                 Id::Str("bad".into()),
@@ -479,7 +476,7 @@ mod tests {
         assert_eq!(*inner.completed.lock().unwrap(), vec!["unknown"]);
         let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
         let before = metrics.gather(&snapshot).unwrap();
-        for method in ["groundhog_chainTip", "invalid", "unknown"] {
+        for method in ["getChainTip", "invalid", "unknown"] {
             assert!(before.contains(&format!(
                 "groundhog_gateway_rpc_in_flight{{method=\"{method}\"}} 1"
             )));
@@ -492,11 +489,11 @@ mod tests {
         assert_eq!(output[2]["error"]["code"], -32601);
         assert_eq!(
             *inner.completed.lock().unwrap(),
-            vec!["unknown", "groundhog_chainTip"]
+            vec!["unknown", "getChainTip"]
         );
         let body = metrics.gather(&snapshot).unwrap();
         for (method, outcome) in [
-            ("groundhog_chainTip", "ok"),
+            ("getChainTip", "ok"),
             ("invalid", "invalid_params"),
             ("unknown", "not_implemented"),
         ] {
@@ -533,7 +530,7 @@ mod tests {
         let mut batch = Batch::new();
         for id in 0..3 {
             batch.push(Request::borrowed(
-                "groundhog_getTransactionReceipt",
+                "getTransactionReceipt",
                 None,
                 Id::Number(id),
             ));
@@ -545,12 +542,12 @@ mod tests {
             .gather(&snapshot)
             .expect("bug: metrics should encode");
         assert!(body.contains(
-            "groundhog_gateway_rpc_requests_total{method=\"groundhog_getTransactionReceipt\",outcome=\"not_implemented\"} 3"
+            "groundhog_gateway_rpc_requests_total{method=\"getTransactionReceipt\",outcome=\"not_implemented\"} 3"
         ));
         assert!(body.contains("groundhog_gateway_rpc_batch_size_count 1"));
-        assert!(body.contains(
-            "groundhog_gateway_rpc_in_flight{method=\"groundhog_getTransactionReceipt\"} 0"
-        ));
+        assert!(
+            body.contains("groundhog_gateway_rpc_in_flight{method=\"getTransactionReceipt\"} 0")
+        );
     }
 
     #[tokio::test]
@@ -569,7 +566,7 @@ mod tests {
             };
             let service = config.batch_service(inner.clone(), 4096);
             let mut batch = Batch::new();
-            batch.push(Request::borrowed("groundhog_chainTip", None, Id::Number(1)));
+            batch.push(Request::borrowed("getChainTip", None, Id::Number(1)));
             batch.push(Request::borrowed("unknown", None, Id::Number(2)));
             let mut response = Box::pin(service.batch(batch));
             future::poll_fn(|cx| {

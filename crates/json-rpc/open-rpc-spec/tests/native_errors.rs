@@ -1,4 +1,4 @@
-//! Native error documentation fixtures; the serving wire-13 artifact is unchanged.
+//! Native error documentation fixtures for the canonical public artifact.
 
 use std::collections::BTreeSet;
 
@@ -288,15 +288,14 @@ fn decorated_document_passes_offline_official_openrpc_meta_schema() {
 }
 
 #[test]
-fn legacy_artifact_remains_unchanged_and_cannot_be_decorated_as_native() {
-    let legacy = build_spec();
-    let snapshot: Value =
-        serde_json::from_str(include_str!("../snapshots/thruput-spec.json")).unwrap();
-    assert_eq!(legacy, snapshot);
-    assert_eq!(legacy["info"]["version"], "13.0.0");
-    let mut attempted = legacy.clone();
-    assert!(add_error_docs(&mut attempted).is_err());
-    assert_eq!(attempted, legacy);
-    let _native = decorated();
-    assert_eq!(build_spec(), legacy);
+fn canonical_artifact_has_idempotent_native_error_documentation() {
+    let original = build_spec();
+    let mut decorated = original.clone();
+    add_error_docs(&mut decorated).unwrap();
+    assert_eq!(decorated, original);
+    let mut legacy = original.clone();
+    legacy["methods"][0]["name"] = json!("groundhog_version");
+    let before = legacy.clone();
+    assert!(add_error_docs(&mut legacy).is_err());
+    assert_eq!(legacy, before);
 }

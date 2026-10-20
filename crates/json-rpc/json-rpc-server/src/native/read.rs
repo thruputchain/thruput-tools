@@ -1,5 +1,4 @@
-//! Native discovery, state, simulation and history handlers. These are not installed by
-//! either production binary. A later composition supplies the complete API.
+//! Native discovery, state, simulation and history handlers.
 
 mod projection;
 mod service;

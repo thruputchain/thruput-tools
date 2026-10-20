@@ -1,12 +1,10 @@
 //! Qualification against a compatible real runtime; run explicitly with --ignored.
 
+use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::HttpClientBuilder;
-use thruput_json_rpc_api::{GroundhogApiClient, LocalFundingApiClient};
-use thruput_json_rpc_types::{
-    airdrop::{ClientNonce, FundAccountRequest},
-    base58::Base58,
-    receipt::ExecStatus,
-};
+use thruput_json_rpc_api::params::NamedParams;
+use thruput_json_rpc_types::{airdrop::ClientNonce, base58::Base58, requests::FundAccountRequest};
+use thruput_json_rpc_types::{requests as input, responses as output};
 use thruput_node_supervisor::{
     BlockDriverConfig, HogdDevConfig, LOCAL_FAUCET_KEY_FILE, LOCAL_FUNDING_ATTEMPTS_FILE,
     NodeSupervisorConfig, NodeSupervisorHandle,
@@ -44,16 +42,24 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
     let request = FundAccountRequest {
         recipient,
         faucet,
-        raw_amount: "123456789".into(),
+        raw_amount: 123_456_789,
         client_nonce: ClientNonce::new(vec![0x42]).unwrap(),
     };
     let client = HttpClientBuilder::default()
         .build(format!("http://{}", node.rpc_addr()))
         .unwrap();
-    let funded = client.fund_account(request.clone()).await.unwrap();
+    let funded = client
+        .request::<output::FundingSubmission, _>("dev_fundAccount", NamedParams(request.clone()))
+        .await
+        .unwrap();
     assert!(
         client
-            .get_transaction_receipt(funded.tx_hash)
+            .request::<output::ReceiptResult, _>(
+                "getTransactionReceipt",
+                NamedParams(input::TransactionQuery {
+                    transaction_hash: funded.transaction_hash
+                })
+            )
             .await
             .unwrap()
             .is_none()
@@ -66,7 +72,12 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
     let receipt = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if let Some(receipt) = client
-                .get_transaction_receipt(funded.tx_hash)
+                .request::<output::ReceiptResult, _>(
+                    "getTransactionReceipt",
+                    NamedParams(input::TransactionQuery {
+                        transaction_hash: funded.transaction_hash,
+                    }),
+                )
                 .await
                 .unwrap()
             {
@@ -77,7 +88,10 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
     })
     .await
     .unwrap();
-    assert!(matches!(receipt.status, ExecStatus::Ok));
+    assert!(matches!(
+        receipt.execution,
+        output::ReceiptExecution::Return { .. }
+    ));
     node.stop().await.unwrap();
     assert!(dir.path().join(LOCAL_FAUCET_KEY_FILE).is_file());
     assert!(dir.path().join(LOCAL_FUNDING_ATTEMPTS_FILE).is_file());
@@ -85,7 +99,14 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
     let client = HttpClientBuilder::default()
         .build(format!("http://{}", restarted.rpc_addr()))
         .unwrap();
-    assert_eq!(client.fund_account(request).await.unwrap(), funded);
+    let reconciled = client
+        .request::<output::FundingSubmission, _>("dev_fundAccount", NamedParams(request))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(reconciled).unwrap(),
+        serde_json::to_value(funded).unwrap()
+    );
     restarted.stop().await.unwrap();
     std::fs::remove_file(dir.path().join(LOCAL_FAUCET_KEY_FILE)).unwrap();
     assert!(NodeSupervisorHandle::start(config).await.is_err());

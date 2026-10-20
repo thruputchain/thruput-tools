@@ -26,5 +26,5 @@ pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig, ViewBatchConfig};
 pub use error::RpcServerError;
 pub use server::{BuildInfo, GroundhogRpcServer};
 
-/// Candidate native transport; production activation is separate.
+/// Native JSON-RPC transport.
 pub mod native;

@@ -308,14 +308,13 @@ pub struct GatewayConfig {
 
     /// x23 RPC address for hogd scheduler.
     ///
-    /// Required for scheduler-backed submission and for read paths such as
-    /// `chainTip`, `pendingTransactionCount`, and pending tx lookup.
+    /// Required for submission and pending transaction lookup.
     pub scheduler_address: String,
 
     /// x23 RPC address for hogd indexer.
     ///
-    /// Optional in runtime-manifest mode. When absent, read APIs backed by the
-    /// indexer return `BackendUnavailable`.
+    /// Optional in runtime-manifest mode. When absent, indexer-dependent methods
+    /// are omitted from registration and `supportedMethods`.
     pub indexer_address: Option<String>,
 
     /// Dedicated scheduler lookup execution permits (1..=68, default 16).
@@ -328,16 +327,14 @@ pub struct GatewayConfig {
 
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
     ///
-    /// Serves `groundhog_getStorageAt`, `groundhog_getBalance`, and
-    /// `groundhog_getAddressAuthData`. Optional: when absent the gateway
-    /// starts in degraded mode and those methods return
-    /// `BackendUnavailable`.
+    /// Serves tip, configuration and latest-state reads. When absent, these
+    /// methods are omitted from registration and `supportedMethods`.
     pub db_gateway_address: Option<String>,
 
     /// x23 RPC address for hogd `ViewGateway1` (sandboxed contract simulation).
     ///
-    /// Serves `groundhog_view`. Optional: when absent the gateway returns
-    /// `NotImplemented` for view execution. When configured, transient
+    /// Serves `simulateInvocation` and `simulateInvocations`. When absent, both
+    /// methods are omitted. When configured, transient
     /// connection or intro timeout/RPC failures degrade startup; intro
     /// rejections remain hard startup errors because they usually indicate a
     /// protocol/config mismatch.
@@ -355,10 +352,10 @@ pub struct GatewayConfig {
     /// matching Rust protocol crate has been published.
     pub hogd_protocol_override: Option<String>,
 
-    /// Maximum `groundhog_view` calldata byte length.
+    /// Maximum `simulateInvocation` calldata byte length.
     pub max_view_calldata_bytes: usize,
 
-    /// Gas budget assigned to backend `groundhog_view` execution.
+    /// Gas budget assigned to backend `simulateInvocation` execution.
     pub view_gas_limit: u64,
 
     /// Per-page cap on `getEvents` responses; requests with `limit`

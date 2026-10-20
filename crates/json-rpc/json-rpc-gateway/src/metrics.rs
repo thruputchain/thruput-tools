@@ -455,26 +455,11 @@ impl GatewayMetrics {
     }
 
     pub(crate) fn bound_rpc_method(method: &str) -> &'static str {
-        match method {
-            "groundhog_sendRawTransaction" => "groundhog_sendRawTransaction",
-            "groundhog_getTransactionReceipt" => "groundhog_getTransactionReceipt",
-            "groundhog_getTransactionStatus" => "groundhog_getTransactionStatus",
-            "groundhog_chainTip" => "groundhog_chainTip",
-            "groundhog_getBlockByNumber" => "groundhog_getBlockByNumber",
-            "groundhog_pendingTransactionCount" => "groundhog_pendingTransactionCount",
-            "groundhog_getEvents" => "groundhog_getEvents",
-            "groundhog_getTransactionsByAddress" => "groundhog_getTransactionsByAddress",
-            "groundhog_getTransactionsByBlock" => "groundhog_getTransactionsByBlock",
-            "groundhog_getStorageAt" => "groundhog_getStorageAt",
-            "groundhog_getBalance" => "groundhog_getBalance",
-            "groundhog_getAddressAuthData" => "groundhog_getAddressAuthData",
-            "groundhog_view" => "groundhog_view",
-            "groundhog_viewBatch" => "groundhog_viewBatch",
-            "groundhog_networkInfo" => "groundhog_networkInfo",
-            "groundhog_requestAirdrop" => "groundhog_requestAirdrop",
-            "groundhog_version" => "groundhog_version",
-            _ => "unknown",
-        }
+        thruput_json_rpc_api::native::METHOD_NAMES
+            .iter()
+            .copied()
+            .find(|name| *name == method)
+            .unwrap_or("unknown")
     }
 
     pub(crate) fn observe_rpc_request(
@@ -698,21 +683,21 @@ mod tests {
     fn cloned_metrics_share_observations_and_survive_the_original() {
         let metrics = GatewayMetrics::for_tests();
         let clone = metrics.clone();
-        let guard = metrics.rpc_in_flight_guard("groundhog_chainTip");
+        let guard = metrics.rpc_in_flight_guard("getChainTip");
         drop(metrics);
-        clone.observe_rpc_request("groundhog_chainTip", "ok", Duration::from_millis(2));
+        clone.observe_rpc_request("getChainTip", "ok", Duration::from_millis(2));
         let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
         let body = clone.gather(&snapshot).unwrap();
         assert!(body.contains(
-            "groundhog_gateway_rpc_requests_total{method=\"groundhog_chainTip\",outcome=\"ok\"} 1"
+            "groundhog_gateway_rpc_requests_total{method=\"getChainTip\",outcome=\"ok\"} 1"
         ));
-        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 1"));
+        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"getChainTip\"} 1"));
         drop(guard);
         assert!(
             clone
                 .gather(&snapshot)
                 .unwrap()
-                .contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 0")
+                .contains("groundhog_gateway_rpc_in_flight{method=\"getChainTip\"} 0")
         );
     }
 
@@ -843,41 +828,24 @@ mod tests {
         let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
         let metrics = GatewayMetrics::for_tests();
 
-        for method in [
-            "groundhog_sendRawTransaction",
-            "groundhog_getTransactionReceipt",
-            "groundhog_getTransactionStatus",
-            "groundhog_chainTip",
-            "groundhog_getBlockByNumber",
-            "groundhog_pendingTransactionCount",
-            "groundhog_getEvents",
-            "groundhog_getTransactionsByAddress",
-            "groundhog_getTransactionsByBlock",
-            "groundhog_getStorageAt",
-            "groundhog_getBalance",
-            "groundhog_getAddressAuthData",
-            "groundhog_view",
-            "groundhog_viewBatch",
-            "groundhog_networkInfo",
-            "groundhog_version",
-        ] {
+        for &method in thruput_json_rpc_api::native::METHOD_NAMES {
             assert_eq!(GatewayMetrics::bound_rpc_method(method), method);
         }
         assert_eq!(GatewayMetrics::bound_rpc_method("evil_custom"), "unknown");
 
-        metrics.observe_rpc_request("groundhog_chainTip", "ok", Duration::from_millis(2));
+        metrics.observe_rpc_request("getChainTip", "ok", Duration::from_millis(2));
         metrics.observe_rpc_request("unknown", "not_implemented", Duration::from_millis(3));
         metrics.observe_rpc_batch_size(5);
         metrics.set_rpc_connections_limit(2000);
         metrics.observe_http_request("jsonrpc", "2xx", Duration::from_millis(4));
         metrics.observe_http_request("readyz", "5xx", Duration::from_millis(1));
 
-        let guard = metrics.rpc_in_flight_guard("groundhog_chainTip");
+        let guard = metrics.rpc_in_flight_guard("getChainTip");
         let body = metrics.gather(&snapshot).expect("metrics should encode");
         drop(guard);
 
         assert!(body.contains(
-            "groundhog_gateway_rpc_requests_total{method=\"groundhog_chainTip\",outcome=\"ok\"} 1"
+            "groundhog_gateway_rpc_requests_total{method=\"getChainTip\",outcome=\"ok\"} 1"
         ));
         assert!(body.contains(
             "groundhog_gateway_rpc_requests_total{method=\"unknown\",outcome=\"not_implemented\"} 1"
@@ -885,7 +853,7 @@ mod tests {
         assert!(body.contains(
             "groundhog_gateway_rpc_request_duration_seconds_count{method=\"unknown\",result=\"error\"} 1"
         ));
-        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 1"));
+        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"getChainTip\"} 1"));
         assert!(body.contains("groundhog_gateway_rpc_batch_size_bucket{le=\"5\"} 1"));
         assert!(body.contains("groundhog_gateway_rpc_connections_limit 2000"));
         assert!(body.contains(
@@ -902,7 +870,7 @@ mod tests {
         for bucket in expected_duration_buckets {
             assert!(
                 body.contains(&format!(
-                    "groundhog_gateway_rpc_request_duration_seconds_bucket{{method=\"groundhog_chainTip\",result=\"ok\",le=\"{bucket}\"}}"
+                    "groundhog_gateway_rpc_request_duration_seconds_bucket{{method=\"getChainTip\",result=\"ok\",le=\"{bucket}\"}}"
                 )),
                 "missing RPC duration bucket {bucket}:\n{body}"
             );
@@ -923,7 +891,7 @@ mod tests {
         }
 
         let body = metrics.gather(&snapshot).expect("metrics should encode");
-        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 0"));
+        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"getChainTip\"} 0"));
     }
 
     #[test]

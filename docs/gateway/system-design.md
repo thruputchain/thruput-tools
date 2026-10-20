@@ -32,30 +32,29 @@ services. Production topology comes from gateway configuration.
 
 ## Shared-snapshot reads
 
-Single views and individual batch entries accept optional `authClaim` (wire
-11.2). A claim is assumed without signatures; normal contract checks still run
+Single views and individual batch entries accept optional `assumedAuth`. A claim is assumed without signatures; normal contract checks still run
 and writes never commit. Omission supplies the existing zero-key, zero-weight
 source-address claim. `caller` separately identifies an optional parent contract.
 
 Claims use `kind: "sourceAddress"` with uint32 `allowedKeys` / `requiredWeight`,
-or `kind: "pubkeySignature"` with an Ed25519 `publicKey` (base58 encoding of 32 bytes) and a
-decimal-string uint64 `nonce`. No private key or signature is accepted.
+or `kind: "pubkeySignature"` with an `pubkeyHash` (base58 encoding of 32 bytes) and a
+decimal-string uint64 `accountNonce`. No private key or signature is accepted.
 
-Single `groundhog_view` calls also accept `minHeight`. The shared RPC server
+Single `simulateInvocation` calls also accept `minStateBlockHeight`. The shared RPC server
 checks the height returned by the existing single-view execution path and rejects
-an older result with `ViewHeightUnavailable`. Omitting the option preserves the
+an older result with `stateHeightUnavailable`. Omitting the option preserves the
 normal single-view behavior. Single views retain their own gas, response, and
 deadline policy; they do not inherit aggregate batch limits.
 
-`groundhog_viewBatch` runs independent calls against one committed snapshot.
+`simulateInvocations` runs independent calls against one committed snapshot.
 Calls retain input order and do not share simulated writes. A failed snapshot
 attempt discards all partial results; hogd retries the group at most three times.
 
-`minHeight` is a freshness floor. If the selected snapshot is older, the request
-returns `ViewHeightUnavailable` with requested and observed heights. It does not
+`minStateBlockHeight` is a freshness floor. If the selected snapshot is older, the request
+returns `stateHeightUnavailable` with requested and observed heights. It does not
 wait for a block or request a snapshot refresh. Hogd maintains snapshots through
 its shared refresh worker; callers choose whether and when to retry.
-For a batch, the floor belongs to the group. A `minHeight` field inside a call
+For a batch, the floor belongs to the group. A `minStateBlockHeight` field inside a call
 entry is rejected rather than ignored.
 
 Batch limits are operator policy, not consensus parameters. The gateway's TOML

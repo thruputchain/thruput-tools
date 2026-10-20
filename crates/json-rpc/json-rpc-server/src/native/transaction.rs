@@ -1,4 +1,4 @@
-//! Native transaction evidence and backend boundaries. Production still serves wire 13.
+//! Native transaction evidence and backend boundaries.
 
 mod attempt;
 mod error;

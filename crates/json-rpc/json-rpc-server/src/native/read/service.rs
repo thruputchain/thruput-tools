@@ -5,7 +5,7 @@ use crate::{BuildVersion, ChainPlane, RpcRequestContext, RpcServerConfig, RpcSer
 use jsonrpsee::core::RpcResult;
 use std::{future::Future, time::Duration};
 use thruput_bundle_identity::BundleIdentity;
-use thruput_json_rpc_api::native::CANDIDATE_WIRE_FORMAT_VERSION;
+use thruput_json_rpc_api::WIRE_FORMAT_VERSION;
 use thruput_json_rpc_types::{BlockHeight, NetworkHash, requests as input, responses as out};
 
 /// Configured state and simulation sources, independent of their health.
@@ -20,7 +20,7 @@ impl NativeReadCapabilities {
     pub const fn new(db: bool, simulation: bool) -> Self {
         Self { db, simulation }
     }
-    /// Sorted implemented method names for candidate test composition.
+    /// Sorted implemented method names for these configured sources.
     pub fn method_names(self) -> Vec<&'static str> {
         let mut names = vec!["getVersionInfo", "getNetworkInfo", "getServerLimits"];
         if self.db {
@@ -40,10 +40,8 @@ impl NativeReadCapabilities {
     }
 }
 
-/// Native read-only producers over the same backend connections used by wire 13.
-/// Register them only in a candidate test composition until activation supplies
-/// the complete public contract. Tip/config calls reuse the backend coalescer;
-/// they do not change the legacy submit cache or its refresh task.
+/// Read-only producers over caller-owned backend connections.
+/// Tip/config calls reuse the backend coalescer and the shared submit cache.
 #[derive(Debug)]
 pub struct NativeReadService<C, R, V> {
     chain: C,
@@ -56,7 +54,7 @@ pub struct NativeReadService<C, R, V> {
 }
 
 impl<C, R, V> NativeReadService<C, R, V> {
-    /// Construct candidate producers without registering any public methods.
+    /// Construct producers without registering public methods.
     pub fn new(
         chain: C,
         state: R,
@@ -66,8 +64,7 @@ impl<C, R, V> NativeReadService<C, R, V> {
         build: BuildVersion,
         capabilities: NativeReadCapabilities,
     ) -> Self {
-        let mut version =
-            out::VersionInfo::new(CANDIDATE_WIRE_FORMAT_VERSION, vec![], build.crate_version());
+        let mut version = out::VersionInfo::new(WIRE_FORMAT_VERSION, vec![], build.crate_version());
         version.commit_hash = build.source_commit().map(str::to_owned);
         version.platform_version = build.platform_version().map(str::to_owned);
         Self {

@@ -1,11 +1,8 @@
-//! Candidate native contracts. These declarations do not activate wire 14.
+//! Public native JSON-RPC contracts.
 //!
 //! The catalog owns names, request/result associations and documentation for the
 //! explicit server/client adapters. jsonrpsee's generated positional/wrapped
 //! argument adapters are intentionally not used for whole-object parameters.
-
-/// Target version for the candidate schema, independent of the serving version.
-pub const CANDIDATE_WIRE_FORMAT_VERSION: &str = "14.0.0";
 
 /// Expand the native method catalog into a consumer macro.
 ///

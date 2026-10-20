@@ -4,7 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use jsonrpsee::{RpcModule, core::RpcResult, types::ErrorObjectOwned};
+use jsonrpsee::{core::RpcResult, types::ErrorObjectOwned};
 use reqwest::{StatusCode, Url};
 use serde::Deserialize;
 use thruput_json_rpc_api::AirdropApiServer;
@@ -394,16 +394,6 @@ impl HostedAirdrop {
     }
 }
 
-pub(crate) fn merge_rpc(
-    rpc: &mut RpcModule<()>,
-    airdrop: Option<HostedAirdrop>,
-) -> Result<(), jsonrpsee::core::RegisterMethodError> {
-    if let Some(airdrop) = airdrop {
-        rpc.merge(airdrop.into_rpc().remove_context())?;
-    }
-    Ok(())
-}
-
 #[async_trait]
 impl AirdropApiServer for HostedAirdrop {
     async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse> {
@@ -586,6 +576,66 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn native_gateway_registration_matches_discovery_and_funding_config() {
+        use thruput_json_rpc_server::native::service::NativeService;
+        use tokio::sync::RwLock;
+
+        let app = Router::new().route(
+            "/v1/network",
+            get(|| async { Json(network_descriptor("devnet")) }),
+        );
+        let (url, faucet) = spawn_app(app).await;
+        for enabled in [false, true] {
+            let mut config = config(&url);
+            if !enabled {
+                config.faucet_url = None;
+            }
+            let funding = HostedAirdrop::from_config(&config, network_info())
+                .await
+                .unwrap();
+            let capabilities = crate::native_capabilities(&config);
+            let ctx = crate::context::GatewayContext::assemble(
+                thruput_xdr::PROTOCOL_VERSION,
+                Arc::new(RwLock::new(None)),
+                Arc::new(RwLock::new(None)),
+                Arc::new(RwLock::new(None)),
+                Arc::new(RwLock::new(None)),
+                Arc::new(config),
+                GatewayMetrics::for_tests(),
+            );
+            let backend = crate::backend::GatewayBackend::new(Arc::new(ctx));
+            let service = NativeService::new(
+                backend.clone(),
+                backend.clone(),
+                backend.clone(),
+                backend,
+                network_info().network_hash,
+                thruput_json_rpc_server::RpcServerConfig::default(),
+                crate::BUILD_VERSION,
+                capabilities,
+            );
+            let module = crate::native_module(service, funding).unwrap();
+            let mut registered: Vec<_> = module.method_names().collect();
+            registered.sort_unstable();
+            assert_eq!(registered.contains(&"faucet_requestAirdrop"), enabled);
+            assert!(!registered.contains(&"dev_fundAccount"));
+            assert!(!registered.contains(&"dev_getPendingTransactionCount"));
+            assert!(!registered.iter().any(|name| name.starts_with("groundhog_")));
+            let (response, _) = module
+                .raw_json_request(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"getVersionInfo","params":{}}"#,
+                    1,
+                )
+                .await
+                .unwrap();
+            let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
+            assert_eq!(response["result"]["supportedMethods"], json!(registered));
+            assert_eq!(response["result"]["wireFormat"], "14.0.0");
+        }
+        faucet.abort();
+    }
+
+    #[tokio::test]
     async fn registered_http_small_array_waits_without_raising_execution_limit() {
         use thruput_json_rpc_server::batch::{ConcurrentBatchService, RpcBatchConcurrency};
 
@@ -633,10 +683,20 @@ mod tests {
                 .await
                 .unwrap();
             let address = server.local_addr().unwrap();
-            let handle = server.start(facade.clone().into_rpc());
+            let mut module = jsonrpsee::RpcModule::new(facade.clone());
+            module
+                .register_async_method("faucet_requestAirdrop", |params, funding, _| async move {
+                    let request = thruput_json_rpc_server::params::parse_named(&params)?;
+                    thruput_json_rpc_server::native::funding::NativeFundingPlane::request_airdrop(
+                        &*funding, request,
+                    )
+                    .await
+                })
+                .unwrap();
+            let handle = server.start(module);
             let body: Vec<_> = (1..=65).map(|id| json!({
-                "jsonrpc": "2.0", "id": id, "method": "groundhog_requestAirdrop",
-                "params": [{"recipient": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([u8::try_from(id).unwrap(); 32])), "clientNonce": "0x01"}]
+                "jsonrpc": "2.0", "id": id, "method": "faucet_requestAirdrop",
+                "params": {"recipient": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([u8::try_from(id).unwrap(); 32])), "clientNonce": "0x01"}
             })).collect();
             let response = tokio::spawn(async move {
                 reqwest::Client::new()
@@ -748,18 +808,6 @@ mod tests {
         facade.request_airdrop(airdrop_request()).await.unwrap();
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         faucet.abort();
-    }
-
-    #[test]
-    fn unconfigured_facade_does_not_register_airdrop_method() {
-        let mut rpc = RpcModule::new(());
-
-        merge_rpc(&mut rpc, None).expect("bug: merging no optional module should succeed");
-
-        assert!(
-            !rpc.method_names()
-                .any(|name| name == "groundhog_requestAirdrop")
-        );
     }
 
     #[tokio::test]

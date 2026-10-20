@@ -23,7 +23,7 @@ path = "src/main.rs"
 
 [features]
 # Explicit local qualification only; enabling the feature does not select native RPC.
-native-rpc-qualification = ["thruput-node-supervisor/native-rpc-qualification"]
+native-rpc-qualification = []
 
 [dependencies]
 thruput-encoding = { workspace = true }

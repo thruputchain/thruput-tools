@@ -341,7 +341,7 @@ fn identifier_decoding_and_production_registration_keep_their_boundaries() {
     for (native, _) in parsers() {
         assert!(!production.method_names().any(|name| name == native));
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "13.0.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.0.0");
 }
 
 fn register_request_echo<T: Send + Sync + 'static>(

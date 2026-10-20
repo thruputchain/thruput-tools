@@ -119,8 +119,8 @@ import urllib.request
 payload = json.dumps({
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "groundhog_chainTip",
-    "params": [],
+    "method": "getChainTip",
+    "params": {},
 }).encode()
 request = urllib.request.Request(
     sys.argv[1],

@@ -1,12 +1,10 @@
-//! Typed native calls and opt-in read-only receipt waiting.
-//!
-//! These adapters do not select a wire version or replace legacy clients. The
-//! caller chooses an endpoint implementing the candidate native contract.
+//! Typed native calls and read-only receipt waiting.
 
 pub mod receipt;
 
 use jsonrpsee::core::client::{ClientT, Error as TransportError};
 use jsonrpsee::types::ErrorObjectOwned;
+use serde::Deserialize;
 use thruput_json_rpc_api::params::NamedParams;
 use thruput_json_rpc_types::{error::native::DecodedError, responses::DecodedResponse};
 
@@ -23,7 +21,16 @@ pub enum NativeClientError {
         source: ErrorObjectOwned,
         data: Box<DecodedError>,
     },
-    /// Transport, protocol or malformed-known-result failure. This says nothing
+    /// A malformed known result, retaining the server's complete JSON value.
+    /// This does not establish admission, commitment or execution failure.
+    #[error("Invalid {method} response: {source}")]
+    InvalidResponse {
+        method: &'static str,
+        raw: Box<serde_json::Value>,
+        #[source]
+        source: serde_json::Error,
+    },
+    /// Transport or protocol failure. This says nothing
     /// about transaction admission or execution; preserve existing uncertainty.
     #[error(transparent)]
     Transport(#[from] TransportError),
@@ -71,8 +78,11 @@ macro_rules! client_methods {
                 pub async fn $name(&self, request: $request)
                     -> Result<DecodedResponse<$response>, NativeClientError>
                 {
-                    self.inner.request($wire, NamedParams(request)).await
-                        .map_err(|error| NativeClientError::from_call($wire, error))
+                    let raw: serde_json::Value = self.inner.request($wire, NamedParams(request)).await
+                        .map_err(|error| NativeClientError::from_call($wire, error))?;
+                    DecodedResponse::<$response>::deserialize(&raw).map_err(|source| {
+                        NativeClientError::InvalidResponse { method: $wire, raw: Box::new(raw), source }
+                    })
                 }
             )*
         }
