@@ -4392,6 +4392,7 @@ dependencies = [
  "serial_test",
  "thiserror 2.0.21",
  "thruput-build-info",
+ "thruput-client",
  "thruput-json-rpc-client",
  "thruput-json-rpc-types",
  "thruput-signing",

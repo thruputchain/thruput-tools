@@ -33,6 +33,7 @@ pub struct AirdropAttempt {
     pub tx_hash: Option<String>,
     /// Signed evidence retained before broadcast; absent in older/custom stores.
     pub transaction: Option<crate::airdrop::PreparedAirdrop>,
+    /// Observed commitment, retained even while the receipt is unavailable.
     pub height: Option<i64>,
     /// Observed successful root output; missing output cannot become native success.
     pub return_data: Option<thruput_json_rpc_types::hex::HexBytes>,

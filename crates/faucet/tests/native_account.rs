@@ -10,11 +10,11 @@ use thruput_faucet::airdrop::{
 };
 use thruput_json_rpc_types::{
     base58::Base58,
-    block::ChainTip,
     hex::HexBytes,
     network_descriptor::{
         FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
     },
+    requests,
     transaction::TxHash,
 };
 use thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT;
@@ -48,7 +48,7 @@ fn assert_native_transfers(
     descriptor: &NetworkDescriptor,
     recipient: ContractAddress,
 ) {
-    assert_eq!(recorded.len(), 4);
+    assert_eq!(recorded.len(), 3);
     assert_eq!(
         xdrs::txs::encode(&recorded[0]).unwrap(),
         xdrs::txs::encode(&recorded[2]).unwrap()
@@ -88,33 +88,47 @@ async fn hosted_airdrops_use_native_authentication_and_distinct_transaction_nonc
     let wrong_hash = Arc::new(AtomicBool::new(false));
     let mut module = RpcModule::new((recorded.clone(), tip.clone(), wrong_hash.clone()));
     module
-        .register_method("groundhog_chainTip", |_, state, _| {
+        .register_method("getChainTip", |params, state, _| {
+            let _: requests::EmptyRequest = params.parse()?;
             let height = state.1.load(Ordering::SeqCst);
-            if height < 0 {
+            if height == -2 {
                 return Err(ErrorObjectOwned::owned(
                     -32000,
                     "tip unavailable",
                     None::<()>,
                 ));
             }
-            Ok::<_, ErrorObjectOwned>(ChainTip {
-                height: height.into(),
-                block_hash: Base58([0; 32].into()),
-            })
+            Ok::<_, ErrorObjectOwned>(serde_json::json!({"blockHeight":height.to_string(), "blockHash":Base58(SHA256Hash::from([0;32]))}))
         })
         .unwrap();
     module
-        .register_method("groundhog_sendRawTransaction", |params, state, _| {
-            let (encoded,): (String,) = params.parse()?;
+        .register_method("sendTransaction", |params, state, _| {
+            let request: requests::SendTransactionRequest = params.parse()?;
             let signed: SignedTransaction =
-                xdrs::txs::decode(&hex::decode(encoded.trim_start_matches("0x")).unwrap()).unwrap();
+                xdrs::txs::decode(&request.signed_transaction.0).unwrap();
             let hash = TxHash(Base58(transaction_hash(&signed.tx).unwrap()));
             state.0.lock().unwrap().push(signed);
-            Ok::<_, ErrorObjectOwned>(if state.2.load(Ordering::SeqCst) {
+            let hash = if state.2.load(Ordering::SeqCst) {
                 TxHash(Base58([9; 32].into()))
             } else {
                 hash
-            })
+            };
+            Ok::<_, ErrorObjectOwned>(
+                serde_json::json!({"transactionHash":hash, "admission":"accepted"}),
+            )
+        })
+        .unwrap();
+    module.register_method("getVersionInfo", |params, _, _| {
+        let _: requests::EmptyRequest = params.parse()?;
+        Ok::<_, ErrorObjectOwned>(serde_json::json!({"wireFormat":"14.0.0", "implementation":"test",
+            "supportedMethods":["getNetworkInfo","getChainTip","sendTransaction","getTransactionReceipt","getTransactionStatus"]}))
+    }).unwrap();
+    module
+        .register_method("getNetworkInfo", |params, _, _| {
+            let _: requests::EmptyRequest = params.parse()?;
+            Ok::<_, ErrorObjectOwned>(
+                serde_json::json!({"networkHash":Base58(SHA256Hash::from([0x42;32]))}),
+            )
         })
         .unwrap();
     let handle = server.start(module);
@@ -129,32 +143,27 @@ async fn hosted_airdrops_use_native_authentication_and_distinct_transaction_nonc
     let first = submitter.prepare_airdrop(recipient).await.unwrap();
     assert!(recorded.lock().unwrap().is_empty());
     // Preparation already read the tip; a later tip outage must not strand
-    // the first broadcast, but must prevent an unchecked replay.
-    tip.store(-1, Ordering::SeqCst);
-    submitter.submit_airdrop(&first, false).await.unwrap();
-    assert!(submitter.submit_airdrop(&first, true).await.is_err());
+    // the first broadcast.
+    tip.store(-2, Ordering::SeqCst);
+    submitter.submit_airdrop(&first).await.unwrap();
     assert_eq!(recorded.lock().unwrap().len(), 1);
     tip.store(10, Ordering::SeqCst);
     let second = submitter.prepare_airdrop(recipient).await.unwrap();
-    submitter.submit_airdrop(&second, false).await.unwrap();
+    submitter.submit_airdrop(&second).await.unwrap();
     assert_ne!(first.tx_hash, second.tx_hash);
-    submitter.submit_airdrop(&first, true).await.unwrap();
-    assert_eq!(recorded.lock().unwrap().len(), 3);
-    tip.store(first.block_expiry_height, Ordering::SeqCst);
-    assert!(
-        submitter
-            .submit_airdrop(&first, true)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("expired")
-    );
-    assert_eq!(recorded.lock().unwrap().len(), 3);
+    for invalid_tip in [-1, i64::MAX] {
+        tip.store(invalid_tip, Ordering::SeqCst);
+        assert!(matches!(
+            submitter.prepare_airdrop(recipient).await.unwrap_err(),
+            thruput_faucet::airdrop::AirdropSubmitError::Preflight(_)
+        ));
+        assert_eq!(recorded.lock().unwrap().len(), 2);
+    }
     tip.store(10, Ordering::SeqCst);
     wrong_hash.store(true, Ordering::SeqCst);
     assert!(
         submitter
-            .submit_airdrop(&first, true)
+            .submit_airdrop(&first)
             .await
             .unwrap_err()
             .to_string()
@@ -177,4 +186,140 @@ fn submitter_rejects_address_of_another_account_nonce() {
         RpcAirdropSubmitter::new(&descriptor, &config, SHA256Hash::from([0x42; 32]).into()),
         Err(AirdropRuntimeConfigError::FaucetAddressMismatch)
     ));
+}
+
+#[tokio::test]
+async fn hosted_receipt_wait_validates_native_identity_execution_and_events() {
+    let hash = TxHash(Base58([0x22; 32].into()));
+    let receipt = serde_json::json!({
+        "transactionHash":hash, "blockHeight":"42", "gasUsed":"7", "events":[],
+        "execution":{"result":"return", "returnData":"0x0102"}
+    });
+    let value = Arc::new(Mutex::new(receipt.clone()));
+    let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", server.local_addr().unwrap());
+    let mut module = RpcModule::new(value.clone());
+    module.register_method("getVersionInfo", |params, _, _| {
+        let _: requests::EmptyRequest = params.parse()?;
+        Ok::<_, ErrorObjectOwned>(serde_json::json!({"wireFormat":"14.0.0", "implementation":"test",
+            "supportedMethods":["getNetworkInfo","getChainTip","sendTransaction","getTransactionReceipt","getTransactionStatus"]}))
+    }).unwrap();
+    module
+        .register_method("getNetworkInfo", |params, _, _| {
+            let _: requests::EmptyRequest = params.parse()?;
+            Ok::<_, ErrorObjectOwned>(
+                serde_json::json!({"networkHash":Base58(SHA256Hash::from([0x42;32]))}),
+            )
+        })
+        .unwrap();
+    module
+        .register_method("getTransactionReceipt", move |params, value, _| {
+            let request: requests::TransactionQuery = params.parse()?;
+            assert_eq!(request.transaction_hash, hash);
+            Ok::<_, ErrorObjectOwned>(value.lock().unwrap().clone())
+        })
+        .unwrap();
+    // No write or status method is registered: receipt waiting must remain read-only.
+    let handle = server.start(module);
+    let signer = LocalSigner::from_secret_key([0x11; 32]);
+    let account = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
+    let descriptor = descriptor(&account, url);
+    let config = AirdropRuntimeConfig::from_wire("100000000", Zeroizing::new([0x11; 32])).unwrap();
+    let submitter =
+        RpcAirdropSubmitter::new(&descriptor, &config, SHA256Hash::from([0x42; 32]).into())
+            .unwrap();
+    let actual = submitter.poll_airdrop(hash, None).await.unwrap();
+    assert_eq!(*actual.block_height, 42);
+    assert!(
+        matches!(actual.execution, thruput_json_rpc_types::responses::ReceiptExecution::Return { return_data } if return_data.0 == [1,2])
+    );
+    for mutation in 0..6 {
+        let mut bad = receipt.clone();
+        match mutation {
+            0 => {
+                bad["transactionHash"] =
+                    serde_json::to_value(TxHash(Base58([3; 32].into()))).unwrap();
+            }
+            1 => bad["execution"] = serde_json::json!({"result":"return"}),
+            2 => bad["events"] = serde_json::json!([{"address":"bad"}]),
+            3 => {
+                bad["execution"] =
+                    serde_json::json!({"result":"futureResult", "payload":"preserved"});
+            }
+            4 => bad["blockHeight"] = serde_json::json!("-1"),
+            _ => bad["blockHeight"] = serde_json::json!("43"),
+        }
+        *value.lock().unwrap() = bad.clone();
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            submitter.poll_airdrop(hash, Some(42)),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        let thruput_faucet::airdrop::AirdropSubmitError::Poll(error) = error else {
+            panic!("expected receipt evidence, got {error:?}");
+        };
+        assert_eq!(error.evidence.transaction_hash, hash);
+        assert_eq!(
+            *error.evidence.commitment.as_ref().unwrap().block_height,
+            42
+        );
+        if mutation == 3 {
+            assert!(matches!(error.cause,
+                thruput_json_rpc_client::native::receipt::ReceiptPollCause::Unsupported { raw, .. }
+                if raw == bad));
+        }
+    }
+    handle.stop().unwrap();
+}
+
+#[tokio::test]
+async fn incompatible_endpoint_never_receives_a_retained_transaction() {
+    for (wire, network) in [("13.0.0", [0x42; 32]), ("14.0.0", [0x99; 32])] {
+        let sent = Arc::new(AtomicBool::new(false));
+        let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", server.local_addr().unwrap());
+        let mut module = RpcModule::new(sent.clone());
+        module.register_method("getVersionInfo", move |params, _, _| {
+            let _: requests::EmptyRequest = params.parse()?;
+            Ok::<_, ErrorObjectOwned>(serde_json::json!({"wireFormat":wire, "implementation":"test",
+                "supportedMethods":["getNetworkInfo","getChainTip","sendTransaction","getTransactionReceipt","getTransactionStatus"]}))
+        }).unwrap();
+        module
+            .register_method("getNetworkInfo", move |params, _, _| {
+                let _: requests::EmptyRequest = params.parse()?;
+                Ok::<_, ErrorObjectOwned>(
+                    serde_json::json!({"networkHash":Base58(SHA256Hash::from(network))}),
+                )
+            })
+            .unwrap();
+        module
+            .register_method("sendTransaction", |_, sent, _| {
+                sent.store(true, Ordering::SeqCst);
+                serde_json::Value::Null
+            })
+            .unwrap();
+        let handle = server.start(module);
+        let signer = LocalSigner::from_secret_key([0x11; 32]);
+        let account = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
+        let descriptor = descriptor(&account, url);
+        let config =
+            AirdropRuntimeConfig::from_wire("100000000", Zeroizing::new([0x11; 32])).unwrap();
+        let submitter =
+            RpcAirdropSubmitter::new(&descriptor, &config, SHA256Hash::from([0x42; 32]).into())
+                .unwrap();
+        let retained = thruput_faucet::airdrop::PreparedAirdrop {
+            raw_amount: "100000000".into(),
+            tx_hash: TxHash(Base58([0x22; 32].into())),
+            signed_transaction: "0x0102".into(),
+            block_expiry_height: 1000,
+        };
+        assert!(matches!(
+            submitter.submit_airdrop(&retained).await,
+            Err(thruput_faucet::airdrop::AirdropSubmitError::Preflight(_))
+        ));
+        assert!(!sent.load(Ordering::SeqCst));
+        handle.stop().unwrap();
+    }
 }

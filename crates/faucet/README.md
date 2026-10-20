@@ -140,12 +140,17 @@ needs at least 120,000 terminal records plus headroom. Increasing the bound
 increases memory use and policy-store scan costs; storage is allocated on demand.
 
 Signed transactions are retained in the policy store before broadcast. A later
-request with the same client nonce observes the original hash. Scheduler `retry`
-replays the same signed bytes at most once per request, after checking the original
-expiry. Receipts take precedence; `dropped` and `invalid` end the attempt. A lost
-submission response, backend error, or expiry without a receipt keeps the original
-attempt unresolved. These attempts count toward the bounded capacity. At
-capacity, the faucet rejects new attempt keys
+request with the same client nonce only reconciles the original hash; it never
+resubmits. The outbound client requires native wire 14 and the configured network
+hash; deploy it with the native gateway activation, not against a wire-13
+endpoint.
+It reads receipts before scheduler status and retains observed commitment
+in the attempt while the receipt is unavailable. A proven first-send refusal
+closes that attempt. After an uncertain send, only a committed receipt resolves
+execution. Scheduler `retry`/`dropped`/`recentFailure`, a lost response, or expiry
+without a receipt keeps the attempt unresolved. Unresolved attempts count toward
+global capacity and the recipient's pending limit. At capacity, the faucet rejects
+new attempt keys
 but continues serving existing keys. This fail-closed behavior prevents an
 expired idempotency record from submitting a second transfer. Operators should
 investigate sustained capacity errors before restarting because a restart also

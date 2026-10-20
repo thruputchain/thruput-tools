@@ -4,13 +4,13 @@ use axum::http::{Request, StatusCode};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+use thruput_json_rpc_types::ContractAddress;
 use thruput_json_rpc_types::base58::Base58;
 use thruput_json_rpc_types::network_descriptor::{
     NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
 };
-use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
-use thruput_json_rpc_types::{BlockHeight, ContractAddress};
+use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt, TransactionStatus};
+use thruput_json_rpc_types::transaction::TxHash;
 use tower::ServiceExt;
 
 use thruput_faucet::{DEFAULT_LISTEN_ADDRESS, FaucetConfig, airdrop, app, config, policy};
@@ -1217,6 +1217,12 @@ fn test_network_descriptor() -> NetworkDescriptor {
     .expect("bug: test network descriptor should deserialize")
 }
 
+enum PollObservation {
+    None,
+    Committed,
+    LookupFailed,
+}
+
 struct MockAirdropSubmitter {
     failures_remaining: Mutex<usize>,
     poll_failures_remaining: Mutex<usize>,
@@ -1225,6 +1231,9 @@ struct MockAirdropSubmitter {
     broadcasts: Mutex<Vec<airdrop::PreparedAirdrop>>,
     poll_status: Mutex<Option<TransactionStatus>>,
     receipt_override: Mutex<Option<TransactionReceipt>>,
+    submit_error: Option<&'static str>,
+    observed_heights: Mutex<Vec<Option<i64>>>,
+    poll_observation: PollObservation,
     raw_amount: String,
     accepted_raw_amount: String,
     poll_times_out: bool,
@@ -1255,7 +1264,6 @@ impl airdrop::AirdropSubmitter for PanickingAirdropSubmitter {
     async fn submit_airdrop(
         &self,
         _transaction: &airdrop::PreparedAirdrop,
-        _check_expiry: bool,
     ) -> Result<(), airdrop::AirdropSubmitError> {
         Ok(())
     }
@@ -1263,6 +1271,7 @@ impl airdrop::AirdropSubmitter for PanickingAirdropSubmitter {
     async fn poll_airdrop(
         &self,
         _tx_hash: TxHash,
+        _committed_height: Option<i64>,
     ) -> Result<TransactionReceipt, airdrop::AirdropSubmitError> {
         unreachable!("panicking submitter never accepts a transaction")
     }
@@ -1284,7 +1293,6 @@ impl airdrop::AirdropSubmitter for PanickingPollAirdropSubmitter {
     async fn submit_airdrop(
         &self,
         _transaction: &airdrop::PreparedAirdrop,
-        _check_expiry: bool,
     ) -> Result<(), airdrop::AirdropSubmitError> {
         Ok(())
     }
@@ -1292,6 +1300,7 @@ impl airdrop::AirdropSubmitter for PanickingPollAirdropSubmitter {
     async fn poll_airdrop(
         &self,
         _tx_hash: TxHash,
+        _committed_height: Option<i64>,
     ) -> Result<TransactionReceipt, airdrop::AirdropSubmitError> {
         panic!("intentional polling panic")
     }
@@ -1311,6 +1320,9 @@ impl MockAirdropSubmitter {
             broadcasts: Mutex::new(Vec::new()),
             poll_status: Mutex::new(None),
             receipt_override: Mutex::new(None),
+            submit_error: None,
+            observed_heights: Mutex::new(Vec::new()),
+            poll_observation: PollObservation::None,
             raw_amount: raw_amount.into(),
             accepted_raw_amount: raw_amount.into(),
             poll_times_out: false,
@@ -1355,6 +1367,9 @@ impl MockAirdropSubmitter {
             broadcasts: Mutex::new(Vec::new()),
             poll_status: Mutex::new(None),
             receipt_override: Mutex::new(None),
+            submit_error: None,
+            observed_heights: Mutex::new(Vec::new()),
+            poll_observation: PollObservation::None,
             raw_amount: "100000000".into(),
             accepted_raw_amount: "100000000".into(),
             poll_times_out: false,
@@ -1375,6 +1390,9 @@ impl MockAirdropSubmitter {
             broadcasts: Mutex::new(Vec::new()),
             poll_status: Mutex::new(None),
             receipt_override: Mutex::new(None),
+            submit_error: None,
+            observed_heights: Mutex::new(Vec::new()),
+            poll_observation: PollObservation::None,
             raw_amount: "100000000".into(),
             accepted_raw_amount: "100000000".into(),
             poll_times_out: false,
@@ -1399,6 +1417,9 @@ impl MockAirdropSubmitter {
             broadcasts: Mutex::new(Vec::new()),
             poll_status: Mutex::new(None),
             receipt_override: Mutex::new(None),
+            submit_error: None,
+            observed_heights: Mutex::new(Vec::new()),
+            poll_observation: PollObservation::None,
             raw_amount: "100000000".into(),
             accepted_raw_amount: "100000000".into(),
             poll_times_out: false,
@@ -1456,8 +1477,65 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
     async fn submit_airdrop(
         &self,
         transaction: &airdrop::PreparedAirdrop,
-        _check_expiry: bool,
     ) -> Result<(), airdrop::AirdropSubmitError> {
+        use thruput_json_rpc_types::error::native::codes;
+
+        if let Some(admission) = self.submit_error {
+            if admission == "local" {
+                return Err(airdrop::AirdropSubmitError::RpcConnect(
+                    "invalid URL".into(),
+                ));
+            }
+            self.broadcasts.lock().unwrap().push(transaction.clone());
+            let (code, kind, value) = match admission {
+                "invalid" => (
+                    codes::TRANSACTION_INVALID,
+                    "transactionInvalid",
+                    "notAttempted",
+                ),
+                "overloaded" => (codes::OVERLOADED, "overloaded", "rejected"),
+                "unavailable" => (codes::BACKEND_UNAVAILABLE, "backendUnavailable", "rejected"),
+                "timeout" => (codes::BACKEND_TIMEOUT, "backendTimeout", "notAttempted"),
+                "dataInvalid" => (
+                    codes::BACKEND_DATA_INVALID,
+                    "backendDataInvalid",
+                    "notAttempted",
+                ),
+                "knownUnknown" => (codes::BACKEND_TIMEOUT, "backendTimeout", "unknown"),
+                "conflict" => (
+                    codes::TRANSACTION_REJECTED,
+                    "transactionRejected",
+                    "rejected",
+                ),
+                _ => (
+                    codes::TRANSACTION_REJECTED,
+                    "transactionRejected",
+                    admission,
+                ),
+            };
+            let mut raw = serde_json::json!({
+                "code":code, "message":"refused", "data":{"kind":kind, "admission":value}
+            });
+            if admission == "conflict" {
+                raw["data"]["transactionHash"] = serde_json::json!(TxHash(Base58(
+                    thruput_xdr::types::SHA256Hash::from([0x91; 32])
+                )));
+            }
+            return Err(airdrop::AirdropSubmitError::Rpc {
+                method: "sendTransaction",
+                source: Box::new(
+                    thruput_json_rpc_client::native::NativeClientError::Application {
+                        source: serde_json::from_value(raw.clone()).unwrap(),
+                        data: Box::new(
+                            thruput_json_rpc_types::error::native::DecodedError::decode(
+                                "sendTransaction",
+                                raw,
+                            ),
+                        ),
+                    },
+                ),
+            });
+        }
         self.broadcasts.lock().unwrap().push(transaction.clone());
         if self.ambiguous_submit {
             return Err(airdrop::AirdropSubmitError::Submit("timeout".into()));
@@ -1468,7 +1546,9 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
     async fn poll_airdrop(
         &self,
         tx_hash: TxHash,
+        committed_height: Option<i64>,
     ) -> Result<TransactionReceipt, airdrop::AirdropSubmitError> {
+        self.observed_heights.lock().unwrap().push(committed_height);
         *self
             .poll_calls
             .lock()
@@ -1488,31 +1568,38 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
             return Err(airdrop::AirdropSubmitError::RpcConnect("boom".into()));
         }
         if let Some(status) = self.poll_status.lock().unwrap().clone() {
-            return Err(airdrop::AirdropSubmitError::Poll(
-                thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
-                    tx_hash,
-                    status,
-                },
-            ));
+            let mut error = poll_timeout(tx_hash, Some(status));
+            if let airdrop::AirdropSubmitError::Poll(error) = &mut error {
+                if matches!(self.poll_observation, PollObservation::Committed)
+                    || committed_height.is_some()
+                {
+                    error.evidence.commitment =
+                        Some(thruput_json_rpc_client::native::receipt::KnownCommitment {
+                            network_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x42; 32])),
+                            transaction_hash: tx_hash,
+                            block_height: committed_height.unwrap_or(42).into(),
+                        });
+                }
+                if matches!(self.poll_observation, PollObservation::LookupFailed) {
+                    error.evidence.last_lookup_error = Some(
+                        thruput_json_rpc_client::native::NativeClientError::Transport(
+                            jsonrpsee::core::client::Error::RequestTimeout,
+                        ),
+                    );
+                }
+            }
+            return Err(error);
         }
         if self.poll_times_out {
-            return Err(airdrop::AirdropSubmitError::Poll(
-                thruput_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout {
-                    tx_hash,
-                    attempts: 1,
-                    last_status: None,
-                },
-            ));
+            return Err(poll_timeout(tx_hash, None));
         }
         if self.poll_invalid {
-            return Err(airdrop::AirdropSubmitError::Poll(
-                thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
-                    tx_hash,
-                    status: TransactionStatus::Invalid {
-                        reason: "expired".into(),
-                    },
-                },
-            ));
+            let mut receipt = successful_receipt(tx_hash);
+            receipt.execution = serde_json::from_value(serde_json::json!({
+                "result":"abort", "abortData":"0x01"
+            }))
+            .unwrap();
+            return Ok(receipt);
         }
         Ok(self
             .receipt_override
@@ -1527,16 +1614,28 @@ fn test_tx_hash() -> TxHash {
     TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x22; 32])))
 }
 
+fn poll_timeout(tx_hash: TxHash, status: Option<TransactionStatus>) -> airdrop::AirdropSubmitError {
+    use thruput_json_rpc_client::native::receipt::{
+        ReceiptEvidence, ReceiptPollCause, ReceiptPollError,
+    };
+    airdrop::AirdropSubmitError::Poll(Box::new(ReceiptPollError {
+        evidence: Box::new(ReceiptEvidence {
+            network_hash: Base58(thruput_xdr::types::SHA256Hash::from([0x42; 32])),
+            transaction_hash: tx_hash,
+            commitment: None,
+            last_status: status,
+            last_lookup_error: None,
+        }),
+        cause: ReceiptPollCause::Timeout,
+    }))
+}
+
 fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
-    TransactionReceipt {
-        tx_hash,
-        height: BlockHeight::from(42),
-        status: ExecStatus::Ok,
-        events: vec![],
-        return_data: Some(thruput_json_rpc_types::hex::HexBytes(vec![])),
-        abort_data: None,
-        gas_used: 1_500,
-    }
+    serde_json::from_value(
+        serde_json::json!({"transactionHash":tx_hash, "blockHeight":"42",
+        "execution":{"result":"return","returnData":"0x"}, "events":[], "gasUsed":"1500"}),
+    )
+    .unwrap()
 }
 
 fn prepared_airdrop(raw_amount: &str) -> airdrop::PreparedAirdrop {
@@ -1548,30 +1647,24 @@ fn prepared_airdrop(raw_amount: &str) -> airdrop::PreparedAirdrop {
     }
 }
 
-fn scheduler_error() -> thruput_json_rpc_types::transaction::SchedulerTransactionError {
-    use thruput_json_rpc_types::transaction::{
-        SchedulerTransactionError, SchedulerTransactionErrorSource,
-    };
-    SchedulerTransactionError::new(SchedulerTransactionErrorSource::Executor, 7)
+fn scheduler_error() -> thruput_json_rpc_types::responses::SchedulerError {
+    serde_json::from_value(serde_json::json!({"source":"executor", "code":7})).unwrap()
 }
 
 #[tokio::test]
-async fn scheduler_retries_replay_retained_bytes_once_per_request() {
+async fn scheduler_retries_only_reconcile_the_retained_transaction() {
     let submitter = Arc::new(MockAirdropSubmitter::success());
     *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
         error: scheduler_error(),
     });
     let config = test_config_with_submitters(submitter.clone());
-    for expected_broadcasts in 2..=3 {
+    for _ in 0..2 {
         assert_eq!(
             airdrop_request(&config).await.status(),
             StatusCode::ACCEPTED
         );
         assert_eq!(submitter.calls(), 1);
-        assert_eq!(
-            submitter.broadcasts.lock().unwrap().len(),
-            expected_broadcasts
-        );
+        assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
         let attempt = stored_airdrop_attempt(&config).unwrap();
         assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
         assert!(attempt.expires_at.is_none());
@@ -1588,37 +1681,29 @@ async fn scheduler_retries_replay_retained_bytes_once_per_request() {
     *submitter.poll_status.lock().unwrap() = None;
     assert_eq!(airdrop_request(&config).await.status(), StatusCode::OK);
     let broadcasts = submitter.broadcasts.lock().unwrap();
-    assert_eq!(broadcasts.len(), 3);
+    assert_eq!(broadcasts.len(), 1);
     assert!(broadcasts.iter().all(|tx| tx == &broadcasts[0]));
 }
 
 #[tokio::test]
-async fn dropped_airdrop_ends_the_attempt_and_reports_the_scheduler_reason() {
+async fn dropped_airdrop_remains_pending_until_a_receipt_resolves_it() {
     let submitter = Arc::new(MockAirdropSubmitter::success());
     *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Dropped {
         error: scheduler_error(),
     });
     let config = test_config_with_submitters(submitter.clone());
-    let response = airdrop_request(&config).await;
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body["error"]["code"], "airdrop_transaction_failed");
-    assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("Executor code 7")
-    );
-    let attempt = stored_airdrop_attempt(&config).unwrap();
-    assert_eq!(attempt.status, policy::AirdropAttemptStatus::FailedTerminal);
-    assert!(attempt.expires_at.is_some());
-    assert_eq!(
-        airdrop_request(&config).await.status(),
-        StatusCode::CONFLICT
-    );
+    for _ in 0..2 {
+        assert_eq!(
+            airdrop_request(&config).await.status(),
+            StatusCode::ACCEPTED
+        );
+        let attempt = stored_airdrop_attempt(&config).unwrap();
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
+        assert!(attempt.expires_at.is_none());
+        assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
+    }
+    *submitter.poll_status.lock().unwrap() = None;
+    assert_eq!(airdrop_request(&config).await.status(), StatusCode::OK);
     assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
 }
 
@@ -1655,7 +1740,7 @@ async fn retry_without_retained_bytes_never_signs_a_replacement() {
     );
     assert_eq!(
         airdrop_request(&config).await.status(),
-        StatusCode::BAD_GATEWAY
+        StatusCode::ACCEPTED
     );
     assert_eq!(submitter.calls(), 0);
     assert!(submitter.broadcasts.lock().unwrap().is_empty());
@@ -1666,7 +1751,7 @@ async fn retry_without_retained_bytes_never_signs_a_replacement() {
 }
 
 #[tokio::test]
-async fn concurrent_same_key_retry_has_one_broadcast() {
+async fn concurrent_same_key_retry_never_rebroadcasts() {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let mut submitter = MockAirdropSubmitter::success();
     submitter.poll_gate = Some(gate.clone());
@@ -1699,31 +1784,22 @@ async fn concurrent_same_key_retry_has_one_broadcast() {
     assert!(submitter.broadcasts.lock().unwrap().is_empty());
     gate.add_permits(1);
     assert_eq!(first.await.unwrap().status(), StatusCode::ACCEPTED);
-    assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
+    assert!(submitter.broadcasts.lock().unwrap().is_empty());
     assert_eq!(submitter.calls(), 0);
 }
 
 #[tokio::test]
 async fn observed_receipt_identity_and_output_are_preserved() {
-    for invalid in 0..8 {
+    for invalid in 0..4 {
         let submitter = MockAirdropSubmitter::success();
         let mut receipt = successful_receipt(test_tx_hash());
-        receipt.return_data = Some(thruput_json_rpc_types::hex::HexBytes(vec![1, 2]));
+        receipt.execution = ReceiptExecution::Return {
+            return_data: thruput_json_rpc_types::hex::HexBytes(vec![1, 2]),
+        };
         match invalid {
-            1 => receipt.tx_hash = TxHash(Base58([3; 32].into())),
-            2 => receipt.height = (-1).into(),
-            3 => receipt.abort_data = Some(thruput_json_rpc_types::hex::HexBytes(vec![])),
-            4 => receipt.return_data = None,
-            5 => {
-                receipt.status = ExecStatus::Reverted { message: None };
-                receipt.return_data = None;
-            }
-            6 => receipt.status = ExecStatus::Reverted { message: None },
-            7 => {
-                receipt.status = ExecStatus::DeterministicError {
-                    kind: "fault".into(),
-                }
-            }
+            1 => receipt.transaction_hash = TxHash(Base58([3; 32].into())),
+            2 => receipt.block_height = (-1).into(),
+            3 => receipt.execution = ReceiptExecution::Other {},
             _ => {}
         }
         *submitter.receipt_override.lock().unwrap() = Some(receipt);
@@ -1747,5 +1823,170 @@ async fn observed_receipt_identity_and_output_are_preserved() {
             assert_eq!(submitter.poll_calls(), 2);
             assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
         }
+    }
+}
+
+#[tokio::test]
+async fn commitment_and_failed_lookups_prevent_scheduler_replay_or_terminal_caching() {
+    for committed in [true, false] {
+        for status in [
+            TransactionStatus::Retry {
+                error: scheduler_error(),
+            },
+            TransactionStatus::Dropped {
+                error: scheduler_error(),
+            },
+            serde_json::from_value(serde_json::json!({
+                "status":"recentFailure", "attemptBlockHeight":"42",
+                "cause":{"kind":"contractRejected", "contractIndex":0, "code":"invalidProgram"}
+            }))
+            .unwrap(),
+        ] {
+            let mut submitter = MockAirdropSubmitter::success();
+            submitter.poll_observation = if committed {
+                PollObservation::Committed
+            } else {
+                PollObservation::LookupFailed
+            };
+            *submitter.poll_status.lock().unwrap() = Some(status);
+            let submitter = Arc::new(submitter);
+            let config = test_config_with_submitters(submitter.clone());
+            for _ in 0..2 {
+                assert_eq!(
+                    airdrop_request(&config).await.status(),
+                    StatusCode::ACCEPTED
+                );
+                let attempt = stored_airdrop_attempt(&config).unwrap();
+                assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
+                assert_eq!(attempt.height, committed.then_some(42));
+                assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
+                assert_eq!(submitter.calls(), 1);
+            }
+            *submitter.poll_status.lock().unwrap() = None;
+            assert_eq!(airdrop_request(&config).await.status(), StatusCode::OK);
+            assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn retained_commitment_survives_service_recreation_with_the_same_store() {
+    let mut first = MockAirdropSubmitter::success();
+    first.poll_observation = PollObservation::Committed;
+    *first.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        error: scheduler_error(),
+    });
+    let first = Arc::new(first);
+    let config = test_config_with_submitters(first.clone());
+    assert_eq!(
+        airdrop_request(&config).await.status(),
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(stored_airdrop_attempt(&config).unwrap().height, Some(42));
+    assert_eq!(first.broadcasts.lock().unwrap().len(), 1);
+
+    let mut restarted = MockAirdropSubmitter::success();
+    restarted.poll_observation = PollObservation::LookupFailed;
+    *restarted.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        error: scheduler_error(),
+    });
+    let restarted = Arc::new(restarted);
+    let mut restarted_config = test_config_with_submitters(restarted.clone());
+    restarted_config.policy_store = config.policy_store.clone();
+    for status in [
+        TransactionStatus::Retry {
+            error: scheduler_error(),
+        },
+        TransactionStatus::Dropped {
+            error: scheduler_error(),
+        },
+    ] {
+        *restarted.poll_status.lock().unwrap() = Some(status);
+        assert_eq!(
+            airdrop_request(&restarted_config).await.status(),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            stored_airdrop_attempt(&restarted_config).unwrap().height,
+            Some(42)
+        );
+        assert!(restarted.broadcasts.lock().unwrap().is_empty());
+        assert_eq!(restarted.calls(), 0);
+        assert!(
+            restarted
+                .observed_heights
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|height| *height == Some(42))
+        );
+    }
+    *restarted.poll_status.lock().unwrap() = None;
+    assert_eq!(
+        airdrop_request(&restarted_config).await.status(),
+        StatusCode::OK
+    );
+    assert!(restarted.broadcasts.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn first_send_refusals_end_only_when_admission_is_proven_absent() {
+    for admission in [
+        "local",
+        "notAttempted",
+        "rejected",
+        "invalid",
+        "overloaded",
+        "unavailable",
+        "timeout",
+        "dataInvalid",
+        "unknown",
+        "futureAdmission",
+        "knownUnknown",
+        "conflict",
+    ] {
+        let mut submitter = MockAirdropSubmitter::success();
+        submitter.submit_error = Some(admission);
+        let submitter = Arc::new(submitter);
+        let config = test_config_with_submitters(submitter.clone());
+        assert_eq!(
+            airdrop_request(&config).await.status(),
+            StatusCode::BAD_GATEWAY
+        );
+        let attempt = stored_airdrop_attempt(&config).unwrap();
+        let terminal = matches!(
+            admission,
+            "local"
+                | "notAttempted"
+                | "rejected"
+                | "invalid"
+                | "overloaded"
+                | "unavailable"
+                | "timeout"
+                | "dataInvalid"
+        );
+        assert_eq!(
+            attempt.status,
+            if terminal {
+                policy::AirdropAttemptStatus::FailedTerminal
+            } else {
+                policy::AirdropAttemptStatus::Pending
+            }
+        );
+        assert_eq!(attempt.expires_at.is_some(), terminal);
+        assert!(attempt.transaction.is_some());
+        assert_eq!(
+            airdrop_request(&config).await.status(),
+            if terminal {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::OK
+            }
+        );
+        assert_eq!(submitter.calls(), 1);
+        assert_eq!(
+            submitter.broadcasts.lock().unwrap().len(),
+            usize::from(admission != "local")
+        );
     }
 }
