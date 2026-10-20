@@ -1,3 +1,8 @@
+#[cfg(feature = "native-rpc-qualification")]
+mod native;
+#[cfg(feature = "native-rpc-qualification")]
+pub use native::run as run_native;
+
 use std::path::Path;
 use thruput_json_rpc_types::hex::prefixed_hex;
 
@@ -108,6 +113,8 @@ pub fn run(
 #[derive(Debug, Clone)]
 struct PreparedView {
     rpc_url: String,
+    #[cfg(feature = "native-rpc-qualification")]
+    native_profile: crate::config::ResolvedProfile,
     contract_address_hex: String,
     method: String,
     resolved: ResolvedCall,
@@ -146,6 +153,8 @@ fn prepare_view(
 
     Ok(PreparedView {
         rpc_url: rpc_url.to_owned(),
+        #[cfg(feature = "native-rpc-qualification")]
+        native_profile: resolved_profile.clone(),
         contract_address_hex,
         method: method.to_owned(),
         resolved,
@@ -393,6 +402,11 @@ mod tests {
         };
         let prepared = PreparedView {
             rpc_url: "http://127.0.0.1:1".into(),
+            #[cfg(feature = "native-rpc-qualification")]
+            native_profile: serde_json::from_value(serde_json::json!({
+                "name": "test", "contracts": {}, "wallets": {}
+            }))
+            .unwrap(),
             contract_address_hex: format!("0x{}", "11".repeat(32)),
             method: "get".into(),
             resolved: ResolvedCall {

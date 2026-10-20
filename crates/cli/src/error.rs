@@ -633,6 +633,13 @@ pub enum CliError {
         method: &'static str,
         message: String,
     },
+    #[error("native RPC: {message}")]
+    #[hint("check the candidate endpoint and retained evidence before choosing a recovery action")]
+    #[details(expr = Some(evidence.clone()))]
+    NativeRpcFailure {
+        message: String,
+        evidence: serde_json::Value,
+    },
     #[error("RPC endpoint does not support {method}: {message}")]
     #[hint(
         "use a full local devnode or a compatible remote RPC that supports the required RPC method"

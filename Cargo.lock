@@ -4169,6 +4169,7 @@ dependencies = [
  "thruput-erc20-if",
  "thruput-erc20-permit-if",
  "thruput-json-rpc-client",
+ "thruput-json-rpc-server",
  "thruput-json-rpc-types",
  "thruput-node-supervisor",
  "thruput-rv32-artifact",

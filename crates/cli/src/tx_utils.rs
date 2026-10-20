@@ -9,7 +9,7 @@ use crate::result::CommandError;
 use crate::terminal::terminal_safe;
 use crate::{CliError, Print};
 
-const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
+pub(crate) const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 
 /// Submission errors that establish the transaction was not admitted.
 /// Backend unavailability can follow dispatch, so it remains uncertain.

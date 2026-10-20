@@ -6,6 +6,7 @@
 
 pub mod codec;
 mod deploy;
+pub mod native;
 
 pub use deploy::{
     DeployRequest, DeploymentVerificationError, SignedDeploy, SubmittedDeploy, UnsignedDeploy,

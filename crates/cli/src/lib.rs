@@ -33,6 +33,8 @@ pub mod init;
 pub mod init_json;
 pub mod keys;
 pub(crate) mod keys_json;
+#[cfg(feature = "native-rpc-qualification")]
+mod native_rpc;
 pub(crate) mod network_descriptor;
 pub mod new;
 pub mod node;
