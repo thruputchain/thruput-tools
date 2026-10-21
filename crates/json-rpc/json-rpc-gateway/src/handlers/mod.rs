@@ -1,5 +1,6 @@
 pub mod blocks;
 pub mod events;
+pub mod native_history;
 pub mod receipt;
 pub mod transactions;
 pub mod view;

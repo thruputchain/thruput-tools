@@ -172,7 +172,7 @@ struct NativeViewCommon {
 impl From<&PreparedView> for NativeViewCommon {
     fn from(prepared: &PreparedView) -> Self {
         Self {
-            schema_version: 3,
+            schema_version: 4,
             rpc_url: prepared.rpc_url.clone(),
             address: prepared.request.contract,
             method: prepared.method.clone(),

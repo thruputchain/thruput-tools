@@ -67,7 +67,7 @@ fn report_preserves_native_simulation_fields_and_wide_integers() {
     let value = serde_json::to_value(CommandResult::new("view", report)).unwrap();
     assert_eq!(value["ok"], true);
     let data = &value["data"];
-    assert_eq!(data["schemaVersion"], 3);
+    assert_eq!(data["schemaVersion"], 4);
     assert_eq!(data["stateBlockHeight"], "9007199254740993");
     assert_eq!(data["gasUsed"], u64::MAX.to_string());
     assert_eq!(

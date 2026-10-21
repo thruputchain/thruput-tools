@@ -1,3 +1,5 @@
+pub(super) mod history;
+
 use super::{NativeSimulationPlane, NativeStatePlane, StateKey, invalid, projection, rpc_error};
 use crate::{BuildVersion, ChainPlane, RpcRequestContext, RpcServerConfig, RpcServerError};
 use jsonrpsee::core::RpcResult;
@@ -141,7 +143,7 @@ impl<C, R, V> NativeReadService<C, R, V> {
         let mut result = out::ServerLimits::new(
             config.view_gas_limit,
             config.max_view_calldata_bytes as u64,
-            config.max_events_per_page,
+            config.event_page_cap(),
             config.transaction_page_cap(),
             config.max_cursor_bytes as u64,
         );

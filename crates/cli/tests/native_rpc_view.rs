@@ -142,7 +142,7 @@ async fn explicit_flag_selects_native_and_default_still_uses_wire_13() {
     assert_eq!(calls.lock().unwrap().len(), 1);
 
     let native = fixture.view(true, true);
-    assert_eq!(native["data"]["schemaVersion"], 3);
+    assert_eq!(native["data"]["schemaVersion"], 4);
     assert_eq!(native["data"]["address"], address());
     for field in ["stateBlockHeight", "output", "events", "gasUsed"] {
         assert_eq!(native["data"][field], response[field]);
@@ -174,7 +174,7 @@ async fn abort_and_fault_exit_unsuccessfully_with_complete_simulation_on_stdout(
         let response = simulation(&output);
         let (url, handle, calls) = server(discovery(), Ok(response.clone())).await;
         let report = Fixture::new(&url).view(true, false);
-        assert_eq!(report["data"]["schemaVersion"], 3);
+        assert_eq!(report["data"]["schemaVersion"], 4);
         assert_eq!(report["error"]["code"], code);
         assert_eq!(report["error"]["details"]["output"], output);
         for field in ["stateBlockHeight", "output", "events", "gasUsed"] {
@@ -191,7 +191,7 @@ async fn unknown_simulation_output_keeps_raw_evidence_and_fails_without_retry() 
     response["newField"] = json!({"retain":"all"});
     let (url, handle, calls) = server(discovery(), Ok(response.clone())).await;
     let report = Fixture::new(&url).view(true, false);
-    assert_eq!(report["data"]["schemaVersion"], 3);
+    assert_eq!(report["data"]["schemaVersion"], 4);
     assert_eq!(report["data"]["evidence"], response);
     assert_eq!(report["error"]["details"], response);
     assert_eq!(calls.lock().unwrap().len(), 2);
@@ -207,7 +207,7 @@ async fn incompatible_discovery_stops_before_simulation_or_legacy_fallback() {
     for version in [wrong_wire, missing_method, json!({"version":"foreign"})] {
         let (url, handle, calls) = server(version, Ok(Value::Null)).await;
         let report = Fixture::new(&url).view(true, false);
-        assert_eq!(report["data"]["schemaVersion"], 3);
+        assert_eq!(report["data"]["schemaVersion"], 4);
         assert!(!report["error"]["message"].as_str().unwrap().is_empty());
         let recorded = calls.lock().unwrap();
         assert_eq!(recorded.len(), 1);
@@ -223,7 +223,7 @@ async fn application_error_preserves_code_message_and_data_on_stdout() {
     let expected = json!(error);
     let (url, handle, calls) = server(discovery(), Err(error)).await;
     let report = Fixture::new(&url).view(true, false);
-    assert_eq!(report["data"]["schemaVersion"], 3);
+    assert_eq!(report["data"]["schemaVersion"], 4);
     assert_eq!(report["data"]["evidence"]["rpcError"], expected);
     assert_eq!(report["error"]["details"]["rpcError"], expected);
     assert_eq!(calls.lock().unwrap().len(), 2);

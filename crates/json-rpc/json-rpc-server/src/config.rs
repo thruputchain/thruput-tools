@@ -149,6 +149,11 @@ impl RpcServerConfig {
         self
     }
 
+    /// Effective event page cap, bounded by the indexer's limit.
+    pub fn event_page_cap(&self) -> u32 {
+        self.max_events_per_page.min(200)
+    }
+
     /// Effective transaction-reference page cap, bounded by the indexer's limit.
     pub fn transaction_page_cap(&self) -> u32 {
         self.max_transactions_per_page.min(200)

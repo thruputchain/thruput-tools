@@ -180,3 +180,60 @@ impl thruput_json_rpc_server::native::read::NativeBlockPlane for HogdDevReadBack
         .await
     }
 }
+
+#[async_trait]
+impl thruput_json_rpc_server::native::read::NativeHistoryPlane for HogdDevReadBackend {
+    #[tracing::instrument(skip_all, fields(filters_len = request.filters.len(), limit = ?request.limit, has_cursor = request.cursor.is_some()))]
+    async fn native_events(
+        &self,
+        context: RpcRequestContext,
+        request: thruput_json_rpc_types::requests::EventQuery,
+    ) -> Result<out::EventPage, RpcServerError> {
+        within_request_deadline(context, async {
+            let query = decode::history::event_query(&request)?;
+            let result = self.indexer.get_events(&query).await.map_err(|error| {
+                RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {error}"))
+            })?;
+            decode::history::event_page(result)
+        })
+        .await
+    }
+    #[tracing::instrument(skip_all, fields(address = ?request.address, limit = ?request.limit, has_cursor = request.cursor.is_some()))]
+    async fn native_root_transactions(
+        &self,
+        context: RpcRequestContext,
+        request: thruput_json_rpc_types::requests::RootAddressQuery,
+    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        within_request_deadline(context, async {
+            let query = decode::history::root_query(&request)?;
+            let result = self
+                .indexer
+                .get_transactions_by_address(&query)
+                .await
+                .map_err(|error| {
+                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {error}"))
+                })?;
+            decode::history::transaction_page(result)
+        })
+        .await
+    }
+    #[tracing::instrument(skip_all, fields(block_height = ?request.block_height, limit = ?request.limit, has_cursor = request.cursor.is_some()))]
+    async fn native_block_transactions(
+        &self,
+        context: RpcRequestContext,
+        request: thruput_json_rpc_types::requests::BlockPageRequest,
+    ) -> Result<out::BlockTransactionPage, RpcServerError> {
+        within_request_deadline(context, async {
+            let query = decode::history::block_query(&request);
+            let result = self
+                .indexer
+                .get_transactions_by_block(&query)
+                .await
+                .map_err(|error| {
+                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {error}"))
+                })?;
+            decode::history::transaction_page(result)
+        })
+        .await
+    }
+}

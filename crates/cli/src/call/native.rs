@@ -426,7 +426,7 @@ struct NativeCallCommon {
 impl NativeCallCommon {
     fn new(prepared: &PreparedCall) -> Result<Self, CliError> {
         Ok(Self {
-            schema_version: 3,
+            schema_version: 4,
             rpc_url: prepared.rpc_url.clone(),
             address: ContractAddress::from(parse_contract_address(&prepared.contract_address_hex)?),
             wallet_address: ContractAddress::from(parse_contract_address(

@@ -161,7 +161,7 @@ runtime manifest. Add `--native-rpc-qualification` to `call` or `view`.
 Native calls currently require a pubkey wallet account. They verify discovery
 and the configured network, submit once, then poll status and receipt without
 resubmitting. Native `view` simulates an invocation and needs no signing key.
-Both commands emit schema-version 3 JSON with the native execution or output,
+Both commands emit schema-version 4 JSON with the native execution or output,
 events and metered gas. Other commands and invocations without the flag keep
 their existing behavior. This feature does not activate the public wire-14 API.
 

@@ -8,15 +8,15 @@ use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
 use super::{
     FinalizedNativeModule, NativeModule,
     read::{
-        NativeBlockPlane, NativeReadCapabilities, NativeReadService, NativeSimulationPlane,
-        NativeStatePlane,
+        NativeBlockPlane, NativeHistoryPlane, NativeReadCapabilities, NativeReadService,
+        NativeSimulationPlane, NativeStatePlane,
     },
     transaction::{NativeSubmitPlane, NativeTransactionReadPlane},
 };
 use crate::{BuildInfo, BuildVersion, ChainPlane, GroundhogRpcServer, RpcServerConfig};
 
 /// Configured backend planes. Transient health does not change registration.
-/// History and funding remain outside this composition.
+/// Optional funding remains outside this composition.
 #[derive(Debug, Clone, Copy)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -48,7 +48,11 @@ impl NativeCapabilities {
         match method {
             "getVersionInfo" | "getNetworkInfo" | "getServerLimits" => true,
             "sendTransaction" => self.scheduler,
-            "getTransactionReceipt" | "getBlockByHeight" => self.indexer,
+            "getTransactionReceipt"
+            | "getBlockByHeight"
+            | "getEvents"
+            | "getTransactionsByRootAddress"
+            | "getTransactionsByBlock" => self.indexer,
             "getTransactionStatus" => self.indexer && self.scheduler,
             "getChainTip" | "getChainConfig" | "getStorage" | "getBalance"
             | "getRegisteredAuth" => self.db,
@@ -71,7 +75,7 @@ impl NativeCapabilities {
 
 /// Shared native service over caller-owned backend connections.
 ///
-/// This assembles discovery, state, simulation and transaction lifecycle methods.
+/// This assembles discovery, state, simulation, history and transaction lifecycle methods.
 /// It does not bind a socket or change either production binary's registration.
 #[derive(Debug)]
 pub struct NativeService<S, C, R, V> {
@@ -138,7 +142,7 @@ impl<S, C, R, V> NativeService<S, C, R, V>
 where
     S: NativeSubmitPlane,
     C: ChainPlane,
-    R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane,
+    R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane + NativeHistoryPlane,
     V: NativeSimulationPlane,
 {
     /// Remove unavailable and unimplemented methods, then freeze discovery.
@@ -179,6 +183,15 @@ macro_rules! dispatch {
     };
     (get_server_limits, $s:expr, $r:expr) => {
         $s.reads.get_server_limits($r).await
+    };
+    (get_events, $s:expr, $r:expr) => {
+        $s.reads.get_events($r).await
+    };
+    (get_transactions_by_root_address, $s:expr, $r:expr) => {
+        $s.reads.get_transactions_by_root_address($r).await
+    };
+    (get_transactions_by_block, $s:expr, $r:expr) => {
+        $s.reads.get_transactions_by_block($r).await
     };
     (get_block_by_height, $s:expr, $r:expr) => {
         $s.reads.get_block_by_height($r).await
@@ -225,7 +238,7 @@ macro_rules! implement {
         where
             S: NativeSubmitPlane,
             C: ChainPlane,
-            R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane,
+            R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane + NativeHistoryPlane,
             V: NativeSimulationPlane,
         {
             $(

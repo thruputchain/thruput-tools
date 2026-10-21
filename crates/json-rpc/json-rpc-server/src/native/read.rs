@@ -1,8 +1,11 @@
-//! Native discovery, state and simulation handlers. These are not installed by
+//! Native discovery, state, simulation and history handlers. These are not installed by
 //! either production binary. A later composition supplies the complete API.
 
 mod projection;
 mod service;
+pub use service::history::{
+    validate_block_transaction_page, validate_event_page, validate_root_transaction_page,
+};
 pub use service::{NativeReadCapabilities, NativeReadService};
 
 use crate::{RpcRequestContext, RpcServerError, ViewBatchConfig};
@@ -27,6 +30,26 @@ pub trait NativeBlockPlane: Send + Sync + 'static {
         context: RpcRequestContext,
         height: thruput_json_rpc_types::BlockHeight,
     ) -> Result<out::BlockResult, RpcServerError>;
+}
+
+/// Strict history pages from the indexer. Cursor contents remain backend-owned.
+#[async_trait]
+pub trait NativeHistoryPlane: Send + Sync + 'static {
+    async fn native_events(
+        &self,
+        context: RpcRequestContext,
+        request: input::EventQuery,
+    ) -> Result<out::EventPage, RpcServerError>;
+    async fn native_root_transactions(
+        &self,
+        context: RpcRequestContext,
+        request: input::RootAddressQuery,
+    ) -> Result<out::TransactionRefPage, RpcServerError>;
+    async fn native_block_transactions(
+        &self,
+        context: RpcRequestContext,
+        request: input::BlockPageRequest,
+    ) -> Result<out::BlockTransactionPage, RpcServerError>;
 }
 
 /// State answers validated before transport demultiplexing loses evidence.
@@ -76,6 +99,21 @@ pub(super) fn rpc_error(error: &RpcServerError) -> ErrorObjectOwned {
             ErrorData::InvalidParams {
                 reason: None,
                 path: None,
+            },
+        ),
+        RpcServerError::InvalidCursor(_) => (
+            codes::INVALID_PARAMS,
+            ErrorData::InvalidCursor {
+                reason: None,
+                path: Some("/params/cursor".into()),
+            },
+        ),
+        RpcServerError::HistoryUnavailable(_) => (
+            codes::HISTORY_UNAVAILABLE,
+            ErrorData::HistoryUnavailable {
+                reason: None,
+                oldest_indexed_block_height: None,
+                latest_indexed_block_height: None,
             },
         ),
         RpcServerError::BackendUnavailable(_) => (

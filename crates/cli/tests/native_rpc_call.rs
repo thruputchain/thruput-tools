@@ -260,7 +260,7 @@ async fn send_error_retains_canonical_hash_and_original_error_without_repeating_
     );
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["ok"], false);
-    assert_eq!(report["data"]["schemaVersion"], 3);
+    assert_eq!(report["data"]["schemaVersion"], 4);
     assert_eq!(report["data"]["submission"], "uncertain");
     assert_eq!(report["error"]["code"], "native_rpc_failure");
     let recorded = calls.lock().unwrap();
@@ -346,7 +346,7 @@ async fn interrupt_during_submission_preserves_uncertainty_and_hash_without_resu
     );
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["ok"], false);
-    assert_eq!(report["data"]["schemaVersion"], 3);
+    assert_eq!(report["data"]["schemaVersion"], 4);
     assert_eq!(report["data"]["submission"], "uncertain");
     let recorded = calls.lock().unwrap();
     let writes: Vec<_> = recorded

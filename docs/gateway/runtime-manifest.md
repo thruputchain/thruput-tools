@@ -120,7 +120,9 @@ THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
 Both URLs use loopback and operating-system assigned ports. The candidate uses
 the node's validated manifest and existing block driver. Query `getVersionInfo`
 for its implemented methods, including committed block metadata through
-`getBlockByHeight`. Paginated history and funding are not registered yet.
+`getBlockByHeight` and all three paginated history methods. Funding is not registered.
+History requires runtime and Rust bindings built from the same protocol revision,
+including typed invalid-cursor and history-unavailable outcomes.
 The normal node and gateway still serve wire 13. Ctrl-C stops both listeners and
 the ephemeral runtime. The example does not use an existing data directory.
 It checks API behavior, not production capacity or batch scheduling. If the
@@ -130,6 +132,22 @@ The [shared service](../../crates/json-rpc/json-rpc-server/src/native/service.rs
 owns method selection; the
 [connector](../../crates/node-supervisor/src/server/qualification.rs) owns this
 local listener. Enabling the Cargo feature alone starts neither.
+
+Build the CLI with `cargo build -p thruput-cli --features native-rpc-qualification`.
+Use the candidate URL printed by the example for native history reads:
+
+```sh
+target/debug/thruput tx list ADDRESS --rpc-url CANDIDATE_URL \
+  --native-rpc-qualification --json
+target/debug/thruput events list ADDRESS --rpc-url CANDIDATE_URL \
+  --native-rpc-qualification --json
+```
+
+Each command fetches one newest-first page. Continue with `--cursor` and the
+same address and filters. Native RPC uses a nullable `nextCursor`; the existing
+v2 CLI JSON reports retain an empty cursor as their terminal marker. An empty
+event page with a nonempty cursor is not exhausted. Without the opt-in flag,
+these commands use wire 13.
 
 ## State and shutdown
 

@@ -1,3 +1,6 @@
+#[cfg(feature = "native-rpc-qualification")]
+mod native;
+
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -87,8 +90,78 @@ pub fn list(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    list_with_rpc(
+        HistoryRpc::Legacy,
+        target_input,
+        limit_input,
+        cursor_input,
+        project_start,
+        profile_name,
+        overrides,
+        cmd,
+        print,
+    )
+}
+
+/// List one page through the explicitly selected native candidate endpoint.
+#[cfg(feature = "native-rpc-qualification")]
+#[expect(clippy::too_many_arguments)]
+pub fn list_native(
+    target_input: Option<&str>,
+    limit_input: Option<&str>,
+    cursor_input: Option<&str>,
+    project_start: &Path,
+    profile_name: Option<&str>,
+    overrides: &ProfileOverrides,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    list_with_rpc(
+        HistoryRpc::Native,
+        target_input,
+        limit_input,
+        cursor_input,
+        project_start,
+        profile_name,
+        overrides,
+        cmd,
+        print,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum HistoryRpc {
+    Legacy,
+    #[cfg(feature = "native-rpc-qualification")]
+    Native,
+}
+
+#[expect(clippy::too_many_arguments)]
+fn list_with_rpc(
+    rpc: HistoryRpc,
+    target_input: Option<&str>,
+    limit_input: Option<&str>,
+    cursor_input: Option<&str>,
+    project_start: &Path,
+    profile_name: Option<&str>,
+    overrides: &ProfileOverrides,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     let limit = parse_history_limit(limit_input)?;
     let cursor = parse_transaction_cursor(cursor_input)?;
+    #[cfg(feature = "native-rpc-qualification")]
+    if matches!(rpc, HistoryRpc::Native)
+        && let Some(input) = cursor_input
+        && cursor.0.is_empty()
+    {
+        return Err(CliError::InvalidTransactionCursor {
+            input: input.to_owned(),
+            display_input: terminal_safe(input),
+            message: "an empty cursor marks the end of history; omit --cursor to start a new walk"
+                .into(),
+        });
+    }
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
     let rpc_url = profile.rpc_endpoint()?.to_owned();
     let (target_input, address) = resolve_address_target_or_default_wallet(&profile, target_input)?;
@@ -104,7 +177,15 @@ pub fn list(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let task = crate::print::progress::Task::start(print, "Reading transaction history", true);
-    let page = rt.block_on(fetch_transaction_page(&rpc_url, query))?;
+    let page = rt.block_on(async {
+        match rpc {
+            HistoryRpc::Legacy => fetch_transaction_page(&rpc_url, query).await,
+            #[cfg(feature = "native-rpc-qualification")]
+            HistoryRpc::Native => {
+                native::fetch_transaction_page(&rpc_url, query, cursor_input.is_some()).await
+            }
+        }
+    })?;
     let _ = task.finish();
 
     if !print.is_json() {

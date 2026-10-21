@@ -509,7 +509,10 @@ mod tests {
     };
     use serde_json::json;
     use thruput_json_rpc_types::error::codes;
-    use tokio::{net::TcpListener, sync::Notify};
+    use tokio::{
+        net::{TcpListener, TcpSocket},
+        sync::Notify,
+    };
 
     use super::*;
 
@@ -850,16 +853,17 @@ mod tests {
 
     #[tokio::test]
     async fn unreachable_faucet_starts_degraded_and_recovers_on_probe() {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bug: test listener should bind");
+        // Reserve the port without listening so parallel tests cannot claim it.
+        let socket = TcpSocket::new_v4().expect("bug: test socket should be created");
+        socket
+            .bind("127.0.0.1:0".parse().expect("bug: valid test address"))
+            .expect("bug: test socket should bind");
         let base_url = format!(
             "http://{}",
-            listener
+            socket
                 .local_addr()
                 .expect("bug: test listener should have an address")
         );
-        drop(listener);
 
         let facade = HostedAirdrop::from_config(&config(&base_url), network_info())
             .await
@@ -881,9 +885,9 @@ mod tests {
         assert!(!probe.up);
         assert!(!facade.is_validated().await);
 
-        let listener = TcpListener::bind(base_url.trim_start_matches("http://"))
-            .await
-            .expect("bug: recovery server should bind the released address");
+        let listener = socket
+            .listen(128)
+            .expect("bug: recovery server should listen on the reserved address");
         let descriptor = network_descriptor("devnet");
         let server = tokio::spawn(async move {
             axum::serve(

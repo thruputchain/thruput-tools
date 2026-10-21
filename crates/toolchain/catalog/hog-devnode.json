@@ -1,8 +1,62 @@
 {
   "component": "hog-devnode",
   "schemaVersion": 1,
-  "defaultVersion": "0.1.31-rc.10",
+  "defaultVersion": "0.1.31-rc.11",
   "versions": {
+    "0.1.31-rc.11": {
+      "source": {
+        "ref": "v0.1.31-rc.11",
+        "repository": "thruputchain/hogd"
+      },
+      "targets": {
+        "aarch64-apple-darwin": {
+          "archive": "hog-devnode_0.1.31-rc.11_aarch64-apple-darwin.tar.gz",
+          "compatibility": { "minimumVersion": "26.0", "os": "macos" },
+          "files": [
+            { "kind": "artifact", "path": "contracts/genesis_root.rv32a" },
+            { "kind": "executable", "path": "hog-devnode" },
+            { "kind": "runtimeLibrary", "path": "lib/libc++.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libc++abi.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libcrypto.3.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libjemalloc.2.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/liblz4.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libsnappy.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libssl.3.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libunwind.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libz.1.dylib" },
+            { "kind": "runtimeLibrary", "path": "lib/libzstd.1.dylib" }
+          ],
+          "layoutVersion": 1,
+          "objectKey": "hog-devnode/0.1.31-rc.11/hog-devnode_0.1.31-rc.11_aarch64-apple-darwin.tar.gz",
+          "sha256": "4a1591272acb9ead47719d68f13f20e793a389dd4d94158a35b86a073a5ad453",
+          "size": 10746703
+        },
+        "aarch64-unknown-linux-gnu": {
+          "archive": "hog-devnode_0.1.31-rc.11_aarch64-unknown-linux-gnu.tar.gz",
+          "compatibility": { "libc": "glibc", "minimumVersion": "2.38" },
+          "files": [
+            { "kind": "artifact", "path": "contracts/genesis_root.rv32a" },
+            { "kind": "executable", "path": "hog-devnode" }
+          ],
+          "layoutVersion": 1,
+          "objectKey": "hog-devnode/0.1.31-rc.11/hog-devnode_0.1.31-rc.11_aarch64-unknown-linux-gnu.tar.gz",
+          "sha256": "f881dbfe80907448844d7a8fe153390d199c7f31fe64eb93814c579ecd65cae1",
+          "size": 8727114
+        },
+        "x86_64-unknown-linux-gnu": {
+          "archive": "hog-devnode_0.1.31-rc.11_x86_64-unknown-linux-gnu.tar.gz",
+          "compatibility": { "libc": "glibc", "minimumVersion": "2.38" },
+          "files": [
+            { "kind": "artifact", "path": "contracts/genesis_root.rv32a" },
+            { "kind": "executable", "path": "hog-devnode" }
+          ],
+          "layoutVersion": 1,
+          "objectKey": "hog-devnode/0.1.31-rc.11/hog-devnode_0.1.31-rc.11_x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "7553b683ff3e65f3d5a3edafedeb0b38dbe0e39e4b9b3182e1eb3d92b919dda0",
+          "size": 9503479
+        }
+      }
+    },
     "0.1.31-rc.10": {
       "source": {
         "ref": "v0.1.31-rc.10",
