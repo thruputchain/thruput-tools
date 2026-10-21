@@ -63,7 +63,8 @@ fn top_senders(counts: BTreeMap<String, SenderStats>, total: usize) -> Vec<Value
         .take(20)
         .map(|(value, stats)| {
             json!({"value": value, "count": stats.count,
-                   "share": stats.count as f64 / total as f64,
+                   "share": f64::from(u32::try_from(stats.count).unwrap_or(u32::MAX))
+                       / f64::from(u32::try_from(total).unwrap_or(u32::MAX)),
                    "nonce_min": stats.nonce_min.to_string(),
                    "nonce_max": stats.nonce_max.to_string(),
                    "self_invocations": stats.self_invocations})
@@ -122,6 +123,40 @@ fn transaction_report(
             "success": log.exec_result == ExecResult::ExecResultOK,
             "root_output_variant": log.root_output.status_code().to_string()
     }))
+}
+
+fn event_and_outcome_summary<'a>(
+    logs: impl Iterator<Item = &'a thruput_xdr::event::TxEventLog>,
+    transaction_count: usize,
+) -> Result<(Value, Value), Error> {
+    let mut event_contracts = BTreeMap::new();
+    let mut topics = BTreeMap::new();
+    let mut event_count = 0;
+    let mut success = 0;
+    let mut outcomes = BTreeMap::new();
+    for log in logs {
+        success += usize::from(log.exec_result == ExecResult::ExecResultOK);
+        increment(&mut outcomes, log.exec_result.to_string());
+        for event in log.events.iter() {
+            event_count += 1;
+            increment(&mut event_contracts, hex(&event.contract_address)?);
+            let topic_bytes = event.num_topics as usize * 32;
+            if event.num_topics > thruput_xdr::event::kMaxTopics
+                || topic_bytes > event.serialized_event.len()
+            {
+                return Err(Error::Invalid("invalid event topic count/length".into()));
+            }
+            for topic in event.serialized_event[..topic_bytes].chunks_exact(32) {
+                increment(&mut topics, format!("0x{}", hex::encode(topic)));
+            }
+        }
+    }
+    Ok((
+        json!({"count": event_count, "by_contract_top10": top(event_contracts, 10),
+               "by_topic_top10": top(topics, 10)}),
+        json!({"success": success, "failure": transaction_count - success,
+               "by_result": top(outcomes, usize::MAX)}),
+    ))
 }
 
 fn inspect(bytes: &[u8]) -> Result<Value, Error> {
@@ -186,28 +221,7 @@ fn inspect(bytes: &[u8]) -> Result<Value, Error> {
         json!({"min": sizes[0], "p50": sizes[(sizes.len() - 1) / 2],
                "max": sizes[sizes.len() - 1]})
     };
-    let mut event_contracts = BTreeMap::new();
-    let mut topics = BTreeMap::new();
-    let mut event_count = 0;
-    let mut success = 0;
-    let mut outcomes = BTreeMap::new();
-    for log in payload.event_logs.iter() {
-        success += usize::from(log.exec_result == ExecResult::ExecResultOK);
-        increment(&mut outcomes, log.exec_result.to_string());
-        for event in log.events.iter() {
-            event_count += 1;
-            increment(&mut event_contracts, hex(&event.contract_address)?);
-            let topic_bytes = event.num_topics as usize * 32;
-            if event.num_topics > thruput_xdr::event::kMaxTopics
-                || topic_bytes > event.serialized_event.len()
-            {
-                return Err(Error::Invalid("invalid event topic count/length".into()));
-            }
-            for topic in event.serialized_event[..topic_bytes].chunks_exact(32) {
-                increment(&mut topics, format!("0x{}", hex::encode(topic)));
-            }
-        }
-    }
+    let (events, outcomes) = event_and_outcome_summary(payload.event_logs.iter(), sizes.len())?;
     Ok(json!({
         "height": payload.consensus_value.proposal_header.block_height.to_string(),
         "consensus_hash": hex(&record.block.identity.consensus_hash)?,
@@ -228,10 +242,8 @@ fn inspect(bytes: &[u8]) -> Result<Value, Error> {
         "gas_limit_histogram_top5": top(gas, 5),
         "expiry_heights_top5": top(expiries, 5),
         "transactions": transactions,
-        "events": {"count": event_count, "by_contract_top10": top(event_contracts, 10),
-                   "by_topic_top10": top(topics, 10)},
-        "outcomes": {"success": success, "failure": sizes.len() - success,
-                     "by_result": top(outcomes, usize::MAX)},
+        "events": events,
+        "outcomes": outcomes,
         "notes": [
             "Pubkey-signature senders are derived offline from their auth preimages. For auth variants without a derivable preimage, sender/source is unavailable (null); auth.variant identifies the variant. Sender shares use all transactions as the denominator; nonce ranges and self_invocations cover each derived sender's transactions.",
             "Transaction is a struct, not an operation union: all transactions invoke a contract, optionally carrying contracts_to_deploy. Native transfers cannot be distinguished without contract-specific calldata knowledge.",
