@@ -251,30 +251,9 @@ without a second content-addressed file layout or deduplication layer.
 
 ## Inspecting records
 
-Inspect one or more archived `.xdr` records offline (one JSON object per file):
-
-```sh
-cargo run -p thruput-firehose --example inspect_record --offline -- /path/to/00000000000000000001.xdr
-# Use --text for an indented report; --json is the default.
-```
-
-The report includes encoded byte sizes, transaction and event breakdowns, and
-execution outcomes. Pubkey-signature senders are derived offline from their auth
-preimages, with sender counts, shares of all transactions, nonce ranges, and
-self-invocation counts. Other auth variants without a derivable preimage report
-a null sender and their auth variant. Transactions have no operation-kind union.
-Selectors and topics are hexadecimal identifiers, without inferred names.
-
-Records decode only with the XDR of the protocol that produced them: build the
-example from the tools release the deployed network runs (the same version the
-firehose binaries are pinned to). A record can be fetched without host access
-by subscribing with `{"from":"height","height":H}` only within serve's
-`--request-window` (default 42,428 blocks) and at or below `--max-record-bytes`
-(default 4 MiB). The notification's `record` field is the exact stored XDR,
-hex-encoded. Larger or older retained records must be copied from the store's
-archive directory on the host: `<archive>/<20-digit height>.xdr`.
-This is a decoder/analyser, not a commitment audit; use the store's `verify`
-command to audit an archive.
+The `inspect_record` example decodes archived records offline. See
+[Inspecting firehose records](../../docs/firehose/inspecting-records.md) for how
+to get a record, which build to use, and what the report contains.
 
 ## Observability
 
