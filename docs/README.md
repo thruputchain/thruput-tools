@@ -13,10 +13,8 @@ Read the guide for the area you are changing:
 - [CLI](cli/design.md): configuration, wallet identity, build artifacts, and
   managed runtime acquisition.
 - [RV32](rv32/design.md): the ELF-to-artifact boundary and memory layout choices.
-- [Simulation](sim/sim-design.md): scheduled traffic, actor state, target ownership,
-  and what reproducibility means for a real node.
 - [Testkit](testkit/DESIGN.md): concurrent application tests and their relationship
-  to simulation and the single-project integration loop.
+  to the single-project integration loop.
 
 ## Operating the tools
 
@@ -25,7 +23,7 @@ Read the guide for the area you are changing:
 - [Benchmark scenarios and comparisons](gateway/bench-scenarios.md)
 - [Transaction-status miss benchmark](gateway/lookup-bench.md)
 - [Gateway health and observability checks](gateway/observability-smoke-test.md)
-- [Simulator quickstart and results](sim/README.md)
+- [Inspecting firehose records](firehose/inspecting-records.md)
 - [Releases](releases.md)
 - [Bundled documentation maintenance](bundled-documentation.md)
 

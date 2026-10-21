@@ -13,7 +13,9 @@ Run the **Release package** GitHub Actions workflow for a normal release.
   `publish.yml`. Do not run it directly for normal releases.
 
 Before release, bump the workspace version in `Cargo.toml` and keep internal
-workspace dependency pins aligned. Do not manually push `v*` tags.
+workspace dependency pins aligned. `crates/thruput` is outside the workspace,
+so bump its version and its `thruput-cli` pin by hand; a `thruput-cli` test
+fails if they drift. Do not manually push `v*` tags.
 
 Release assets:
 
@@ -25,7 +27,7 @@ SHA256SUMS
 ```
 
 Each binary archive also has a `<binary-archive-base>-debuginfo.tar.gz`
-companion covered by `SHA256SUMS` (32 archives total).
+companion covered by `SHA256SUMS` (28 archives total).
 
 - The trailing `-debuginfo` prevents it matching binary selectors ending in the
   target or `-znver5`.
@@ -42,12 +44,11 @@ Install the Linux debuginfo companion with
 for gdb, perf, and eBPF profilers. Alternatively, extract it elsewhere and point
 the tool's debug-file directory at the extracted `usr/lib/debug` tree.
 
-Linux apps are `hog-gateway`, `thruput`, `rv32-lower`, `hogsim`,
-`thruput-faucet`, `hog-firehose-store`, and `hog-firehose-serve`. Each
-archive contains one app binary plus `README.md` and `LICENSE`. `hog-gateway`,
-`hogsim`, `thruput-faucet`, `hog-firehose-store`, and `hog-firehose-serve`
-are binary release artifacts only; `thruput-rv32-lower` is also a published
-crate/library. macOS
+Linux apps are `hog-gateway`, `thruput`, `rv32-lower`, `thruput-faucet`,
+`hog-firehose-store`, and `hog-firehose-serve`. Each archive contains one app
+binary plus `README.md` and `LICENSE`. `hog-gateway`, `thruput-faucet`,
+`hog-firehose-store`, and `hog-firehose-serve` are binary release artifacts
+only; `thruput-rv32-lower` is also a published crate/library. macOS
 releases currently target Apple Silicon and include only the `thruput` CLI,
 which links the RV32 lowerer in-process. The macOS binary is ad-hoc signed but
 not notarized, so macOS may require explicit approval after download.
@@ -59,4 +60,4 @@ Linux releases additionally publish
 release `SHA256SUMS`. This gateway is compiled with `target-cpu=znver5` for
 qualified AMD Zen 5 servers (for example EC2 C8a/M8a). Packaging must select it
 explicitly and validate it on a Zen 5 host before deployment. Portable gateway,
-CLI, faucet, simulator, and macOS artifacts keep their existing CPU targets.
+CLI, faucet, and macOS artifacts keep their existing CPU targets.

@@ -28,9 +28,10 @@ members = [
     "crates/firehose",
     "crates/e2e-tests",
     "crates/bench",
-    "crates/sim",
     "crates/testkit",
 ]
+# Builds the same `thruput` binary as crates/cli; see its Cargo.toml.
+exclude = ["crates/thruput"]
 
 [workspace.package]
 version = "0.33.0"
