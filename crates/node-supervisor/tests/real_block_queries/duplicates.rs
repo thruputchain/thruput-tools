@@ -390,6 +390,21 @@ async fn event_history(
     Ok(())
 }
 
+async fn expected_sender_balance(rpc: &HttpClient, before: i128) -> Result<i128> {
+    let costs = rpc
+        .request::<output::ChainConfig, _>("getChainConfig", NamedParams(input::EmptyRequest {}))
+        .await?
+        .execution
+        .ok_or_else(|| std::io::Error::other("authoritative storage costs missing"))?
+        .storage_costs;
+    // Each bootstrap-funded sender has no prior transactions: its first commitment
+    // creates one replay-cache item. Both balance rows already exist; gas is metering.
+    Ok(before
+        - i128::try_from(AMOUNT)?
+        - i128::from(costs.base_data_item_cost)
+        - i128::from(costs.replay_cache_cost_per_entry))
+}
+
 async fn exercise_case(
     fixture: &Fixture,
     clients: [&HttpClient; 2],
@@ -401,6 +416,8 @@ async fn exercise_case(
     let rpc = clients[submitter];
     let tx = transfer(fixture, rpc, sender, recipient).await?;
     let before = balance(rpc, recipient, &BlockHeight::from(0)).await?;
+    let sender_before = balance(rpc, tx.sender, &before.state_block_height).await?;
+    let expected_sender_balance = expected_sender_balance(rpc, sender_before.raw_balance).await?;
     require(
         receipt(rpc, tx.hash).await?.is_none(),
         "unsigned fixture already has a committed receipt",
@@ -432,6 +449,11 @@ async fn exercise_case(
                 == before.raw_balance,
             "pending transfer changed committed balance",
         )?;
+        let pending_sender = balance(client, tx.sender, &sender_before.state_block_height).await?;
+        require(
+            pending_sender.raw_balance == sender_before.raw_balance,
+            "pending submissions charged the sender",
+        )?;
     }
     let height = produce(fixture).await?;
     // Lost-response recovery uses the locally computed hash and read methods only.
@@ -443,7 +465,13 @@ async fn exercise_case(
             && original.events.len() == 1,
         "original transfer did not execute once successfully",
     )?;
-    let sender_after = balance(rpc, tx.sender, &original.block_height).await?;
+    for client in clients {
+        let committed_sender = balance(client, tx.sender, &original.block_height).await?;
+        require(
+            committed_sender.raw_balance == expected_sender_balance,
+            "first commitment did not charge exactly one transfer and replay-cache entry",
+        )?;
+    }
     let expected_balance = before.raw_balance + i128::try_from(AMOUNT)?;
     let mut latest = height;
     for _ in 0..2 {
@@ -460,7 +488,7 @@ async fn exercise_case(
             require(
                 balance(client, recipient, &latest).await?.raw_balance == expected_balance
                     && balance(client, tx.sender, &latest).await?.raw_balance
-                        == sender_after.raw_balance,
+                        == expected_sender_balance,
                 "replay changed committed token balances",
             )?;
         }
