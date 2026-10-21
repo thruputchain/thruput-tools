@@ -23,6 +23,15 @@ struct Fixture {
     node: Option<NodeSupervisorHandle>,
     gateway: Option<tokio::process::Child>,
     starts: u32,
+    shutdown: Option<tokio::task::JoinHandle<ShutdownOutcome>>,
+}
+
+struct ShutdownOutcome {
+    gateway: std::io::Result<()>,
+    node: std::result::Result<
+        Option<std::process::ExitStatus>,
+        thruput_node_supervisor::NodeSupervisorError,
+    >,
 }
 
 impl Fixture {
@@ -52,6 +61,7 @@ impl Fixture {
             node: None,
             gateway: None,
             starts: 0,
+            shutdown: None,
         })
     }
 
@@ -110,19 +120,31 @@ impl Fixture {
     }
 
     async fn stop(&mut self) -> Result {
-        let gateway_result = if let Some(mut child) = self.gateway.take() {
-            let _ = child.start_kill();
-            child.wait().await.map(|_| ())
-        } else {
-            Ok(())
-        };
-        let node_result = if let Some(node) = self.node.take() {
-            node.stop().await.map(Some)
-        } else {
-            Ok(None)
-        };
-        gateway_result?;
-        if let Some(status) = node_result? {
+        if self.shutdown.is_none() {
+            let gateway = self.gateway.take();
+            let node = self.node.take();
+            // A qualification timeout can cancel this waiter. Keep both processes
+            // owned by the task so final cleanup can await the same shutdown.
+            self.shutdown = Some(tokio::spawn(async move {
+                let gateway = if let Some(mut child) = gateway {
+                    let _ = child.start_kill();
+                    child.wait().await.map(|_| ())
+                } else {
+                    Ok(())
+                };
+                let node = if let Some(node) = node {
+                    node.stop().await.map(Some)
+                } else {
+                    Ok(None)
+                };
+                ShutdownOutcome { gateway, node }
+            }));
+        }
+        let outcome = self.shutdown.as_mut().unwrap().await;
+        self.shutdown = None;
+        let outcome = outcome?;
+        outcome.gateway?;
+        if let Some(status) = outcome.node? {
             require(
                 status.success(),
                 &format!("runtime did not shut down cleanly: {status}"),
@@ -781,3 +803,7 @@ async fn real_history_scanning_and_coverage_match_both_servers() {
     cleanup.unwrap();
     result.unwrap().unwrap();
 }
+
+#[cfg(unix)]
+#[path = "history/cleanup.rs"]
+mod cleanup;
