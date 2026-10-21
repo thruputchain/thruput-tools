@@ -5,11 +5,11 @@ use std::{error::Error, path::PathBuf};
 use thruput_json_rpc_types::{ContractAddress, hex::Topic};
 use thruput_signing::NATIVE_HOG_ADDRESS;
 
-type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
+pub(super) type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
 const CANDIDATE_BUDGET: usize = 1_000;
 const MAX_PAGES: usize = 64;
 
-fn require(condition: bool, message: &str) -> Result {
+pub(super) fn require(condition: bool, message: &str) -> Result {
     if condition {
         Ok(())
     } else {
@@ -17,10 +17,10 @@ fn require(condition: bool, message: &str) -> Result {
     }
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     directory: tempfile::TempDir,
-    config: NodeSupervisorConfig,
-    node: Option<NodeSupervisorHandle>,
+    pub(super) config: NodeSupervisorConfig,
+    pub(super) node: Option<NodeSupervisorHandle>,
     gateway: Option<tokio::process::Child>,
     starts: u32,
     shutdown: Option<tokio::task::JoinHandle<ShutdownOutcome>>,
@@ -35,7 +35,7 @@ struct ShutdownOutcome {
 }
 
 impl Fixture {
-    fn new() -> Result<Self> {
+    pub(super) fn new() -> Result<Self> {
         let binary = PathBuf::from(
             std::env::var_os("THRUPUT_DEVNODE_BINARY")
                 .ok_or_else(|| std::io::Error::other("THRUPUT_DEVNODE_BINARY is required"))?,
@@ -65,7 +65,7 @@ impl Fixture {
         })
     }
 
-    async fn start(&mut self) -> Result<(HttpClient, HttpClient)> {
+    pub(super) async fn start(&mut self) -> Result<(HttpClient, HttpClient)> {
         self.starts += 1;
         eprintln!("starting history fixture phase {}", self.starts);
         self.node = Some(NodeSupervisorHandle::start(self.config.clone()).await?);
@@ -119,7 +119,21 @@ impl Fixture {
         Ok((local, remote))
     }
 
-    async fn stop(&mut self) -> Result {
+    pub(super) fn print_diagnostics(&self) {
+        let log = self
+            .directory
+            .path()
+            .join(format!("gateway-{}.log", self.starts));
+        match std::fs::read_to_string(&log) {
+            Ok(contents) => eprintln!("gateway diagnostics: {contents}"),
+            Err(error) => eprintln!(
+                "cannot read gateway diagnostics at {}: {error}",
+                log.display()
+            ),
+        }
+    }
+
+    pub(super) async fn stop(&mut self) -> Result {
         if self.shutdown.is_none() {
             let gateway = self.gateway.take();
             let node = self.node.take();
@@ -787,18 +801,9 @@ async fn real_history_scanning_and_coverage_match_both_servers() {
     let mut fixture = Fixture::new().unwrap();
     let result = tokio::time::timeout(Duration::from_mins(5), exercise(&mut fixture)).await;
     let cleanup = fixture.stop().await;
-    if !matches!(&result, Ok(Ok(()))) {
-        eprintln!("history qualification failed: {result:?}");
-        eprintln!(
-            "gateway diagnostics: {}",
-            std::fs::read_to_string(
-                fixture
-                    .directory
-                    .path()
-                    .join(format!("gateway-{}.log", fixture.starts))
-            )
-            .unwrap_or_default()
-        );
+    if !matches!(&result, Ok(Ok(()))) || cleanup.is_err() {
+        eprintln!("history qualification failed: {result:?}; cleanup: {cleanup:?}");
+        fixture.print_diagnostics();
     }
     cleanup.unwrap();
     result.unwrap().unwrap();
