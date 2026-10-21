@@ -84,6 +84,18 @@ fn tx_invalid_detail_serializes_with_reason_tag_and_camel_case_fields() {
             }),
             "contract 3 in contractsToDeploy carries 65540 bytes of code; limit is 65536",
         ),
+        (
+            TxInvalidDetail::GasLimitTooHigh {
+                gas_limit: 5_000_000_000,
+                max_gas: 1_000_000_000,
+            },
+            serde_json::json!({
+                "reason": "gasLimitTooHigh",
+                "gasLimit": "5000000000",
+                "maxGas": "1000000000",
+            }),
+            "transaction budgets 5000000000 gas; chain permits 1000000000",
+        ),
     ];
 
     for (detail, expected_json, expected_message) in cases {

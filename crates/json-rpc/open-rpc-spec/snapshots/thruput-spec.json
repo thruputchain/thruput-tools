@@ -548,6 +548,9 @@
             "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
+          },
+          "maxTxGas": {
+            "$ref": "#/components/schemas/DecimalU64"
           }
         },
         "type": "object"
@@ -2208,6 +2211,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/0/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/0/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -2870,6 +2893,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/1/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/1/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -3548,6 +3591,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/2/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/2/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -4193,6 +4256,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/2/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/2/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -4833,6 +4916,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/2/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/2/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -5483,6 +5586,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/2/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/2/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -6121,6 +6244,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/2/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/2/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -6804,6 +6947,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/3/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/3/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -7449,6 +7612,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/3/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/3/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -8089,6 +8272,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/3/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/3/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -8739,6 +8942,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/3/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/3/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -9377,6 +9600,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/3/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/3/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -10046,6 +10289,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/4/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/4/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -10739,6 +11002,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/5/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/5/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -11382,6 +11665,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/5/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/5/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -12022,6 +12325,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/5/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/5/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -12659,6 +12982,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/5/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/5/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -13308,6 +13651,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/5/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/5/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -13942,6 +14305,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/5/x-data-schema/TransactionInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/5/x-data-schema/TransactionInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -14593,6 +14976,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/5/x-data-schema/TransactionRejected/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/5/x-data-schema/TransactionRejected/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -15295,6 +15698,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/6/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/6/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -15940,6 +16363,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/6/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/6/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -16580,6 +17023,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/6/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/6/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -17230,6 +17693,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/6/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/6/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -17868,6 +18351,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/6/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/6/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -18574,6 +19077,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/7/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/7/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -19210,6 +19733,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/7/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/7/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -19852,6 +20395,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/7/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/7/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -20502,6 +21065,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/7/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/7/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -21140,6 +21723,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/7/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/7/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -21894,6 +22497,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/8/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/8/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -22539,6 +23162,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/8/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/8/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -23179,6 +23822,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/8/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/8/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -23829,6 +24492,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/8/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/8/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -24467,6 +25150,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/8/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/8/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -25112,6 +25815,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/8/x-data-schema/StateHeightUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/8/x-data-schema/StateHeightUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -25869,6 +26592,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/9/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/9/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -26514,6 +27257,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/9/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/9/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -27154,6 +27917,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/9/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/9/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -27804,6 +28587,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/9/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/9/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -28442,6 +29245,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/9/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/9/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -29087,6 +29910,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/9/x-data-schema/StateHeightUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/9/x-data-schema/StateHeightUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -29812,6 +30655,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/10/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/10/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -30457,6 +31320,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/10/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/10/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -31097,6 +31980,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/10/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/10/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -31747,6 +32650,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/10/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/10/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -32385,6 +33308,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/10/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/10/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -33089,6 +34032,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/11/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/11/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -33734,6 +34697,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/11/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/11/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -34374,6 +35357,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/11/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/11/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -35024,6 +36027,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/11/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/11/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -35662,6 +36685,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/11/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/11/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -36361,6 +37404,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/12/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/12/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -37006,6 +38069,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/12/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/12/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -37646,6 +38729,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/12/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/12/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -38296,6 +39399,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/12/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/12/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -38934,6 +40057,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/12/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/12/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -39665,6 +40808,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/13/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/13/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -40310,6 +41473,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/13/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/13/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -40950,6 +42133,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/13/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/13/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -41598,6 +42801,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/13/x-data-schema/HistoryUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/13/x-data-schema/HistoryUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -42250,6 +43473,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/13/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/13/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -42967,6 +44210,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/13/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/13/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -43735,6 +44998,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/14/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/14/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -44380,6 +45663,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/14/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/14/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -45020,6 +46323,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/14/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/14/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -45668,6 +46991,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/14/x-data-schema/HistoryUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/14/x-data-schema/HistoryUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -46320,6 +47663,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/14/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/14/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -47037,6 +48400,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/14/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/14/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -47788,6 +49171,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/15/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/15/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -48433,6 +49836,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/15/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/15/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -49073,6 +50496,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/15/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/15/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -49721,6 +51164,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/15/x-data-schema/HistoryUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/15/x-data-schema/HistoryUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -50375,6 +51838,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/15/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/15/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -51013,6 +52496,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/15/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/15/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -51749,6 +53252,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/16/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/16/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -52394,6 +53917,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/16/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/16/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -53034,6 +54577,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/16/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/16/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -53682,6 +55245,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/16/x-data-schema/HistoryUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/16/x-data-schema/HistoryUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -54334,6 +55917,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/16/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/16/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -55051,6 +56654,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/16/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/16/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -55805,6 +57428,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/17/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/17/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -56443,6 +58086,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/17/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/17/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -57076,6 +58739,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/17/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/17/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -57712,6 +59395,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/17/x-data-schema/FundingAttemptStopped/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/17/x-data-schema/FundingAttemptStopped/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -58321,6 +60024,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/17/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/17/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -58954,6 +60677,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/17/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/17/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -59688,6 +61431,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/18/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/18/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -60326,6 +62089,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/18/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/18/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -60959,6 +62742,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/18/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/18/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -61595,6 +63398,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/18/x-data-schema/FundingAttemptStopped/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/18/x-data-schema/FundingAttemptStopped/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -62204,6 +64027,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/18/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/18/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -62839,6 +64682,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/18/x-data-schema/LocalFundingUnresolved/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/18/x-data-schema/LocalFundingUnresolved/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -63454,6 +65317,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/18/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/18/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -64158,6 +66041,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/19/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/19/x-data-schema/BackendDataInvalid/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -64803,6 +66706,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/19/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/19/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -65443,6 +67366,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/19/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/19/x-data-schema/BackendUnavailable/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }
@@ -66093,6 +68036,26 @@
                     "maxBytes"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/19/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/19/x-data-schema/InvalidParams/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -66731,6 +68694,26 @@
                     "index",
                     "codeBytes",
                     "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/19/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/19/x-data-schema/Overloaded/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
                   ],
                   "type": "object"
                 }

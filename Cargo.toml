@@ -86,28 +86,28 @@ thruput-cli-macros = { path = "crates/cli-macros", version = "=0.33.0", registry
 # These crates define or encode the protocol schema. Keep them exact and update
 # them as one qualified release family so published binaries cannot float to an
 # incompatible patch release.
-thruput-xdr = { version = "=0.56.4", registry = "thruput", features = ["serde", "xdrs", "schema"] }
-thruput-indexer = { version = "=0.56.4", registry = "thruput", features = ["serde"] }
-thruput-scheduler = { version = "=0.56.4", registry = "thruput" }
-thruput-db-gateway = { version = "=0.56.4", registry = "thruput" }
-thruput-view = { version = "=0.56.4", registry = "thruput" }
-thruput-scp = { version = "=0.56.4", registry = "thruput" }
-thruput-coordinator = { version = "=0.56.4", registry = "thruput" }
-thruput-trace = { version = "=0.56.4", registry = "thruput" }
+thruput-xdr = { version = "=0.56.5", registry = "thruput", features = ["serde", "xdrs", "schema"] }
+thruput-indexer = { version = "=0.56.5", registry = "thruput", features = ["serde"] }
+thruput-scheduler = { version = "=0.56.5", registry = "thruput" }
+thruput-db-gateway = { version = "=0.56.5", registry = "thruput" }
+thruput-view = { version = "=0.56.5", registry = "thruput" }
+thruput-scp = { version = "=0.56.5", registry = "thruput" }
+thruput-coordinator = { version = "=0.56.5", registry = "thruput" }
+thruput-trace = { version = "=0.56.5", registry = "thruput" }
 # The XDR codec is the exception: caret, so an xdrs patch release reaches this
 # workspace without a release here. Cargo resolves the protocol's 0.12.x codec.
 xdrs = { version = "0.12.0", registry = "thruput", features = ["alloc"] }
 xdr-common = { version = "0.12.0", registry = "thruput" }
 rpc_driver = { version = "=0.15.0", registry = "thruput" }
 # from the sdk crate:
-thruput-spec-tool = { version = "=0.52.3", registry = "thruput" }
-thruput-contract-util = { version = "=0.52.3", registry = "thruput" }
-thruput-domain-separator = { version = "=0.52.3", registry = "thruput" }
-thruput-contract-spec = { version = "=0.52.3", registry = "thruput" }
-thruput-u256 = { version = "=0.52.3", registry = "thruput" }
-thruput-erc20-if = { version = "=0.1.62", registry = "thruput" }
-thruput-erc20-permit-if = { version = "=0.1.62", registry = "thruput" }
-thruput-sdk = { version = "=0.52.3", registry = "thruput" }
+thruput-spec-tool = { version = "=0.52.4", registry = "thruput" }
+thruput-contract-util = { version = "=0.52.4", registry = "thruput" }
+thruput-domain-separator = { version = "=0.52.4", registry = "thruput" }
+thruput-contract-spec = { version = "=0.52.4", registry = "thruput" }
+thruput-u256 = { version = "=0.52.4", registry = "thruput" }
+thruput-erc20-if = { version = "=0.1.63", registry = "thruput" }
+thruput-erc20-permit-if = { version = "=0.1.63", registry = "thruput" }
+thruput-sdk = { version = "=0.52.4", registry = "thruput" }
 
 # --- Async ---
 async-trait = "0.1"

@@ -62,3 +62,19 @@ fn retired_sha256_buffer_bytes_is_dropped_when_a_chain_still_states_it() {
         json!({ "maxSavepointDepth": 9 })
     );
 }
+
+#[test]
+fn max_tx_gas_is_read_from_its_arm_and_spelled_as_a_decimal_string() {
+    let config = network_config(vec![ConfigParam::kConfigParamMaxTxGas {
+        max_tx_gas: 5_000_000_000,
+    }]);
+
+    let params = NetworkConfigParams::from_network_config(&config).unwrap();
+
+    assert_eq!(params.max_tx_gas, Some(5_000_000_000));
+    let encoded = serde_json::to_value(params).expect("bug: params serialize");
+    assert_eq!(encoded, json!({ "maxTxGas": "5000000000" }));
+    let decoded: NetworkConfigParams =
+        serde_json::from_value(encoded).expect("bug: params deserialize");
+    assert_eq!(decoded, params);
+}
