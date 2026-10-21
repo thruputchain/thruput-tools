@@ -34,7 +34,7 @@ for setup and [docs/README.md](docs/README.md) for focused documentation.
 | hogd result mapping | `crates/x23/hogd-backend`: shared decoding, submit packing, and transaction-status probe ordering; no connections, timeout/retry policy, or metrics |
 | Internal transport | `crates/x23/x23-transport`: x23 pool and connection helpers; not a public SDK API |
 | Embeddable client | `crates/client`: supplied-spec codecs and contract invocation with resolved inputs and caller-owned RPC clients; no CLI config, discovery, terminal output, compiler, or node supervision |
-| CLI | `crates/cli`: command logic in the library; `main.rs` dispatches |
+| CLI | `crates/cli`: command logic in the library; `app.rs` parses and dispatches. `crates/thruput` publishes the same binary under the bare `thruput` name and holds no code |
 | Transaction bounds | `crates/tx-validation`: off-chain mirror of executor checks |
 | Runtime acquisition | `crates/toolchain`: trusted catalog, acquisition, and cache; lookup is local and non-mutating, acquisition is explicit |
 | RV32 format/build | `crates/rv32/artifact` owns the format and validation; `crates/rv32/lower` lowers ELF to `.rv32a` |

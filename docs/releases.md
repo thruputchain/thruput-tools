@@ -13,7 +13,9 @@ Run the **Release package** GitHub Actions workflow for a normal release.
   `publish.yml`. Do not run it directly for normal releases.
 
 Before release, bump the workspace version in `Cargo.toml` and keep internal
-workspace dependency pins aligned. Do not manually push `v*` tags.
+workspace dependency pins aligned. `crates/thruput` is outside the workspace,
+so bump its version and its `thruput-cli` pin by hand; a `thruput-cli` test
+fails if they drift. Do not manually push `v*` tags.
 
 Release assets:
 

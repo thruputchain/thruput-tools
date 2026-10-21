@@ -1,4 +1,5 @@
 /target
+/crates/thruput/target
 **/.DS_Store
 docs/plans/
 docs/superpowers/
