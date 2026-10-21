@@ -134,6 +134,18 @@ jobs:
             test "$("target/debug/$app" --version)" = "$app $expected_version"
           done
 
+      - name: Native history through local RPC and gateway
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          cargo build --locked -p thruput-cli -p thruput-json-rpc-gateway --bins
+          runtime_version=$(python3 -c 'import json; print(json.load(open("crates/toolchain/catalog/hog-devnode.json"))["defaultVersion"])')
+          target/debug/thruput --json toolchain install "$runtime_version" > /tmp/history-toolchain.json
+          export THRUPUT_DEVNODE_BINARY
+          THRUPUT_DEVNODE_BINARY=$(python3 -c 'import json; print(json.load(open("/tmp/history-toolchain.json"))["data"]["path"])')
+          export THRUPUT_GATEWAY_BINARY="$PWD/target/debug/hog-gateway"
+          cargo test --locked -p thruput-node-supervisor --test real_block_queries -- --ignored --test-threads=1
+
   cli-smoke:
     needs: dependency-policy # Check deps before building anything
     name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + thruput test + thruput test --integration)
