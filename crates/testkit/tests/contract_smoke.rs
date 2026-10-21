@@ -16,8 +16,8 @@ use std::{
     time::Duration,
 };
 
-use thruput_testkit::rpc_types::receipt::ExecStatus;
-use thruput_testkit::rpc_types::view::RootInvocationOutput;
+use thruput_testkit::rpc_types::responses::InvocationOutput;
+use thruput_testkit::rpc_types::responses::ReceiptExecution;
 use thruput_testkit::xdr::types::ContractAddress;
 use thruput_testkit::{
     Agent, AgentContext, BlockDriverConfig, DeployOptions, LocalNetworkConfig, NetworkConfig,
@@ -34,7 +34,7 @@ fn caller_counter_artifact() -> Option<PathBuf> {
     Some(PathBuf::from(root).join("caller_counter.rv32a"))
 }
 
-/// Read the caller's counter via `groundhog_view`, decoding the CXS `u64`.
+/// Read the caller's counter via `simulateInvocation`, decoding the CXS `u64`.
 ///
 /// `get()` keys on `msg.sender`, so the view must run with `caller` set to the
 /// same wallet that issued the `bump()`; the node installs it as a parent frame.
@@ -49,7 +49,7 @@ async fn read_counter(
         .view_call(contract, get, &[], Some(caller))
         .await?;
     match response.output {
-        RootInvocationOutput::Return { return_data } => {
+        InvocationOutput::Return { return_data } => {
             Ok(thruput_testkit::xdrs::cxs::decode::<u64>(&return_data.0)
                 .expect("get() return decodes as a u64"))
         }
@@ -62,9 +62,9 @@ async fn bump_counter(ctx: &AgentContext, contract: ContractAddress) -> Result<(
         .call(contract, entrypoint_id(INTERFACE, VERSION, "bump"), &[])
         .await?;
     assert!(
-        matches!(receipt.status, ExecStatus::Ok),
+        matches!(receipt.execution, ReceiptExecution::Return { .. }),
         "bump reverted: {:?}",
-        receipt.status
+        receipt.execution
     );
     Ok(())
 }
@@ -84,7 +84,7 @@ async fn fund_native_accounts(scenario: &Scenario, manual: bool) {
                 barrier.wait().await;
             }
             let receipt = submitted.await_receipt().await?;
-            assert!(matches!(receipt.status, ExecStatus::Ok));
+            assert!(matches!(receipt.execution, ReceiptExecution::Return { .. }));
             Ok(())
         })
     });
@@ -115,8 +115,8 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
         alice_height.store(block.height, Ordering::Release);
         alice_barrier.wait().await;
         let receipt = call.await_receipt().await?;
-        assert_eq!(*receipt.height, block.height);
-        assert!(matches!(receipt.status, ExecStatus::Ok));
+        assert_eq!(*receipt.block_height, block.height);
+        assert!(matches!(receipt.execution, ReceiptExecution::Return { .. }));
         assert_eq!(read_counter(&ctx, alice_address, ctx.address()).await?, 1);
         Ok(())
     });
@@ -133,8 +133,8 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
         bob_barrier.wait().await;
         let height = bob_height.load(Ordering::Acquire);
         let receipt = call.await_receipt().await?;
-        assert_eq!(*receipt.height, height);
-        assert!(matches!(receipt.status, ExecStatus::Ok));
+        assert_eq!(*receipt.block_height, height);
+        assert!(matches!(receipt.execution, ReceiptExecution::Return { .. }));
         assert_eq!(read_counter(&ctx, bob_address, ctx.address()).await?, 1);
         Ok(())
     });
@@ -354,7 +354,10 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
 
             let registration_block = ctx.network().produce_block().await?;
             let registration_receipt = ctx.network().await_receipt(registration_hash).await?;
-            assert_eq!(*registration_receipt.height, registration_block.height);
+            assert_eq!(
+                *registration_receipt.block_height,
+                registration_block.height
+            );
 
             let deployment = ctx
                 .submit_deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
@@ -367,7 +370,7 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
             deployment.await_pending().await?;
             let deployment_block = ctx.network().produce_block().await?;
             let deployed = deployment.await_receipt().await?;
-            assert_eq!(*deployed.receipt.height, deployment_block.height);
+            assert_eq!(*deployed.receipt.block_height, deployment_block.height);
             assert!(!deployed.registered);
             Ok(())
         })])
@@ -418,14 +421,14 @@ async fn manual_block_production_stages_deploys_and_calls() {
                 .await?;
             registration.await_pending().await?;
             assert_eq!(
-                ctx.network().chain_tip().await?.height,
-                genesis.height,
+                ctx.network().chain_tip().await?.block_height,
+                genesis.block_height,
                 "manual mode must not commit the submitted deployment"
             );
 
             let registration_block = ctx.network().produce_block().await?;
             let registered = registration.await_receipt().await?;
-            assert_eq!(*registered.receipt.height, registration_block.height);
+            assert_eq!(*registered.receipt.block_height, registration_block.height);
             assert!(registered.registered);
             deployment_addresses
                 .lock()
@@ -437,14 +440,14 @@ async fn manual_block_production_stages_deploys_and_calls() {
                 .await?;
             second.await_pending().await?;
             assert_eq!(
-                *ctx.network().chain_tip().await?.height,
+                *ctx.network().chain_tip().await?.block_height,
                 registration_block.height,
                 "staged deployment must remain pending"
             );
 
             let deployment_block = ctx.network().produce_block().await?;
             let second = second.await_receipt().await?;
-            assert_eq!(*second.receipt.height, deployment_block.height);
+            assert_eq!(*second.receipt.block_height, deployment_block.height);
             deployment_addresses
                 .lock()
                 .expect("address mutex is not poisoned")

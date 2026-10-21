@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use thruput_json_rpc_types::hex::HexBytes;
-use thruput_json_rpc_types::receipt::TransactionReceipt;
+use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
 use thruput_json_rpc_types::transaction::TxHash;
 use thruput_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SchemeSigner, SignTransactionParams,
@@ -18,20 +18,19 @@ use xdr_common::VecM;
 use crate::account_resolution::resolve_transaction_sender;
 use crate::artifacts::{ArtifactKind, ArtifactOptions, ResolvedArtifact};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
-use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 
 use crate::result::{CommandError, CommandResult};
 use crate::terminal::render_shell_arg;
 use crate::tx_utils::{
     command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_failed_receipt_data,
-    resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
+    resolve_block_expiry_height, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
 mod funding;
 
 /// Current schema version for `deploy --json` data payloads.
-pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 7;
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 8;
 
 /// HOG that `thruput test --integration` transfers to the contract it deploys.
 ///
@@ -88,12 +87,12 @@ struct NativeDeployment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeployAddressSource {
     Receipt,
-    Derived,
 }
 
 /// Fully prepared deploy submission inputs shared by live execution and dry-run flows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedDeploy {
+    network_hash: NetworkHash,
     initializer_metadata: Option<crate::codec::CallMetadata>,
     tx_hash: TxHash,
     native: Option<NativeDeployment>,
@@ -177,7 +176,7 @@ pub fn run(
             print.detail("balance deposit HOG", crate::hog::format_amount(report.balance_deposit()));
             print.detail("deployment collateral HOG", crate::hog::format_amount(report.deployment_cost()));
             print.detail("minimum funding HOG", &report.minimum_funding_hog);
-            print.detail("observed height", *report.execution.observed_tip.height);
+            print.detail("observed height", *report.execution.observed_tip.block_height);
             print.note("The minimum leaves no free balance for future storage. Sender storage and gas capacity are separate.");
             if options.init_method.is_some() {
                 print.note("Initializer storage funding is unknown; choose an explicit total --fund amount.");
@@ -249,7 +248,10 @@ pub fn run(
 
     let submitted = match submit_prepared_deploy_and_resolve(&prepared) {
         Ok(submitted) => submitted,
-        Err(error @ CliError::NativeDeploymentUnverified { .. }) if prepared.native.is_some() => {
+        Err(
+            error @ (CliError::NativeDeploymentUnverified { .. }
+            | CliError::NativeRpcFailure { .. }),
+        ) => {
             let _ = task.finish();
             return report_unverified_native_deploy(&prepared, &error, cmd, print);
         }
@@ -257,8 +259,6 @@ pub fn run(
     };
     let tx_hash = submitted.tx_hash;
     let receipt = submitted.receipt;
-    let transaction_detail =
-        fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, task.print());
     let warnings = task.finish();
     let contract_addr_hex = submitted.contract_address;
     let address_source = submitted.address_source;
@@ -270,31 +270,22 @@ pub fn run(
     let insufficient_funding =
         is_insufficient_deploy_funding(&receipt, decoded_abort.as_ref(), Some(&prepared));
     print.group(
-        if matches!(
-            receipt.status,
-            thruput_json_rpc_types::receipt::ExecStatus::Ok
-        ) {
+        if matches!(receipt.execution, ReceiptExecution::Return { .. }) {
             crate::print::Outcome::Success
         } else {
             crate::print::Outcome::Error
         },
         "Deployment",
         |print| {
-            match &receipt.status {
-                thruput_json_rpc_types::receipt::ExecStatus::Ok => {
+            match &receipt.execution {
+                ReceiptExecution::Return { .. } => {
                     let contract_addr_hex = contract_addr_hex
                         .as_deref()
                         .expect("bug: successful deploy must resolve a contract address");
                     print.success("Deployed contract");
                     print.detail("address", contract_addr_hex);
-                    if matches!(address_source, Some(DeployAddressSource::Derived)) {
-                        print.warn(
-                            "receipt omitted deploy return_data; address was derived locally from \
-                     deployer, nonce, and contract hash",
-                        );
-                    }
                     print.detail("tx", &tx_hash_formatted);
-                    print.detail("height", *receipt.height);
+                    print.detail("height", *receipt.block_height);
                     print.detail("gas used", receipt.gas_used);
                 }
                 other => {
@@ -304,25 +295,19 @@ pub fn run(
                         print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
                     }
                     print.detail("tx", &tx_hash_formatted);
-                    print.detail("height", *receipt.height);
+                    print.detail("height", *receipt.block_height);
                     print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
                 }
             }
             for warning in &warnings {
                 print.warn(warning);
             }
-            if let Some(detail) = transaction_detail.as_ref() {
-                print_transaction_detail(detail, print);
-            }
         },
     );
 
     // Save contract alias
     let mut alias_warnings: Vec<crate::checks::Finding> = Vec::new();
-    if matches!(
-        &receipt.status,
-        thruput_json_rpc_types::receipt::ExecStatus::Ok
-    ) {
+    if matches!(&receipt.execution, ReceiptExecution::Return { .. }) {
         // `--alias` wins; otherwise the alias is the package name, which is what
         // an author reads back with `thruput call <name>`. There is no third
         // source. `--artifact` names a bare binary and carries no package, so
@@ -386,15 +371,11 @@ pub fn run(
         "artifactPath": &prepared.artifact.path,
         "artifactBytes": prepared.artifact_bytes_len.to_string(),
         "address": contract_addr_hex,
-        "addressSource": match address_source {
-            Some(DeployAddressSource::Receipt) => Some("receipt"),
-            Some(DeployAddressSource::Derived) => Some("derived"),
-            None => None,
-        },
-        "height": receipt.height.to_string(),
-        "status": receipt.status,
+        "addressSource": address_source.map(|DeployAddressSource::Receipt| "receipt"),
+        "blockHeight": receipt.block_height.to_string(),
+        "execution": receipt.execution,
+        "events": receipt.events,
         "gasUsed": receipt.gas_used.to_string(),
-        "transactionDetail": transaction_detail,
         "walletEntrypointId": prepared.wallet_entrypoint_id,
         "walletEntrypointSource": prepared.wallet_entrypoint_source,
     });
@@ -405,8 +386,6 @@ pub fn run(
         data["rpcUrl"] = json!(prepared.rpc_url);
     }
     if command_error.is_some() {
-        data["returnData"] = json!(receipt.return_data);
-        data["abortData"] = json!(receipt.abort_data);
         crate::tx_utils::insert_abort_json(&mut data, decoded_abort.as_ref());
     }
     if let Some(error) = command_error {
@@ -448,7 +427,7 @@ fn command_error_for_deploy_receipt(
             .with_hint(hint),
         );
     }
-    command_error_for_exec_status(&receipt.status)
+    command_error_for_exec_status(&receipt.execution)
 }
 
 fn is_insufficient_deploy_funding(
@@ -466,10 +445,7 @@ fn is_insufficient_deploy_funding(
     }) {
         return false;
     }
-    if !matches!(
-        receipt.status,
-        thruput_json_rpc_types::receipt::ExecStatus::Reverted { .. }
-    ) {
+    if !matches!(receipt.execution, ReceiptExecution::Abort { .. }) {
         return false;
     }
     crate::codec::is_erc20_too_large(decoded_abort)
@@ -569,13 +545,16 @@ pub(crate) fn submit_prepared_deploy(
     prepared: &PreparedDeploy,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    if prepared.native.is_some() {
-        return rt.block_on(async {
-            let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
-            submit_native_deploy(prepared, &client, thruput_client::PollOptions::default()).await
-        });
-    }
-    rt.block_on(async { submit_and_poll(&prepared.rpc_url, &prepared.tx_hex).await })
+    rt.block_on(async {
+        let client =
+            thruput_client::NativeClient::new(crate::http_client::rpc_client(&prepared.rpc_url)?);
+        submit_native_deploy(
+            prepared,
+            &client,
+            thruput_client::ReceiptPollConfig::default(),
+        )
+        .await
+    })
 }
 
 /// Submit a deploy transaction and resolve the deployed contract address when successful.
@@ -585,13 +564,23 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
     let (tx_hash, receipt) = submit_prepared_deploy(prepared)?;
     let predicted_address =
         ContractAddress::from(parse_predicted_address(&prepared.predicted_address)?);
-    let (contract_address, address_source) = match &receipt.status {
-        thruput_json_rpc_types::receipt::ExecStatus::Ok => {
+    let (contract_address, address_source) = match &receipt.execution {
+        ReceiptExecution::Return { return_data } => {
             let (address, source) = if prepared.native.is_some() {
-                resolve_native_deployed_address(receipt.return_data.as_ref(), &predicted_address)?
+                resolve_native_deployed_address(return_data, &predicted_address)
             } else {
-                resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?
-            };
+                resolve_deployed_address(return_data)
+            }
+            .map_err(|error| {
+                crate::native_rpc::failure(
+                    error.to_string(),
+                    json!({
+                        "submission":"acknowledged", "receipt":receipt,
+                        "transactionHash":format_tx_hash(&tx_hash),
+                        "commitment":{"blockHeight":receipt.block_height.to_string()}
+                    }),
+                )
+            })?;
             (Some(address), Some(source))
         }
         _ => (None, None),
@@ -896,6 +885,7 @@ fn sign_deploy_plan(plan: DeployPlan) -> Result<PreparedDeploy, CliError> {
     )
     .map_err(|error| CliError::Other(error.to_string()))?;
     Ok(PreparedDeploy {
+        network_hash: plan.network_hash,
         initializer_metadata: plan.initializer_metadata,
         tx_hash: plan.tx_hash,
         native: plan.native,
@@ -943,75 +933,36 @@ fn resolve_native_funding(native: bool, fund: Option<&str>) -> Result<Option<u12
     }
 }
 
-async fn submit_native_deploy(
+async fn submit_native_deploy<C: jsonrpsee::core::client::ClientT + Sync>(
     prepared: &PreparedDeploy,
-    client: &(impl jsonrpsee::core::client::ClientT + Sync),
-    polling: thruput_client::PollOptions,
+    client: &thruput_client::NativeClient<C>,
+    polling: thruput_client::ReceiptPollConfig,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
-    let returned =
-        thruput_json_rpc_client::submit_transaction_with_client(client, &prepared.tx_hex)
-            .await
-            .map_err(|error| native_submission_error(&error))?;
-    if returned != prepared.tx_hash {
-        return Err(CliError::NativeDeploymentUnverified {
-            message: format!(
-                "endpoint returned {}, expected {}",
-                format_tx_hash(&returned),
-                format_tx_hash(&prepared.tx_hash)
-            ),
-        });
-    }
-    let receipt = thruput_json_rpc_client::poll_transaction_receipt_with_client_config(
+    let cancelled = crate::native_rpc::install_interrupt_listener().await;
+    let receipt = crate::native_rpc::submit_and_wait(
         client,
         prepared.tx_hash,
-        polling.max_attempts,
-        polling.interval,
+        &prepared.tx_hex,
+        &prepared.network_hash,
+        polling,
+        cancelled,
     )
     .await
-    .map_err(|error| {
-        let error = crate::tx_utils::map_poll_receipt_error(error);
-        if matches!(error, CliError::TransactionInvalid { .. }) {
-            error
-        } else {
-            CliError::NativeDeploymentUnverified {
-                message: error.to_string(),
-            }
-        }
-    })?;
-    if receipt.tx_hash != prepared.tx_hash {
-        return Err(CliError::NativeDeploymentUnverified {
-            message: "receipt hash does not match the submitted transaction".into(),
-        });
-    }
+    .map_err(|failure| failure.error)?;
     Ok((prepared.tx_hash, receipt))
 }
 
-fn native_submission_error(error: &jsonrpsee::core::ClientError) -> CliError {
-    let message = crate::tx_utils::rpc_error_message(error);
-    if crate::tx_utils::is_unsupported_rpc_method_error(error) {
-        CliError::RpcCapabilityUnsupported {
-            method: "sendRawTransaction",
-            message,
-        }
-    } else if crate::tx_utils::is_conclusive_send_error(error) {
-        CliError::RpcMethodFailed {
-            method: "sendRawTransaction",
-            message,
-        }
-    } else {
-        CliError::NativeDeploymentUnverified {
-            message: format!("sendRawTransaction failed: {message}"),
-        }
-    }
-}
-
 fn resolve_native_deployed_address(
-    return_data: Option<&HexBytes>,
+    return_data: &HexBytes,
     predicted: &ContractAddress,
 ) -> Result<(String, DeployAddressSource), CliError> {
-    match return_data {
-        Some(data) if data.0.as_slice() == predicted.as_ref() => Ok((crate::codec::format_contract_address(predicted), DeployAddressSource::Receipt)),
-        _ => Err(CliError::NativeDeploymentUnverified { message: "successful receipt must return the exact predicted 32-byte contract address; alias was not saved".into() }),
+    if return_data.0.as_slice() == predicted.as_ref() {
+        Ok((
+            crate::codec::format_contract_address(predicted),
+            DeployAddressSource::Receipt,
+        ))
+    } else {
+        Err(CliError::NativeDeploymentUnverified { message: "successful receipt must return the exact predicted 32-byte contract address; alias was not saved".into() })
     }
 }
 
@@ -1027,10 +978,29 @@ fn report_unverified_native_deploy(
         render_shell_arg(&format!("--profile={}", prepared.profile_name)),
         render_shell_arg(&format!("--rpc-url={}", prepared.rpc_url))
     );
-    let hint = format!(
-        "reconcile the original transaction with `{inspect}` before another deployment; rerunning deploy generates a new nonce and address. A timeout or unknown status does not prove failure"
-    );
+    let not_sent = crate::native_rpc::submission_phase(error)
+        == Some(crate::native_rpc::SubmissionPhase::NotSent);
+    let not_admitted = crate::native_rpc::submission_phase(error)
+        == Some(crate::native_rpc::SubmissionPhase::NotAdmitted);
+    let evidence = error.details_json().unwrap_or(serde_json::Value::Null);
+    let receipt = evidence.get("receipt");
+    let hint = if receipt.is_some() {
+        "The transaction committed, but its deployment return did not validate. Inspect the receipt before another deployment; rerunning deploy generates a new nonce and address.".to_owned()
+    } else if not_sent {
+        "No transaction was sent. Resolve the reported issue before submitting.".to_owned()
+    } else if not_admitted {
+        "This submission was not admitted. Resolve the reported issue before another deployment; no retry was attempted.".to_owned()
+    } else {
+        format!(
+            "reconcile the original transaction with `{inspect}` before another deployment; rerunning deploy generates a new nonce and address. A timeout or unknown status does not prove failure"
+        )
+    };
     print.warn(error.to_string());
+    if let Some(phase) = crate::native_rpc::submission_phase(error) {
+        for (label, value) in crate::native_rpc::failure_observations(phase, &evidence) {
+            print.detail(label, value);
+        }
+    }
     print.detail("tx", &tx_hash);
     print.detail("predicted address", &prepared.predicted_address);
     print.detail("signed tx", &prepared.tx_hex);
@@ -1038,7 +1008,8 @@ fn report_unverified_native_deploy(
     print.json(&CommandResult::failure_with_error(
         cmd,
         json!({
-            "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION, "confirmation": "unverified",
+            "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION, "confirmation": if receipt.is_some() { "committed" } else if not_sent { "notSent" } else if not_admitted { "notAdmitted" } else { "unverified" },
+            "receipt": receipt,
             "txHash": tx_hash, "rpcUrl": prepared.rpc_url, "profile": prepared.profile_name,
             "predictedAddress": prepared.predicted_address, "signedTx": prepared.tx_hex,
             "nativeDeployment": prepared.native,
@@ -1114,25 +1085,19 @@ fn newest_source_mtime(dir: &Path) -> Option<std::time::SystemTime> {
 }
 
 fn resolve_deployed_address(
-    return_data: Option<&HexBytes>,
-    predicted_address: &ContractAddress,
+    return_data: &HexBytes,
 ) -> Result<(String, DeployAddressSource), CliError> {
-    if let Some(return_data) = return_data {
-        if return_data.0.len() == 32 {
-            return Ok((
-                thruput_encoding::encode(&return_data.0),
-                DeployAddressSource::Receipt,
-            ));
-        }
-        return Err(CliError::Other(format!(
-            "deploy receipt return_data had {} bytes, expected 32-byte contract address",
-            return_data.0.len()
-        )));
+    if return_data.0.len() != 32 {
+        return Err(CliError::NativeDeploymentUnverified {
+            message: format!(
+                "deploy receipt returned {} bytes; expected a 32-byte contract address; alias was not saved",
+                return_data.0.len()
+            ),
+        });
     }
-
     Ok((
-        crate::codec::format_contract_address(predicted_address),
-        DeployAddressSource::Derived,
+        thruput_encoding::encode(&return_data.0),
+        DeployAddressSource::Receipt,
     ))
 }
 
@@ -1153,7 +1118,7 @@ mod tests {
         BlockHeight,
         base58::Base58,
         hex::HexBytes,
-        receipt::{ExecStatus, TransactionReceipt},
+        responses::{ReceiptExecution, TransactionReceipt},
         transaction::TxHash,
     };
     use thruput_xdr::types::{ContractAddress, SHA256Hash};
@@ -1184,19 +1149,35 @@ mod tests {
         let mut module = jsonrpsee::RpcModule::new(submissions.clone());
         let hash = TxHash(Base58(SHA256Hash::from([1; 32])));
         module
-            .register_method("groundhog_sendRawTransaction", move |_, state, _| {
+            .register_method("sendTransaction", move |_, state, _| {
                 state.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, jsonrpsee::types::ErrorObjectOwned>(hash)
+                Ok::<_, jsonrpsee::types::ErrorObjectOwned>(
+                    serde_json::json!({"transactionHash":hash,"admission":"accepted"}),
+                )
             })
             .unwrap();
         module
-            .register_method("groundhog_getTransactionReceipt", |_, _, _| {
-                None::<TransactionReceipt>
-            })
+            .register_method(
+                "getTransactionReceipt",
+                |_, _, _| None::<TransactionReceipt>,
+            )
+            .unwrap();
+        module.register_method("getVersionInfo", |_, _, _| serde_json::json!({
+            "wireFormat":"14.0.0", "implementation":"test",
+            "supportedMethods":["sendTransaction", "getTransactionStatus", "getTransactionReceipt", "getNetworkInfo"]
+        })).unwrap();
+        module.register_method("getNetworkInfo", |_, _, _| serde_json::json!({"networkHash":thruput_json_rpc_types::NetworkHash::from(SHA256Hash::from([9;32]))})).unwrap();
+        module
+            .register_method(
+                "getTransactionStatus",
+                |_, _, _| serde_json::json!({"status":"unknown"}),
+            )
             .unwrap();
         let handle = server.start(module);
-        let client = crate::http_client::rpc_client(&url).unwrap();
+        let client =
+            thruput_client::NativeClient::new(crate::http_client::rpc_client(&url).unwrap());
         let prepared = PreparedDeploy {
+            network_hash: thruput_xdr::types::NetworkHash::from(SHA256Hash::from([9; 32])),
             initializer_metadata: None,
             tx_hash: hash,
             native: None,
@@ -1218,32 +1199,23 @@ mod tests {
         let error = super::submit_native_deploy(
             &prepared,
             &client,
-            thruput_client::PollOptions {
-                max_attempts: 1,
-                interval: std::time::Duration::ZERO,
+            thruput_client::ReceiptPollConfig {
+                timeout: std::time::Duration::from_millis(1),
+                interval: std::time::Duration::from_millis(1),
             },
         )
         .await
         .unwrap_err();
         assert_eq!(submissions.load(Ordering::SeqCst), 1);
-        assert!(matches!(
-            error,
-            crate::CliError::NativeDeploymentUnverified { .. }
-        ));
-        assert!(
-            error
-                .to_string()
-                .contains(&crate::tx_utils::format_tx_hash(&hash))
+        assert!(matches!(error, crate::CliError::NativeRpcFailure { .. }));
+        let evidence = error.details_json().unwrap();
+        assert_eq!(
+            evidence["transactionHash"],
+            crate::tx_utils::format_tx_hash(&hash)
         );
+        assert_eq!(evidence["submission"], "acknowledged");
+        assert_eq!(evidence["cause"]["kind"], "timeout");
         handle.stop().unwrap();
-    }
-
-    #[test]
-    fn native_submit_transport_timeout_remains_unverified() {
-        assert!(matches!(
-            super::native_submission_error(&jsonrpsee::core::ClientError::RequestTimeout),
-            crate::CliError::NativeDeploymentUnverified { .. }
-        ));
     }
 
     #[test]
@@ -1318,18 +1290,18 @@ mod tests {
     }
 
     #[test]
-    fn deploy_address_resolution_falls_back_to_prediction() {
-        let predicted = ContractAddress::from([0x11; 32]);
-        let resolved = resolve_deployed_address(None, &predicted)
-            .expect("bug: predicted address fallback should succeed");
-        assert_eq!(resolved.0, thruput_encoding::encode(&[0x11; 32]));
-        assert_eq!(resolved.1, DeployAddressSource::Derived);
+    fn deploy_address_resolution_requires_receipt_evidence() {
+        for bytes in [vec![], vec![0x11; 31], vec![0x11; 33]] {
+            assert!(matches!(
+                resolve_deployed_address(&HexBytes(bytes)),
+                Err(crate::CliError::NativeDeploymentUnverified { .. })
+            ));
+        }
     }
 
     #[test]
     fn deploy_address_resolution_prefers_receipt_return_data() {
-        let predicted = ContractAddress::from([0x11; 32]);
-        let resolved = resolve_deployed_address(Some(&HexBytes(vec![0x22; 32])), &predicted)
+        let resolved = resolve_deployed_address(&HexBytes(vec![0x22; 32]))
             .expect("bug: receipt return_data should be accepted");
         assert_eq!(resolved.0, thruput_encoding::encode(&[0x22; 32]));
         assert_eq!(resolved.1, DeployAddressSource::Receipt);
@@ -1389,6 +1361,7 @@ mod tests {
     #[test]
     fn funding_commands_support_option_like_wallet_and_profile_names() {
         let prepared = PreparedDeploy {
+            network_hash: thruput_xdr::types::NetworkHash::from(SHA256Hash::from([9; 32])),
             initializer_metadata: None,
             tx_hash: TxHash(Base58(SHA256Hash::from([0; 32]))),
             native: None,
@@ -1419,12 +1392,12 @@ mod tests {
 
     fn failed_receipt(abort_data: Option<HexBytes>) -> TransactionReceipt {
         TransactionReceipt {
-            tx_hash: TxHash(Base58(SHA256Hash::from([0x11; 32]))),
-            height: BlockHeight::from(1),
-            status: ExecStatus::Reverted { message: None },
+            transaction_hash: TxHash(Base58(SHA256Hash::from([0x11; 32]))),
+            block_height: BlockHeight::from(1),
+            execution: ReceiptExecution::Abort {
+                abort_data: abort_data.unwrap_or(HexBytes(vec![])),
+            },
             events: Vec::new(),
-            return_data: None,
-            abort_data,
             gas_used: 1_500,
         }
     }

@@ -223,6 +223,10 @@ pub enum AirdropAttemptResponse {
         #[serde(with = "crate::decimal")]
         #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
         height: BlockHeight,
+        /// Actual root return bytes, retained from the matched receipt.
+        /// Older producers may omit these; native success projection must fail closed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        return_data: Option<HexBytes>,
         /// Committed execution result.
         status: ExecStatus,
     },

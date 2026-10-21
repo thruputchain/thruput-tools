@@ -21,14 +21,11 @@ fn prepared() -> PreparedView {
             "name":"test", "contracts":{}, "wallets":{}
         }))
         .unwrap(),
-        contract_address_hex: "unused in native report".into(),
         method: "0x0101010101010101".into(),
         resolved: ResolvedCall {
             entrypoint: thruput_xdr::contract::ContractEntrypointID::from([1; 8]),
             metadata: None,
         },
-        entrypoint_id: "0x0101010101010101".into(),
-        calldata_hex: "0x0203".into(),
         request: ViewRequest {
             auth_claim: None,
             min_height: None,
@@ -281,4 +278,26 @@ fn configured_manifest_pin_takes_precedence_over_stale_profile_hash() {
             thruput_xdr::types::SHA256Hash::from([8; 32])
         ))
     );
+}
+
+#[test]
+fn native_report_decodes_return_with_resolved_metadata() {
+    use crate::codec::{CallMetadata, ContractMetadata, MethodMetadata};
+    let mut prepared = prepared();
+    prepared.resolved.metadata = Some(CallMetadata::Local(ContractMetadata {
+        interface_name: "Counter".into(),
+        version: "0.1.0".into(),
+        source: std::path::PathBuf::from("/tmp/implementation.rs"),
+        method: MethodMetadata {
+            arg_types: vec![],
+            return_type: Some("u64".into()),
+        },
+    }));
+    let report = NativeViewReport::new(
+        &prepared,
+        simulation(InvocationOutput::Return {
+            return_data: HexBytes(xdrs::cxs::encode(&7_u64).unwrap()),
+        }),
+    );
+    assert_eq!(report.return_value, Some(json!("7")));
 }

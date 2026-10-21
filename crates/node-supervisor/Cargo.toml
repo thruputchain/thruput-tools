@@ -12,10 +12,6 @@ keywords.workspace = true
 categories.workspace = true
 description = "Local node supervisor for Thruput development"
 
-[features]
-# Opt-in local qualification; never changes the normal server registration.
-native-rpc-qualification = []
-
 [lints]
 workspace = true
 
@@ -65,4 +61,3 @@ test = true
 
 [[example]]
 name = "native_rpc_qualification"
-required-features = ["native-rpc-qualification"]

@@ -30,7 +30,7 @@ fn assert_integration_scaffold(dir: &std::path::Path) {
             "THRUPUT_CONTRACT_ADDRESS",
             "THRUPUT_RUNTIME_MANIFEST",
             "HttpClientBuilder",
-            ".chain_tip()",
+            ".get_chain_tip(EmptyRequest {})",
         ],
     );
 }

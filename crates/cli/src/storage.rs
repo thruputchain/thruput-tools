@@ -2,10 +2,11 @@ use std::path::Path;
 use thruput_json_rpc_types::hex::prefixed_hex;
 
 use serde_json::json;
-use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_client::native::NativeClient;
 use thruput_json_rpc_types::ContractAddress;
 use thruput_json_rpc_types::hex::{FixedHexError, HexBytes, decode_fixed_hex};
-use thruput_json_rpc_types::state::StorageItemRead;
+use thruput_json_rpc_types::requests::StorageQuery;
+use thruput_json_rpc_types::responses::StorageResult;
 
 use crate::account_resolution::resolve_contract_target;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
@@ -13,7 +14,7 @@ use crate::result::CommandResult;
 use crate::{CliError, Print};
 
 /// Schema version of the `storage --json` data payload.
-pub const STORAGE_JSON_SCHEMA_VERSION: u32 = 2;
+pub const STORAGE_JSON_SCHEMA_VERSION: u32 = 3;
 
 /// Read the latest committed storage item at a contract address/key pair.
 pub fn run(
@@ -56,7 +57,7 @@ pub fn run(
             &[
                 ("Address".into(), address_text.clone()),
                 ("Key".into(), key_hex.clone()),
-                ("Height".into(), read.block_height.to_string()),
+                ("Height".into(), read.state_block_height.to_string()),
                 ("Item".into(), item.unwrap_or_else(|| "Absent".into())),
             ],
         );
@@ -71,7 +72,7 @@ pub fn run(
             "rpcUrl": rpc_url,
             "address": address_text,
             "key": key_hex,
-            "blockHeight": read.block_height.to_string(),
+            "stateBlockHeight": read.state_block_height.to_string(),
             "item": read.item,
         }),
     ))?;
@@ -83,26 +84,26 @@ async fn fetch_storage_at(
     rpc_url: &str,
     address: ContractAddress,
     key: HexBytes,
-) -> Result<StorageItemRead, CliError> {
-    let client = crate::http_client::rpc_client(rpc_url)?;
-    client
-        .get_storage_at(address, key)
+) -> Result<StorageResult, CliError> {
+    let client = NativeClient::new(crate::http_client::rpc_client(rpc_url)?);
+    thruput_client::check_endpoint(&client, &["getStorage"])
         .await
-        .map_err(|e| CliError::RpcMethodFailed {
-            method: "getStorageAt",
-            message: e.to_string(),
-        })
+        .map_err(|error| crate::native_rpc::rpc_error(&error))?;
+    crate::native_rpc::known(
+        "getStorage",
+        client.get_storage(StorageQuery { address, key }).await,
+    )
 }
 
 fn print_storage_read(
     address: &str,
     key: &str,
-    read: &StorageItemRead,
+    read: &StorageResult,
     print: &Print,
 ) -> Result<(), CliError> {
     print.detail("address", address);
     print.detail("key", key);
-    print.detail("height", *read.block_height);
+    print.detail("height", *read.state_block_height);
     match &read.item {
         Some(item) => {
             let value = serde_json::to_string(item)

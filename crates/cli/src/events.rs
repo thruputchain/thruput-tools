@@ -1,9 +1,7 @@
-#[cfg(feature = "native-rpc-qualification")]
 mod native;
 
 use std::path::Path;
 
-use thruput_json_rpc_client::GroundhogApiClient;
 use thruput_json_rpc_types::ContractAddress;
 use thruput_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
@@ -24,91 +22,11 @@ use crate::events_json::{
 use crate::pagination::{parse_cursor, parse_limit};
 use crate::result::CommandResult;
 use crate::terminal::terminal_safe;
-use crate::tx::map_rpc_error;
 use crate::tx_utils::format_tx_hash;
 use crate::{CliError, Print};
 
-/// List one page of raw events emitted by a resolved contract address.
 #[expect(clippy::too_many_arguments)]
 pub fn list(
-    contract_input: &str,
-    topic0_inputs: &[String],
-    topic1_inputs: &[String],
-    topic2_inputs: &[String],
-    limit_input: Option<&str>,
-    cursor_input: Option<&str>,
-    spec_path: Option<&Path>,
-    selected_event: Option<&str>,
-    project_start: &Path,
-    profile_name: Option<&str>,
-    overrides: &ProfileOverrides,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    list_with_rpc(
-        HistoryRpc::Legacy,
-        contract_input,
-        topic0_inputs,
-        topic1_inputs,
-        topic2_inputs,
-        limit_input,
-        cursor_input,
-        spec_path,
-        selected_event,
-        project_start,
-        profile_name,
-        overrides,
-        cmd,
-        print,
-    )
-}
-
-/// List one page through the explicitly selected native candidate endpoint.
-#[cfg(feature = "native-rpc-qualification")]
-#[expect(clippy::too_many_arguments)]
-pub fn list_native(
-    contract_input: &str,
-    topic0_inputs: &[String],
-    topic1_inputs: &[String],
-    topic2_inputs: &[String],
-    limit_input: Option<&str>,
-    cursor_input: Option<&str>,
-    spec_path: Option<&Path>,
-    selected_event: Option<&str>,
-    project_start: &Path,
-    profile_name: Option<&str>,
-    overrides: &ProfileOverrides,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    list_with_rpc(
-        HistoryRpc::Native,
-        contract_input,
-        topic0_inputs,
-        topic1_inputs,
-        topic2_inputs,
-        limit_input,
-        cursor_input,
-        spec_path,
-        selected_event,
-        project_start,
-        profile_name,
-        overrides,
-        cmd,
-        print,
-    )
-}
-
-#[derive(Clone, Copy)]
-enum HistoryRpc {
-    Legacy,
-    #[cfg(feature = "native-rpc-qualification")]
-    Native,
-}
-
-#[expect(clippy::too_many_arguments)]
-fn list_with_rpc(
-    rpc: HistoryRpc,
     contract_input: &str,
     topic0_inputs: &[String],
     topic1_inputs: &[String],
@@ -128,9 +46,7 @@ fn list_with_rpc(
     let topic2 = parse_topic_values(topic2_inputs, "topic2")?;
     let limit = parse_event_limit(limit_input)?;
     let cursor = parse_event_cursor(cursor_input)?;
-    #[cfg(feature = "native-rpc-qualification")]
-    if matches!(rpc, HistoryRpc::Native)
-        && let Some(input) = cursor_input
+    if let Some(input) = cursor_input
         && cursor.0.is_empty()
     {
         return Err(CliError::InvalidEventCursor {
@@ -170,15 +86,11 @@ fn list_with_rpc(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let task = crate::print::progress::Task::start(print, "Reading events", true);
-    let page = rt.block_on(async {
-        match rpc {
-            HistoryRpc::Legacy => fetch_event_page(&rpc_url, query).await,
-            #[cfg(feature = "native-rpc-qualification")]
-            HistoryRpc::Native => {
-                native::fetch_event_page(&rpc_url, query, cursor_input.is_some()).await
-            }
-        }
-    })?;
+    let page = rt.block_on(native::fetch_event_page(
+        &rpc_url,
+        query,
+        cursor_input.is_some(),
+    ))?;
     let _ = task.finish();
     let spec_report = event_spec.as_ref().map(|spec| spec.report(selected_event));
     let events = match &event_spec {
@@ -287,14 +199,8 @@ pub(crate) async fn fetch_event_page(
     rpc_url: &str,
     query: EventQuery,
 ) -> Result<EventPage, CliError> {
-    let requested_limit = query.limit;
-    let client = crate::http_client::rpc_client(rpc_url)?;
-    let page = client
-        .get_events(query)
-        .await
-        .map_err(|error| map_rpc_error("getEvents", &error))?;
-    validate_event_page(&page, requested_limit)?;
-    Ok(page)
+    let continuation = !query.cursor.0.is_empty();
+    native::fetch_event_page(rpc_url, query, continuation).await
 }
 
 fn validate_event_page(page: &EventPage, requested_limit: u32) -> Result<(), CliError> {

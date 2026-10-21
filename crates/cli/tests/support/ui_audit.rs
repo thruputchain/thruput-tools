@@ -273,8 +273,7 @@ fn live_call_and_deploy_results_cover_success_and_execution_failure() {
             } else {
                 sample_call_receipt(42)
             };
-            let (rpc, server) =
-                spawn_transaction_rpc(42, receipt, DevDetailRpcResponse::MethodNotFound);
+            let (rpc, server) = spawn_transaction_rpc(42, receipt);
             write_project_config_with_alice_wallet(&project, &rpc, &config);
             let mut command = thruput();
             if deploy {
@@ -302,7 +301,10 @@ fn live_call_and_deploy_results_cover_success_and_execution_failure() {
             );
             assert!(text.contains("height"), "{text}");
             if fail {
-                assert!(text.contains("error:"), "{text}");
+                assert!(
+                    text.contains("failed") || text.contains("aborted"),
+                    "{text}"
+                );
             }
         }
     }
@@ -360,7 +362,7 @@ fn services_report_ready_without_exiting_and_stop_cleanly() {
 }
 
 #[test]
-fn transfer_cards_distinguish_commitment_rejection_and_uncertainty() {
+fn transfer_results_distinguish_commitment_and_unconfirmed_evidence() {
     for (poll, success, label) in [
         (
             TransferPollMock::Receipt {
@@ -376,12 +378,12 @@ fn transfer_cards_distinguish_commitment_rejection_and_uncertainty() {
         (
             TransferPollMock::Status(serde_json::json!({"status":"invalid", "reason":"denied"})),
             false,
-            "Transfer rejected",
+            "unsupported",
         ),
         (
             TransferPollMock::Status(serde_json::json!({"status":"unknown"})),
             false,
-            "Outcome unconfirmed",
+            "timed out",
         ),
     ] {
         let temp = TempDir::new().unwrap();
@@ -406,15 +408,18 @@ fn transfer_cards_distinguish_commitment_rejection_and_uncertainty() {
             .current_dir(temp.path())
             .env("XDG_CONFIG_HOME", temp.path().join("fixture-config"))
             .env("THRUPUT_TEST_RECEIPT_POLL_ATTEMPTS", "1")
-            .env("THRUPUT_TEST_RECEIPT_POLL_INTERVAL_MS", "0");
+            .env("THRUPUT_TEST_RECEIPT_POLL_INTERVAL_MS", "100");
         let (status, text) = rendered(command, 80);
         assert_eq!(status.success(), success, "{text}");
-        assert!(text.contains(label) && text.contains('╭'), "{text}");
+        assert!(text.contains(label), "{text}");
+        if success {
+            assert!(text.contains('╭'), "{text}");
+        }
         let compact: String = text
             .chars()
             .filter(|c| !c.is_whitespace() && *c != '│')
             .collect();
-        assert!(compact.contains(&hashes.recv().unwrap()), "{text}");
+        assert!(compact.contains(&hashes.recv().unwrap().hash), "{text}");
         server.join().unwrap();
     }
 }

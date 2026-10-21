@@ -51,7 +51,7 @@ Leave the gateway running too. In a third terminal:
 RUNTIME_MANIFEST=$(jq -er '.data.runtimeManifest.path' /tmp/groundhog-node.json)
 thruput-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" --account-seed benchmark-fixtures-v1 \
-  --method sendRawTransaction --accounts 3 --rate 3 --duration 2 --force
+  --method sendTransaction --accounts 3 --rate 3 --duration 2 --force
 ```
 
 This submits real test transactions. `--force` explicitly authorizes the submit
@@ -107,47 +107,31 @@ The supervisor's validation and process protocol are in
 
 ## Native RPC qualification
 
-The opt-in supervisor example starts an ephemeral node with a wire-13 listener
-and a separate native candidate listener. It requires a compatible real runtime
-and the private registry access described in the repository README:
+The example starts an ephemeral node with the native wire-14 API. It requires a
+compatible real runtime and the private registry access described in the README:
 
 ```sh
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
-  cargo run -p thruput-node-supervisor --locked \
-  --features native-rpc-qualification --example native_rpc_qualification
+  cargo run -p thruput-node-supervisor --locked --example native_rpc_qualification
 ```
 
-Both URLs use loopback and operating-system assigned ports. The candidate uses
-the node's validated manifest and existing block driver. Query `getVersionInfo`
-for its implemented methods, including committed block metadata through
-`getBlockByHeight` and all three paginated history methods. Funding is not registered.
-History requires runtime and Rust bindings built from the same protocol revision,
-including typed invalid-cursor and history-unavailable outcomes.
-The normal node and gateway still serve wire 13. Ctrl-C stops both listeners and
-the ephemeral runtime. The example does not use an existing data directory.
-It checks API behavior, not production capacity or batch scheduling. If the
-runtime exits early, stop the example with Ctrl-C; it does not monitor child exit.
+The endpoint uses loopback and an operating-system assigned port. Query
+`getVersionInfo` for the configured methods. History requires runtime and bindings
+from the same protocol revision, including typed cursor outcomes. Ctrl-C stops the
+listener and runtime. The example checks API behavior, not production capacity;
+if the runtime exits early, stop the example with Ctrl-C.
 
-The [shared service](../../crates/json-rpc/json-rpc-server/src/native/service.rs)
-owns method selection; the
-[connector](../../crates/node-supervisor/src/server/qualification.rs) owns this
-local listener. Enabling the Cargo feature alone starts neither.
-
-Build the CLI with `cargo build -p thruput-cli --features native-rpc-qualification`.
-Use the candidate URL printed by the example for native history reads:
+Build the CLI with `cargo build -p thruput-cli`. Use the printed URL for reads:
 
 ```sh
-target/debug/thruput tx list ADDRESS --rpc-url CANDIDATE_URL \
-  --native-rpc-qualification --json
-target/debug/thruput events list ADDRESS --rpc-url CANDIDATE_URL \
-  --native-rpc-qualification --json
+target/debug/thruput tx list ADDRESS --rpc-url RPC_URL --json
+target/debug/thruput events list ADDRESS --rpc-url RPC_URL --json
 ```
 
-Each command fetches one newest-first page. Continue with `--cursor` and the
-same address and filters. Native RPC uses a nullable `nextCursor`; the existing
-v2 CLI JSON reports retain an empty cursor as their terminal marker. An empty
-event page with a nonempty cursor is not exhausted. Without the opt-in flag,
-these commands use wire 13.
+Each command fetches one newest-first page. Continue with `--cursor` and the same
+address and filters. RPC pages use nullable `nextCursor`; CLI v2 page reports use
+an empty cursor as their terminal marker. An empty event page with a nonempty
+cursor is not exhausted.
 
 ## State and shutdown
 

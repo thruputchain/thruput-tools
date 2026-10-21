@@ -1,12 +1,9 @@
-//! The complete candidate contract is generated from the transport declaration.
-//! These checks do not change or qualify the serving wire-13 API.
-use std::{cmp::Ordering, collections::BTreeSet, fs, path::PathBuf};
+//! The complete contract is generated from the public transport declaration.
+use std::{cmp::Ordering, collections::BTreeSet};
 
 use serde_json::{Value, json};
 use thruput_json_rpc_api::{
-    WIRE_FORMAT_VERSION,
-    native::{CANDIDATE_WIRE_FORMAT_VERSION, METHOD_NAMES},
-    types::error::native as errors,
+    WIRE_FORMAT_VERSION, native::METHOD_NAMES, types::error::native as errors,
 };
 use thruput_open_rpc_spec::{build_spec, native};
 
@@ -188,31 +185,10 @@ fn receipt() -> Value {
 }
 
 #[test]
-fn native_candidate_matches_snapshot_and_leaves_serving_artifact_unchanged() {
-    let candidate = native::build_spec();
-    let actual = serde_json::to_string_pretty(&candidate).unwrap();
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("snapshots/native-spec.json");
-    if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
-        fs::write(path, format!("{actual}\n")).unwrap();
-    } else {
-        pretty_assertions::assert_eq!(actual, fs::read_to_string(path).unwrap().trim_end());
-    }
-    assert_eq!(candidate["info"]["version"], CANDIDATE_WIRE_FORMAT_VERSION);
-    assert_eq!(CANDIDATE_WIRE_FORMAT_VERSION, "14.0.0");
-    assert_eq!(WIRE_FORMAT_VERSION, "13.0.0");
-    semver::Version::parse(CANDIDATE_WIRE_FORMAT_VERSION).unwrap();
-    let serving = build_spec();
-    let snapshot: Value =
-        serde_json::from_str(include_str!("../snapshots/thruput-spec.json")).unwrap();
-    assert_eq!(serving, snapshot);
-    assert_eq!(serving["info"]["version"], "13.0.0");
-    assert!(
-        serving["methods"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|m| m["name"].as_str().unwrap().starts_with("groundhog_"))
-    );
+fn native_contract_is_the_canonical_serving_artifact() {
+    assert_eq!(native::build_spec(), build_spec());
+    assert_eq!(build_spec()["info"]["version"], WIRE_FORMAT_VERSION);
+    assert_eq!(WIRE_FORMAT_VERSION, "14.0.0");
 }
 
 #[test]

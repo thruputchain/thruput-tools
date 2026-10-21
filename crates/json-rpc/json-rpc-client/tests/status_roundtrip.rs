@@ -3,11 +3,11 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use thruput_json_rpc_api::GroundhogApiServer;
-use thruput_json_rpc_client::{
-    GroundhogApiClient, HttpClientBuilder, PollTransactionReceiptError,
-    poll_transaction_receipt_with_config,
+use thruput_json_rpc_api::{GroundhogApiClient, GroundhogApiServer};
+use thruput_json_rpc_client::receipt::{
+    ReceiptPollConfig, ReceiptPollError, ReceiptSource, poll_receipt,
 };
+use thruput_json_rpc_client::{HttpClient, HttpClientBuilder};
 use thruput_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
     RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
@@ -27,6 +27,29 @@ use thruput_json_rpc_types::{
         TransactionStatus, TxHash,
     },
 };
+
+// The legacy server remains an internal adapter under test, not a public client default.
+struct ReportSource(HttpClient);
+
+impl ReceiptSource for ReportSource {
+    type Error = jsonrpsee::core::client::Error;
+
+    async fn transaction_receipt(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionReceipt>, Self::Error> {
+        GroundhogApiClient::get_transaction_receipt(&self.0, tx_hash).await
+    }
+
+    async fn transaction_status(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, Self::Error> {
+        GroundhogApiClient::get_transaction_status(&self.0, tx_hash)
+            .await
+            .map(Some)
+    }
+}
 
 const ATTEMPT_HEIGHT: i64 = 42;
 const CONFLICT_ADDRESS: [u8; 32] = [0x0D; 32];
@@ -200,17 +223,21 @@ async fn receipt_polling_surfaces_recent_failure_status() {
     let handle = server.start(rpc.into_rpc());
     let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x33; 32])));
 
-    let error = poll_transaction_receipt_with_config(
-        &format!("http://{addr}"),
+    let source = ReportSource(
+        HttpClientBuilder::default()
+            .build(format!("http://{addr}"))
+            .unwrap(),
+    );
+    let error = poll_receipt(
+        &source,
         tx_hash,
-        3,
-        std::time::Duration::from_millis(1),
+        ReceiptPollConfig::attempts(3, std::time::Duration::from_millis(1)),
     )
     .await
     .expect_err("recent failure must be returned after receipt polling is exhausted");
 
     match error {
-        PollTransactionReceiptError::TransactionStatus {
+        ReceiptPollError::Status {
             tx_hash: actual_hash,
             status:
                 TransactionStatus::RecentFailure {
@@ -250,11 +277,15 @@ async fn receipt_polling_prefers_a_later_receipt_to_recent_failure() {
     let handle = server.start(rpc.into_rpc());
     let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
 
-    let receipt = poll_transaction_receipt_with_config(
-        &format!("http://{addr}"),
+    let source = ReportSource(
+        HttpClientBuilder::default()
+            .build(format!("http://{addr}"))
+            .unwrap(),
+    );
+    let receipt = poll_receipt(
+        &source,
         tx_hash,
-        3,
-        std::time::Duration::from_millis(1),
+        ReceiptPollConfig::attempts(3, std::time::Duration::from_millis(1)),
     )
     .await
     .expect("a receipt that appears after an advisory failure must win");

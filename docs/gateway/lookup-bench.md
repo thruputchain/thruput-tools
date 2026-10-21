@@ -1,7 +1,7 @@
 # Scheduler lookup miss benchmark
 
 `thruput-lookup-bench` isolates transaction-status lookup admission. It sends
-`groundhog_getTransactionStatus` for a deterministic corpus of hashes that it
+`getTransactionStatus` for a deterministic corpus of hashes that it
 never submits. It creates no wallets and sends no transactions.
 
 On the indexer-first gateway, a successful `Unknown` answer follows this path:
@@ -119,3 +119,6 @@ backend lookup counter deltas, and sampled lookup gauge peaks. Missing scrapes
 are null; counter deltas without a baseline or with a decrease are null. A
 restart that catches up between snapshots cannot be detected reliably from
 counter values alone. The sampler is best effort and runs through drain.
+
+The benchmark sends native wire 14 requests. A successful benchmark does not
+qualify a server release or the full API surface.

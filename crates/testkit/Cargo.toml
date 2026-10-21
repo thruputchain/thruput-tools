@@ -24,7 +24,6 @@ thruput-json-rpc-types = { workspace = true }
 thruput-node-supervisor = { workspace = true }
 thruput-signing = { workspace = true }
 thruput-xdr = { workspace = true }
-jsonrpsee = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
@@ -34,5 +33,6 @@ xdr-common = { workspace = true }
 xdrs = { workspace = true }
 
 [dev-dependencies]
+jsonrpsee = { workspace = true }
 tempfile = { workspace = true }
 hex = { workspace = true }

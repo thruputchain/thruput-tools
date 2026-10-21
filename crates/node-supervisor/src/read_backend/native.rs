@@ -6,10 +6,12 @@ use super::{
 use crate::service::SCHEDULER_GATEWAY;
 use thruput_hogd_backend::native as decode;
 use thruput_hogd_backend::{native::transaction as native_transaction, receipt::tx_hash_to_wire};
+use thruput_json_rpc_server::native::read::{NativeBlockPlane, NativeHistoryPlane};
 use thruput_json_rpc_server::native::read::{NativeStatePlane, StateKey};
 use thruput_json_rpc_server::native::transaction::{
     NativeReadError, NativeTransactionReadPlane, within_native_read_deadline,
 };
+use thruput_json_rpc_types::requests as input;
 use thruput_json_rpc_types::{responses as out, transaction::TxHash};
 
 async fn storage(
@@ -235,5 +237,49 @@ impl thruput_json_rpc_server::native::read::NativeHistoryPlane for HogdDevReadBa
             decode::history::transaction_page(result)
         })
         .await
+    }
+}
+
+#[async_trait]
+impl NativeBlockPlane for HogdDevStorageReadBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_block(
+        &self,
+        _context: RpcRequestContext,
+        _height: thruput_json_rpc_types::BlockHeight,
+    ) -> Result<out::BlockResult, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBlockByHeight".into()))
+    }
+}
+
+#[async_trait]
+impl NativeHistoryPlane for HogdDevStorageReadBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_events(
+        &self,
+        _context: RpcRequestContext,
+        _request: input::EventQuery,
+    ) -> Result<out::EventPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getEvents".into()))
+    }
+    #[tracing::instrument(skip_all)]
+    async fn native_root_transactions(
+        &self,
+        _context: RpcRequestContext,
+        _request: input::RootAddressQuery,
+    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByRootAddress".into(),
+        ))
+    }
+    #[tracing::instrument(skip_all)]
+    async fn native_block_transactions(
+        &self,
+        _context: RpcRequestContext,
+        _request: input::BlockPageRequest,
+    ) -> Result<out::BlockTransactionPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByBlock".into(),
+        ))
     }
 }

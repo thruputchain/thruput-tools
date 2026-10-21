@@ -1,5 +1,4 @@
 use thruput_cli::CliError;
-use thruput_json_rpc_types::error::TxInvalidDetail;
 use thruput_rv32_lower::LowerError;
 
 fn hint(error: &CliError) -> String {
@@ -16,45 +15,6 @@ fn rv32_lower_data_too_large_hints_at_stack_size_and_memory_size() {
     let hint = hint(&error);
     assert!(hint.contains("--stack-size"));
     assert!(hint.contains("initial_memory_bytes"));
-}
-
-#[test]
-fn pre_submission_rejections_hint_at_the_violated_bound() {
-    let code = CliError::TransactionRejectedBeforeSubmission {
-        detail: TxInvalidDetail::Rv32CodeTooLarge {
-            index: 0,
-            code_bytes: 70_000,
-            max_bytes: 65_536,
-        },
-    };
-    assert!(hint(&code).contains("reduce code size"));
-    assert_eq!(code.code(), "transaction_rejected_before_submission");
-    assert_eq!(
-        code.details_json().expect("bug: details expected")["reason"],
-        "rv32CodeTooLarge"
-    );
-
-    let memory = CliError::TransactionRejectedBeforeSubmission {
-        detail: TxInvalidDetail::Rv32MemoryTooLarge {
-            index: 0,
-            memory_bytes: 131_072,
-            max_bytes: 65_536,
-        },
-    };
-    assert!(hint(&memory).contains("initial_memory_bytes"));
-
-    let count = CliError::TransactionRejectedBeforeSubmission {
-        detail: TxInvalidDetail::TooManyContracts {
-            attached: 5,
-            max: 4,
-        },
-    };
-    assert!(hint(&count).contains("resubmit"));
-    assert!(
-        count
-            .to_string()
-            .contains("transaction attaches 5 contracts; chain permits 4")
-    );
 }
 
 #[test]

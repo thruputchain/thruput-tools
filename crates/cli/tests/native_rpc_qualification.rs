@@ -1,13 +1,12 @@
-//! Opt-in CLI call/view qualification against an isolated real local runtime.
-#![cfg(all(feature = "native-rpc-qualification", unix))]
+//! Native CLI flow against the production endpoint of a real local runtime.
+#![cfg(unix)]
 
 use std::{error::Error, os::unix::fs::PermissionsExt, path::PathBuf, time::Duration};
 
 use jsonrpsee::http_client::HttpClientBuilder;
 use serde_json::Value;
 use tempfile::TempDir;
-use thruput_json_rpc_client::{GroundhogApiClient, native::NativeClient};
-use thruput_json_rpc_server::RpcServerConfig;
+use thruput_json_rpc_client::native::NativeClient;
 use thruput_json_rpc_types::{
     ContractAddress,
     base58::Base58,
@@ -51,7 +50,7 @@ impl Fixture {
         };
         let key = fixture.command(&["keys", "generate", "owner"]).await?;
         fixture.owner =
-            thruput_encoding::decode_fixed::<32>(text(&key["data"]["key"], "public_key")?)?;
+            thruput_encoding::decode_fixed::<32>(text(&key["data"]["key"], "publicKey")?)?;
         let key_path = fixture.dir.path().join("config/thruput/keys/owner.json");
         require(
             std::fs::metadata(key_path)?.permissions().mode() & 0o777 == 0o600,
@@ -100,7 +99,7 @@ impl Fixture {
 
 #[tokio::test]
 #[ignore = "requires absolute THRUPUT_DEVNODE_BINARY; runs a fresh real local runtime"]
-async fn native_cli_call_receipt_and_view_keep_wire13_serving() {
+async fn native_cli_call_receipt_view_and_history() {
     let binary = PathBuf::from(
         std::env::var_os("THRUPUT_DEVNODE_BINARY")
             .expect("THRUPUT_DEVNODE_BINARY must select a compatible runtime"),
@@ -111,8 +110,10 @@ async fn native_cli_call_receipt_and_view_keep_wire13_serving() {
     let node = NodeSupervisorHandle::start(
         NodeSupervisorConfig::default()
             .with_rpc_listen_address("127.0.0.1:0")
+            .with_view_gas_limit(25_000_000)
             .with_hogd_dev(
                 HogdDevConfig::default()
+                    .with_ramdb_bytes(1024 * 1024 * 1024)
                     .with_binary_path(binary)
                     .with_contract_artifact_directories([artifacts])
                     .with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(
@@ -123,33 +124,24 @@ async fn native_cli_call_receipt_and_view_keep_wire13_serving() {
     )
     .await
     .unwrap();
-    let result = qualify(&fixture, &node).await;
+    let result = exercise(&fixture, &node).await;
     node.stop().await.unwrap();
     result.unwrap();
 }
 
-async fn qualify(fixture: &Fixture, node: &NodeSupervisorHandle) -> TestResult {
-    let candidate = node
-        .start_native_qualification(RpcServerConfig::default().with_view_gas_limit(25_000_000))
-        .await?;
-    let result = exercise(fixture, node, candidate.rpc_addr()).await;
-    candidate.stop().await;
-    result
-}
-
-async fn exercise(
-    fixture: &Fixture,
-    node: &NodeSupervisorHandle,
-    candidate: std::net::SocketAddr,
-) -> TestResult {
-    fixture.configure(node, candidate)?;
-    let legacy = HttpClientBuilder::default().build(format!("http://{}", node.rpc_addr()))?;
+async fn exercise(fixture: &Fixture, node: &NodeSupervisorHandle) -> TestResult {
+    fixture.configure(node, node.rpc_addr())?;
+    let native = NativeClient::new(
+        HttpClientBuilder::default().build(format!("http://{}", node.rpc_addr()))?,
+    );
+    let output::DecodedResponse::Known(version) = native.get_version_info(EmptyRequest {}).await?
+    else {
+        return Err(std::io::Error::other("unsupported discovery response").into());
+    };
     require(
-        legacy.version().await?.wire_format == "13.0.0",
-        "wire 13 was replaced",
+        version.wire_format == "14.0.0",
+        "native wire 14 is not serving",
     )?;
-    let native =
-        NativeClient::new(HttpClientBuilder::default().build(format!("http://{candidate}"))?);
     let expected_balance = expected_free_balance(&native).await?;
     let recipient = Base58(PubkeyAccount::from_public_key_bytes([0x63; 32], 0).address());
     let token = thruput_encoding::encode(NATIVE_HOG_ADDRESS.as_ref());
@@ -158,17 +150,9 @@ async fn exercise(
         "0x{}",
         hex::encode(native_hog_transfer_calldata(&recipient.0, AMOUNT)?)
     );
-    // The candidate listener has no groundhog_* registrations. Successful CLI
-    // call and view therefore cannot depend on a legacy-method fallback.
+    // Default commands must use the production native endpoint.
     let call = fixture
-        .command(&[
-            "call",
-            &token,
-            &selector,
-            &calldata,
-            "--native-rpc-qualification",
-            "--force",
-        ])
+        .command(&["call", &token, &selector, &calldata, "--force"])
         .await?;
     require(
         call["command"] == "call" && call["data"]["schemaVersion"] == 4,
@@ -183,7 +167,7 @@ async fn exercise(
         receipt.gas_used > 0 && !receipt.events.is_empty(),
         "CLI receipt omitted metering or events",
     )?;
-    check_block(&native, &legacy, &receipt.block_height).await?;
+    check_block(&native, &receipt.block_height).await?;
     check_history(&native, fixture, &receipt).await?;
     require(
         call["data"]["blockHeight"].is_string() && call["data"]["gasUsed"].is_string(),
@@ -200,15 +184,7 @@ async fn exercise(
             .as_ref(),
     );
     let view = fixture
-        .command(&[
-            "view",
-            &token,
-            &selector,
-            &calldata,
-            "--from",
-            &sender,
-            "--native-rpc-qualification",
-        ])
+        .command(&["view", &token, &selector, &calldata, "--from", &sender])
         .await?;
     check_view(&view, &before)?;
     let after = balance(&native, recipient).await?;
@@ -217,10 +193,7 @@ async fn exercise(
             && after.state_block_height == before.state_block_height,
         "CLI view changed committed state",
     )?;
-    require(
-        legacy.version().await?.wire_format == "13.0.0",
-        "wire 13 stopped serving",
-    )
+    Ok(())
 }
 
 fn check_view(report: &Value, before: &output::BalanceResult) -> TestResult {
@@ -270,7 +243,6 @@ async fn expected_free_balance(
 
 async fn check_block(
     native: &NativeClient<jsonrpsee::http_client::HttpClient>,
-    legacy: &jsonrpsee::http_client::HttpClient,
     height: &thruput_json_rpc_types::BlockHeight,
 ) -> TestResult {
     let output::DecodedResponse::Known(Some(block)) = native
@@ -281,14 +253,13 @@ async fn check_block(
     else {
         return Err(std::io::Error::other("CLI receipt block is missing or invalid").into());
     };
-    let legacy_block = legacy
-        .get_block_by_number(height.clone().into())
-        .await?
-        .ok_or_else(|| std::io::Error::other("legacy receipt block is missing"))?;
+    let output::DecodedResponse::Known(network) = native.get_network_info(EmptyRequest {}).await?
+    else {
+        return Err(std::io::Error::other("unsupported network response").into());
+    };
     require(
-        block.block_height == *height
-            && serde_json::to_value(&block)? == serde_json::to_value(&legacy_block)?,
-        "native CLI receipt did not resolve to the canonical committed block",
+        block.block_height == *height && block.network_hash == network.network_hash,
+        "CLI receipt block has the wrong height or network",
     )?;
     Ok(())
 }
@@ -383,14 +354,7 @@ async fn check_history_commands(
             .as_ref(),
     );
     let transactions = fixture
-        .command(&[
-            "tx",
-            "list",
-            &owner,
-            "--limit",
-            "1",
-            "--native-rpc-qualification",
-        ])
+        .command(&["tx", "list", &owner, "--limit", "1"])
         .await?;
     let transactions: thruput_cli::tx_json::TxListReport =
         serde_json::from_value(transactions["data"].clone())?;
@@ -403,14 +367,7 @@ async fn check_history_commands(
     )?;
     let token = thruput_encoding::encode(NATIVE_HOG_ADDRESS.as_ref());
     let events = fixture
-        .command(&[
-            "events",
-            "list",
-            &token,
-            "--limit",
-            "100",
-            "--native-rpc-qualification",
-        ])
+        .command(&["events", "list", &token, "--limit", "100"])
         .await?;
     let events: thruput_cli::events_json::EventListReport =
         serde_json::from_value(events["data"].clone())?;

@@ -36,21 +36,15 @@ pub struct TransactionReceipt {
     /// Events emitted during execution.
     pub events: Vec<EmittedEvent>,
 
-    /// Bytes returned by the contract's root call on a successful
-    /// transaction.  Present when `status` is `ok` and the chain
-    /// version that executed the transaction recorded a return
-    /// value; absent otherwise.  Returned raw — decode against the
+    /// Bytes returned by the root call when `status` is `ok`, including an empty
+    /// buffer for an empty return. Absent for other statuses. Decode against the
     /// contract's spec to recover typed values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_data: Option<HexBytes>,
 
-    /// Bytes the contract passed to its `abort` / `revert` syscall
-    /// when the transaction reverted deterministically.  Present
-    /// when `status` is `reverted` and the chain version that
-    /// executed the transaction recorded the revert payload; absent
-    /// otherwise.  Returned raw — decode against the contract's
-    /// spec (typically the error variant) to recover a human-
-    /// readable reason.
+    /// Bytes passed to the root call's `abort` / `revert` syscall when `status`
+    /// is `reverted`, including an empty buffer for an empty payload. Absent for
+    /// other statuses. Decode against the contract's error spec.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abort_data: Option<HexBytes>,
 
@@ -63,6 +57,22 @@ pub struct TransactionReceipt {
     #[serde(with = "crate::decimal")]
     #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub gas_used: u64,
+}
+
+impl TransactionReceipt {
+    /// Whether a known execution status agrees with the observed root output.
+    /// Empty return/abort buffers must be present. This cannot validate events
+    /// discarded by an earlier decoder or the underlying log's identity.
+    pub fn has_consistent_execution_output(&self) -> bool {
+        match self.status {
+            ExecStatus::Ok => self.return_data.is_some() && self.abort_data.is_none(),
+            ExecStatus::Reverted { .. } => self.return_data.is_none() && self.abort_data.is_some(),
+            ExecStatus::DeterministicError { .. } => {
+                self.return_data.is_none() && self.abort_data.is_none()
+            }
+            _ => true,
+        }
+    }
 }
 
 /// `kind` reported for a deterministic execution fault when the node

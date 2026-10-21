@@ -205,7 +205,9 @@ pub fn scheduler_status(
     };
     Ok(Some(match value.status {
         Status::SchedulerTransactionNotFound => return Ok(None),
-        Status::SchedulerTransactionPending => out::TransactionStatus::Pending {},
+        Status::SchedulerTransactionPending => out::TransactionStatus::Pending {
+            recent_failure: None,
+        },
         Status::SchedulerTransactionSucceeded => {
             valid_height(&value.height)?;
             out::TransactionStatus::Committed {
@@ -230,9 +232,15 @@ pub fn scheduler_status(
                 code: value.error_code,
             };
             if value.status == Status::SchedulerTransactionRetry {
-                out::TransactionStatus::Retry { error }
+                out::TransactionStatus::Retry {
+                    error,
+                    recent_failure: None,
+                }
             } else {
-                out::TransactionStatus::Dropped { error }
+                out::TransactionStatus::Dropped {
+                    error,
+                    recent_failure: None,
+                }
             }
         }
         _ => {

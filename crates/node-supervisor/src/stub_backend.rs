@@ -10,6 +10,10 @@
 //! `tracing::warn!` at supervisor startup, not into the wire error.
 
 use async_trait::async_trait;
+use thruput_json_rpc_server::native::{
+    read::{NativeBlockPlane, NativeHistoryPlane, NativeStatePlane, StateKey},
+    transaction::{NativeReadError, NativeTransactionReadPlane},
+};
 use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError, ViewPlane};
 use thruput_json_rpc_types::{
     ContractAddress,
@@ -19,6 +23,7 @@ use thruput_json_rpc_types::{
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
 };
+use thruput_json_rpc_types::{requests as input, responses as out};
 
 /// Backend that returns `NotImplemented` for unwired planes.
 #[derive(Debug, Clone, Copy, Default)]
@@ -94,3 +99,88 @@ impl ReadPlane for StubBackend {
 
 #[async_trait]
 impl ViewPlane for StubBackend {}
+
+#[async_trait]
+impl NativeBlockPlane for StubBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_block(
+        &self,
+        _context: RpcRequestContext,
+        _height: thruput_json_rpc_types::BlockHeight,
+    ) -> Result<out::BlockResult, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBlockByHeight".into()))
+    }
+}
+
+#[async_trait]
+impl NativeHistoryPlane for StubBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_events(
+        &self,
+        _context: RpcRequestContext,
+        _request: input::EventQuery,
+    ) -> Result<out::EventPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getEvents".into()))
+    }
+    #[tracing::instrument(skip_all)]
+    async fn native_root_transactions(
+        &self,
+        _context: RpcRequestContext,
+        _request: input::RootAddressQuery,
+    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByRootAddress".into(),
+        ))
+    }
+    #[tracing::instrument(skip_all)]
+    async fn native_block_transactions(
+        &self,
+        _context: RpcRequestContext,
+        _request: input::BlockPageRequest,
+    ) -> Result<out::BlockTransactionPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByBlock".into(),
+        ))
+    }
+}
+
+#[async_trait]
+impl NativeStatePlane for StubBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_storage(
+        &self,
+        _context: RpcRequestContext,
+        _address: ContractAddress,
+        _key: StateKey,
+    ) -> Result<out::StorageResult, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getStorage".into()))
+    }
+    #[tracing::instrument(skip_all)]
+    async fn native_registered_auth(
+        &self,
+        _context: RpcRequestContext,
+        _address: ContractAddress,
+    ) -> Result<out::RegisteredAuthResult, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getRegisteredAuth".into()))
+    }
+}
+
+#[async_trait]
+impl NativeTransactionReadPlane for StubBackend {
+    #[tracing::instrument(skip_all)]
+    async fn native_receipt(
+        &self,
+        _context: RpcRequestContext,
+        _hash: TxHash,
+    ) -> Result<Option<out::TransactionReceipt>, NativeReadError> {
+        Err(RpcServerError::NotImplemented("getTransactionReceipt".into()).into())
+    }
+    #[tracing::instrument(skip_all)]
+    async fn native_status(
+        &self,
+        _context: RpcRequestContext,
+        _hash: TxHash,
+    ) -> Result<out::TransactionStatus, NativeReadError> {
+        Err(RpcServerError::NotImplemented("getTransactionStatus".into()).into())
+    }
+}

@@ -5,9 +5,12 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use thruput_json_rpc_types::{
-    airdrop::{FundAccountRequest, FundAccountResponse},
     base58::Base58,
     hex::HexBytes,
+    requests::FundAccountRequest,
+    responses::{
+        Admission, FundingSubmission, ReceiptExecution, SendTransactionResult, TransactionReceipt,
+    },
     transaction::TxHash,
 };
 use thruput_signing::{
@@ -25,37 +28,14 @@ async fn lost_response_reuses_request_and_returns_admitted_bytes_without_receipt
     let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", server.local_addr().unwrap());
     let mut module = RpcModule::new(requests.clone());
-    module
-        .register_method("groundhog_fundAccount", move |params, requests, _| {
-            let request: FundAccountRequest = params.one()?;
-            let mut seen = requests.lock().unwrap();
-            seen.push(request.clone());
-            if seen.len() == 1 {
-                let response = funding_response(request, &faucet);
-                return Err(ErrorObjectOwned::owned(
-                    thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED,
-                    "receipt unavailable after durable signing",
-                    Some(thruput_json_rpc_types::airdrop::LocalFundingErrorData::new(
-                        response.tx_hash,
-                        response.signed_transaction,
-                    )),
-                ));
-            }
-            if seen.len() == 2 {
-                return Err(ErrorObjectOwned::owned(
-                    -32000,
-                    "lost admission response",
-                    None::<()>,
-                ));
-            }
-            Ok(funding_response(request, &faucet))
-        })
-        .unwrap();
+    serve_uncertain_funding(&mut module, faucet);
     let receipt_ready = Arc::new(AtomicBool::new(false));
     let receipt_flag = receipt_ready.clone();
     module
-        .register_method("groundhog_getTransactionReceipt", move |params, _, _| {
-            let hash: TxHash = params.one()?;
+        .register_method("getTransactionReceipt", move |params, _, _| {
+            let hash = params
+                .parse::<thruput_json_rpc_types::requests::TransactionQuery>()?
+                .transaction_hash;
             if !receipt_flag.load(Ordering::SeqCst) {
                 return Err(ErrorObjectOwned::owned(
                     -32000,
@@ -111,8 +91,14 @@ async fn lost_response_reuses_request_and_returns_admitted_bytes_without_receipt
     assert_eq!(requests.lock().unwrap().len(), 4);
     {
         let seen = requests.lock().unwrap();
-        assert_eq!(seen[0], seen[1]);
-        assert_eq!(seen[1], seen[2]);
+        assert_eq!(
+            serde_json::to_value(&seen[0]).unwrap(),
+            serde_json::to_value(&seen[1]).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&seen[1]).unwrap(),
+            serde_json::to_value(&seen[2]).unwrap()
+        );
         assert_ne!(seen[2].client_nonce, seen[3].client_nonce);
     }
     scenario.stop().await.unwrap();
@@ -128,41 +114,32 @@ async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
     let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", server.local_addr().unwrap());
     let mut module = RpcModule::new(requests.clone());
-    module
-        .register_method("groundhog_fundAccount", move |params, requests, _| {
-            let request: FundAccountRequest = params.one()?;
-            let response = funding_response(request.clone(), &faucet);
-            let mut seen = requests.lock().unwrap();
-            seen.push(request);
-            if seen.len() == 1 {
-                return Err(ErrorObjectOwned::owned(
-                    thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED,
-                    "admission unverified",
-                    Some(thruput_json_rpc_types::airdrop::LocalFundingErrorData::new(
-                        response.tx_hash,
-                        response.signed_transaction,
-                    )),
-                ));
-            }
-            Ok(response)
-        })
-        .unwrap();
+    serve_stopped_funding(&mut module, faucet);
     let submitted_hash = Arc::new(Mutex::new(None::<TxHash>));
     let submitted = submitted_hash.clone();
     module
-        .register_method("groundhog_sendRawTransaction", move |params, _, _| {
-            let bytes: String = params.one()?;
+        .register_method("sendTransaction", move |params, _, _| {
+            let bytes = thruput_json_rpc_types::hex::prefixed_hex(
+                params
+                    .parse::<thruput_json_rpc_types::requests::SendTransactionRequest>()?
+                    .signed_transaction,
+            );
             let signed: thruput_xdr::transaction::SignedTransaction =
                 xdrs::txs::decode(&hex::decode(bytes.strip_prefix("0x").unwrap()).unwrap())
                     .unwrap();
             let hash = TxHash(Base58(transaction_hash(&signed.tx).unwrap()));
             *submitted.lock().unwrap() = Some(hash);
-            Ok::<_, ErrorObjectOwned>(hash)
+            Ok::<_, ErrorObjectOwned>(SendTransactionResult {
+                transaction_hash: hash,
+                admission: Admission::Accepted,
+            })
         })
         .unwrap();
     module
-        .register_method("groundhog_getTransactionReceipt", move |params, _, _| {
-            let hash: TxHash = params.one()?;
+        .register_method("getTransactionReceipt", move |params, _, _| {
+            let hash = params
+                .parse::<thruput_json_rpc_types::requests::TransactionQuery>()?
+                .transaction_hash;
             assert_eq!(*submitted_hash.lock().unwrap(), Some(hash));
             Ok::<_, ErrorObjectOwned>(Some(successful_receipt(hash)))
         })
@@ -191,7 +168,12 @@ async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
                 ctx.submit_fund(67890).await,
                 Err(TestkitError::FundingRequestMismatch { .. })
             ));
-            assert_eq!(ctx.network().submit_raw(signed_transaction).await?, tx_hash);
+            assert_eq!(
+                ctx.network()
+                    .submit_raw(signed_transaction.replacen("0x", "0X", 1))
+                    .await?,
+                tx_hash
+            );
             assert!(ctx.network().receipt(tx_hash).await?.is_some());
             let _next = ctx.submit_fund(67890).await?;
             Ok(())
@@ -207,24 +189,22 @@ async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
     handle.stop().unwrap();
 }
 
-fn successful_receipt(tx_hash: TxHash) -> thruput_json_rpc_types::receipt::TransactionReceipt {
-    thruput_json_rpc_types::receipt::TransactionReceipt {
-        tx_hash,
-        height: 3.into(),
-        status: thruput_json_rpc_types::receipt::ExecStatus::Ok,
+fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
+    TransactionReceipt {
+        transaction_hash: tx_hash,
+        block_height: 3.into(),
+        execution: ReceiptExecution::Return {
+            return_data: HexBytes(vec![]),
+        },
         events: vec![],
-        return_data: None,
-        abort_data: None,
         gas_used: 123,
     }
 }
 
-fn funding_response(request: FundAccountRequest, faucet: &LocalSigner) -> FundAccountResponse {
-    let calldata = thruput_signing::native_hog_transfer_calldata(
-        &request.recipient.0,
-        request.amount().unwrap(),
-    )
-    .unwrap();
+fn funding_response(request: &FundAccountRequest, faucet: &LocalSigner) -> FundingSubmission {
+    let calldata =
+        thruput_signing::native_hog_transfer_calldata(&request.recipient.0, request.raw_amount)
+            .unwrap();
     let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
         thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
             account: &PubkeyAccount::new(faucet.public_key(), 0),
@@ -246,12 +226,12 @@ fn funding_response(request: FundAccountRequest, faucet: &LocalSigner) -> FundAc
         &thruput_xdr::types::NetworkHash::new([0; 32].into()),
     )
     .unwrap();
-    FundAccountResponse::new(
-        request.recipient,
-        request.raw_amount,
-        hash,
-        HexBytes(hex::decode(signed.strip_prefix("0x").unwrap()).unwrap()),
-    )
+    FundingSubmission {
+        recipient: request.recipient,
+        raw_amount: request.raw_amount,
+        transaction_hash: hash,
+        signed_transaction: HexBytes(hex::decode(signed.strip_prefix("0x").unwrap()).unwrap()),
+    }
 }
 
 fn local_manifest(
@@ -277,13 +257,191 @@ fn local_manifest(
 
 /// Serve the network identity named by the runtime manifest fixture (a zero `networkHash`).
 fn serve_manifest_network_info<T: Send + Sync + 'static>(module: &mut RpcModule<T>) {
+    module.register_method("getVersionInfo", |_, _, _| Ok::<_, ErrorObjectOwned>(serde_json::json!({
+        "wireFormat": "14.0.0", "softwareVersion": "test", "implementation": "test",
+        "supportedMethods": ["getNetworkInfo", "sendTransaction", "getTransactionStatus", "getTransactionReceipt", "dev_fundAccount"]
+    }))).unwrap();
+
     module
-        .register_method("groundhog_networkInfo", |_, _, _| {
-            Ok::<_, ErrorObjectOwned>(thruput_json_rpc_types::network_info::NetworkInfo::new(
-                thruput_json_rpc_types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from(
-                    [0; 32],
-                )),
-            ))
+        .register_method("getNetworkInfo", |_, _, _| {
+            Ok::<_, ErrorObjectOwned>(thruput_json_rpc_types::responses::NetworkInfo {
+                network_hash: thruput_json_rpc_types::NetworkHash::from(
+                    thruput_xdr::types::SHA256Hash::from([0; 32]),
+                ),
+            })
+        })
+        .unwrap();
+}
+
+fn serve_uncertain_funding(
+    module: &mut RpcModule<Arc<Mutex<Vec<FundAccountRequest>>>>,
+    faucet: LocalSigner,
+) {
+    module
+        .register_method("dev_fundAccount", move |params, requests, _| {
+            let request: FundAccountRequest = params.parse()?;
+            let mut seen = requests.lock().unwrap();
+            seen.push(request.clone());
+            if seen.len() == 1 {
+                let response = funding_response(&request, &faucet);
+                return Err(ErrorObjectOwned::owned(
+                    thruput_json_rpc_types::error::native::codes::LOCAL_FUNDING_UNRESOLVED,
+                    "receipt unavailable after durable signing",
+                    Some(
+                        thruput_json_rpc_types::error::native::ErrorData::LocalFundingUnresolved {
+                            transaction_hash: response.transaction_hash,
+                            signed_transaction: response.signed_transaction,
+                            cause: None,
+                        },
+                    ),
+                ));
+            }
+            if seen.len() == 2 {
+                return Err(ErrorObjectOwned::owned(
+                    -32000,
+                    "lost admission response",
+                    None::<()>,
+                ));
+            }
+            Ok(funding_response(&request, &faucet))
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn conflicting_funding_results_keep_both_identities_and_preserve_original_intent() {
+    for error_result in [false, true] {
+        conflicting_funding_case(error_result).await;
+    }
+}
+
+async fn conflicting_funding_case(error_result: bool) {
+    use thruput_json_rpc_types::error::native::{ErrorData, codes};
+    let faucet = LocalSigner::from_secret_key([42; 32]);
+    let manifest = local_manifest(
+        faucet.verifying_key_bytes(),
+        PubkeyAccount::new(faucet.public_key(), 0).address(),
+    );
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", server.local_addr().unwrap());
+    let mut module = RpcModule::new(count.clone());
+    module
+        .register_method("dev_fundAccount", move |params, count, _| {
+            let mut request: FundAccountRequest = params.parse()?;
+            let attempt = count.fetch_add(1, Ordering::SeqCst);
+            if attempt == 1 {
+                request.client_nonce =
+                    thruput_json_rpc_types::airdrop::ClientNonce::new(vec![99; 16]).unwrap();
+            }
+            let response = funding_response(&request, &faucet);
+            if attempt == 0 || (attempt == 1 && error_result) {
+                return Err(ErrorObjectOwned::owned(
+                    codes::LOCAL_FUNDING_UNRESOLVED,
+                    "unresolved",
+                    Some(ErrorData::LocalFundingUnresolved {
+                        transaction_hash: response.transaction_hash,
+                        signed_transaction: response.signed_transaction,
+                        cause: None,
+                    }),
+                ));
+            }
+            Ok(response)
+        })
+        .unwrap();
+    serve_manifest_network_info(&mut module);
+    let handle = server.start(module);
+    let scenario = Scenario::builder("funding-conflict")
+        .accounts(1)
+        .network(NetworkConfig::existing(&url, manifest.path()))
+        .build()
+        .await
+        .unwrap();
+    scenario
+        .run_agents([Agent::new("alice", move |ctx| async move {
+            let original = ctx.submit_fund(123).await.unwrap_err();
+            let TestkitError::Submission {
+                tx_hash,
+                signed_transaction,
+                ..
+            } = original
+            else {
+                panic!("expected retained original")
+            };
+            let conflict = ctx.submit_fund(123).await.unwrap_err();
+            match conflict {
+                TestkitError::InvalidFundingResponse {
+                    retained: Some(retained),
+                    response,
+                    ..
+                } => {
+                    assert!(!error_result);
+                    assert_eq!(retained.0, tx_hash);
+                    assert_ne!(response.transaction_hash, tx_hash);
+                    assert_eq!(
+                        thruput_json_rpc_types::hex::prefixed_hex(&retained.1),
+                        signed_transaction
+                    );
+                }
+                TestkitError::InvalidFundingEvidence {
+                    retained: Some(retained),
+                    source,
+                    ..
+                } => {
+                    assert!(error_result);
+                    assert_eq!(retained.0, tx_hash);
+                    let thruput_json_rpc_client::native::NativeClientError::Application {
+                        data,
+                        ..
+                    } = *source
+                    else {
+                        panic!("missing conflicting RPC error")
+                    };
+                    assert_ne!(
+                        data.raw()["data"]["transactionHash"],
+                        serde_json::to_value(tx_hash).unwrap()
+                    );
+                }
+                other => panic!("missing conflict evidence: {other:?}"),
+            }
+            let recovered = ctx.submit_fund(123).await?;
+            assert_eq!(recovered.tx_hash(), tx_hash);
+            assert_eq!(recovered.signed_transaction(), signed_transaction);
+            Ok(())
+        })])
+        .await
+        .unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 3);
+    handle.stop().unwrap();
+}
+
+fn serve_stopped_funding(
+    module: &mut RpcModule<Arc<Mutex<Vec<FundAccountRequest>>>>,
+    faucet: LocalSigner,
+) {
+    module
+        .register_method("dev_fundAccount", move |params, requests, _| {
+            let request: FundAccountRequest = params.parse()?;
+            let response = funding_response(&request, &faucet);
+            let mut seen = requests.lock().unwrap();
+            seen.push(request);
+            if seen.len() == 1 {
+                return Err(ErrorObjectOwned::owned(
+                    thruput_json_rpc_types::error::native::codes::FUNDING_ATTEMPT_STOPPED,
+                    "admission unverified",
+                    Some(
+                        thruput_json_rpc_types::error::native::ErrorData::FundingAttemptStopped(
+                            thruput_json_rpc_types::error::native::FundingAttemptStoppedData {
+                                transaction_hash: Some(response.transaction_hash),
+                                signed_transaction: Some(response.signed_transaction),
+                                service_code: None,
+                                receipt: None,
+                            },
+                        ),
+                    ),
+                ));
+            }
+            Ok(response)
         })
         .unwrap();
 }

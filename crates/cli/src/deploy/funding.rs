@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::Serialize;
-use thruput_json_rpc_client::GroundhogApiClient;
-use thruput_json_rpc_types::{decimal, network_config::ExecutionConfig};
+use thruput_client::NativeClient;
+use thruput_json_rpc_types::requests::EmptyRequest;
+use thruput_json_rpc_types::{decimal, responses::ExecutionConfig};
 use thruput_rv32_artifact::DeclaredSizes;
 
 use crate::CliError;
@@ -49,16 +50,6 @@ fn invalid(message: impl Into<String>) -> CliError {
     }
 }
 
-fn price(value: &str) -> Result<u128, CliError> {
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(invalid("storage prices must be unsigned decimal integers"));
-    }
-    value
-        .parse::<u64>()
-        .map(u128::from)
-        .map_err(|_| invalid("storage price exceeds u64"))
-}
-
 fn calculate(
     bytes: u64,
     sizes: DeclaredSizes,
@@ -89,12 +80,12 @@ fn calculate(
         }
     }
     let costs = &execution.storage_costs;
-    let balance = price(&costs.balance_cost)?;
-    let deployment = price(&costs.base_contract_deployment_cost)?
-        + u128::from(bytes) * price(&costs.contract_deployment_cost_per_byte)?;
+    let balance = u128::from(costs.balance_cost);
+    let deployment = u128::from(costs.base_contract_deployment_cost)
+        + u128::from(bytes) * u128::from(costs.contract_deployment_cost_per_byte);
     let minimum = balance + deployment;
     Ok(FundingReport {
-        schema_version: 1,
+        schema_version: 2,
         artifact_bytes: bytes,
         balance_deposit_raw: balance,
         deployment_cost_raw: deployment,
@@ -117,13 +108,16 @@ pub(super) fn read(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let execution = rt.block_on(async {
-        let client = crate::http_client::rpc_client(rpc_url)?;
-        client
-            .chain_config()
+        let client = NativeClient::new(crate::http_client::rpc_client(rpc_url)?);
+        thruput_client::check_endpoint(&client, &["getChainConfig"])
             .await
-            .map_err(|error| invalid(error.to_string()))?
-            .execution
-            .ok_or_else(|| invalid("RPC did not supply authoritative execution rules"))
+            .map_err(|error| crate::native_rpc::rpc_error(&error))?;
+        crate::native_rpc::known(
+            "getChainConfig",
+            client.get_chain_config(EmptyRequest {}).await,
+        )?
+        .execution
+        .ok_or_else(|| invalid("RPC did not supply authoritative execution rules"))
     })?;
     calculate(
         u64::try_from(artifact.len()).map_err(|_| invalid("artifact size exceeds u64"))?,
@@ -139,7 +133,7 @@ mod tests {
 
     fn rules(balance: &str, base: &str, per_byte: &str) -> ExecutionConfig {
         serde_json::from_value(serde_json::json!({
-            "observedTip": { "height": "42", "blockHash": thruput_json_rpc_types::NetworkHashText::from([0x11; 32]) },
+            "observedTip": { "blockHeight": "42", "blockHash": thruput_json_rpc_types::NetworkHashText::from([0x11; 32]) },
             "configHash": thruput_json_rpc_types::NetworkHashText::from([0x22; 32]),
             "effectiveLimits": {
                 "maxContractSizeBytes": u32::MAX,
@@ -244,7 +238,9 @@ mod tests {
         assert!(calculate(1, SIZES, missing, false).is_err());
         assert!(calculate(u64::from(u32::MAX) + 1, SIZES, rules("0", "0", "0"), false).is_err());
         for invalid_price in ["", "-1", "+1", "1.5", "18446744073709551616"] {
-            assert!(calculate(1, SIZES, rules(invalid_price, "0", "0"), false).is_err());
+            let mut value = serde_json::to_value(rules("0", "0", "0")).unwrap();
+            value["storageCosts"]["balanceCost"] = serde_json::json!(invalid_price);
+            assert!(serde_json::from_value::<ExecutionConfig>(value).is_err());
         }
         assert_eq!(
             calculate(1, SIZES, rules("0", "0", "0"), false)

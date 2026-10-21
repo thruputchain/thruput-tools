@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_json_rpc_types::{responses::TransactionStatus, transaction::TxHash};
 use thruput_node_supervisor::BlockProductionError;
 
 /// Result alias used throughout `thruput-testkit`.
@@ -94,6 +94,8 @@ pub enum TestkitError {
     ReceiptHashMismatch {
         /// Locally computed transaction identity.
         expected: TxHash,
+        /// Complete conflicting receipt, including its claimed commitment and execution.
+        receipt: Box<thruput_json_rpc_types::responses::TransactionReceipt>,
     },
     /// An ambiguous submission retains the exact original signed transaction.
     #[error("submission of {tx_hash:?} was not verified: {detail}")]
@@ -104,6 +106,9 @@ pub enum TestkitError {
         signed_transaction: String,
         /// Transport error or unexpected returned identity.
         detail: String,
+        /// Original structured submission or funding failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// A submitted deployment could not be verified; preserve the original attempt.
     #[error("deployment {tx_hash:?} at {predicted_address:?} was not verified: {detail}")]
@@ -115,7 +120,12 @@ pub enum TestkitError {
         /// Exact original signed bytes for reconciliation.
         signed_transaction: String,
         /// Failed receipt lookup or verification.
-        detail: String,
+        detail: Box<str>,
+        /// Original receipt-wait evidence, when waiting stopped before validation.
+        #[source]
+        source: Option<Box<TestkitError>>,
+        /// Authoritative receipt whose deployment return did not match the prediction.
+        receipt: Option<Box<thruput_json_rpc_types::responses::TransactionReceipt>>,
     },
     /// Retained deployment effects differ from a new request by the same caller.
     #[error("artifact {name} has a retained deployment with different funding or initialization")]
@@ -272,18 +282,57 @@ pub enum TestkitError {
         detail: String,
     },
 
-    /// A receipt did not appear within the polling budget.
-    ///
-    /// `status` reports what `getTransactionStatus` last knew about the
-    /// transaction, which usually explains the missing receipt: a scheduler
-    /// rejection, or a two-phase-commit conflict (for example a balance that
-    /// could not cover its own storage cost) that kept it out of every block.
-    #[error("timed out waiting for receipt of `{tx_hash}` ({status})")]
-    ReceiptTimeout {
-        /// The transaction hash that never produced a receipt.
-        tx_hash: String,
-        /// The last observed transaction status, as a human-readable summary.
-        status: String,
+    /// Receipt waiting stopped with retained status, commitment and read errors.
+    #[error("{source}")]
+    ReceiptWait {
+        /// Wait cause plus the strongest observed commitment and status.
+        #[source]
+        source: Box<thruput_json_rpc_client::native::receipt::ReceiptPollError>,
+    },
+    /// Native RPC failure, retaining the original application or malformed result.
+    #[error("rpc `{method}` failed: {source}")]
+    NativeCall {
+        /// Native method that failed.
+        method: &'static str,
+        /// Original RPC error or malformed result, including raw data.
+        #[source]
+        source: Box<thruput_json_rpc_client::native::NativeClientError>,
+    },
+    /// Funding evidence could not be validated; retain the original RPC failure.
+    #[error("invalid local funding evidence: {detail}")]
+    InvalidFundingEvidence {
+        /// Why the supplied evidence could not be accepted.
+        detail: String,
+        /// Original validated hash and signed bytes, if already retained.
+        retained: Option<Box<(TxHash, thruput_json_rpc_types::hex::HexBytes)>>,
+        /// Original RPC error carrying the conflicting or invalid evidence.
+        #[source]
+        source: Box<thruput_json_rpc_client::native::NativeClientError>,
+    },
+    /// A funding result conflicts with the retained request or its signed identity.
+    #[error("invalid local funding response: {detail}")]
+    InvalidFundingResponse {
+        /// Original validated hash and signed bytes, if already retained.
+        retained: Option<Box<(TxHash, thruput_json_rpc_types::hex::HexBytes)>>,
+        /// Complete supplied result, retained without accepting its identity.
+        response: Box<thruput_json_rpc_types::responses::FundingSubmission>,
+        /// Why the response conflicts with the request or original evidence.
+        detail: String,
+    },
+    /// An unfamiliar response is retained without asserting its meaning.
+    #[error("unsupported `{method}` response")]
+    UnsupportedResponse {
+        /// Native method that returned an unfamiliar result.
+        method: &'static str,
+        /// Complete result, retained without interpreting unknown variants.
+        raw: serde_json::Value,
+    },
+    /// Endpoint compatibility or identity validation failed.
+    #[error("{source}")]
+    NativeEndpoint {
+        /// Compatibility, identity or discovery failure with its original evidence.
+        #[source]
+        source: Box<thruput_client::NativeRpcError>,
     },
 
     /// A submitted transaction did not become pending before the polling budget elapsed.
@@ -292,7 +341,7 @@ pub enum TestkitError {
         /// Transaction hash that never appeared as pending.
         tx_hash: String,
         /// Last status observed before timeout.
-        last_status: TransactionStatus,
+        last_status: Box<TransactionStatus>,
     },
 
     /// A submitted transaction reached a terminal or unexpected state before becoming pending.
@@ -301,7 +350,7 @@ pub enum TestkitError {
         /// Transaction hash whose status was observed.
         tx_hash: String,
         /// Status observed instead of `Pending`.
-        status: TransactionStatus,
+        status: Box<TransactionStatus>,
     },
 
     /// Manual block production is unavailable for this target or driver mode.
@@ -355,6 +404,8 @@ pub enum TestkitError {
         name: String,
         /// Transaction currently registering the artifact.
         tx_hash: TxHash,
+        /// Original signed bytes for explicit caller-controlled reconciliation.
+        signed_transaction: String,
     },
 
     /// The local node supervisor failed to start or stop the target.
@@ -391,6 +442,11 @@ pub enum TestkitError {
 }
 
 impl TestkitError {
+    pub(crate) fn native(source: thruput_client::NativeRpcError) -> Self {
+        Self::NativeEndpoint {
+            source: Box::new(source),
+        }
+    }
     /// Build an [`TestkitError::Rpc`] from a failing call.
     pub(crate) fn rpc(method: &'static str, error: impl std::fmt::Display) -> Self {
         Self::Rpc {

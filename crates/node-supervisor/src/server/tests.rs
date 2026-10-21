@@ -9,12 +9,11 @@ use serial_test::serial;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use thruput_bundle_identity::{BundleIdentity, BundleSubject};
-use thruput_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
+use thruput_json_rpc_api::params::NamedParams;
 use thruput_json_rpc_server::BuildVersion;
+use thruput_json_rpc_types::responses as out;
 use thruput_json_rpc_types::{
-    airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
-    base58::Base58,
-    error::codes,
+    airdrop::ClientNonce, base58::Base58, error::native::codes, requests::AirdropRequest,
 };
 
 use super::*;
@@ -242,15 +241,50 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         .expect("bug: jsonrpsee http client builds");
 
     let network_info = client
-        .network_info()
+        .request::<out::NetworkInfo, _>("getNetworkInfo", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: networkInfo should use immutable manifest identity");
     assert_eq!(network_info.network_hash.as_ref(), &[0; 32]);
 
     let version = client
-        .version()
+        .request::<out::VersionInfo, _>("getVersionInfo", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: version should report the embedding client identity");
+    assert_eq!(version.wire_format, "14.0.0");
+    let expected = [
+        "dev_getPendingTransactionCount",
+        "getBalance",
+        "getChainConfig",
+        "getChainTip",
+        "getNetworkInfo",
+        "getRegisteredAuth",
+        "getServerLimits",
+        "getStorage",
+        "getVersionInfo",
+        "sendTransaction",
+    ];
+    assert_eq!(version.supported_methods, expected);
+    for absent in [
+        "getTransactionReceipt",
+        "getTransactionStatus",
+        "getEvents",
+        "getTransactionsByRootAddress",
+        "getTransactionsByBlock",
+        "getBlockByHeight",
+        "simulateInvocation",
+        "simulateInvocations",
+        "faucet_requestAirdrop",
+        "dev_fundAccount",
+    ] {
+        let error = client
+            .request::<serde_json::Value, _>(absent, NamedParams(serde_json::json!({})))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, jsonrpsee::core::client::Error::Call(ref error) if error.code() == -32601),
+            "{absent}: {error}"
+        );
+    }
     assert_eq!(version.implementation, "9.8.7-test");
     assert_eq!(
         version.commit_hash.as_deref(),
@@ -263,11 +297,11 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
     );
 
     let tip = client
-        .chain_tip()
+        .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: chainTip should dispatch to fake scheduler");
     assert_eq!(
-        *tip.height, 0,
+        *tip.block_height, 0,
         "chainTip should report the genesis block loaded during startup"
     );
     assert_eq!(
@@ -275,7 +309,7 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         "G86DxMgpV6arteLsJ4J5UxdRLvFfH5yPAo2G8hNpFPcc"
     );
     let chain_config = client
-        .chain_config()
+        .request::<out::ChainConfig, _>("getChainConfig", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: chainConfig should dispatch to fake scheduler");
     assert_eq!(
@@ -290,19 +324,25 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
     );
     assert_eq!(
         client
-            .pending_transaction_count()
+            .request::<out::PendingTransactionCount, _>(
+                "dev_getPendingTransactionCount",
+                NamedParams(serde_json::json!({}))
+            )
             .await
             .expect("bug: pendingTransactionCount should use SchedGateway")
-            .0,
+            .count,
         0
     );
 
     let airdrop_error = client
-        .request_airdrop(AirdropRequest {
-            recipient: Base58(thruput_xdr::types::ContractAddress::from([0x88; 32])),
-            client_nonce: ClientNonce::new(vec![0x99])
-                .expect("bug: test client nonce should validate"),
-        })
+        .request::<out::AirdropAttempt, _>(
+            "faucet_requestAirdrop",
+            NamedParams(AirdropRequest {
+                recipient: Base58(thruput_xdr::types::ContractAddress::from([0x88; 32])),
+                client_nonce: ClientNonce::new(vec![0x99])
+                    .expect("bug: test client nonce should validate"),
+            }),
+        )
         .await
         .expect_err("bug: scheduler-only runtime must not expose airdrop");
     assert!(
@@ -311,21 +351,24 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
     );
 
     let tx_hash = client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect("bug: sendRawTransaction should dispatch to fake scheduler");
     assert_eq!(
-        serde_json::to_value(tx_hash).expect("bug: tx hash should serialize"),
+        serde_json::to_value(tx_hash.transaction_hash).expect("bug: tx hash should serialize"),
         CANONICAL_HASH_VECTOR_TX_HASH_JSON
     );
 
     let err = client
-        .send_raw_transaction("not-valid-hex".into())
+        .request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": "not-valid-hex"})),
+        )
         .await
         .expect_err("bug: invalid hex should fail before fake scheduler dispatch");
     assert!(
-        matches!(&err, ClientError::Call(object) if object.code() == codes::TX_INVALID),
-        "expected TX_INVALID JSON-RPC error, got {err:?}",
+        matches!(&err, ClientError::Call(object) if object.code() == codes::INVALID_PARAMS),
+        "expected INVALID_PARAMS JSON-RPC error, got {err:?}",
     );
 
     let pid = read_pid_file(&pid_path).expect("bug: fake should have written pid");
@@ -361,13 +404,13 @@ async fn scheduler_gateway_rejection_surfaces_tx_rejected_without_coordinator_fa
     .await;
 
     let error = client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect_err("bug: typed scheduler gateway rejection should fail submission");
 
     assert!(
-        matches!(&error, ClientError::Call(object) if object.code() == codes::TX_REJECTED),
-        "expected TX_REJECTED from SchedGateway without coordinator fallback, got {error:?}",
+        matches!(&error, ClientError::Call(object) if object.code() == codes::TRANSACTION_REJECTED),
+        "expected TRANSACTION_REJECTED from SchedGateway without coordinator fallback, got {error:?}",
     );
     handle.stop().await.expect("bug: clean shutdown");
 }
@@ -394,23 +437,23 @@ async fn submit_wakes_hogd_dev_block_driver() {
         .expect("bug: jsonrpsee http client builds");
 
     client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect("bug: sendRawTransaction should dispatch to fake scheduler");
 
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let tip = client
-            .chain_tip()
+            .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
             .await
             .expect("bug: chainTip should dispatch to fake scheduler");
-        if *tip.height == 1 {
+        if *tip.block_height == 1 {
             break;
         }
         assert!(
             Instant::now() < deadline,
             "block driver did not advance fake scheduler tip before timeout; tip={}",
-            *tip.height
+            *tip.block_height
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -445,11 +488,26 @@ async fn concurrent_public_submissions_are_batched_for_scheduler() {
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
 
     let (a, b, c, d, e) = tokio::join!(
-        client.send_raw_transaction(tx_hex.clone()),
-        client.send_raw_transaction(tx_hex.clone()),
-        client.send_raw_transaction(tx_hex.clone()),
-        client.send_raw_transaction(tx_hex.clone()),
-        client.send_raw_transaction(tx_hex),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
+        ),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
+        ),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
+        ),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
+        ),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex}))
+        ),
     );
 
     for result in [a, b, c, d, e] {
@@ -496,7 +554,7 @@ async fn rpc_array_limit_rejects_oversized_submissions_before_dispatch() {
     let mut allowed = BatchRequestBuilder::new();
     for _ in 0..MAX_RPC_BATCH_REQUESTS {
         allowed
-            .insert("groundhog_version", jsonrpsee::rpc_params![])
+            .insert("getVersionInfo", jsonrpsee::rpc_params![])
             .unwrap();
     }
     let responses = client
@@ -509,8 +567,8 @@ async fn rpc_array_limit_rejects_oversized_submissions_before_dispatch() {
     let oversized: Vec<_> = (0..=MAX_RPC_BATCH_REQUESTS)
         .map(|id| {
             serde_json::json!({
-                "jsonrpc": "2.0", "id": id, "method": "groundhog_sendRawTransaction",
-                "params": [format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")],
+                "jsonrpc": "2.0", "id": id, "method": "sendTransaction",
+                "params": {"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")},
             })
         })
         .collect();
@@ -574,13 +632,13 @@ async fn homogeneous_rpc_array_is_batched_for_scheduler() {
         for _ in 0..35 {
             batch
                 .insert(
-                    "groundhog_sendRawTransaction",
-                    jsonrpsee::rpc_params![format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")],
+                    "sendTransaction",
+                    NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})),
                 )
                 .expect("bug: batch entry should serialize");
         }
         let responses = client
-            .batch_request::<String>(batch)
+            .batch_request::<out::SendTransactionResult>(batch)
             .await
             .expect("bug: submission array should succeed");
         assert_eq!(responses.len(), 35);
@@ -625,11 +683,26 @@ async fn block_driver_coalesces_rapid_submit_wakes() {
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
 
     let (a, b, c, d, e) = tokio::join!(
-        client.send_raw_transaction(tx_hex.clone()),
-        client.send_raw_transaction(tx_hex.clone()),
-        client.send_raw_transaction(tx_hex.clone()),
-        client.send_raw_transaction(tx_hex.clone()),
-        client.send_raw_transaction(tx_hex),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
+        ),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
+        ),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
+        ),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
+        ),
+        client.request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex}))
+        ),
     );
     for result in [a, b, c, d, e] {
         result.expect("bug: sendRawTransaction should dispatch to fake scheduler");
@@ -638,29 +711,29 @@ async fn block_driver_coalesces_rapid_submit_wakes() {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let tip = client
-            .chain_tip()
+            .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
             .await
             .expect("bug: chainTip should dispatch to fake scheduler");
-        if *tip.height >= 1 {
+        if *tip.block_height >= 1 {
             break;
         }
         assert!(
             Instant::now() < deadline,
             "block driver did not commit any block before timeout; tip={}",
-            *tip.height
+            *tip.block_height
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     let final_tip = client
-        .chain_tip()
+        .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: chainTip should dispatch to fake scheduler");
     assert!(
-        *final_tip.height <= 2,
+        *final_tip.block_height <= 2,
         "coalesced submit wakes should not commit one block per submit; tip={}",
-        *final_tip.height
+        *final_tip.block_height
     );
 
     handle.stop().await.expect("bug: clean shutdown");
@@ -689,33 +762,33 @@ async fn interval_block_driver_paces_submit_commit() {
         .expect("bug: jsonrpsee http client builds");
 
     client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect("bug: sendRawTransaction should dispatch to fake scheduler");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let early_tip = client
-        .chain_tip()
+        .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: chainTip should dispatch to fake scheduler");
     assert_eq!(
-        *early_tip.height, 0,
+        *early_tip.block_height, 0,
         "interval mode should not commit immediately from a submit wake"
     );
 
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let tip = client
-            .chain_tip()
+            .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
             .await
             .expect("bug: chainTip should dispatch to fake scheduler");
-        if *tip.height == 1 {
+        if *tip.block_height == 1 {
             break;
         }
         assert!(
             Instant::now() < deadline,
             "interval block driver did not advance fake scheduler tip before timeout; tip={}",
-            *tip.height
+            *tip.block_height
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -749,20 +822,29 @@ async fn manual_block_driver_only_commits_on_explicit_request() {
         .expect("bug: jsonrpsee http client builds");
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
     client
-        .send_raw_transaction(tx_hex.clone())
+        .request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()})),
+        )
         .await
         .expect("bug: first submit should reach fake scheduler");
     client
-        .send_raw_transaction(tx_hex)
+        .request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({"signedTransaction": tx_hex})),
+        )
         .await
         .expect("bug: second submit should reach fake scheduler");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let before = client
-        .chain_tip()
+        .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: chainTip should dispatch to fake scheduler");
-    assert_eq!(*before.height, 0, "manual mode must not automine submits");
+    assert_eq!(
+        *before.block_height, 0,
+        "manual mode must not automine submits"
+    );
 
     let produced = producer
         .produce_block()
@@ -770,10 +852,10 @@ async fn manual_block_driver_only_commits_on_explicit_request() {
         .expect("bug: explicit production should commit one block");
     assert_eq!(produced.height, 1);
     let after = client
-        .chain_tip()
+        .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: chainTip should dispatch to fake scheduler");
-    assert_eq!(*after.height, 1);
+    assert_eq!(*after.block_height, 1);
 
     let empty_error = producer
         .produce_block()
@@ -806,7 +888,10 @@ async fn manual_block_requests_are_serialized_without_coalescing() {
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
     for _ in 0..2 {
         client
-            .send_raw_transaction(tx_hex.clone())
+            .request::<out::SendTransactionResult, _>(
+                "sendTransaction",
+                NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()})),
+            )
             .await
             .expect("bug: submit should reach fake scheduler");
     }
@@ -840,7 +925,7 @@ async fn malformed_scheduler_proposal_returns_typed_error_without_panicking_driv
         .manual_block_producer()
         .expect("bug: manual mode should expose a producer");
     client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect("bug: submit should reach fake scheduler");
 
@@ -870,7 +955,7 @@ async fn retained_commit_rejection_stops_manual_producer() {
         .manual_block_producer()
         .expect("bug: manual mode should expose a producer");
     client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect("bug: submit should reach fake scheduler");
 
@@ -907,7 +992,7 @@ async fn manual_block_request_times_out_instead_of_hanging() {
         .manual_block_producer()
         .expect("bug: manual mode should expose a producer");
     client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect("bug: submit should reach fake scheduler");
 
@@ -943,7 +1028,7 @@ async fn shutdown_resolves_an_in_flight_manual_request() {
         .manual_block_producer()
         .expect("bug: manual mode should expose a producer");
     client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect("bug: submit should reach fake scheduler");
     let request = tokio::spawn(async move { producer.produce_block().await });
@@ -974,7 +1059,7 @@ async fn commit_rpc_error_is_reconciled_against_the_scheduler_tip() {
         .manual_block_producer()
         .expect("bug: manual mode should expose a producer");
     client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect("bug: submit should reach fake scheduler");
 
@@ -996,7 +1081,7 @@ async fn commit_rpc_error_without_tip_confirmation_is_indeterminate() {
         .manual_block_producer()
         .expect("bug: manual mode should expose a producer");
     client
-        .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+        .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
         .expect("bug: submit should reach fake scheduler");
 
@@ -1027,7 +1112,7 @@ async fn runtime_scheduler_rpc_failures_are_typed() {
             .manual_block_producer()
             .expect("bug: manual mode should expose a producer");
         client
-            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
             .await
             .expect("bug: submit should reach fake scheduler");
 
@@ -1291,7 +1376,7 @@ async fn stopped_observes_hogd_dev_exit_and_tears_down_rpc() {
         .build(&url)
         .expect("bug: jsonrpsee http client builds");
     let err = client
-        .chain_tip()
+        .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
         .await
         .expect_err("bug: RPC facade should be down after hogd-dev exit");
     // Any client error here is correct (transport closed, refused, etc.).
@@ -1541,15 +1626,18 @@ async fn start_with_indexer_reports_hogd_dev_full_backend_planes() {
         .expect("bug: jsonrpsee http client builds");
 
     let response = client
-        .request_airdrop(AirdropRequest {
-            recipient: Base58(thruput_xdr::types::ContractAddress::from([0x88; 32])),
-            client_nonce: ClientNonce::new(vec![0x99])
-                .expect("bug: test client nonce should validate"),
-        })
+        .request::<out::AirdropAttempt, _>(
+            "faucet_requestAirdrop",
+            NamedParams(AirdropRequest {
+                recipient: Base58(thruput_xdr::types::ContractAddress::from([0x88; 32])),
+                client_nonce: ClientNonce::new(vec![0x99])
+                    .expect("bug: test client nonce should validate"),
+            }),
+        )
         .await
         .expect("bug: full local runtime should expose airdrop");
 
-    assert!(matches!(response, AirdropAttemptResponse::Pending { .. }));
+    assert!(matches!(response, out::AirdropAttempt::Pending { .. }));
 
     handle.stop().await.expect("bug: clean shutdown");
 }
@@ -1578,11 +1666,14 @@ async fn start_with_gateway_without_indexer_reports_storage_only_backend_planes(
         .build(format!("http://{}", handle.rpc_addr()))
         .expect("bug: jsonrpsee http client builds");
     let error = client
-        .request_airdrop(AirdropRequest {
-            recipient: Base58(thruput_xdr::types::ContractAddress::from([0x88; 32])),
-            client_nonce: ClientNonce::new(vec![0x99])
-                .expect("bug: test client nonce should validate"),
-        })
+        .request::<out::AirdropAttempt, _>(
+            "faucet_requestAirdrop",
+            NamedParams(AirdropRequest {
+                recipient: Base58(thruput_xdr::types::ContractAddress::from([0x88; 32])),
+                client_nonce: ClientNonce::new(vec![0x99])
+                    .expect("bug: test client nonce should validate"),
+            }),
+        )
         .await
         .expect_err("bug: storage-only runtime must not expose airdrop");
     assert!(
@@ -1619,8 +1710,8 @@ async fn transaction_status_committed_returns_committed_with_correct_height() {
     // Act: query status for a canned committed hash.
     let status: serde_json::Value = client
         .request(
-            "groundhog_getTransactionStatus",
-            jsonrpsee::rpc_params![CANNED_HASH_A],
+            "getTransactionStatus",
+            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_A})),
         )
         .await
         .expect("bug: getTransactionStatus should succeed");
@@ -1631,7 +1722,7 @@ async fn transaction_status_committed_returns_committed_with_correct_height() {
         "expected committed status for known tx, got {status}"
     );
     assert_eq!(
-        status["height"],
+        status["blockHeight"],
         CANNED_HEIGHT_A.to_string(),
         "committed status height should be CANNED_HEIGHT_A"
     );
@@ -1663,8 +1754,8 @@ async fn transaction_status_unknown_hash_returns_unknown() {
     // Act: query status for an unknown hash.
     let status: serde_json::Value = client
         .request(
-            "groundhog_getTransactionStatus",
-            jsonrpsee::rpc_params![CANNED_HASH_UNKNOWN],
+            "getTransactionStatus",
+            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_UNKNOWN})),
         )
         .await
         .expect("bug: getTransactionStatus should succeed for unknown hash");
@@ -1702,8 +1793,8 @@ async fn transaction_receipt_committed_returns_some() {
     // Act: request receipt for a canned committed hash.
     let receipt: serde_json::Value = client
         .request(
-            "groundhog_getTransactionReceipt",
-            jsonrpsee::rpc_params![CANNED_HASH_A],
+            "getTransactionReceipt",
+            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_A})),
         )
         .await
         .expect("bug: getTransactionReceipt should succeed");
@@ -1714,12 +1805,12 @@ async fn transaction_receipt_committed_returns_some() {
         "receipt should be non-null for committed tx"
     );
     assert_eq!(
-        receipt["height"],
+        receipt["blockHeight"],
         CANNED_HEIGHT_A.to_string(),
         "receipt height should be CANNED_HEIGHT_A"
     );
     assert_eq!(
-        receipt["txHash"].as_str().unwrap_or(""),
+        receipt["transactionHash"].as_str().unwrap_or(""),
         CANNED_HASH_A,
         "receipt txHash should round-trip"
     );
@@ -1764,18 +1855,16 @@ async fn contract_events_first_page_returns_two_events() {
     .to_string();
     let query = serde_json::json!({
         "filters": [{
-            "contractAddresses": [contract],
+            "addresses": [contract],
             "topics": {"topic0": [], "topic1": [], "topic2": []},
         }],
-        "order": "ascending",
-        "anchor": { "kind": "atBeginning" },
-        "cursor": "0x",
+        "start": {"order": "ascending", "anchor": { "kind": "atBeginning" }},
         "limit": 10
     });
 
     // Act
     let page: serde_json::Value = client
-        .request("groundhog_getEvents", jsonrpsee::rpc_params![query])
+        .request("getEvents", NamedParams(query))
         .await
         .expect("bug: getEvents should succeed");
 
@@ -1787,10 +1876,10 @@ async fn contract_events_first_page_returns_two_events() {
     assert!(
         events
             .iter()
-            .all(|event| event["event"]["contractAddress"] == contract),
+            .all(|event| event["event"]["address"] == contract),
         "events should come from the filtered contract"
     );
-    let cursor = page["cursor"].as_str().unwrap_or("");
+    let cursor = page["nextCursor"].as_str().unwrap_or("");
     assert!(
         cursor.len() > 2,
         "first page cursor should be non-empty (got {cursor:?})"
@@ -1824,14 +1913,14 @@ async fn get_storage_at_existing_key_returns_item_from_hogd_dev_gateway() {
     // Act
     let read: serde_json::Value = client
         .request(
-            "groundhog_getStorageAt",
-            jsonrpsee::rpc_params![address, CANNED_STORAGE_KEY_HEX],
+            "getStorage",
+            NamedParams(serde_json::json!({"address": address, "key": CANNED_STORAGE_KEY_HEX})),
         )
         .await
         .expect("bug: getStorageAt should succeed");
 
     // Assert
-    assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT.to_string());
+    assert_eq!(read["stateBlockHeight"], CANNED_STORAGE_HEIGHT.to_string());
     assert_eq!(read["item"]["kind"], "bytestring");
     assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
 
@@ -1863,27 +1952,27 @@ async fn get_storage_at_works_when_gateway_is_advertised_without_indexer() {
     // Act
     let read: serde_json::Value = client
         .request(
-            "groundhog_getStorageAt",
-            jsonrpsee::rpc_params![address, CANNED_STORAGE_KEY_HEX],
+            "getStorage",
+            NamedParams(serde_json::json!({"address": address, "key": CANNED_STORAGE_KEY_HEX})),
         )
         .await
         .expect("bug: getStorageAt should succeed with DbGateway only");
 
     // Assert
-    assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT.to_string());
+    assert_eq!(read["stateBlockHeight"], CANNED_STORAGE_HEIGHT.to_string());
     assert_eq!(read["item"]["kind"], "bytestring");
     assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
 
     let err = client
         .request::<serde_json::Value, _>(
-            "groundhog_getTransactionReceipt",
-            jsonrpsee::rpc_params![CANNED_HASH_A],
+            "getTransactionReceipt",
+            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_A})),
         )
         .await
         .expect_err("bug: receipt reads should remain unavailable without indexer");
     assert!(
-        matches!(&err, ClientError::Call(object) if object.code() == codes::NOT_IMPLEMENTED),
-        "expected NOT_IMPLEMENTED JSON-RPC error, got {err:?}",
+        matches!(&err, ClientError::Call(object) if object.code() == jsonrpsee::types::error::METHOD_NOT_FOUND_CODE),
+        "expected method not found JSON-RPC error, got {err:?}",
     );
 
     handle.stop().await.expect("bug: clean shutdown");
@@ -1914,14 +2003,16 @@ async fn get_storage_at_missing_key_returns_null_item_with_snapshot_height() {
     // Act
     let read: serde_json::Value = client
         .request(
-            "groundhog_getStorageAt",
-            jsonrpsee::rpc_params![address, CANNED_STORAGE_MISSING_KEY_HEX],
+            "getStorage",
+            NamedParams(
+                serde_json::json!({"address": address, "key": CANNED_STORAGE_MISSING_KEY_HEX}),
+            ),
         )
         .await
         .expect("bug: getStorageAt miss should succeed");
 
     // Assert
-    assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT.to_string());
+    assert_eq!(read["stateBlockHeight"], CANNED_STORAGE_HEIGHT.to_string());
     assert!(
         read["item"].is_null(),
         "missing storage item should serialize as null"
@@ -1932,7 +2023,7 @@ async fn get_storage_at_missing_key_returns_null_item_with_snapshot_height() {
 
 #[tokio::test]
 #[serial]
-async fn get_storage_at_without_gateway_endpoint_returns_backend_unavailable() {
+async fn get_storage_without_gateway_endpoint_is_not_registered() {
     // Arrange
     let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer-no-gateway");
     let hogd = HogdDevConfig::default()
@@ -1955,16 +2046,16 @@ async fn get_storage_at_without_gateway_endpoint_returns_backend_unavailable() {
     // Act
     let err = client
         .request::<serde_json::Value, _>(
-            "groundhog_getStorageAt",
-            jsonrpsee::rpc_params![address, CANNED_STORAGE_KEY_HEX],
+            "getStorage",
+            NamedParams(serde_json::json!({"address": address, "key": CANNED_STORAGE_KEY_HEX})),
         )
         .await
         .expect_err("bug: missing DbGateway should fail");
 
     // Assert
     assert!(
-        matches!(&err, ClientError::Call(object) if object.code() == codes::BACKEND_UNAVAILABLE),
-        "expected BACKEND_UNAVAILABLE JSON-RPC error, got {err:?}",
+        matches!(&err, ClientError::Call(object) if object.code() == jsonrpsee::types::error::METHOD_NOT_FOUND_CODE),
+        "expected method not found JSON-RPC error, got {err:?}",
     );
 
     handle.stop().await.expect("bug: clean shutdown");
@@ -2120,8 +2211,8 @@ async fn transaction_status_indexer_runtime_rpc_fail_surfaces_backend_unavailabl
     // Act: query a tx status; the fake indexer will fail the data-plane call.
     let err = client
         .request::<serde_json::Value, _>(
-            "groundhog_getTransactionStatus",
-            jsonrpsee::rpc_params![CANNED_HASH_A],
+            "getTransactionStatus",
+            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_A})),
         )
         .await
         .expect_err("bug: getTransactionStatus should error when indexer data-plane fails");

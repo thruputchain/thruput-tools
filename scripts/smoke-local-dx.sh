@@ -20,6 +20,9 @@
 #   SMOKE_PROTOCOL_RS_PATH=/path/to/protocol-rs  # defaults to sdk_rs sibling
 #   CARGO_TARGET_DIR=/absolute/path/to/build-output
 #   SMOKE_NETWORK_HASH=<32-byte network hash in unprefixed base58>
+#   SMOKE_CHECKOUT_CLIENT=1  # use this checkout's unpublished Rust client
+#   SMOKE_RAMDB_BYTES=128M  # optional local runtime capacity override
+#   SMOKE_STARTUP_TIMEOUT_SECS=60  # optional readiness budget
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
@@ -94,7 +97,7 @@ import urllib.request
 endpoint, expected = sys.argv[1:]
 request = urllib.request.Request(
     endpoint,
-    data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "groundhog_networkInfo", "params": []}).encode(),
+    data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "getNetworkInfo", "params": {}}).encode(),
     headers={"Content-Type": "application/json"},
 )
 with urllib.request.urlopen(request, timeout=10) as response:
@@ -258,8 +261,8 @@ url = sys.argv[1]
 payload = json.dumps({
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "groundhog_version",
-    "params": [],
+    "method": "getVersionInfo",
+    "params": {},
 }).encode()
 request = urllib.request.Request(
     url,
@@ -465,7 +468,7 @@ payload = json.dumps({
     "jsonrpc": "2.0",
     "id": 1,
     "method": method,
-    "params": [tx_hash],
+    "params": {"transactionHash": tx_hash},
 }).encode()
 request = urllib.request.Request(
     url,
@@ -484,16 +487,16 @@ assert_transaction_committed() {
     local tx_hash="$3"
     local expected_height="$4"
     local receipt status
-    receipt="$(rpc_hash_query "$url" groundhog_getTransactionReceipt "$tx_hash")"
-    [[ "$(json_field result.txHash "$receipt")" == "$tx_hash" ]] \
+    receipt="$(rpc_hash_query "$url" getTransactionReceipt "$tx_hash")"
+    [[ "$(json_field result.transactionHash "$receipt")" == "$tx_hash" ]] \
         || die "$label receipt hash did not match $tx_hash: $receipt"
-    [[ "$(json_field result.height "$receipt")" == "$expected_height" ]] \
+    [[ "$(json_field result.blockHeight "$receipt")" == "$expected_height" ]] \
         || die "$label receipt height did not match $expected_height: $receipt"
 
-    status="$(rpc_hash_query "$url" groundhog_getTransactionStatus "$tx_hash")"
+    status="$(rpc_hash_query "$url" getTransactionStatus "$tx_hash")"
     [[ "$(json_field result.status "$status")" == "committed" ]] \
         || die "$label transaction status was not committed: $status"
-    [[ "$(json_field result.height "$status")" == "$expected_height" ]] \
+    [[ "$(json_field result.blockHeight "$status")" == "$expected_height" ]] \
         || die "$label committed height did not match $expected_height: $status"
     log "$label receipt/status agree: tx=$tx_hash height=$expected_height"
 }
@@ -545,21 +548,8 @@ PY
 assert_call_succeeded() {
     local label="$1"
     local payload="$2"
-    local status_summary
-    status_summary="$(json_field data.statusSummary "$payload")"
-    if [[ "$status_summary" == "succeeded" ]]; then
-        return
-    fi
-
-    local tx_hash wallet_entrypoint wallet_entrypoint_source target_entrypoint detail_available
-    tx_hash="$(json_field data.txHash "$payload")"
-    wallet_entrypoint="$(json_field data.diagnostics.wallet.entrypointId "$payload")"
-    wallet_entrypoint_source="$(json_field data.diagnostics.wallet.entrypointSource "$payload")"
-    target_entrypoint="$(json_field data.diagnostics.target.entrypointId "$payload")"
-    detail_available="$(json_field data.diagnostics.transactionDetail.available "$payload")"
-    die "$label status was $status_summary (tx=$tx_hash wallet_entrypoint=$wallet_entrypoint \
-wallet_entrypoint_source=$wallet_entrypoint_source target_entrypoint=$target_entrypoint \
-transaction_detail_available=$detail_available)"
+    [[ "$(json_field data.execution.result "$payload")" == "return" ]] \
+        || die "$label failed: $(json_field data.execution "$payload")"
 }
 
 collect_descendants() {
@@ -606,6 +596,9 @@ else
 fi
 
 WORK="$(mktemp -d)"
+if [[ "${SMOKE_CHECKOUT_CLIENT:-0}" == "1" ]]; then
+    "$REPO_ROOT/scripts/use-checkout-client.sh" "$WORK"
+fi
 export XDG_CONFIG_HOME="$WORK/config"
 export XDG_CACHE_HOME="$WORK/cache"
 NODE_DATA_DIR="$WORK/node-data"
@@ -616,6 +609,12 @@ NODE_BASE_ARGS=(
     --hog-devnode-binary "$DEVNODE_BINARY"
     --data-dir "$NODE_DATA_DIR"
 )
+if [[ -n "${SMOKE_RAMDB_BYTES:-}" ]]; then
+    NODE_BASE_ARGS+=(--ramdb-bytes "$SMOKE_RAMDB_BYTES")
+fi
+if [[ -n "${SMOKE_STARTUP_TIMEOUT_SECS:-}" ]]; then
+    NODE_BASE_ARGS+=(--startup-timeout-secs "$SMOKE_STARTUP_TIMEOUT_SECS")
+fi
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_BASE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"
@@ -784,8 +783,8 @@ RECIPIENT_BALANCE_BEFORE="$(json_field data.rawBalance "$RECIPIENT_BEFORE_JSON")
 
 TRANSFER_JSON="$(run_json transfer "$CLI" --json transfer --force "$TRANSFER_RECIPIENT" "$TRANSFER_AMOUNT")"
 TRANSFER_TX_HASH="$(json_field data.txHash "$TRANSFER_JSON")"
-[[ "$(json_field data.status.result "$TRANSFER_JSON")" == "ok" ]] \
-    || die "transfer did not commit successfully: $(json_field data.status "$TRANSFER_JSON")"
+[[ "$(json_field data.execution.result "$TRANSFER_JSON")" == "return" ]] \
+    || die "transfer did not commit successfully: $(json_field data.execution "$TRANSFER_JSON")"
 [[ "$(json_field data.rawAmount "$TRANSFER_JSON")" == "$TRANSFER_RAW_AMOUNT" ]] \
     || die "transfer raw amount did not equal $TRANSFER_RAW_AMOUNT"
 [[ "$(json_field data.sender "$TRANSFER_JSON")" == "$SENDER_ADDRESS" ]] \
@@ -803,7 +802,7 @@ TRANSFER_FEE_RAW="$(assert_transfer_balance_deltas \
     "$RECIPIENT_BALANCE_BEFORE" \
     "$RECIPIENT_BALANCE_AFTER" \
     "$TRANSFER_RAW_AMOUNT")"
-TRANSFER_HEIGHT="$(json_field data.height "$TRANSFER_JSON")"
+TRANSFER_HEIGHT="$(json_field data.blockHeight "$TRANSFER_JSON")"
 TOKEN_ADDRESS="$(json_field data.tokenAddress "$TRANSFER_JSON")"
 [[ "$TOKEN_ADDRESS" != "null" && -n "$TOKEN_ADDRESS" ]] \
     || die "transfer did not report its token address"
@@ -829,10 +828,10 @@ TX_SHOW_JSON="$(run_json "transaction show" "$CLI" --json tx show "$TRANSFER_TX_
     || die "tx show hash did not match transfer hash $TRANSFER_TX_HASH"
 [[ "$(json_field data.status.status "$TX_SHOW_JSON")" == "committed" ]] \
     || die "tx show did not report committed status: $(json_field data.status "$TX_SHOW_JSON")"
-[[ "$(json_field data.receipt.txHash "$TX_SHOW_JSON")" == "$TRANSFER_TX_HASH" ]] \
+[[ "$(json_field data.receipt.transactionHash "$TX_SHOW_JSON")" == "$TRANSFER_TX_HASH" ]] \
     || die "tx show receipt hash did not match transfer hash $TRANSFER_TX_HASH"
-TX_SHOW_STATUS_HEIGHT="$(json_field data.status.height "$TX_SHOW_JSON")"
-TX_SHOW_RECEIPT_HEIGHT="$(json_field data.receipt.height "$TX_SHOW_JSON")"
+TX_SHOW_STATUS_HEIGHT="$(json_field data.status.blockHeight "$TX_SHOW_JSON")"
+TX_SHOW_RECEIPT_HEIGHT="$(json_field data.receipt.blockHeight "$TX_SHOW_JSON")"
 [[ "$TX_SHOW_RECEIPT_HEIGHT" == "$TX_SHOW_STATUS_HEIGHT" ]] \
     || die "tx show receipt height $TX_SHOW_RECEIPT_HEIGHT did not match status height $TX_SHOW_STATUS_HEIGHT"
 log "transaction show result: tx=$TRANSFER_TX_HASH height=$TX_SHOW_STATUS_HEIGHT status=committed"
@@ -841,14 +840,14 @@ DIRECT_RECIPIENT="$RECIPIENT_ADDRESS"
 DIRECT_BEFORE_JSON="$(run_json "direct recipient balance before" "$CLI" --json balance "$DIRECT_RECIPIENT")"
 DIRECT_BALANCE_BEFORE="$(json_field data.rawBalance "$DIRECT_BEFORE_JSON")"
 DIRECT_TRANSFER_JSON="$(run_json "direct recipient transfer" "$CLI" --json transfer --force "$DIRECT_RECIPIENT" "$TRANSFER_AMOUNT")"
-[[ "$(json_field data.status.result "$DIRECT_TRANSFER_JSON")" == "ok" ]] \
-    || die "direct recipient transfer did not commit successfully: $(json_field data.status "$DIRECT_TRANSFER_JSON")"
+[[ "$(json_field data.execution.result "$DIRECT_TRANSFER_JSON")" == "return" ]] \
+    || die "direct recipient transfer did not commit successfully: $(json_field data.execution "$DIRECT_TRANSFER_JSON")"
 [[ "$(json_field data.recipient "$DIRECT_TRANSFER_JSON")" == "$DIRECT_RECIPIENT" ]] \
     || die "direct transfer recipient did not match $DIRECT_RECIPIENT"
 DIRECT_AFTER_JSON="$(run_json "direct recipient balance after" "$CLI" --json balance "$DIRECT_RECIPIENT")"
 DIRECT_BALANCE_AFTER="$(json_field data.rawBalance "$DIRECT_AFTER_JSON")"
 assert_exact_balance_increase "$DIRECT_BALANCE_BEFORE" "$DIRECT_BALANCE_AFTER" "$TRANSFER_RAW_AMOUNT"
-log "direct-address transfer result: recipient=$DIRECT_RECIPIENT $DIRECT_BALANCE_BEFORE->$DIRECT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT height=$(json_field data.height "$DIRECT_TRANSFER_JSON") tx=$(json_field data.txHash "$DIRECT_TRANSFER_JSON")"
+log "direct-address transfer result: recipient=$DIRECT_RECIPIENT $DIRECT_BALANCE_BEFORE->$DIRECT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT height=$(json_field data.blockHeight "$DIRECT_TRANSFER_JSON") tx=$(json_field data.txHash "$DIRECT_TRANSFER_JSON")"
 
 HISTORY_CURSOR=""
 HISTORY_SEEN="|"
@@ -919,7 +918,7 @@ if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     GATEWAY_PID=$!
     if ! wait_for_gateway_rpc "$GATEWAY_RPC_URL"; then
         cat "$WORK/gateway.err" >&2 || true
-        die "standalone gateway did not answer groundhog_version"
+        die "standalone gateway did not answer getVersionInfo"
     fi
     assert_rpc_network_identity "$GATEWAY_RPC_URL"
 fi
@@ -937,7 +936,7 @@ DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy --force --fund 10)"
 CONTRACT_ADDRESS="$(json_field data.address "$DEPLOY_JSON")"
 [[ "$CONTRACT_ADDRESS" != "null" && -n "$CONTRACT_ADDRESS" ]] \
     || die "deploy did not return a contract address"
-DEPLOY_HEIGHT="$(json_field data.height "$DEPLOY_JSON")"
+DEPLOY_HEIGHT="$(json_field data.blockHeight "$DEPLOY_JSON")"
 DEPLOY_TX_HASH="$(json_field data.txHash "$DEPLOY_JSON")"
 log "deploy result: address=$CONTRACT_ADDRESS height=$DEPLOY_HEIGHT tx=$DEPLOY_TX_HASH"
 assert_transaction_committed "embedded gateway" "$RPC_URL" "$DEPLOY_TX_HASH" "$DEPLOY_HEIGHT"
@@ -954,17 +953,17 @@ INITIALIZE_SELECTOR_SOURCE="$(json_field data.selector.source "$INITIALIZE_DRY_R
     || die "initialize selector source was $INITIALIZE_SELECTOR_SOURCE, expected embedded_spec from the RV32 sidecar"
 INITIALIZE_JSON="$(run_json "call initialize" "$CLI" --json call --force "$PROJECT_NAME" initialize "$INITIAL_VALUE")"
 assert_call_succeeded "initialize" "$INITIALIZE_JSON"
-log "initialize result: status=$(json_field data.statusSummary "$INITIALIZE_JSON") height=$(json_field data.height "$INITIALIZE_JSON") tx=$(json_field data.txHash "$INITIALIZE_JSON")"
+log "initialize result: status=$(json_field data.execution.result "$INITIALIZE_JSON") height=$(json_field data.blockHeight "$INITIALIZE_JSON") tx=$(json_field data.transactionHash "$INITIALIZE_JSON")"
 
 INCREMENT_JSON="$(run_json "call increment" "$CLI" --json call --force "$PROJECT_NAME" increment "$INCREMENT_AMOUNT")"
 assert_call_succeeded "increment" "$INCREMENT_JSON"
-log "increment result: status=$(json_field data.statusSummary "$INCREMENT_JSON") height=$(json_field data.height "$INCREMENT_JSON") tx=$(json_field data.txHash "$INCREMENT_JSON")"
+log "increment result: status=$(json_field data.execution.result "$INCREMENT_JSON") height=$(json_field data.blockHeight "$INCREMENT_JSON") tx=$(json_field data.transactionHash "$INCREMENT_JSON")"
 
 PING_TAG=99
 PING_CALL_JSON="$(run_json "call ping" "$CLI" --json call --force "$PROJECT_NAME" ping "$PING_TAG")"
 assert_call_succeeded "ping" "$PING_CALL_JSON"
-PING_TX_HASH="$(json_field data.txHash "$PING_CALL_JSON")"
-PING_HEIGHT="$(json_field data.height "$PING_CALL_JSON")"
+PING_TX_HASH="$(json_field data.transactionHash "$PING_CALL_JSON")"
+PING_HEIGHT="$(json_field data.blockHeight "$PING_CALL_JSON")"
 
 RAW_EVENTS_JSON="$(run_json "raw counter events" "$CLI" --json events list "$CONTRACT_ADDRESS")"
 assert_height_at_least \
@@ -998,9 +997,9 @@ VIEW_OUTPUT="$(json_field data.output.result "$VIEW_JSON")"
 [[ "$VIEW_OUTPUT" == "return" ]] || die "view get output was $VIEW_OUTPUT, expected return"
 VIEW_RETURN="$(json_field data.returnValue "$VIEW_JSON")"
 [[ "$VIEW_RETURN" == "$EXPECTED_VALUE" ]] || die "view get return was $VIEW_RETURN, expected $EXPECTED_VALUE"
-log "view get result: height=$(json_field data.height "$VIEW_JSON") caller=$(json_field data.caller "$VIEW_JSON") return=$VIEW_RETURN"
+log "view get result: height=$(json_field data.stateBlockHeight "$VIEW_JSON") caller=$(json_field data.caller "$VIEW_JSON") return=$VIEW_RETURN"
 
-VIEW_ENTRYPOINT="$(json_field data.entrypointId "$VIEW_JSON")"
+VIEW_ENTRYPOINT="$(json_field data.entrypoint "$VIEW_JSON")"
 RAW_VIEW_JSON="$(run_json "raw view get" "$CLI" --json view "$CONTRACT_ADDRESS" "$VIEW_ENTRYPOINT" --calldata 0x)"
 RAW_VIEW_OUTPUT="$(json_field data.output.result "$RAW_VIEW_JSON")"
 [[ "$RAW_VIEW_OUTPUT" == "return" ]] || die "raw view get output was $RAW_VIEW_OUTPUT, expected return"
@@ -1009,16 +1008,16 @@ RAW_VIEW_RETURN="$(json_field data.returnValue "$RAW_VIEW_JSON")"
 RAW_VIEW_DATA="$(json_field data.output.returnData "$RAW_VIEW_JSON")"
 [[ "$RAW_VIEW_DATA" != "null" && "$RAW_VIEW_DATA" != "0x" ]] \
     || die "raw view get did not return raw returnData"
-log "raw view get result: height=$(json_field data.height "$RAW_VIEW_JSON") entrypoint=$VIEW_ENTRYPOINT returnData=$RAW_VIEW_DATA"
+log "raw view get result: height=$(json_field data.stateBlockHeight "$RAW_VIEW_JSON") entrypoint=$VIEW_ENTRYPOINT returnData=$RAW_VIEW_DATA"
 
-ERROR_VIEW_JSON="$(run_view_json "view error" "$PROJECT_NAME" error)"
+ERROR_VIEW_JSON="$(run_json_failure "view error" "$CLI" --json view --from "$VIEW_FROM" "$PROJECT_NAME" error)"
 ERROR_VIEW_OUTPUT="$(json_field data.output.result "$ERROR_VIEW_JSON")"
 [[ "$ERROR_VIEW_OUTPUT" == "abort" ]] || die "view error output was $ERROR_VIEW_OUTPUT, expected abort"
 ERROR_ABORT_DATA="$(json_field data.output.abortData "$ERROR_VIEW_JSON")"
 [[ "$ERROR_ABORT_DATA" != "null" ]] || die "view error did not return abortData"
 ERROR_RETURN="$(json_field data.returnValue "$ERROR_VIEW_JSON")"
 [[ "$ERROR_RETURN" == "null" ]] || die "view error decoded return was $ERROR_RETURN, expected null"
-log "view error result: height=$(json_field data.height "$ERROR_VIEW_JSON") abortData=$ERROR_ABORT_DATA"
+log "view error result: height=$(json_field data.stateBlockHeight "$ERROR_VIEW_JSON") abortData=$ERROR_ABORT_DATA"
 
 # `view` runs the contract under hogd `ViewingModeData`: writes happen against
 # a discarded scratchpad, so a mutating entrypoint like `decrement` returns
@@ -1027,7 +1026,7 @@ log "view error result: height=$(json_field data.height "$ERROR_VIEW_JSON") abor
 WRITE_VIEW_JSON="$(run_view_json "view decrement simulated" "$PROJECT_NAME" decrement 1)"
 WRITE_VIEW_OUTPUT="$(json_field data.output.result "$WRITE_VIEW_JSON")"
 [[ "$WRITE_VIEW_OUTPUT" == "return" ]] || die "view decrement output was $WRITE_VIEW_OUTPUT, expected return"
-log "view decrement simulated result: height=$(json_field data.height "$WRITE_VIEW_JSON") output=$WRITE_VIEW_OUTPUT"
+log "view decrement simulated result: height=$(json_field data.stateBlockHeight "$WRITE_VIEW_JSON") output=$WRITE_VIEW_OUTPUT"
 
 # View an event-emitting entrypoint to confirm hogd captures events from the
 # simulated frame.
@@ -1038,15 +1037,15 @@ PING_VIEW_OUTPUT="$(json_field data.output.result "$PING_VIEW_JSON")"
 PING_EVENTS="$(json_field data.events "$PING_VIEW_JSON")"
 [[ "$PING_EVENTS" != "null" && "$PING_EVENTS" != "[]" ]] \
     || die "view ping did not surface any events (got $PING_EVENTS)"
-PING_EVENT_CONTRACT="$(json_field data.events.0.contractAddress "$PING_VIEW_JSON")"
+PING_EVENT_CONTRACT="$(json_field data.events.0.address "$PING_VIEW_JSON")"
 [[ "$PING_EVENT_CONTRACT" == "$CONTRACT_ADDRESS" ]] \
-    || die "view ping event contractAddress was $PING_EVENT_CONTRACT, expected $CONTRACT_ADDRESS"
+    || die "view ping event address was $PING_EVENT_CONTRACT, expected $CONTRACT_ADDRESS"
 PING_EVENT_TOPICS="$(json_field data.events.0.topics "$PING_VIEW_JSON")"
 [[ "$PING_EVENT_TOPICS" != "[]" ]] || die "view ping event had no topics"
 PING_EVENT_COUNT="$(json_len data.events "$PING_VIEW_JSON")"
 PING_EVENT_TOPIC0="$(json_field data.events.0.topics.0 "$PING_VIEW_JSON")"
 PING_EVENT_DATA="$(json_field data.events.0.data "$PING_VIEW_JSON")"
-log "view ping result: height=$(json_field data.height "$PING_VIEW_JSON") events=$PING_EVENT_COUNT \
+log "view ping result: height=$(json_field data.stateBlockHeight "$PING_VIEW_JSON") events=$PING_EVENT_COUNT \
 contract=$PING_EVENT_CONTRACT topic0=$PING_EVENT_TOPIC0 data=$PING_EVENT_DATA"
 
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
@@ -1057,7 +1056,7 @@ else
     GET_RETURN="$(json_field data.returnValue "$GET_JSON")"
     [[ "$GET_RETURN" == "$EXPECTED_VALUE" ]] \
         || die "get decoded return was $GET_RETURN, expected $EXPECTED_VALUE"
-    log "get result: status=$(json_field data.statusSummary "$GET_JSON") height=$(json_field data.height "$GET_JSON") tx=$(json_field data.txHash "$GET_JSON") return=$GET_RETURN"
+    log "get result: status=$(json_field data.execution.result "$GET_JSON") height=$(json_field data.blockHeight "$GET_JSON") tx=$(json_field data.transactionHash "$GET_JSON") return=$GET_RETURN"
 fi
 
 COUNTER_VALUE_KEY="$(counter_value_key)"
@@ -1070,7 +1069,7 @@ EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))
 STORAGE_VALUE="$(json_field data.item.value "$STORAGE_JSON")"
 [[ "$STORAGE_VALUE" == "$EXPECTED_VALUE" ]] || die "counter storage value was $STORAGE_VALUE, expected $EXPECTED_VALUE"
 log "storage args: address=$CONTRACT_ADDRESS key=$COUNTER_VALUE_KEY"
-log "storage result: height=$(json_field data.blockHeight "$STORAGE_JSON") kind=$STORAGE_KIND value=$STORAGE_VALUE"
+log "storage result: height=$(json_field data.stateBlockHeight "$STORAGE_JSON") kind=$STORAGE_KIND value=$STORAGE_VALUE"
 
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC back to thruput node for wallet-create write checks"
@@ -1087,7 +1086,7 @@ UNSAVED_ADDRESS="$(json_field data.address "$UNSAVED_EMPTY_JSON")"
 [[ "$(json_field data.rawBalance "$UNSAVED_EMPTY_JSON")" == "0" ]] \
     || die "new ordinary key did not resolve to an empty native account"
 UNSAVED_AIRDROP_JSON="$(run_json "explicitly fund unsaved native account" "$CLI" --json airdrop --force --amount 100)"
-[[ "$(json_field data.status.result "$UNSAVED_AIRDROP_JSON")" == "ok" ]] \
+[[ "$(json_field data.execution.result "$UNSAVED_AIRDROP_JSON")" == "return" ]] \
     || die "unsaved native account airdrop did not commit"
 UNSAVED_DEPLOY_JSON="$(run_json "unsaved native atomic deploy and initialize" "$CLI" --json deploy --force --fund 10 --init initialize --init-arg 21)"
 [[ "$(json_field data.nativeDeployment.sender "$UNSAVED_DEPLOY_JSON")" == "$UNSAVED_ADDRESS" ]] \
@@ -1103,7 +1102,7 @@ UNSAVED_WALLET_JSON="$(run_json "save funded native identity" "$CLI" --json wall
 UNSAVED_BALANCE_AFTER_JSON="$(run_json "saved native identity balance" "$CLI" --json balance "$UNSAVED_KEY")"
 [[ "$(json_field data.rawBalance "$UNSAVED_BALANCE_AFTER_JSON")" == "$(json_field data.rawBalance "$UNSAVED_BALANCE_BEFORE_JSON")" ]] \
     || die "saving the native binding changed its balance"
-[[ "$(json_field data.height "$UNSAVED_BALANCE_AFTER_JSON")" == "$(json_field data.height "$UNSAVED_BALANCE_BEFORE_JSON")" ]] \
+[[ "$(json_field data.stateBlockHeight "$UNSAVED_BALANCE_AFTER_JSON")" == "$(json_field data.stateBlockHeight "$UNSAVED_BALANCE_BEFORE_JSON")" ]] \
     || die "saving the native binding advanced the chain"
 
 USER_KEY="smoke-user"
@@ -1127,13 +1126,13 @@ done
 WALLET_EMPTY_JSON="$(run_json "empty saved wallet balance" "$CLI" --json balance "$USER_KEY")"
 [[ "$(json_field data.rawBalance "$WALLET_EMPTY_JSON")" == "0" ]] \
     || die "wallet creation implicitly funded the account"
-[[ "$(json_field data.height "$WALLET_EMPTY_JSON")" == "$(json_field data.height "$WALLET_BEFORE_JSON")" ]] \
+[[ "$(json_field data.stateBlockHeight "$WALLET_EMPTY_JSON")" == "$(json_field data.stateBlockHeight "$WALLET_BEFORE_JSON")" ]] \
     || die "wallet creation advanced the chain"
 
 "$CLI" keys use "$USER_KEY"
 "$CLI" wallet use --profile "$SMOKE_PROFILE" "$USER_KEY"
 AIRDROP_JSON="$(run_json "explicitly fund empty native wallet" "$CLI" --json airdrop --force "$USER_KEY" --amount 100)"
-[[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
+[[ "$(json_field data.execution.result "$AIRDROP_JSON")" == "return" ]] \
     || die "saved-wallet airdrop did not commit successfully"
 [[ "$(json_field data.faucet.address "$AIRDROP_JSON")" == "$(json_field bootstrapAccounts.0.walletAddress "$RUNTIME_JSON")" && "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
     || die "saved-wallet airdrop did not identify the local faucet"
@@ -1170,7 +1169,7 @@ assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
 NATIVE_SENDER_BEFORE_JSON="$(run_json "native transfer sender before" "$CLI" --json balance "$USER_KEY")"
 NATIVE_RECIPIENT_BEFORE_JSON="$(run_json "native transfer recipient before" "$CLI" --json balance smoke-recipient)"
 NATIVE_TRANSFER_JSON="$(run_json "native transfer to bootstrap dev account" "$CLI" --json transfer --force smoke-recipient 1)"
-[[ "$(json_field data.status.result "$NATIVE_TRANSFER_JSON")" == "ok" ]] \
+[[ "$(json_field data.execution.result "$NATIVE_TRANSFER_JSON")" == "return" ]] \
     || die "native transfer did not commit"
 [[ "$(json_field data.sender "$NATIVE_TRANSFER_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.recipient "$NATIVE_TRANSFER_JSON")" == "$RECIPIENT_ADDRESS" ]] \
     || die "native transfer changed a native or bootstrap identity"

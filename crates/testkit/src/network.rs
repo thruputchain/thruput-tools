@@ -8,17 +8,21 @@ use std::time::Duration;
 
 use thruput_node_supervisor::{BlockDriverConfig, LogLevel, ManualBlockProducer, ProducedBlock};
 
-use thruput_json_rpc_client::{
-    GroundhogApiClient, HttpClient, HttpClientBuilder, ReceiptPollConfig, ReceiptPollError,
-    ReceiptSource, poll_receipt,
+use thruput_json_rpc_client::native::{
+    NativeClient, NativeClientError,
+    receipt::{ReceiptPollConfig, poll_receipt},
 };
-use thruput_json_rpc_types::block::ChainTip;
-use thruput_json_rpc_types::events::{EventPage, EventQuery};
-use thruput_json_rpc_types::receipt::TransactionReceipt;
+use thruput_json_rpc_client::{HttpClient, HttpClientBuilder};
 use thruput_json_rpc_types::runtime_manifest::RuntimeManifest;
-use thruput_json_rpc_types::state::StorageItemRead;
-use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
-use thruput_json_rpc_types::view::{ViewRequest, ViewResponse};
+use thruput_json_rpc_types::transaction::TxHash;
+use thruput_json_rpc_types::{
+    NetworkHash,
+    requests::{self, EmptyRequest, EventQuery, TransactionQuery},
+    responses::{
+        ChainTip, DecodedResponse, EventPage, SimulationResult, StorageResult, TransactionReceipt,
+        TransactionStatus,
+    },
+};
 use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
 use thruput_xdr::contract::ContractEntrypointID;
 use thruput_xdr::types::ContractAddress;
@@ -26,7 +30,7 @@ use thruput_xdr::types::ContractAddress;
 use crate::error::{Result, TestkitError};
 
 const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const RECEIPT_POLL_ATTEMPTS: usize = 40; // ~10 seconds at the interval above.
+const RECEIPT_TIMEOUT: Duration = Duration::from_secs(10);
 const PENDING_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PENDING_POLL_ATTEMPTS: usize = 400; // ~10 seconds at the interval above.
 
@@ -79,21 +83,81 @@ impl SubmittedTransaction {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct FundingEvidence {
+    tx_hash: TxHash,
+    signed_transaction: HexBytes,
+}
+
 #[derive(Debug)]
 struct LocalFundingAttempt {
-    request: thruput_json_rpc_types::airdrop::FundAccountRequest,
-    admitted: Option<thruput_json_rpc_types::airdrop::FundAccountResponse>,
-    evidence: Option<thruput_json_rpc_types::airdrop::LocalFundingErrorData>,
+    request: requests::FundAccountRequest,
+    admitted: Option<thruput_json_rpc_types::responses::FundingSubmission>,
+    evidence: Option<FundingEvidence>,
 }
 
 impl LocalFundingAttempt {
-    fn retain_error_evidence(&mut self, error: &jsonrpsee::core::client::Error) -> Result<()> {
-        if let jsonrpsee::core::client::Error::Call(call) = error
-            && call.code() == thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
-            && let Some(data) = call.data()
+    fn retained_evidence(&self) -> Option<Box<(TxHash, HexBytes)>> {
+        self.evidence
+            .as_ref()
+            .map(|e| Box::new((e.tx_hash, e.signed_transaction.clone())))
+    }
+
+    fn accept_response(
+        &mut self,
+        response: &thruput_json_rpc_types::responses::FundingSubmission,
+    ) -> Result<()> {
+        validate_funding_response(response, &self.request).map_err(|error| {
+            TestkitError::InvalidFundingResponse {
+                response: Box::new(response.clone()),
+                retained: self.retained_evidence(),
+                detail: error.to_string(),
+            }
+        })?;
+        let evidence = FundingEvidence {
+            tx_hash: response.transaction_hash,
+            signed_transaction: response.signed_transaction.clone(),
+        };
+        if self
+            .evidence
+            .as_ref()
+            .is_some_and(|original| original != &evidence)
         {
-            let evidence: thruput_json_rpc_types::airdrop::LocalFundingErrorData =
-                serde_json::from_str(data.get()).map_err(TestkitError::signing)?;
+            return Err(TestkitError::InvalidFundingResponse {
+                response: Box::new(response.clone()),
+                retained: self.retained_evidence(),
+                detail: "local funding replaced retained signed evidence".into(),
+            });
+        }
+        self.admitted = Some(response.clone());
+        Ok(())
+    }
+
+    fn retain_error_evidence(&mut self, error: &NativeClientError) -> Result<()> {
+        use thruput_json_rpc_types::error::native::{DecodedError, ErrorData};
+        if let NativeClientError::Application { data, .. } = error
+            && let DecodedError::Known { data, .. } = data.as_ref()
+        {
+            let (tx_hash, signed_transaction) = match data.as_ref() {
+                ErrorData::LocalFundingUnresolved {
+                    transaction_hash,
+                    signed_transaction,
+                    ..
+                } => (*transaction_hash, signed_transaction.clone()),
+                ErrorData::FundingAttemptStopped(stopped) => {
+                    let (Some(hash), Some(bytes)) =
+                        (stopped.transaction_hash, &stopped.signed_transaction)
+                    else {
+                        return Ok(());
+                    };
+                    (hash, bytes.clone())
+                }
+                _ => return Ok(()),
+            };
+            let evidence = FundingEvidence {
+                tx_hash,
+                signed_transaction,
+            };
             validate_funding_evidence(&evidence)?;
             if self
                 .evidence
@@ -112,7 +176,8 @@ impl LocalFundingAttempt {
 
 struct NetworkInner {
     rpc_url: Option<String>,
-    client: Option<HttpClient>,
+    client: Option<NativeClient<HttpClient>>,
+    network_hash: Option<NetworkHash>,
     faucet: tokio::sync::Mutex<Option<crate::manifest::TestAccount>>,
     local_faucet: Option<ContractAddress>,
     local_funding:
@@ -141,24 +206,35 @@ impl Network {
         manifest: &RuntimeManifest,
         manual_block_producer: Option<ManualBlockProducer>,
     ) -> Result<Self> {
-        let client = HttpClientBuilder::default()
+        let transport = HttpClientBuilder::default()
             .build(rpc_url)
             .map_err(|e| TestkitError::rpc("connect", e))?;
+        let client = NativeClient::new(transport);
+        thruput_client::check_endpoint(
+            &client,
+            &[
+                "getNetworkInfo",
+                "sendTransaction",
+                "getTransactionStatus",
+                "getTransactionReceipt",
+            ],
+        )
+        .await
+        .map_err(TestkitError::native)?;
         thruput_client::validate_network(&client, &manifest.network_hash.to_network_hash())
             .await
             .map_err(|error| match error {
-                thruput_client::NetworkError::Rpc(error) => TestkitError::rpc("networkInfo", error),
-                mismatch @ thruput_client::NetworkError::Mismatch { .. } => {
-                    TestkitError::Manifest {
-                        field: "networkHash",
-                        detail: format!("{mismatch} at {rpc_url}"),
-                    }
-                }
+                thruput_client::NativeRpcError::NetworkMismatch { .. } => TestkitError::Manifest {
+                    field: "networkHash",
+                    detail: format!("{error} at {rpc_url}"),
+                },
+                error => TestkitError::native(error),
             })?;
         Ok(Self {
             inner: Arc::new(NetworkInner {
                 rpc_url: Some(rpc_url.to_owned()),
                 client: Some(client),
+                network_hash: Some(Base58(manifest.network_hash.to_network_hash().into_inner())),
                 faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?),
                 local_faucet: local_faucet(manifest)?,
                 local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
@@ -173,6 +249,7 @@ impl Network {
             inner: Arc::new(NetworkInner {
                 rpc_url: None,
                 client: None,
+                network_hash: None,
                 faucet: tokio::sync::Mutex::new(None),
                 local_faucet: None,
                 local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
@@ -187,39 +264,61 @@ impl Network {
     }
 
     /// The underlying typed JSON-RPC client, for methods this handle does not wrap.
-    pub fn client(&self) -> Option<&HttpClient> {
+    pub fn client(&self) -> Option<&NativeClient<HttpClient>> {
         self.inner.client.as_ref()
     }
 
     /// Current chain tip.
     pub async fn chain_tip(&self) -> Result<ChainTip> {
-        self.require_client("chainTip")?
-            .chain_tip()
-            .await
-            .map_err(|e| TestkitError::rpc("chainTip", e))
+        known(
+            self.require_client("getChainTip")?
+                .get_chain_tip(EmptyRequest {})
+                .await,
+            "getChainTip",
+        )
     }
 
-    /// Submit a pre-signed `0x`-hex transaction and return its hash.
+    /// Submit a pre-signed transaction once, verifying the returned identity.
     pub async fn submit_raw(&self, tx_hex: String) -> Result<TxHash> {
-        self.require_client("sendRawTransaction")?
-            .send_raw_transaction(tx_hex)
-            .await
-            .map_err(|e| TestkitError::rpc("sendRawTransaction", e))
+        let bytes = thruput_json_rpc_types::hex::decode_prefixed_hex(&tx_hex)
+            .map_err(TestkitError::signing)?;
+        let signed: thruput_xdr::transaction::SignedTransaction =
+            xdrs::txs::decode(&bytes).map_err(TestkitError::signing)?;
+        let hash = TxHash(Base58(
+            thruput_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?,
+        ));
+        let canonical = thruput_json_rpc_types::hex::prefixed_hex(&bytes);
+        crate::account::submit_signed(self, hash, &canonical).await?;
+        Ok(hash)
     }
 
     /// Fetch a transaction receipt if it is already available.
     pub async fn receipt(&self, tx_hash: TxHash) -> Result<Option<TransactionReceipt>> {
-        let receipt = self
-            .require_client("getTransactionReceipt")?
-            .get_transaction_receipt(tx_hash)
-            .await
-            .map_err(|e| TestkitError::rpc("getTransactionReceipt", e))?;
-        if receipt.as_ref().is_some_and(|r| r.tx_hash == tx_hash) {
+        let receipt: Option<TransactionReceipt> = known(
+            self.require_client("getTransactionReceipt")?
+                .get_transaction_receipt(TransactionQuery {
+                    transaction_hash: tx_hash,
+                })
+                .await,
+            "getTransactionReceipt",
+        )?;
+        if let Some(observed) = &receipt
+            && observed.transaction_hash != tx_hash
+        {
+            return Err(TestkitError::ReceiptHashMismatch {
+                expected: tx_hash,
+                receipt: Box::new(observed.clone()),
+            });
+        }
+        if receipt
+            .as_ref()
+            .is_some_and(|r| r.transaction_hash == tx_hash)
+        {
             self.inner.local_funding.lock().await.retain(|_, attempt| {
                 !attempt
                     .admitted
                     .as_ref()
-                    .is_some_and(|admitted| admitted.tx_hash == tx_hash)
+                    .is_some_and(|admitted| admitted.transaction_hash == tx_hash)
                     && !attempt
                         .evidence
                         .as_ref()
@@ -229,41 +328,56 @@ impl Network {
         Ok(receipt)
     }
 
-    /// Poll for a receipt until it appears or the polling budget elapses.
-    ///
-    /// On timeout the error carries a `getTransactionStatus` summary, which
-    /// usually explains the missing receipt (a scheduler rejection, or a
-    /// two-phase-commit conflict such as a balance that could not cover its own
-    /// storage cost) rather than leaving the caller with a bare timeout.
+    /// Read-only receipt wait. Errors retain commitment and advisory status evidence;
+    /// no status authorizes resubmission or proves that execution cannot occur.
     pub async fn await_receipt(&self, tx_hash: TxHash) -> Result<TransactionReceipt> {
-        match poll_receipt(
-            &NetworkReceipts(self),
+        let client = self.require_client("getTransactionReceipt")?;
+        let network_hash = self.inner.network_hash.ok_or(TestkitError::Offline {
+            operation: "getTransactionReceipt",
+        })?;
+        let receipt = poll_receipt(
+            client,
+            network_hash,
             tx_hash,
-            ReceiptPollConfig::attempts(RECEIPT_POLL_ATTEMPTS, RECEIPT_POLL_INTERVAL),
+            None,
+            ReceiptPollConfig {
+                timeout: RECEIPT_TIMEOUT,
+                interval: RECEIPT_POLL_INTERVAL,
+            },
+            std::future::pending(),
         )
         .await
-        {
-            Ok(receipt) if receipt.tx_hash == tx_hash => Ok(receipt),
-            Ok(_) => Err(TestkitError::ReceiptHashMismatch { expected: tx_hash }),
-            Err(ReceiptPollError::Lookup { source, .. }) => Err(source),
-            Err(_) => Err(TestkitError::ReceiptTimeout {
-                tx_hash: format!("{tx_hash:?}"),
-                status: self.describe_status(tx_hash).await,
-            }),
-        }
+        .map_err(|source| TestkitError::ReceiptWait {
+            source: Box::new(source),
+        })?;
+        self.inner.local_funding.lock().await.retain(|_, attempt| {
+            !attempt
+                .admitted
+                .as_ref()
+                .is_some_and(|r| r.transaction_hash == tx_hash)
+                && !attempt
+                    .evidence
+                    .as_ref()
+                    .is_some_and(|r| r.tx_hash == tx_hash)
+        });
+        Ok(receipt)
     }
 
-    /// Fetch a transaction's status.
+    /// Fetch a transaction's advisory status.
     pub async fn transaction_status(&self, tx_hash: TxHash) -> Result<TransactionStatus> {
-        self.require_client("getTransactionStatus")?
-            .get_transaction_status(tx_hash)
-            .await
-            .map_err(|e| TestkitError::rpc("getTransactionStatus", e))
+        known(
+            self.require_client("getTransactionStatus")?
+                .get_transaction_status(TransactionQuery {
+                    transaction_hash: tx_hash,
+                })
+                .await,
+            "getTransactionStatus",
+        )
     }
 
     /// Wait until the scheduler reports a submitted transaction as pending.
     ///
-    /// A successful submit RPC only confirms `submit_unvetted` ingest. Manual
+    /// A successful submit RPC confirms admission, not nomination. Manual
     /// block tests should await this barrier before requesting nomination.
     /// If the transaction commits before `Pending` is observed, this returns
     /// [`TestkitError::TransactionNotPending`] because the requested nomination
@@ -273,7 +387,7 @@ impl Network {
     }
 
     async fn await_pending_inner(&self, tx_hash: TxHash) -> Result<()> {
-        let mut last_status = TransactionStatus::Unknown;
+        let mut last_status = TransactionStatus::Unknown {};
         for _ in 0..PENDING_POLL_ATTEMPTS {
             let status = self.transaction_status(tx_hash).await?;
             match classify_pending_status(&status) {
@@ -285,14 +399,14 @@ impl Network {
                 PendingStatusClassification::Terminal => {
                     return Err(TestkitError::TransactionNotPending {
                         tx_hash: format!("{tx_hash:?}"),
-                        status,
+                        status: Box::new(status),
                     });
                 }
             }
         }
         Err(TestkitError::PendingTimeout {
             tx_hash: format!("{tx_hash:?}"),
-            last_status,
+            last_status: Box::new(last_status),
         })
     }
 
@@ -307,30 +421,24 @@ impl Network {
             .map_err(|source| TestkitError::BlockProduction { source })
     }
 
-    /// Best-effort human summary of a transaction's status, for diagnostics.
-    ///
-    /// Never fails: a status query that errors is folded into the returned
-    /// string so it can be embedded directly in a timeout error.
-    async fn describe_status(&self, tx_hash: TxHash) -> String {
-        match self.transaction_status(tx_hash).await {
-            Ok(status) => describe_status(&status),
-            Err(e) => format!("status unavailable: {e}"),
-        }
-    }
-
     /// Read one latest-committed storage item at `address`/`key`.
     pub async fn get_storage_at(
         &self,
         address: ContractAddress,
         key: &[u8],
-    ) -> Result<StorageItemRead> {
-        self.require_client("getStorageAt")?
-            .get_storage_at(Base58(address), HexBytes(key.to_vec()))
-            .await
-            .map_err(|e| TestkitError::rpc("getStorageAt", e))
+    ) -> Result<StorageResult> {
+        known(
+            self.require_client("getStorage")?
+                .get_storage(requests::StorageQuery {
+                    address: Base58(address),
+                    key: HexBytes(key.to_vec()),
+                })
+                .await,
+            "getStorage",
+        )
     }
 
-    /// Simulate a contract call through `thruput_view`.
+    /// Simulate a contract call through `simulateInvocation`.
     ///
     /// `caller` sets the simulated `msg.sender`; pass an agent's own address to
     /// read state keyed by that caller.
@@ -340,28 +448,30 @@ impl Network {
         entrypoint: ContractEntrypointID,
         calldata: &[u8],
         caller: Option<ContractAddress>,
-    ) -> Result<ViewResponse> {
-        let request = ViewRequest {
-            auth_claim: None,
-            min_height: None,
-            contract: Base58(contract),
+    ) -> Result<SimulationResult> {
+        let request = requests::SimulateInvocationRequest {
+            assumed_auth: None,
+            min_state_block_height: None,
+            address: Base58(contract),
             entrypoint: HexBytes(entrypoint.into_inner().to_vec()),
             calldata: HexBytes(calldata.to_vec()),
             caller: caller.map(Base58),
             gas_limit: None,
         };
-        self.require_client("view")?
-            .view(request)
-            .await
-            .map_err(|e| TestkitError::rpc("view", e))
+        known(
+            self.require_client("simulateInvocation")?
+                .simulate_invocation(request)
+                .await,
+            "simulateInvocation",
+        )
     }
 
-    /// Query contract events.
+    /// Query events using native opaque pagination cursors.
     pub async fn get_events(&self, query: EventQuery) -> Result<EventPage> {
-        self.require_client("getEvents")?
-            .get_events(query)
-            .await
-            .map_err(|e| TestkitError::rpc("getEvents", e))
+        known(
+            self.require_client("getEvents")?.get_events(query).await,
+            "getEvents",
+        )
     }
 
     pub(crate) async fn submit_fund(
@@ -403,14 +513,13 @@ impl Network {
         amount: u128,
         faucet: ContractAddress,
     ) -> Result<SubmittedTransaction> {
-        use thruput_json_rpc_client::LocalFundingApiClient;
-        use thruput_json_rpc_types::airdrop::{ClientNonce, FundAccountRequest};
+        use thruput_json_rpc_types::{airdrop::ClientNonce, requests::FundAccountRequest};
         if amount == 0 {
             return Err(TestkitError::signing("funding amount must be positive"));
         }
         let mut pending = self.inner.local_funding.lock().await;
         if let Some(request) = pending.get(&recipient) {
-            if request.request.raw_amount != amount.to_string() {
+            if request.request.raw_amount != amount {
                 return Err(TestkitError::FundingRequestMismatch { recipient });
             }
         } else {
@@ -421,7 +530,7 @@ impl Network {
                 LocalFundingAttempt {
                     request: FundAccountRequest {
                         recipient: Base58(recipient),
-                        raw_amount: amount.to_string(),
+                        raw_amount: amount,
                         faucet: Base58(faucet),
                         client_nonce: ClientNonce::new(nonce.to_vec())
                             .map_err(TestkitError::signing)?,
@@ -443,12 +552,18 @@ impl Network {
                 .fund_account(request.clone())
                 .await
             {
-                Ok(response) => response,
+                Ok(response) => known(Ok(response), "dev_fundAccount")?,
                 Err(error) => {
                     let attempt = pending
                         .get_mut(&recipient)
                         .expect("bug: retained funding intent");
-                    attempt.retain_error_evidence(&error)?;
+                    if let Err(invalid) = attempt.retain_error_evidence(&error) {
+                        return Err(TestkitError::InvalidFundingEvidence {
+                            detail: invalid.to_string(),
+                            retained: attempt.retained_evidence(),
+                            source: Box::new(error),
+                        });
+                    }
                     return Err(match &attempt.evidence {
                         Some(evidence) => TestkitError::Submission {
                             tx_hash: evidence.tx_hash,
@@ -456,48 +571,31 @@ impl Network {
                                 &evidence.signed_transaction.0,
                             ),
                             detail: error.to_string(),
+                            source: Box::new(error),
                         },
-                        None => TestkitError::rpc("fundAccount", error),
+                        None => TestkitError::NativeCall {
+                            method: "dev_fundAccount",
+                            source: Box::new(error),
+                        },
                     });
                 }
             }
         };
-        let signed: thruput_xdr::transaction::SignedTransaction =
-            xdrs::txs::decode(&response.signed_transaction.0).map_err(TestkitError::signing)?;
-        let hash = thruput_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?;
-        if response.recipient != request.recipient
-            || response.raw_amount != request.raw_amount
-            || response.tx_hash.0.0 != hash
-        {
-            return Err(TestkitError::signing(
-                "local funding response does not match retained request and signed hash",
-            ));
-        }
-        let evidence = thruput_json_rpc_types::airdrop::LocalFundingErrorData::new(
-            response.tx_hash,
-            response.signed_transaction.clone(),
-        );
-        if pending
-            .get(&recipient)
-            .and_then(|attempt| attempt.evidence.as_ref())
-            .is_some_and(|original| original != &evidence)
-        {
-            return Err(TestkitError::signing(
-                "local funding replaced retained signed evidence",
-            ));
-        }
         pending
             .get_mut(&recipient)
             .expect("bug: retained funding intent")
-            .admitted = Some(response.clone());
+            .accept_response(&response)?;
         Ok(SubmittedTransaction::new(
             self.clone(),
-            response.tx_hash,
+            response.transaction_hash,
             thruput_json_rpc_types::hex::prefixed_hex(&response.signed_transaction.0),
         ))
     }
 
-    pub(crate) fn require_client(&self, operation: &'static str) -> Result<&HttpClient> {
+    pub(crate) fn require_client(
+        &self,
+        operation: &'static str,
+    ) -> Result<&NativeClient<HttpClient>> {
         self.inner
             .client
             .as_ref()
@@ -505,9 +603,45 @@ impl Network {
     }
 }
 
-fn validate_funding_evidence(
-    evidence: &thruput_json_rpc_types::airdrop::LocalFundingErrorData,
+fn known<T>(
+    result: std::result::Result<DecodedResponse<T>, NativeClientError>,
+    method: &'static str,
+) -> Result<T> {
+    match result {
+        Ok(DecodedResponse::Known(value)) => Ok(value),
+        Ok(DecodedResponse::Unsupported { raw }) => {
+            Err(TestkitError::UnsupportedResponse { method, raw })
+        }
+        Ok(_) => Err(TestkitError::rpc(
+            method,
+            "unsupported response representation",
+        )),
+        Err(source) => Err(TestkitError::NativeCall {
+            method,
+            source: Box::new(source),
+        }),
+    }
+}
+
+fn validate_funding_response(
+    response: &thruput_json_rpc_types::responses::FundingSubmission,
+    request: &requests::FundAccountRequest,
 ) -> Result<()> {
+    let signed: thruput_xdr::transaction::SignedTransaction =
+        xdrs::txs::decode(&response.signed_transaction.0).map_err(TestkitError::signing)?;
+    let hash = thruput_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?;
+    if response.recipient != request.recipient
+        || response.raw_amount != request.raw_amount
+        || response.transaction_hash.0.0 != hash
+    {
+        return Err(TestkitError::signing(
+            "local funding response does not match retained request and signed hash",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_funding_evidence(evidence: &FundingEvidence) -> Result<()> {
     let signed: thruput_xdr::transaction::SignedTransaction =
         xdrs::txs::decode(&evidence.signed_transaction.0).map_err(TestkitError::signing)?;
     let hash = thruput_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?;
@@ -543,20 +677,6 @@ fn local_faucet(manifest: &RuntimeManifest) -> Result<Option<ContractAddress>> {
     Ok(Some(faucet.wallet_address.0))
 }
 
-/// Drives the shared receipt poll over a [`Network`].
-///
-/// Status is deliberately left out: `await_receipt` summarizes it once, when
-/// the budget runs out, instead of spending a status request per attempt.
-struct NetworkReceipts<'a>(&'a Network);
-
-impl ReceiptSource for NetworkReceipts<'_> {
-    type Error = TestkitError;
-
-    async fn transaction_receipt(&self, tx_hash: TxHash) -> Result<Option<TransactionReceipt>> {
-        self.0.receipt(tx_hash).await
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PendingStatusClassification {
     Ready,
@@ -566,15 +686,15 @@ enum PendingStatusClassification {
 
 fn classify_pending_status(status: &TransactionStatus) -> PendingStatusClassification {
     match status {
-        TransactionStatus::Pending => PendingStatusClassification::Ready,
-        TransactionStatus::Unknown => PendingStatusClassification::Retry,
+        TransactionStatus::Pending { .. } => PendingStatusClassification::Ready,
+        TransactionStatus::Unknown {} => PendingStatusClassification::Retry,
         _ => PendingStatusClassification::Terminal,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use thruput_json_rpc_types::transaction::TransactionStatus;
+    use thruput_json_rpc_types::responses::TransactionStatus;
     use thruput_node_supervisor::BlockDriverMode;
 
     use super::{
@@ -592,37 +712,41 @@ mod tests {
 
     #[test]
     fn pending_status_classification_never_resubmits() {
+        use thruput_json_rpc_types::responses::{SchedulerError, SchedulerErrorSource};
         assert_eq!(
-            classify_pending_status(&TransactionStatus::Pending),
+            classify_pending_status(&TransactionStatus::Pending {
+                recent_failure: None
+            }),
             PendingStatusClassification::Ready
         );
         assert_eq!(
-            classify_pending_status(&TransactionStatus::Unknown),
+            classify_pending_status(&TransactionStatus::Unknown {}),
             PendingStatusClassification::Retry
         );
-        assert_eq!(
-            classify_pending_status(&TransactionStatus::Invalid {
-                reason: "rejected".to_owned(),
-            }),
-            PendingStatusClassification::Terminal
-        );
-        assert_eq!(
-            classify_pending_status(&TransactionStatus::Committed { height: 2.into() }),
-            PendingStatusClassification::Terminal
-        );
-        assert_eq!(
-            classify_pending_status(&TransactionStatus::RecentFailure {
-                attempt_height: 1.into(),
-                cause: thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
-                    conflict: thruput_json_rpc_types::transaction::ConflictDiagnostic {
-                        address: thruput_json_rpc_types::base58::Base58([0; 32].into()),
-                        key: thruput_json_rpc_types::hex::HexBytes(Vec::new()),
-                        code: thruput_json_rpc_types::transaction::ConflictCode::Other,
-                    }
+        for status in [
+            TransactionStatus::Committed {
+                block_height: 2.into(),
+            },
+            TransactionStatus::Retry {
+                recent_failure: None,
+                error: SchedulerError {
+                    source: SchedulerErrorSource::Executor,
+                    code: 7,
                 },
-            }),
-            PendingStatusClassification::Terminal
-        );
+            },
+            TransactionStatus::Dropped {
+                recent_failure: None,
+                error: SchedulerError {
+                    source: SchedulerErrorSource::Executor,
+                    code: 7,
+                },
+            },
+        ] {
+            assert_eq!(
+                classify_pending_status(&status),
+                PendingStatusClassification::Terminal
+            );
+        }
     }
 
     #[tokio::test]
@@ -635,31 +759,6 @@ mod tests {
             error,
             TestkitError::ManualBlockProductionUnavailable
         ));
-    }
-}
-
-/// Render a transaction status as a short diagnostic phrase.
-fn describe_status(status: &TransactionStatus) -> String {
-    match status {
-        TransactionStatus::Pending => {
-            "still pending; never committed within the polling budget".to_owned()
-        }
-        TransactionStatus::Committed { height } => {
-            format!("committed at height {height:?}, but the receipt was not yet indexed")
-        }
-        TransactionStatus::Invalid { reason } => format!("rejected by the scheduler: {reason}"),
-        TransactionStatus::Retry { error } => {
-            format!("retry required: {:?} code {}", error.source, error.code)
-        }
-        TransactionStatus::Dropped { error } => {
-            format!("dropped: {:?} code {}", error.source, error.code)
-        }
-        TransactionStatus::RecentFailure {
-            attempt_height,
-            cause,
-        } => format!("proposal attempt failed at height {attempt_height:?}: {cause}"),
-        TransactionStatus::Unknown => "unknown; not found in the mempool or the indexer".to_owned(),
-        _ => "unrecognized status from the node".to_owned(),
     }
 }
 

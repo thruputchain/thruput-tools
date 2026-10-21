@@ -50,7 +50,9 @@ export async function checkDeployment(config) {
     const client = await createThruputClient({
       cluster: localnet({ rpcUrl: config.rpcUrl }),
     });
-    receipt = await client.getTransactionReceipt(hashFromBase58(config.txHash));
+    receipt = await client.getTransactionReceipt({
+      transactionHash: hashFromBase58(config.txHash),
+    });
   } catch (error) {
     throw new Error(
       `Could not check the saved deployment: ${error.message}. Run thruput node in another terminal and check the saved RPC endpoint.`,

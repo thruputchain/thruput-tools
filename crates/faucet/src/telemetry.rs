@@ -292,45 +292,20 @@ impl opentelemetry::propagation::Injector for OutgoingHeaders {
     }
 }
 
-pub(crate) async fn submit_transaction(
+/// Propagate the active request span through native RPC calls.
+pub(crate) fn rpc_client(
     rpc_url: &str,
-    tx_hex: &str,
-) -> Result<
-    thruput_json_rpc_types::transaction::TxHash,
-    thruput_json_rpc_client::SubmitTransactionError,
-> {
+) -> Result<thruput_json_rpc_client::HttpClient, thruput_client::jsonrpsee::core::client::Error> {
     use opentelemetry::propagation::TextMapPropagator;
-    use thruput_json_rpc_client::{
-        HttpClientBuilder, SubmitTransactionError, submit_transaction_with_client,
-    };
-    use tracing::Instrument;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
-    let span = tracing::info_span!(
-        target: "groundhog_otel",
-        "jsonrpc.submit",
-        otel.name = "groundhog_sendRawTransaction",
-        otel.kind = "client",
-        rpc.system = "jsonrpc",
-        rpc.method = "groundhog_sendRawTransaction"
-    );
-    async {
-        let mut headers = OutgoingHeaders(axum::http::HeaderMap::new());
-        opentelemetry_sdk::propagation::TraceContextPropagator::new()
-            .inject_context(&tracing::Span::current().context(), &mut headers);
-        let client = HttpClientBuilder::default()
-            .set_headers(headers.0)
-            .build(rpc_url)
-            .map_err(|source| SubmitTransactionError::Connect {
-                rpc_url: rpc_url.to_owned(),
-                source,
-            })?;
-        submit_transaction_with_client(&client, tx_hex)
-            .await
-            .map_err(SubmitTransactionError::SendRawTransaction)
-    }
-    .instrument(span)
-    .await
+    let mut headers = OutgoingHeaders(axum::http::HeaderMap::new());
+    opentelemetry_sdk::propagation::TraceContextPropagator::new()
+        .inject_context(&tracing::Span::current().context(), &mut headers);
+    thruput_json_rpc_client::HttpClientBuilder::default()
+        .set_headers(headers.0)
+        .build(rpc_url)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

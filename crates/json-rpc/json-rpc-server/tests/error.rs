@@ -87,6 +87,7 @@ fn unresolved_local_funding_carries_evidence_without_asserting_an_outcome() {
         thruput_json_rpc_types::hex::HexBytes(vec![1, 2, 3]),
     );
     let object: ErrorObjectOwned = RpcServerError::LocalFundingUnresolved {
+        cause: None,
         reason: "receipt unavailable".into(),
         evidence: evidence.clone(),
     }

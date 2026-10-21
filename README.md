@@ -82,10 +82,10 @@ Use `thruput <command> --help` for the installed version's options.
 
 ## Clients and API
 
-The public API uses JSON-RPC methods named `groundhog_*`. Start with the
+The public API uses native JSON-RPC methods such as `sendTransaction` and `getTransactionReceipt`. Start with the
 [generated OpenRPC specification](crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json)
 for methods, types, and errors. Its wire-format version is independent of the
-Rust workspace version and is reported by `groundhog_version` as `wireFormat`.
+Rust workspace version and is reported by `getVersionInfo` as `wireFormat`.
 
 Wire format 11 encodes every 64-bit-or-wider integer as a canonical decimal string,
 including small values such as `"0"`. This applies to requests and responses;

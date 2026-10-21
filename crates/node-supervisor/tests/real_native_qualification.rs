@@ -1,15 +1,12 @@
-//! Opt-in real runtime coverage for the candidate native connector.
-#![cfg(feature = "native-rpc-qualification")]
+//! Real runtime coverage for the default native endpoint.
 
 use std::{error::Error, path::PathBuf, time::Duration};
 
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
-use thruput_json_rpc_api::GroundhogApiClient;
 use thruput_json_rpc_client::native::{
     NativeClient, NativeClientError,
     receipt::{ReceiptPollConfig, poll_receipt},
 };
-use thruput_json_rpc_server::RpcServerConfig;
 use thruput_json_rpc_types::{
     ContractAddress,
     base58::Base58,
@@ -81,10 +78,13 @@ async fn real_native_submit_receipt_balance_and_simulation() {
     let node = NodeSupervisorHandle::start(
         NodeSupervisorConfig::default()
             .with_rpc_listen_address("127.0.0.1:0")
+            .with_view_gas_limit(GAS)
             .with_block_driver(BlockDriverConfig::manual())
             .with_hogd_dev(
                 HogdDevConfig::default()
                     .with_binary_path(binary)
+                    .with_startup_timeout(Duration::from_mins(1))
+                    .with_ramdb_bytes(128 * 1024 * 1024)
                     .with_contract_artifact_directories([artifacts])
                     .with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(
                         Base58(sender.verifying_key_bytes().into()),
@@ -94,33 +94,15 @@ async fn real_native_submit_receipt_balance_and_simulation() {
     )
     .await
     .unwrap();
-    // The helper returns errors instead of panicking, so both listeners and the
+    // The helper returns errors instead of panicking, so the listener and the
     // runtime are stopped before the test reports a failed assertion.
-    let outcome = qualify(&node, &sender).await;
+    let outcome = exercise(&node, &sender).await;
     node.stop().await.unwrap();
     outcome.unwrap();
 }
 
-async fn qualify(node: &NodeSupervisorHandle, sender: &LocalSigner) -> TestResult {
-    let candidate = node
-        .start_native_qualification(RpcServerConfig::default().with_view_gas_limit(GAS))
-        .await?;
-    let outcome = exercise(node, candidate.rpc_addr(), sender).await;
-    candidate.stop().await;
-    outcome
-}
-
-async fn exercise(
-    node: &NodeSupervisorHandle,
-    candidate_addr: std::net::SocketAddr,
-    sender: &LocalSigner,
-) -> TestResult {
-    let legacy = transport(node.rpc_addr())?;
-    require(
-        legacy.version().await?.wire_format == "13.0.0",
-        "legacy endpoint changed",
-    )?;
-    let native = NativeClient::new(transport(candidate_addr)?);
+async fn exercise(node: &NodeSupervisorHandle, sender: &LocalSigner) -> TestResult {
+    let native = NativeClient::new(transport(node.rpc_addr())?);
     check_discovery(&native).await?;
     let network = known(native.get_network_info(input::EmptyRequest {}).await?)?.network_hash;
     let signing_network = node
@@ -132,7 +114,7 @@ async fn exercise(
         .to_network_hash();
     require(
         network.0 == signing_network.clone().into_inner(),
-        "candidate network differs from validated manifest",
+        "native network differs from validated manifest",
     )?;
     let recipient = random_signer()?;
     let recipient =
@@ -158,7 +140,7 @@ async fn exercise(
         "transfer receipt omitted its token event",
     )?;
     require(receipt.gas_used > 0, "receipt omitted metering")?;
-    check_block(&native, &legacy, &receipt.block_height, &network).await?;
+    check_block(&native, &receipt.block_height, &network).await?;
     let funded = known(
         native
             .get_balance(input::AddressQuery { address: recipient })
@@ -192,10 +174,7 @@ async fn exercise(
     )
     .await?;
     check_block_continuations(node, &native, sender, recipient, signing_network).await?;
-    require(
-        legacy.version().await?.wire_format == "13.0.0",
-        "wire 13 stopped serving",
-    )
+    Ok(())
 }
 
 async fn send_transfer(
@@ -284,9 +263,12 @@ async fn check_discovery(native: &NativeClient<HttpClient>) -> TestResult {
     let version = known(native.get_version_info(input::EmptyRequest {}).await?)?;
     require(
         version.wire_format == "14.0.0",
-        "candidate wire version mismatch",
+        "native wire version mismatch",
     )?;
     let mut expected_methods = [
+        "dev_getPendingTransactionCount",
+        "faucet_requestAirdrop",
+        "dev_fundAccount",
         "getVersionInfo",
         "getNetworkInfo",
         "getServerLimits",
@@ -308,7 +290,7 @@ async fn check_discovery(native: &NativeClient<HttpClient>) -> TestResult {
     expected_methods.sort_unstable();
     require(
         version.supported_methods == expected_methods,
-        "candidate method map mismatch",
+        "native method map mismatch",
     )?;
     require(
         version.implementation == env!("CARGO_PKG_VERSION"),
@@ -316,7 +298,7 @@ async fn check_discovery(native: &NativeClient<HttpClient>) -> TestResult {
     )?;
     require(
         version.release_version.is_none() && version.bundle_manifest_digest.is_none(),
-        "candidate claimed an installed release identity",
+        "native claimed an installed release identity",
     )
 }
 
@@ -368,7 +350,6 @@ async fn check_simulation(
 
 async fn check_block(
     native: &NativeClient<HttpClient>,
-    legacy: &HttpClient,
     height: &thruput_json_rpc_types::BlockHeight,
     network: &thruput_json_rpc_types::NetworkHash,
 ) -> TestResult {
@@ -380,17 +361,9 @@ async fn check_block(
             .await?,
     )?
     .ok_or_else(|| std::io::Error::other("committed receipt block is missing"))?;
-    let legacy_block = legacy
-        .get_block_by_number(height.clone().into())
-        .await?
-        .ok_or_else(|| std::io::Error::other("legacy receipt block is missing"))?;
     require(
         block.block_height == *height && block.network_hash == *network,
         "block metadata does not match receipt height and signing network",
-    )?;
-    require(
-        serde_json::to_value(&block)? == serde_json::to_value(&legacy_block)?,
-        "native block changed the canonical consensus metadata",
     )?;
     let committed_tip = known(native.get_chain_tip(input::EmptyRequest {}).await?)?;
     require(

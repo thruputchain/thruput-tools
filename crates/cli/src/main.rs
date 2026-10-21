@@ -202,14 +202,14 @@ enum Command {
     Balance(BalanceArgs),
     /// Execute a sandboxed contract simulation against committed state
     #[command(long_about = "Execute a sandboxed contract simulation via \
-                      groundhog_view. Named methods use local or built \
+                      simulateInvocation. Named methods use local or built \
                       contract-spec metadata when available. Without metadata, \
                       pass an explicit 0x-prefixed 8-byte entrypoint ID \
                       and raw calldata.")]
     View(ViewArgs),
     /// Read latest committed raw contract storage
     #[command(long_about = "Read one latest committed raw storage item via \
-                      groundhog_getStorageAt. This is a low-level state \
+                      getStorage. This is a low-level state \
                       inspection command for address/key reads; use \
                       `thruput call` for signed transaction invocation \
                       and `thruput view` for sandboxed contract \
@@ -832,10 +832,6 @@ impl DeployArgs {
 
 #[derive(Args)]
 struct CallArgs {
-    /// Select the native candidate endpoint for local qualification
-    #[cfg(feature = "native-rpc-qualification")]
-    #[arg(long, hide = true)]
-    native_rpc_qualification: bool,
     /// Contract alias, C StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     contract: String,
@@ -871,12 +867,6 @@ impl CallArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let cwd = invocation_cwd()?;
         let run = thruput_cli::call::run;
-        #[cfg(feature = "native-rpc-qualification")]
-        let run = if self.native_rpc_qualification {
-            thruput_cli::call::run_native
-        } else {
-            run
-        };
         run(
             &self.contract,
             &self.method,
@@ -992,10 +982,6 @@ impl BalanceArgs {
 
 #[derive(Args)]
 struct ViewArgs {
-    /// Select the native candidate endpoint for local qualification
-    #[cfg(feature = "native-rpc-qualification")]
-    #[arg(long, hide = true)]
-    native_rpc_qualification: bool,
     /// Contract alias, C StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     contract: String,
@@ -1025,12 +1011,6 @@ impl ViewArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         let cwd = invocation_cwd()?;
         let run = thruput_cli::view::run;
-        #[cfg(feature = "native-rpc-qualification")]
-        let run = if self.native_rpc_qualification {
-            thruput_cli::view::run_native
-        } else {
-            run
-        };
         run(
             &self.contract,
             &self.method,
@@ -1767,10 +1747,6 @@ enum TxCommand {
                        Receipts are not fetched; inspect selected hashes with `thruput tx show`."
     )]
     List {
-        /// Select the native candidate endpoint for local qualification
-        #[cfg(feature = "native-rpc-qualification")]
-        #[arg(long, hide = true)]
-        native_rpc_qualification: bool,
         /// Wallet name, contract alias, stored key, or address (default: effective wallet)
         target: Option<String>,
         /// Number of transaction references to request (default: 50)
@@ -1812,8 +1788,6 @@ impl TxCommand {
                 print,
             ),
             Self::List {
-                #[cfg(feature = "native-rpc-qualification")]
-                native_rpc_qualification,
                 target,
                 limit,
                 cursor,
@@ -1821,12 +1795,6 @@ impl TxCommand {
                 target_args,
             } => {
                 let list = thruput_cli::tx::list;
-                #[cfg(feature = "native-rpc-qualification")]
-                let list = if native_rpc_qualification {
-                    thruput_cli::tx::list_native
-                } else {
-                    list
-                };
                 list(
                     target.as_deref(),
                     limit.as_deref(),
@@ -1853,10 +1821,6 @@ enum EventsCommand {
                        cursor is opaque and must be reused with the same contract and filters."
     )]
     List {
-        /// Select the native candidate endpoint for local qualification
-        #[cfg(feature = "native-rpc-qualification")]
-        #[arg(long, hide = true)]
-        native_rpc_qualification: bool,
         /// Wallet name, contract alias, stored key, or direct address
         contract: String,
         /// Topic-0 value; repeat for OR within this position
@@ -1898,8 +1862,6 @@ impl EventsCommand {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         match self {
             Self::List {
-                #[cfg(feature = "native-rpc-qualification")]
-                native_rpc_qualification,
                 contract,
                 topic0,
                 topic1,
@@ -1912,12 +1874,6 @@ impl EventsCommand {
                 target_args,
             } => {
                 let list = thruput_cli::events::list;
-                #[cfg(feature = "native-rpc-qualification")]
-                let list = if native_rpc_qualification {
-                    thruput_cli::events::list_native
-                } else {
-                    list
-                };
                 list(
                     &contract,
                     &topic0,
@@ -2888,8 +2844,6 @@ mod tests {
             Command::Tx {
                 command:
                     TxCommand::List {
-                        #[cfg(feature = "native-rpc-qualification")]
-                        native_rpc_qualification,
                         target,
                         limit,
                         cursor,
@@ -2897,8 +2851,6 @@ mod tests {
                         target_args,
                     },
             } => {
-                #[cfg(feature = "native-rpc-qualification")]
-                assert!(!native_rpc_qualification);
                 assert_eq!(target.as_deref(), Some("alice"));
                 assert_eq!(limit.as_deref(), Some("25"));
                 assert_eq!(cursor.as_deref(), Some("0xaabb"));
@@ -2949,8 +2901,6 @@ mod tests {
             Command::Events {
                 command:
                     EventsCommand::List {
-                        #[cfg(feature = "native-rpc-qualification")]
-                        native_rpc_qualification,
                         contract,
                         topic0,
                         topic1,
@@ -2963,8 +2913,6 @@ mod tests {
                         target_args,
                     },
             } => {
-                #[cfg(feature = "native-rpc-qualification")]
-                assert!(!native_rpc_qualification);
                 assert_eq!(contract, "counter");
                 assert_eq!(topic0, ["0x11", "0x22"]);
                 assert_eq!(topic1, ["0x33"]);

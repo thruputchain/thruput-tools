@@ -1,6 +1,6 @@
 # thruput-client
 
-Reusable contract invocation and spec codec for native Groundhog clients.
+Reusable contract invocation and spec codec for Thruput clients.
 Groundhog CLI and the experimental Stellar adapter supply their own configuration,
 identity resolution, confirmation, runtime and output.
 
@@ -9,7 +9,8 @@ identity resolution, confirmation, runtime and output.
 1. Resolve the trusted network hash and wallet identity: `Wallet::Native` for a
    pubkey account, or `Wallet::Legacy` for an existing deployed wallet and its
    configured entrypoint. Supply the target, calldata, gas limits, expiry and nonce.
-2. Use `validate_network` to compare the endpoint with the trusted network identity.
+2. Wrap the caller-owned transport in `NativeClient`, use `check_endpoint` to
+   require wire 14 and the methods the flow needs, then use `validate_network` to compare the endpoint with the trusted network identity.
    `resolve_block_expiry_height` can derive expiry from the current chain tip.
 3. `prepare_call(CallRequest, NetworkHash)` returns `UnsignedCall` for inspection.
 4. `UnsignedCall::sign(&impl Signer)` returns `SignedCall`; inspect `tx_hex` and
@@ -17,8 +18,8 @@ identity resolution, confirmation, runtime and output.
    key is rejected before invoking the signer.
 5. `SignedCall::submit(&client)` returns `SubmittedCall`, rejecting a server hash
    that differs from the locally computed hash. Errors retain the original hash.
-6. `SubmittedCall::wait(&client, PollOptions)` returns a typed receipt, including
-   unsuccessful execution. The caller interprets execution status and formats it.
+6. `SubmittedCall::wait(&client, network_hash, config, cancelled)` returns a typed receipt, including
+   unsuccessful execution. The caller interprets `receipt.execution` and formats it.
 
 Native calls use `DefaultWallet.execute`; legacy calls use `doAction`. After
 checking receipt success, `SignedCall::decode_return` extracts the single child
@@ -30,18 +31,10 @@ not contact the network. Submission is not retried by this library. After an
 ambiguous submission error or receipt timeout, reconcile by the retained hash
 before deciding what to do next.
 
-## Native JSON-RPC candidate
-
-For a native wire-14 endpoint, use `native::check_endpoint` with the methods your
-flow needs, then `native::validate_network` with an independently trusted hash.
-`native::resolve_block_expiry_height` reads the native tip. Prepare and sign the
-call as above, then use `SignedCall::submit_native` and `NativeSubmittedCall::wait`.
-These helpers send once and wait read-only. They retain the canonical hash,
-original RPC errors, unfamiliar responses and receipt-wait evidence.
-
-This choice concerns the RPC contract. `Wallet::Native` identifies a wallet
-account and can also be used with the existing wire-13 helpers. No helper chooses
-or falls back between RPC versions automatically.
+RPC selection is independent of wallet format: both pubkey wallets and existing
+contract wallets use wire 14. There is no legacy RPC fallback. Submission errors
+retain original RPC data and unfamiliar results; receipt waits retain commitment,
+status and lookup evidence through timeout or cancellation.
 
 ## Native deployment
 
@@ -55,9 +48,9 @@ signing: `UnsignedDeploy::address`.
 Deployment then follows the same sign, submit and wait phases as calls, through
 `SignedDeploy` and `SubmittedDeploy`. `SubmittedDeploy::verify` requires the
 receipt to match the transaction hash. It also requires a successful deployment
-to return exactly the predicted address. The caller interprets execution status.
-`submit_signed_transaction` resubmits retained signed bytes of a call or
-deployment by their canonical hash; it is for reconciliation, not retry.
+to return exactly the predicted address. The caller interprets `receipt.execution`.
+`submit_signed_transaction` submits supplied signed bytes once and checks the
+acknowledgement against their canonical hash. Observation never calls it.
 
 ## Codec
 

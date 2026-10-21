@@ -159,7 +159,7 @@ pub(super) fn transaction_inputs_for_method(
     num_accounts: usize,
     fixture_seed: Option<&str>,
 ) -> Result<Vec<BenchAccount>, BenchError> {
-    if method != "sendRawTransaction" {
+    if method != "sendTransaction" {
         return Ok(Vec::new());
     }
     if num_accounts == 0 {
@@ -240,23 +240,23 @@ pub(super) async fn load_runtime_manifest(
 /// Build a JSON-RPC request body.
 pub(super) fn make_request(method: &str, input: &str, id: u64) -> serde_json::Value {
     match method {
-        "sendRawTransaction" => serde_json::json!({
+        "sendTransaction" => serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
-            "method": "groundhog_sendRawTransaction",
-            "params": [input]
+            "method": "sendTransaction",
+            "params": {"signedTransaction":input}
         }),
-        "chainTip" => serde_json::json!({
+        "getChainTip" => serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
-            "method": "groundhog_chainTip",
-            "params": []
+            "method": "getChainTip",
+            "params": {}
         }),
         "getTransactionStatus" | "getTransactionReceipt" => serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
-            "method": format!("groundhog_{method}"),
-            "params": [if input.is_empty() { "11111111111111111111111111111111" } else { input }]
+            "method": method,
+            "params": {"transactionHash":if input.is_empty() { "11111111111111111111111111111111" } else { input }}
         }),
         _ => unreachable!("bug: method validated before benchmark starts"),
     }
@@ -264,7 +264,7 @@ pub(super) fn make_request(method: &str, input: &str, id: u64) -> serde_json::Va
 
 pub(super) fn validate_method(method: &str) -> Result<(), BenchError> {
     match method {
-        "sendRawTransaction" | "chainTip" | "getTransactionStatus" | "getTransactionReceipt" => {
+        "sendTransaction" | "getChainTip" | "getTransactionStatus" | "getTransactionReceipt" => {
             Ok(())
         }
         method => Err(BenchError::UnknownMethod {
@@ -297,14 +297,14 @@ mod tests {
             );
         }
         assert!(
-            transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2, None).is_err()
+            transaction_inputs_for_method("sendTransaction", Some(&manifest), 2, None).is_err()
         );
         assert!(
-            transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2, Some("wrong"))
+            transaction_inputs_for_method("sendTransaction", Some(&manifest), 2, Some("wrong"))
                 .is_err()
         );
         let accounts =
-            transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2, Some(seed))
+            transaction_inputs_for_method("sendTransaction", Some(&manifest), 2, Some(seed))
                 .unwrap();
         assert_eq!(accounts.len(), 2);
         assert_eq!(
@@ -312,7 +312,7 @@ mod tests {
             manifest.bootstrap_accounts[0].wallet_address.0
         );
         assert!(
-            transaction_inputs_for_method("chainTip", Some(&manifest), 2, None)
+            transaction_inputs_for_method("getChainTip", Some(&manifest), 2, None)
                 .unwrap()
                 .is_empty()
         );
@@ -328,7 +328,7 @@ mod tests {
             .scheme = "future-scheme".into();
         manifest.bootstrap_accounts.clear();
 
-        let accounts = transaction_inputs_for_method("chainTip", Some(&manifest), 0, None)
+        let accounts = transaction_inputs_for_method("getChainTip", Some(&manifest), 0, None)
             .expect("bug: read-only manifest should not validate accounts");
 
         assert!(accounts.is_empty());
@@ -343,11 +343,10 @@ mod tests {
             .unwrap()
             .scheme = "future-scheme".into();
 
-        let err =
-            match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1, None) {
-                Ok(_) => panic!("bug: unsupported derivation scheme should fail"),
-                Err(error) => error,
-            };
+        let err = match transaction_inputs_for_method("sendTransaction", Some(&manifest), 1, None) {
+            Ok(_) => panic!("bug: unsupported derivation scheme should fail"),
+            Err(error) => error,
+        };
 
         assert!(matches!(
             err,
@@ -357,7 +356,7 @@ mod tests {
 
     #[test]
     fn send_raw_transaction_requires_runtime_manifest() {
-        let err = match transaction_inputs_for_method("sendRawTransaction", None, 1, None) {
+        let err = match transaction_inputs_for_method("sendTransaction", None, 1, None) {
             Ok(_) => panic!("bug: submit benchmark without runtime metadata should fail"),
             Err(error) => error,
         };
@@ -374,11 +373,10 @@ mod tests {
             .unwrap()
             .scheme = "future-scheme".into();
 
-        let err =
-            match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 0, None) {
-                Ok(_) => panic!("bug: zero-account submit benchmark should fail"),
-                Err(error) => error,
-            };
+        let err = match transaction_inputs_for_method("sendTransaction", Some(&manifest), 0, None) {
+            Ok(_) => panic!("bug: zero-account submit benchmark should fail"),
+            Err(error) => error,
+        };
 
         assert!(matches!(err, BenchError::MissingAccounts));
     }
@@ -386,8 +384,7 @@ mod tests {
     #[test]
     fn send_raw_transaction_uses_native_execute_entrypoint() {
         let accounts =
-            transaction_inputs_for_method("sendRawTransaction", Some(&manifest()), 1, None)
-                .unwrap();
+            transaction_inputs_for_method("sendTransaction", Some(&manifest()), 1, None).unwrap();
         let network = manifest().network_hash.to_network_hash();
         let transactions = generate_tx_batch(1, &accounts, &network, 42).unwrap();
         let bytes = hex::decode(transactions[0].hex.trim_start_matches("0x")).unwrap();
@@ -407,7 +404,7 @@ mod tests {
     #[test]
     fn send_raw_transaction_uses_the_requested_subset_of_manifest_accounts() {
         let accounts = transaction_inputs_for_method(
-            "sendRawTransaction",
+            "sendTransaction",
             Some(&manifest_with_accounts(3)),
             2,
             None,
@@ -422,9 +419,8 @@ mod tests {
         let mut manifest = manifest_with_accounts(3);
         manifest.bootstrap_accounts[0].role = "faucet".into();
 
-        let accounts =
-            transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2, None)
-                .expect("bug: two local-user accounts should be available");
+        let accounts = transaction_inputs_for_method("sendTransaction", Some(&manifest), 2, None)
+            .expect("bug: two local-user accounts should be available");
 
         assert_eq!(accounts.len(), 2);
         assert_eq!(
@@ -440,7 +436,7 @@ mod tests {
     #[test]
     fn send_raw_transaction_rejects_more_accounts_than_the_manifest_contains() {
         let err = match transaction_inputs_for_method(
-            "sendRawTransaction",
+            "sendTransaction",
             Some(&manifest_with_accounts(2)),
             3,
             None,
@@ -463,11 +459,10 @@ mod tests {
         let mut manifest = manifest();
         manifest.bootstrap_accounts[0].public_key = Base58(XdrEd25519PublicKey::from([0x99; 32]));
 
-        let err =
-            match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1, None) {
-                Ok(_) => panic!("bug: public key mismatch should fail"),
-                Err(error) => error,
-            };
+        let err = match transaction_inputs_for_method("sendTransaction", Some(&manifest), 1, None) {
+            Ok(_) => panic!("bug: public key mismatch should fail"),
+            Err(error) => error,
+        };
 
         assert!(matches!(
             err,

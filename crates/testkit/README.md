@@ -50,7 +50,9 @@ requires resolving that attempt first.
 
 `bootstrap_accounts()` is an explicit hosted schema-3 adapter. Local manifests contain public keys only and cannot supply signing keys. For existing local nodes, use scenario-owned accounts and explicitly call `fund` or `submit_fund` as needed.
 
-Local funding uses `groundhog_fundAccount`. The network handle retains each request before sending. After an uncertain response, retry the same recipient and amount on that handle; a changed amount is refused until the request is reconciled. Keep the handle alive during recovery. The handle retains admitted hash and signed bytes until an authoritative receipt, including errors or cancellation in `fund()`. `SubmittedTransaction` also exposes those bytes. Unresolved funding errors expose retained hash and exact bytes through `TestkitError::Submission`; this evidence does not prove admission. This preserves submit → produce block → receipt in manual mode.
+Local funding uses `dev_fundAccount`. The network handle retains each request before sending. After an uncertain response, retry the same recipient and amount on that handle; a changed amount is refused until the request is reconciled. Keep the handle alive during recovery. The handle retains admitted hash and signed bytes until an authoritative receipt, including errors or cancellation in `fund()`. `SubmittedTransaction` also exposes those bytes. `TestkitError::Submission` exposes retained hash and exact bytes. Conflicting or invalid funding evidence stays inspectable in `InvalidFundingEvidence` or `InvalidFundingResponse`. This evidence does not prove admission. This preserves submit → await pending → produce block → receipt in manual mode.
+
+The network requires native wire major 14 and verifies the manifest network hash. Receipt waits are read-only. `TestkitError::ReceiptWait` retains commitment, scheduler observations and read failures. Retry or dropped statuses never resubmit or discard a retained artifact registration; reconcile its original hash.
 
 The live tests in `tests/contract_smoke.rs` cover atomic initialization,
 registration and hash-only deployment, native calls, manual blocks, and recovery

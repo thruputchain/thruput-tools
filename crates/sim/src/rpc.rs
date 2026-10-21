@@ -9,9 +9,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use thruput_json_rpc_client::{
-    GroundhogApiClient, ReceiptPollConfig, ReceiptPollError, ReceiptSource,
-};
+use thruput_json_rpc_client::receipt::{ReceiptPollConfig, ReceiptPollError, ReceiptSource};
 use thruput_json_rpc_types::{
     ContractAddress,
     block::ChainTip,
@@ -30,6 +28,20 @@ use crate::executor::DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SimRpcError {
+    /// Native RPC failure, retaining complete response or application evidence.
+    #[error("{method} failed: {source}")]
+    Native {
+        method: &'static str,
+        #[source]
+        source: Box<thruput_json_rpc_client::native::NativeClientError>,
+    },
+    /// A native response cannot be represented by the simulator report model.
+    #[error("{method}: {message}; response: {raw}")]
+    InvalidResponse {
+        method: &'static str,
+        message: String,
+        raw: serde_json::Value,
+    },
     /// The JSON-RPC round trip failed.
     #[error("{method} failed: {source}")]
     Rpc {
@@ -46,6 +58,26 @@ pub enum SimRpcError {
 }
 
 impl SimRpcError {
+    /// Complete native result or error evidence for persisted setup diagnostics.
+    pub fn evidence(&self) -> serde_json::Value {
+        use thruput_json_rpc_client::native::NativeClientError;
+        match self {
+            Self::Native { method, source } => match source.as_ref() {
+                NativeClientError::Application { source, .. } => {
+                    serde_json::json!({"method": method, "rpcError": source})
+                }
+
+                _ => serde_json::json!({"method": method, "error": source.to_string()}),
+            },
+            Self::InvalidResponse {
+                method,
+                message,
+                raw,
+            } => serde_json::json!({"method": method, "result": raw, "error": message}),
+            _ => serde_json::json!({"error": self.to_string()}),
+        }
+    }
+
     /// A failed round trip reported by `method`.
     pub fn rpc(method: &'static str, source: jsonrpsee::core::client::Error) -> Self {
         Self::Rpc { method, source }
@@ -117,78 +149,35 @@ pub trait SimRpcClient {
     }
 }
 
-impl<T> SimRpcClient for T
-where
-    T: GroundhogApiClient + Send + Sync,
-{
-    #[allow(clippy::manual_async_fn)]
-    fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
-        async {
-            GroundhogApiClient::chain_tip(self)
-                .await
-                .map_err(|source| SimRpcError::rpc("chainTip", source))
-        }
-    }
+mod native;
 
-    #[allow(clippy::manual_async_fn)]
-    fn send_raw_transaction(
-        &self,
-        tx_hex: String,
-    ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
-        async {
-            GroundhogApiClient::send_raw_transaction(self, tx_hex)
-                .await
-                .map_err(|source| SimRpcError::rpc("sendRawTransaction", source))
-        }
-    }
+pub(crate) use native::known;
 
-    #[allow(clippy::manual_async_fn)]
-    fn transaction_receipt(
+impl SimRpcClient for thruput_json_rpc_client::HttpClient {
+    async fn chain_tip(&self) -> Result<ChainTip, SimRpcError> {
+        native::chain_tip(self).await
+    }
+    async fn send_raw_transaction(&self, tx_hex: String) -> Result<TxHash, SimRpcError> {
+        native::send_transaction(self, tx_hex).await
+    }
+    async fn transaction_receipt(
         &self,
         tx_hash: TxHash,
-    ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
-        async move {
-            GroundhogApiClient::get_transaction_receipt(self, tx_hash)
-                .await
-                .map_err(|source| SimRpcError::rpc("getTransactionReceipt", source))
-        }
+    ) -> Result<Option<TransactionReceipt>, SimRpcError> {
+        native::receipt(self, tx_hash).await
     }
-
-    #[allow(clippy::manual_async_fn)]
-    fn view(
-        &self,
-        request: ViewRequest,
-    ) -> impl Future<Output = Result<ViewResponse, SimRpcError>> + Send {
-        async move {
-            GroundhogApiClient::view(self, request)
-                .await
-                .map_err(|source| SimRpcError::rpc("view", source))
-        }
+    async fn view(&self, request: ViewRequest) -> Result<ViewResponse, SimRpcError> {
+        native::simulate(self, request).await
     }
-
-    #[allow(clippy::manual_async_fn)]
-    fn storage_read(
+    async fn storage_read(
         &self,
         address: ContractAddress,
         key: HexBytes,
-    ) -> impl Future<Output = Result<StorageItemRead, SimRpcError>> + Send {
-        async move {
-            GroundhogApiClient::get_storage_at(self, address, key)
-                .await
-                .map_err(|source| SimRpcError::rpc("getStorageAt", source))
-        }
+    ) -> Result<StorageItemRead, SimRpcError> {
+        native::storage(self, address, key).await
     }
-
-    #[allow(clippy::manual_async_fn)]
-    fn events_query(
-        &self,
-        query: EventQuery,
-    ) -> impl Future<Output = Result<EventPage, SimRpcError>> + Send {
-        async move {
-            GroundhogApiClient::get_events(self, query)
-                .await
-                .map_err(|source| SimRpcError::rpc("getEvents", source))
-        }
+    async fn events_query(&self, query: EventQuery) -> Result<EventPage, SimRpcError> {
+        native::events(self, query).await
     }
 }
 

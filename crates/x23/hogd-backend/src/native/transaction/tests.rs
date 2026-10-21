@@ -221,7 +221,9 @@ fn scheduler_checks_cardinality_tags_and_committed_height() {
     );
     assert!(matches!(
         scheduler_status(&VecM(vec![scheduler(Status::SchedulerTransactionPending)])).unwrap(),
-        Some(out::TransactionStatus::Pending {})
+        Some(out::TransactionStatus::Pending {
+            recent_failure: None
+        })
     ));
     assert!(
         matches!(scheduler_status(&VecM(vec![scheduler(Status::SchedulerTransactionSucceeded)])).unwrap(),Some(out::TransactionStatus::Committed {block_height}) if block_height==42.into())

@@ -1,7 +1,8 @@
 use std::{future::Future, path::Path, time::Duration};
 
 use sha2::{Digest, Sha256};
-use thruput_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use thruput_json_rpc_client::{HttpClientBuilder, native::NativeClient};
+use thruput_json_rpc_types::requests::EmptyRequest;
 use thruput_json_rpc_types::{
     NetworkHashText,
     protocol_token::protocol_text,
@@ -86,10 +87,9 @@ pub(crate) async fn preflight_chain_identity(
     manifest: &RuntimeManifest,
     rpc_url: &str,
     request_timeout: Duration,
+    required_methods: &[&str],
 ) -> Result<(), RuntimeManifestError> {
-    // This checks this client's wire compatibility, not remotely observed server
-    // protocol: RC2 networkInfo exposes only networkHash, and chainTip only
-    // height/blockHash. Keep the distinction explicit until that API changes.
+    // The manifest protocol must match the signing types compiled into this client.
     let compiled_protocol = protocol_text(&thruput_xdr::PROTOCOL_VERSION);
     if manifest.protocol != compiled_protocol {
         return Err(RuntimeManifestError::ClientProtocolMismatch {
@@ -104,10 +104,20 @@ pub(crate) async fn preflight_chain_identity(
             rpc_url: rpc_url.to_string(),
             error: error.to_string(),
         })?;
-    let info = preflight_timeout(
-        request_timeout,
-        GroundhogApiClient::network_info(&public_client),
-    )
+    thruput_client::check_endpoint(&NativeClient::new(public_client.clone()), required_methods)
+        .await
+        .map_err(|error| RuntimeManifestError::PublicCapabilities {
+            rpc_url: rpc_url.into(),
+            error: error.to_string(),
+        })?;
+    let info = preflight_timeout(request_timeout, async {
+        crate::rpc::known(
+            "getNetworkInfo",
+            NativeClient::new(public_client.clone())
+                .get_network_info(EmptyRequest {})
+                .await,
+        )
+    })
     .await
     .map_err(|_| RuntimeManifestError::PublicNetworkInfoTimeout {
         rpc_url: rpc_url.to_string(),
@@ -126,10 +136,14 @@ pub(crate) async fn preflight_chain_identity(
             observed,
         });
     }
-    preflight_timeout(
-        request_timeout,
-        GroundhogApiClient::chain_tip(&public_client),
-    )
+    preflight_timeout(request_timeout, async {
+        crate::rpc::known(
+            "getChainTip",
+            NativeClient::new(public_client.clone())
+                .get_chain_tip(EmptyRequest {})
+                .await,
+        )
+    })
     .await
     .map_err(|_| RuntimeManifestError::PublicChainTipTimeout {
         rpc_url: rpc_url.to_string(),
@@ -312,15 +326,17 @@ pub enum RuntimeManifestError {
         expected: NetworkHashText,
         observed: NetworkHashText,
     },
-    #[error("public groundhog_networkInfo failed at {rpc_url}: {error}")]
+    #[error("public native RPC capabilities at {rpc_url}: {error}")]
+    PublicCapabilities { rpc_url: String, error: String },
+    #[error("public getNetworkInfo failed at {rpc_url}: {error}")]
     PublicNetworkInfo { rpc_url: String, error: String },
-    #[error("public groundhog_networkInfo at {rpc_url} timed out after {timeout:?}")]
+    #[error("public getNetworkInfo at {rpc_url} timed out after {timeout:?}")]
     PublicNetworkInfoTimeout { rpc_url: String, timeout: Duration },
     #[error("failed to build public JSON-RPC client for {rpc_url}: {error}")]
     PublicRpcClient { rpc_url: String, error: String },
-    #[error("public groundhog_chainTip failed at {rpc_url}: {error}")]
+    #[error("public getChainTip failed at {rpc_url}: {error}")]
     PublicChainTip { rpc_url: String, error: String },
-    #[error("public groundhog_chainTip at {rpc_url} timed out after {timeout:?}")]
+    #[error("public getChainTip at {rpc_url} timed out after {timeout:?}")]
     PublicChainTipTimeout { rpc_url: String, timeout: Duration },
 }
 
@@ -394,13 +410,51 @@ mod tests {
             server.local_addr().expect("test server address")
         );
         let mut module = jsonrpsee::RpcModule::new(());
+        module.register_method("getVersionInfo", |_, (), _| json!({"wireFormat":"14.0.0","implementation":"fixture","supportedMethods":["getNetworkInfo","getChainTip"]})).unwrap();
         module
-            .register_method("groundhog_networkInfo", move |_, (), _| network.clone())
+            .register_method("getNetworkInfo", move |_, (), _| network.clone())
             .expect("network method");
         module
-            .register_method("groundhog_chainTip", move |_, (), _| tip.clone())
+            .register_method("getChainTip", move |_, (), _| tip.clone())
             .expect("tip method");
         (url, server.start(module))
+    }
+
+    #[tokio::test]
+    async fn preflight_rejects_incompatible_wire_and_missing_scenario_methods() {
+        for wire in ["13.0.0", "14.0.0"] {
+            let server = jsonrpsee::server::ServerBuilder::default()
+                .build("127.0.0.1:0")
+                .await
+                .unwrap();
+            let url = format!("http://{}", server.local_addr().unwrap());
+            let mut module = jsonrpsee::RpcModule::new(());
+            let methods = if wire == "13.0.0" {
+                vec!["getNetworkInfo", "getChainTip", "sendTransaction"]
+            } else {
+                vec!["getNetworkInfo", "getChainTip"]
+            };
+            module.register_method("getVersionInfo", move |_,(),_|json!({"wireFormat":wire,"implementation":"fixture","supportedMethods":methods})).unwrap();
+            module
+                .register_method("getNetworkInfo", |_, (), _| -> serde_json::Value {
+                    panic!("capability failure must stop before state reads")
+                })
+                .unwrap();
+            let handle = server.start(module);
+            let error = preflight_chain_identity(
+                &runtime_manifest(false),
+                &url,
+                Duration::from_secs(1),
+                &["sendTransaction"],
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                RuntimeManifestError::PublicCapabilities { .. }
+            ));
+            handle.stop().unwrap();
+        }
     }
 
     #[tokio::test]
@@ -417,12 +471,17 @@ mod tests {
             .expect("endpoint");
         let (url, server) = public_server(
             json!({"networkHash":identifier(0)}),
-            json!({"height":"1","blockHash":identifier(1)}),
+            json!({"blockHeight":"1","blockHash":identifier(1)}),
         )
         .await;
-        preflight_chain_identity(&manifest, &url, Duration::from_secs(1))
-            .await
-            .expect("public identity matches");
+        preflight_chain_identity(
+            &manifest,
+            &url,
+            Duration::from_secs(1),
+            &["getNetworkInfo", "getChainTip"],
+        )
+        .await
+        .expect("public identity matches");
         assert!(
             tokio::time::timeout(Duration::from_millis(10), scheduler.accept())
                 .await
@@ -435,13 +494,17 @@ mod tests {
     async fn runtime_preflight_rejects_public_network_mismatch() {
         let (url, server) = public_server(
             json!({"networkHash":identifier(0xff)}),
-            json!({"height":"1","blockHash":identifier(1)}),
+            json!({"blockHeight":"1","blockHash":identifier(1)}),
         )
         .await;
-        let error =
-            preflight_chain_identity(&runtime_manifest(false), &url, Duration::from_secs(1))
-                .await
-                .expect_err("wrong network");
+        let error = preflight_chain_identity(
+            &runtime_manifest(false),
+            &url,
+            Duration::from_secs(1),
+            &["getNetworkInfo", "getChainTip"],
+        )
+        .await
+        .expect_err("wrong network");
         assert!(matches!(
             error,
             RuntimeManifestError::NetworkHashMismatch { .. }
@@ -452,10 +515,14 @@ mod tests {
     #[tokio::test]
     async fn runtime_preflight_rejects_malformed_public_tip() {
         let (url, server) = public_server(json!({"networkHash":identifier(0)}), json!(null)).await;
-        let error =
-            preflight_chain_identity(&runtime_manifest(false), &url, Duration::from_secs(1))
-                .await
-                .expect_err("tip unavailable");
+        let error = preflight_chain_identity(
+            &runtime_manifest(false),
+            &url,
+            Duration::from_secs(1),
+            &["getNetworkInfo", "getChainTip"],
+        )
+        .await
+        .expect_err("tip unavailable");
         assert!(matches!(error, RuntimeManifestError::PublicChainTip { .. }));
         server.stop().expect("stop server");
     }
@@ -464,10 +531,14 @@ mod tests {
     async fn runtime_preflight_rejects_local_client_protocol_mismatch_before_rpc() {
         let mut manifest = runtime_manifest(false);
         manifest.protocol = "hogp/other00000000000".into();
-        let error =
-            preflight_chain_identity(&manifest, "http://127.0.0.1:1", Duration::from_millis(10))
-                .await
-                .expect_err("incompatible client");
+        let error = preflight_chain_identity(
+            &manifest,
+            "http://127.0.0.1:1",
+            Duration::from_millis(10),
+            &[],
+        )
+        .await
+        .expect_err("incompatible client");
         assert!(matches!(
             error,
             RuntimeManifestError::ClientProtocolMismatch { .. }

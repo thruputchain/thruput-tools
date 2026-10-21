@@ -1,8 +1,5 @@
-use jsonrpsee::core::ClientError;
-use jsonrpsee::types::error::METHOD_NOT_FOUND_CODE;
-use thruput_json_rpc_types::error::{TxInvalidDetail, codes};
-use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
+use thruput_json_rpc_types::transaction::TxHash;
 
 use crate::codec::{AbortDecodeError, CallMetadata, DecodedAbort, decode_abort};
 use crate::result::CommandError;
@@ -11,52 +8,26 @@ use crate::{CliError, Print};
 
 pub(crate) const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 
-/// Submission errors that establish the transaction was not admitted.
-/// Backend unavailability can follow dispatch, so it remains uncertain.
-pub(crate) fn is_conclusive_send_error(error: &ClientError) -> bool {
-    let ClientError::Call(object) = error else {
-        return false;
-    };
-    matches!(
-        object.code(),
-        codes::INVALID_PARAMS | codes::TX_INVALID | codes::TX_REJECTED | codes::OVERLOADED
-    )
-}
-
 /// Human-readable one-line summary of an execution status.
-pub fn summarize_exec_status(status: &ExecStatus) -> String {
+pub fn summarize_exec_status(status: &ReceiptExecution) -> String {
     match status {
-        ExecStatus::Ok => "succeeded".into(),
-        ExecStatus::Reverted {
-            message: Some(message),
-        } => format!("reverted: {message}"),
-        ExecStatus::Reverted { message: None } => "reverted".into(),
-        ExecStatus::DeterministicError { kind }
-            if kind == thruput_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT =>
-        {
-            "failed with a deterministic execution fault (e.g. out-of-bounds access or \
-             out of gas; the node does not report the specific cause)"
-                .into()
-        }
-        ExecStatus::DeterministicError { kind } => {
-            format!("failed with deterministic execution error ({kind})")
-        }
-        ExecStatus::NonDeterministicError => "failed with nondeterministic commit error".into(),
-        ExecStatus::FailedGasSponsorship => "failed gas sponsorship".into(),
-        ExecStatus::Other => "failed with unknown execution result".into(),
+        ReceiptExecution::Return { .. } => "succeeded".into(),
+        ReceiptExecution::Abort { .. } => "aborted".into(),
+        ReceiptExecution::Fault {} => "failed with a deterministic execution fault (e.g. out-of-bounds access or out of gas; the node does not report the specific cause)".into(),
+        ReceiptExecution::NonDeterministicError {} => "failed with nondeterministic commit error".into(),
+        ReceiptExecution::FailedGasSponsorship {} => "failed gas sponsorship".into(),
         _ => "failed with unsupported execution result".into(),
     }
 }
 
 /// Stable machine-readable error for an unsuccessful transaction receipt.
-pub fn command_error_for_exec_status(status: &ExecStatus) -> Option<CommandError> {
+pub fn command_error_for_exec_status(status: &ReceiptExecution) -> Option<CommandError> {
     let code = match status {
-        ExecStatus::Ok => return None,
-        ExecStatus::Reverted { .. } => "transaction_reverted",
-        ExecStatus::DeterministicError { .. } => "transaction_deterministic_error",
-        ExecStatus::NonDeterministicError => "transaction_nondeterministic_error",
-        ExecStatus::FailedGasSponsorship => "transaction_failed_gas_sponsorship",
-        ExecStatus::Other => "transaction_unknown_error",
+        ReceiptExecution::Return { .. } => return None,
+        ReceiptExecution::Abort { .. } => "transaction_reverted",
+        ReceiptExecution::Fault {} => "transaction_deterministic_error",
+        ReceiptExecution::NonDeterministicError {} => "transaction_nondeterministic_error",
+        ReceiptExecution::FailedGasSponsorship {} => "transaction_failed_gas_sponsorship",
         _ => "transaction_unsupported_error",
     };
     Some(CommandError::new(
@@ -66,38 +37,43 @@ pub fn command_error_for_exec_status(status: &ExecStatus) -> Option<CommandError
     ))
 }
 
-/// Decode the abort buffer retained on a receipt, when present.
+/// Decode a committed abort, preserving empty abort buffers.
 pub(crate) fn decode_receipt_abort(
     receipt: &TransactionReceipt,
     metadata: Option<&CallMetadata>,
 ) -> Option<Result<DecodedAbort, AbortDecodeError>> {
-    receipt
-        .abort_data
-        .as_ref()
-        .map(|data| decode_abort(data.0.as_slice(), metadata))
+    match &receipt.execution {
+        ReceiptExecution::Abort { abort_data } => Some(decode_abort(&abort_data.0, metadata)),
+        _ => None,
+    }
 }
 
-/// Print return data, gas, and abort context retained on an unsuccessful
-/// receipt.
-///
-/// A decoded abort prints as its exception type and value; the raw abort
-/// buffer prints only when decoding failed (with the reason) or was not
-/// attempted, mirroring how decoded return data elides the raw bytes.
 pub(crate) fn print_failed_receipt_data(
     receipt: &TransactionReceipt,
     decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
     print: &Print,
 ) {
-    if let Some(data) = receipt.return_data.as_ref() {
-        print.status(format_args!("  return data: 0x{}", hex::encode(&data.0)));
-    }
+    print_execution_data(&receipt.execution, decoded_abort, print);
     print.detail("gas used", receipt.gas_used);
-    print_abort_context(receipt.abort_data.as_ref(), decoded_abort, print);
 }
 
-/// Print a receipt's abort context: the decoded exception when decoding
-/// succeeded, otherwise the raw buffer plus the decode failure when one
-/// was attempted.
+fn print_execution_data(
+    execution: &ReceiptExecution,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+    print: &Print,
+) {
+    match execution {
+        ReceiptExecution::Return { return_data } => print.detail(
+            "return data",
+            format_args!("0x{}", hex::encode(&return_data.0)),
+        ),
+        ReceiptExecution::Abort { abort_data } => {
+            print_abort_context(Some(abort_data), decoded_abort, print);
+        }
+        _ => {}
+    }
+}
+
 fn print_abort_context(
     abort_data: Option<&thruput_json_rpc_types::hex::HexBytes>,
     decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
@@ -175,27 +151,6 @@ pub(crate) fn print_prepared_transaction(tx_hex: &str, print: &Print) {
     }
 }
 
-pub(crate) fn rpc_error_message(error: &ClientError) -> String {
-    match error {
-        ClientError::Call(object) => {
-            format!(
-                "{} (code {})",
-                terminal_safe(object.message()),
-                object.code()
-            )
-        }
-        _ => terminal_safe(&error.to_string()),
-    }
-}
-
-pub(crate) fn is_unsupported_rpc_method_error(error: &ClientError) -> bool {
-    matches!(
-        error,
-        ClientError::Call(object)
-            if matches!(object.code(), METHOD_NOT_FOUND_CODE | codes::NOT_IMPLEMENTED)
-    )
-}
-
 pub(crate) fn print_receipt_data(
     receipt: &TransactionReceipt,
     decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
@@ -206,45 +161,17 @@ pub(crate) fn print_receipt_data(
             print.detail("event", terminal_safe(&event));
         }
     }
-    if let Some(data) = &receipt.return_data {
-        print.detail("return data", format_args!("0x{}", hex::encode(&data.0)));
-    }
-    print.detail("gas used", receipt.gas_used);
-    print_abort_context(receipt.abort_data.as_ref(), decoded_abort, print);
+    print_failed_receipt_data(receipt, decoded_abort, print);
 }
 
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {
     let client = crate::http_client::rpc_client(rpc_url)?;
-    thruput_client::resolve_block_expiry_height(&client, DEFAULT_BLOCK_EXPIRY_OFFSET)
-        .await
-        .map_err(|e| CliError::RpcMethodFailed {
-            method: "chainTip",
-            message: e.to_string(),
-        })
-}
-
-pub async fn submit_and_poll(
-    rpc_url: &str,
-    tx_hex: &str,
-) -> Result<(TxHash, TransactionReceipt), CliError> {
-    let client = crate::http_client::rpc_client(rpc_url)?;
-    thruput_json_rpc_client::submit_and_poll_with_client_config(
-        &client,
-        tx_hex,
-        thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
-        thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
+    thruput_client::resolve_block_expiry_height(
+        &thruput_client::NativeClient::new(client),
+        DEFAULT_BLOCK_EXPIRY_OFFSET,
     )
     .await
-    .map_err(map_submit_and_poll_error)
-}
-
-pub fn submit_and_poll_blocking(
-    rpc_url: &str,
-    tx_hex: &str,
-) -> Result<(TxHash, TransactionReceipt), CliError> {
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    rt.block_on(async { submit_and_poll(rpc_url, tx_hex).await })
+    .map_err(|error| crate::native_rpc::rpc_error(&error))
 }
 
 pub fn ensure_tx_success(
@@ -252,314 +179,51 @@ pub fn ensure_tx_success(
     receipt: &TransactionReceipt,
     tx_hash: &str,
 ) -> Result<(), CliError> {
-    if matches!(receipt.status, ExecStatus::Ok) {
+    if matches!(receipt.execution, ReceiptExecution::Return { .. }) {
         return Ok(());
     }
     Err(CliError::Other(format!(
         "{label} {}; tx: {tx_hash}",
-        summarize_exec_status(&receipt.status),
+        summarize_exec_status(&receipt.execution),
     )))
-}
-
-pub(crate) fn map_submit_call_error(error: thruput_client::SubmitCallError) -> CliError {
-    match error {
-        thruput_client::SubmitCallError::Rpc { source, .. } => map_submit_and_poll_error(
-            thruput_json_rpc_client::SubmitAndPollError::SendRawTransaction(source),
-        ),
-        mismatch @ thruput_client::SubmitCallError::HashMismatch { .. } => {
-            CliError::Other(mismatch.to_string())
-        }
-    }
-}
-
-pub(crate) fn map_poll_receipt_error(
-    error: thruput_json_rpc_client::PollTransactionReceiptError,
-) -> CliError {
-    use thruput_json_rpc_client::{
-        PollTransactionReceiptError as Poll, SubmitAndPollError as Combined,
-    };
-    map_submit_and_poll_error(match error {
-        Poll::Connect { rpc_url, source } => Combined::Connect { rpc_url, source },
-        Poll::GetTransactionReceipt { source, .. } => Combined::GetTransactionReceipt(source),
-        Poll::TransactionStatus { tx_hash, status } => {
-            Combined::TransactionStatus { tx_hash, status }
-        }
-        Poll::ReceiptTimeout {
-            tx_hash,
-            attempts,
-            last_status,
-        } => Combined::ReceiptTimeout {
-            tx_hash,
-            attempts,
-            last_status,
-        },
-        _ => return CliError::ReceiptPollingExhausted,
-    })
-}
-
-fn map_submit_and_poll_error(error: thruput_json_rpc_client::SubmitAndPollError) -> CliError {
-    match error {
-        thruput_json_rpc_client::SubmitAndPollError::Connect { rpc_url, source } => {
-            CliError::RpcConnect(format!("{rpc_url}: {source}"))
-        }
-        thruput_json_rpc_client::SubmitAndPollError::SendRawTransaction(error) => {
-            match violated_bound(&error) {
-                Some(detail) => CliError::TransactionRejectedBeforeSubmission { detail },
-                None => CliError::RpcMethodFailed {
-                    method: "sendRawTransaction",
-                    message: error.to_string(),
-                },
-            }
-        }
-        thruput_json_rpc_client::SubmitAndPollError::GetTransactionReceipt(error) => {
-            CliError::RpcMethodFailed {
-                method: "getTransactionReceipt",
-                message: error.to_string(),
-            }
-        }
-        thruput_json_rpc_client::SubmitAndPollError::TransactionStatus { tx_hash, status } => {
-            match status {
-                TransactionStatus::Invalid { reason } => CliError::TransactionInvalid {
-                    tx_hash: format_tx_hash(&tx_hash),
-                    reason,
-                },
-                TransactionStatus::Retry { error } => CliError::TransactionRetry {
-                    tx_hash: format_tx_hash(&tx_hash),
-                    error,
-                },
-                TransactionStatus::Dropped { error } => CliError::TransactionDropped {
-                    tx_hash: format_tx_hash(&tx_hash),
-                    error,
-                },
-                TransactionStatus::RecentFailure {
-                    attempt_height,
-                    cause,
-                } => CliError::TransactionRecentFailure {
-                    tx_hash: format_tx_hash(&tx_hash),
-                    attempt_height: *attempt_height,
-                    cause,
-                },
-                _ => CliError::ReceiptPollingExhausted,
-            }
-        }
-        thruput_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
-            tx_hash,
-            attempts,
-            last_status,
-        } => CliError::ReceiptTimeout {
-            tx_hash: format_tx_hash(&tx_hash),
-            seconds: receipt_poll_duration_seconds(attempts),
-            last_status: match last_status {
-                Some(TransactionStatus::Unknown) => "unknown",
-                Some(TransactionStatus::Pending) => "pending",
-                Some(TransactionStatus::Committed { .. }) => "committed",
-                Some(TransactionStatus::Invalid { .. }) => "invalid",
-                Some(TransactionStatus::RecentFailure { .. }) => "recentFailure",
-                Some(TransactionStatus::Retry { .. }) => "retry",
-                Some(TransactionStatus::Dropped { .. }) => "dropped",
-                None => "unavailable",
-                Some(_) => "unrecognized",
-            },
-        },
-        _ => CliError::ReceiptPollingExhausted,
-    }
-}
-
-/// The bound a `sendRawTransaction` rejection names, when the endpoint's
-/// pre-submission checks refused the transaction with a `TxInvalidDetail` in
-/// the error data. A `TxInvalid` without readable detail (undecodable XDR, or
-/// a reason this build does not know) is `None` and stays a plain method
-/// failure.
-fn violated_bound(error: &ClientError) -> Option<TxInvalidDetail> {
-    let ClientError::Call(object) = error else {
-        return None;
-    };
-    if object.code() != codes::TX_INVALID {
-        return None;
-    }
-    serde_json::from_str(object.data()?.get()).ok()
-}
-
-fn receipt_poll_duration_seconds(attempts: usize) -> u64 {
-    let attempts = u32::try_from(attempts).unwrap_or(u32::MAX);
-    let duration = thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL.saturating_mul(attempts);
-    duration
-        .as_secs()
-        .saturating_add(u64::from(duration.subsec_nanos() != 0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn receipt_timeout_preserves_status_without_echoing_endpoint() {
-        use thruput_json_rpc_types::base58::Base58;
-        for (status, expected) in [
-            (Some(TransactionStatus::Unknown), "unknown"),
-            (Some(TransactionStatus::Pending), "pending"),
-            (None, "unavailable"),
-        ] {
-            let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
-            let error = map_submit_and_poll_error(
-                thruput_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
-                    tx_hash,
-                    attempts: 300,
-                    last_status: status,
-                },
-            );
-            assert_eq!(error.code(), "receipt_timeout");
-            assert!(
-                error
-                    .to_string()
-                    .contains(&format!("last observed status: {expected}"))
-            );
-            let hint = error.hint().unwrap();
-            assert!(hint.contains(&format!("thruput tx show {}", format_tx_hash(&tx_hash))));
-            assert!(!hint.contains("--rpc-url"));
-            assert!(hint.contains("same profile and RPC endpoint as the original submission"));
-            assert!(hint.contains("sending wallet's HOG balance on the same network"));
-            assert!(hint.contains("before submitting the operation again"));
-            assert!(!hint.contains("rerun"));
-            assert!(hint.contains("node terminal or redirected output"));
-            assert!(!hint.contains('\n'));
-        }
-    }
-
-    #[test]
-    fn fault_kind_summarizes_with_bundled_causes() {
-        let summary = summarize_exec_status(&ExecStatus::DeterministicError {
-            kind: thruput_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT.into(),
-        });
-        assert_eq!(
-            summary,
-            "failed with a deterministic execution fault (e.g. out-of-bounds access or \
-             out of gas; the node does not report the specific cause)"
-        );
-    }
-
-    #[test]
-    fn specific_deterministic_error_kind_summarizes_verbatim() {
-        let summary = summarize_exec_status(&ExecStatus::DeterministicError {
-            kind: "outOfGas".into(),
-        });
-        assert_eq!(
-            summary,
-            "failed with deterministic execution error (outOfGas)"
-        );
-    }
-
-    #[test]
-    fn unsuccessful_exec_statuses_have_stable_error_codes() {
-        let statuses = [
+    fn execution_failures_keep_the_native_outcome() {
+        use thruput_json_rpc_types::hex::HexBytes;
+        for (execution, code) in [
             (
-                ExecStatus::Reverted {
-                    message: Some("nope".into()),
+                ReceiptExecution::Abort {
+                    abort_data: HexBytes(vec![]),
                 },
                 "transaction_reverted",
             ),
             (
-                ExecStatus::DeterministicError {
-                    kind: "outOfGas".into(),
-                },
+                ReceiptExecution::Fault {},
                 "transaction_deterministic_error",
             ),
             (
-                ExecStatus::NonDeterministicError,
+                ReceiptExecution::NonDeterministicError {},
                 "transaction_nondeterministic_error",
             ),
             (
-                ExecStatus::FailedGasSponsorship,
+                ReceiptExecution::FailedGasSponsorship {},
                 "transaction_failed_gas_sponsorship",
             ),
-            (ExecStatus::Other, "transaction_unknown_error"),
-        ];
-
-        for (status, expected_code) in statuses {
-            let error = command_error_for_exec_status(&status)
-                .expect("bug: unsuccessful receipt status must produce an error");
+        ] {
+            let error = command_error_for_exec_status(&execution).unwrap();
             let value = serde_json::to_value(error).unwrap();
-            assert_eq!(value["code"], expected_code);
-            assert_eq!(value["details"], serde_json::to_value(status).unwrap());
+            assert_eq!(value["code"], code);
+            assert_eq!(value["details"], serde_json::to_value(execution).unwrap());
         }
-        assert!(command_error_for_exec_status(&ExecStatus::Ok).is_none());
-    }
-
-    #[test]
-    fn recent_bounds_failure_maps_to_actionable_cli_error() {
-        use thruput_json_rpc_types::{
-            BlockHeight,
-            base58::Base58,
-            hex::HexBytes,
-            transaction::{ConflictCode, ConflictDiagnostic},
-        };
-
-        let tx_hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from([0x44; 32])));
-        let error = map_submit_and_poll_error(
-            thruput_json_rpc_client::SubmitAndPollError::TransactionStatus {
-                tx_hash,
-                status: TransactionStatus::RecentFailure {
-                    attempt_height: BlockHeight::from(17),
-                    cause:
-                        thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
-                            conflict: ConflictDiagnostic {
-                                address: Base58(thruput_xdr::types::ContractAddress::from(
-                                    [0x55; 32],
-                                )),
-                                key: HexBytes(vec![0, 0, 0, 1]),
-                                code: ConflictCode::BoundsExceeded,
-                            },
-                        },
-                },
-            },
-        );
-
-        assert_eq!(error.code(), "transaction_recent_failure");
-        assert!(error.to_string().contains("boundsExceeded"));
-        assert!(error.hint().expect("hint expected").contains("airdrop"));
-        let details = error.details_json().expect("details expected");
-        assert_eq!(details["attemptHeight"], 17);
-        assert_eq!(details["cause"]["conflict"]["key"], "0x00000001");
-        assert_eq!(details["cause"]["conflict"]["code"], "boundsExceeded");
-    }
-
-    #[test]
-    fn contract_rejection_preserves_diagnostic_in_cli_error() {
-        use thruput_json_rpc_types::transaction::{ContractRejectCode, TransactionFailureCause};
-        let error = map_submit_and_poll_error(
-            thruput_json_rpc_client::SubmitAndPollError::TransactionStatus {
-                tx_hash: TxHash(thruput_json_rpc_types::base58::Base58(
-                    thruput_xdr::types::SHA256Hash::from([0x44; 32]),
-                )),
-                status: TransactionStatus::RecentFailure {
-                    attempt_height: 17.into(),
-                    cause: TransactionFailureCause::ContractRejected {
-                        contract_index: 2,
-                        code: ContractRejectCode::GasScheduleMismatch,
-                    },
-                },
-            },
-        );
-        assert_eq!(error.code(), "transaction_recent_failure");
         assert!(
-            error
-                .to_string()
-                .contains("contract attachment 2 rejected: gasScheduleMismatch")
-        );
-        assert!(error.hint().unwrap().contains("rebuild artifacts"));
-        assert_eq!(
-            error.details_json().unwrap()["cause"],
-            serde_json::json!({
-                "kind": "contractRejected", "contractIndex": 2, "code": "gasScheduleMismatch"
+            command_error_for_exec_status(&ReceiptExecution::Return {
+                return_data: HexBytes(vec![])
             })
-        );
-    }
-
-    #[test]
-    fn default_receipt_timeout_stays_thirty_seconds() {
-        assert_eq!(
-            receipt_poll_duration_seconds(thruput_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,),
-            30
+            .is_none()
         );
     }
 }

@@ -1,4 +1,4 @@
-//! Native RPC result contracts. Production wire-13 projections remain separate.
+//! Native RPC result contracts.
 //!
 //! Schemas describe known producer variants. Readers accept added object fields
 //! and retain unfamiliar variants; use [`DecodedResponse`] to distinguish those

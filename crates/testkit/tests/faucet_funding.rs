@@ -2,7 +2,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use thruput_json_rpc_client::GroundhogApiClient;
 use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
 use thruput_testkit::rpc_types::base58::Base58;
 use thruput_testkit::{Agent, NetworkConfig, Scenario};
@@ -43,13 +42,20 @@ async fn repeated_existing_scenarios_fund_the_same_native_account() {
                     .network()
                     .client()
                     .unwrap()
-                    .get_balance(Base58(ctx.address()))
+                    .get_balance(thruput_json_rpc_types::requests::AddressQuery {
+                        address: Base58(ctx.address()),
+                    })
                     .await
                     .unwrap();
                 observations.lock().unwrap().push((
                     ctx.address(),
-                    receipt.tx_hash,
-                    balance.raw_balance.parse::<u128>().unwrap(),
+                    receipt.transaction_hash,
+                    match balance {
+                        thruput_json_rpc_types::responses::DecodedResponse::Known(value) => {
+                            value.raw_balance
+                        }
+                        other => panic!("unexpected balance {other:?}"),
+                    },
                 ));
                 Ok(())
             })])
@@ -62,7 +68,10 @@ async fn repeated_existing_scenarios_fund_the_same_native_account() {
         assert_eq!(observations.len(), 2);
         assert_eq!(observations[0].0, observations[1].0);
         assert_ne!(observations[0].1, observations[1].1);
-        assert_eq!(observations[1].2 - observations[0].2, AMOUNT);
+        assert_eq!(
+            observations[1].2 - observations[0].2,
+            i128::try_from(AMOUNT).unwrap()
+        );
     }
     node.stop().await.unwrap();
 }

@@ -119,8 +119,8 @@ import urllib.request
 payload = json.dumps({
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "groundhog_chainTip",
-    "params": [],
+    "method": "getChainTip",
+    "params": {},
 }).encode()
 request = urllib.request.Request(
     sys.argv[1],
@@ -264,7 +264,7 @@ bench_chain_tip() {
     log "Bench $label chainTip: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers"
     run_bench_command "$(benchmark_slug "$label")-chain-tip-${rate}rps.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
-        --url "$url" --runtime-manifest "$manifest" --method chainTip \
+        --url "$url" --runtime-manifest "$manifest" --method getChainTip \
         --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers"
 }
 
@@ -278,10 +278,10 @@ bench_send_raw() {
     local workers="$7"
     local accounts="$8"
 
-    log "Bench $label sendRawTransaction: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers, ${accounts} accounts"
+    log "Bench $label sendTransaction: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers, ${accounts} accounts"
     run_bench_command "$(benchmark_slug "$label")-send-raw-transaction-${rate}rps.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
-        --url "$url" --runtime-manifest "$manifest" --account-seed "$BENCH_ACCOUNT_SEED" --method sendRawTransaction \
+        --url "$url" --runtime-manifest "$manifest" --account-seed "$BENCH_ACCOUNT_SEED" --method sendTransaction \
         --accounts "$accounts" --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers" \
         --force
 }
@@ -394,9 +394,11 @@ case "$BENCH_BUILD_PROFILE" in
         die "unknown BENCH_BUILD_PROFILE=$BENCH_BUILD_PROFILE (expected debug or release)"
         ;;
 esac
-CLI="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/thruput"
-GATEWAY="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/hog-gateway"
-BENCH="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/thruput-bench"
+BUILD_TARGET_DIR="$(cargo metadata --no-deps --format-version 1 --locked \
+    --manifest-path "$REPO_ROOT/Cargo.toml" | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+CLI="$BUILD_TARGET_DIR/$BENCH_BUILD_PROFILE/thruput"
+GATEWAY="$BUILD_TARGET_DIR/$BENCH_BUILD_PROFILE/hog-gateway"
+BENCH="$BUILD_TARGET_DIR/$BENCH_BUILD_PROFILE/thruput-bench"
 
 unset GROUNDHOG_BENCH_GIT_COMMIT GROUNDHOG_BENCH_GIT_DIRTY
 if GROUNDHOG_BENCH_GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)"; then
@@ -474,7 +476,13 @@ log "Creating explicitly seeded benchmark fixture keys"
 for ((index=0; index<fixture_count; index++)); do
     python3 - "$BENCH_ACCOUNT_SEED" "$index" <<'SEED' | "$CLI" --json keys import "bench-$index" > "$WORK/bench-$index.json"
 import hashlib, sys
-print(hashlib.sha256(f"groundhog-bench:{sys.argv[1]}:account-{sys.argv[2]}".encode()).hexdigest())
+seed = hashlib.sha256(f"groundhog-bench:{sys.argv[1]}:account-{sys.argv[2]}".encode()).digest()
+alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+number, encoded = int.from_bytes(seed, "big"), ""
+while number:
+    number, digit = divmod(number, 58)
+    encoded = alphabet[digit] + encoded
+print("1" * (len(seed) - len(seed.lstrip(b"\0"))) + encoded)
 SEED
 done
 python3 - "$WORK" "$fixture_count" <<'ALLOCATIONS'

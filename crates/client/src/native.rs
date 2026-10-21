@@ -119,7 +119,8 @@ pub async fn check_endpoint<C: ClientT + Sync>(
 
 fn invalid_discovery(error: &NativeClientError) -> bool {
     match error {
-        NativeClientError::Transport(jsonrpsee::core::client::Error::ParseError(_)) => true,
+        NativeClientError::Transport(jsonrpsee::core::client::Error::ParseError(_))
+        | NativeClientError::InvalidResponse { .. } => true,
         NativeClientError::Application { source, .. } => {
             source.code() == jsonrpsee::types::error::METHOD_NOT_FOUND_CODE
         }
@@ -194,7 +195,7 @@ pub async fn resolve_block_expiry_height<C: ClientT + Sync>(
 /// Neither an RPC failure nor an unfamiliar acknowledgement proves non-admission.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-pub enum NativeSubmitError {
+pub enum SubmitCallError {
     #[error("sendTransaction failed for {tx_hash:?}: {source}")]
     Rpc {
         tx_hash: TxHash,
@@ -218,50 +219,128 @@ pub enum NativeSubmitError {
     },
 }
 
-impl SignedCall {
-    /// Submit these signed bytes exactly once through the native RPC contract.
-    /// The caller must verify compatibility and network identity before signing.
-    pub async fn submit_native<C: ClientT + Sync>(
-        &self,
-        client: &NativeClient<C>,
-    ) -> Result<NativeSubmittedCall, NativeSubmitError> {
-        let tx_hash = self.tx_hash();
-        let bytes = hex::decode(self.tx_hex().strip_prefix("0x").unwrap_or(self.tx_hex()))
-            .map_err(|source| NativeSubmitError::Encoding { tx_hash, source })?;
-        let result = client
-            .send_transaction(SendTransactionRequest {
-                signed_transaction: HexBytes(bytes),
-            })
-            .await
-            .map_err(|source| NativeSubmitError::Rpc {
-                tx_hash,
-                source: Box::new(source),
-            })?;
-        let acknowledgement = match result {
-            DecodedResponse::Known(value) => value,
-            DecodedResponse::Unsupported { raw } => {
-                return Err(NativeSubmitError::Unsupported { tx_hash, raw });
-            }
-            _ => return Err(NativeSubmitError::ResponseRepresentation { tx_hash }),
-        };
-        if acknowledgement.transaction_hash != tx_hash {
-            return Err(NativeSubmitError::HashMismatch {
-                tx_hash,
-                returned: acknowledgement.transaction_hash,
-            });
+/// Whether the first dispatch received authoritative proof of non-admission.
+/// This says nothing about earlier submissions of the same transaction and never
+/// grants permission to retry. Missing admission, unfamiliar data or a conflicting
+/// supplied hash is false; request-scoped refusal may omit the optional hash.
+pub fn first_submission_not_admitted(error: &NativeClientError, expected_hash: TxHash) -> bool {
+    use thruput_json_rpc_types::error::native::{AttemptAdmission, DecodedError, ErrorData};
+    let NativeClientError::Application { data, .. } = error else {
+        return false;
+    };
+    let DecodedError::Known { data, .. } = data.as_ref() else {
+        return false;
+    };
+    let (ErrorData::TransactionInvalid {
+        admission,
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::TransactionRejected {
+        admission,
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::BackendUnavailable {
+        admission: Some(admission),
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::BackendTimeout {
+        admission: Some(admission),
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::Overloaded {
+        admission: Some(admission),
+        transaction_hash: hash,
+        ..
+    }
+    | ErrorData::BackendDataInvalid {
+        admission: Some(admission),
+        transaction_hash: hash,
+        ..
+    }) = data.as_ref()
+    else {
+        return false;
+    };
+    matches!(
+        admission,
+        AttemptAdmission::NotAttempted | AttemptAdmission::Rejected
+    ) && hash.is_none_or(|hash| hash == expected_hash)
+}
+
+impl SubmitCallError {
+    /// The first dispatch was refused; this does not prove that an earlier
+    /// submission of the same bytes was refused or permit automatic retries.
+    pub fn proves_first_send_not_admitted(&self) -> bool {
+        match self {
+            Self::Rpc { tx_hash, source } => first_submission_not_admitted(source, *tx_hash),
+            Self::Encoding { .. } => true,
+            _ => false,
         }
-        Ok(NativeSubmittedCall { tx_hash })
     }
 }
 
-/// A native admission acknowledgement, not proof of execution or commitment.
+impl SignedCall {
+    /// Submit these signed bytes exactly once through the native RPC contract.
+    /// The caller must verify compatibility and network identity before signing.
+    pub async fn submit<C: ClientT + Sync>(
+        &self,
+        client: &NativeClient<C>,
+    ) -> Result<SubmittedCall, SubmitCallError> {
+        submit_signed_transaction(client, self.tx_hash(), self.tx_hex()).await
+    }
+}
+
+/// Submit retained signed bytes once and verify the acknowledgement's transaction hash.
+pub async fn submit_signed_transaction<C: ClientT + Sync>(
+    client: &NativeClient<C>,
+    tx_hash: TxHash,
+    tx_hex: &str,
+) -> Result<SubmittedCall, SubmitCallError> {
+    let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex))
+        .map_err(|source| SubmitCallError::Encoding { tx_hash, source })?;
+    let result = client
+        .send_transaction(SendTransactionRequest {
+            signed_transaction: HexBytes(bytes),
+        })
+        .await
+        .map_err(|source| SubmitCallError::Rpc {
+            tx_hash,
+            source: Box::new(source),
+        })?;
+    let acknowledgement = match result {
+        DecodedResponse::Known(value) => value,
+        DecodedResponse::Unsupported { raw } => {
+            return Err(SubmitCallError::Unsupported { tx_hash, raw });
+        }
+        _ => return Err(SubmitCallError::ResponseRepresentation { tx_hash }),
+    };
+    if acknowledgement.transaction_hash != tx_hash {
+        return Err(SubmitCallError::HashMismatch {
+            tx_hash,
+            returned: acknowledgement.transaction_hash,
+        });
+    }
+    Ok(SubmittedCall { tx_hash })
+}
+
+/// A transaction hash that can be observed without resubmitting its envelope.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-pub struct NativeSubmittedCall {
+pub struct SubmittedCall {
     pub tx_hash: TxHash,
 }
 
-impl NativeSubmittedCall {
+impl SubmittedCall {
+    /// Resume observation of a retained hash after an uncertain submission or restart.
+    /// Construction does not claim that the transaction was admitted or executed.
+    #[must_use]
+    pub const fn new(tx_hash: TxHash) -> Self {
+        Self { tx_hash }
+    }
+
     /// Wait read-only for this hash on the same caller-verified chain instance.
     /// Failed execution receipts are returned intact. Cancellation and timeout
     /// retain the native waiter's commitment, status and original error evidence.

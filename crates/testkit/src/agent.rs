@@ -5,13 +5,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use thruput_json_rpc_types::transaction::TransactionStatus;
+use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
 use thruput_xdr::contract::ContractEntrypointID;
 use thruput_xdr::types::{ContractAddress, SHA256Hash};
 
 use crate::account::{
-    Account, DeployOptions, Deployed, PreparedDeploy, SubmittedDeploy, verify_deployment_receipt,
+    Account, DeployOptions, Deployed, SubmittedDeploy, verify_deployment_receipt,
 };
 use crate::artifact::{
     ArtifactEntry, ArtifactKind, PendingRegistration, RegistrationOwner, Registry,
@@ -202,8 +201,8 @@ impl AgentContext {
     /// is registering the same artifact. The error carries that transaction's
     /// hash so a manual scenario can produce its block and await its receipt
     /// before retrying this deployment.
-    /// A scheduler `Retry` replays the retained registration's signed bytes;
-    /// a `Dropped` outcome clears that attempt and returns its failure.
+    /// The error also retains signed bytes for explicit caller recovery. Scheduler
+    /// statuses never replay or discard a retained attempt.
     pub async fn submit_deploy_artifact(
         &mut self,
         name: &str,
@@ -396,10 +395,10 @@ impl AgentContext {
     /// In manual mode, use `submit_fund`, produce a block, then await the receipt.
     pub async fn fund(&self, amount: u128) -> Result<TransactionReceipt> {
         let receipt = self.submit_fund(amount).await?.await_receipt().await?;
-        if !matches!(receipt.status, ExecStatus::Ok) {
+        if !matches!(receipt.execution, ReceiptExecution::Return { .. }) {
             return Err(TestkitError::Reverted {
                 method: "fund".to_owned(),
-                status: format!("{:?}", receipt.status),
+                status: format!("{:?}", receipt.execution),
             });
         }
         Ok(receipt)
@@ -562,52 +561,15 @@ async fn reconcile_pending_registration(
     }
     let tx_hash = attempt.tx_hash;
     let Some(receipt) = network.receipt(tx_hash).await? else {
-        return match network.transaction_status(tx_hash).await? {
-            TransactionStatus::Retry { .. } => {
-                let submitted = PreparedDeploy::from_registration(network.clone(), &attempt)
-                    .submit()
-                    .await?
-                    .with_registration(Arc::clone(entry));
-                if attempt.owner == caller {
-                    Ok(RegistrationResolution::Recovered(Box::new(submitted)))
-                } else {
-                    Err(TestkitError::ArtifactRegistrationPending {
-                        name: name.to_owned(),
-                        tx_hash,
-                    })
-                }
-            }
-            TransactionStatus::Dropped { error } => {
-                *pending = None;
-                Err(TestkitError::Deploy {
-                    detail: format!(
-                        "retained registration dropped: {:?} code {}",
-                        error.source, error.code
-                    ),
-                })
-            }
-            TransactionStatus::Invalid { reason } => {
-                *pending = None;
-                Err(TestkitError::Deploy {
-                    detail: format!("retained registration rejected: {reason}"),
-                })
-            }
-            TransactionStatus::Pending
-            | TransactionStatus::Unknown
-            | TransactionStatus::RecentFailure { .. } => {
-                Err(TestkitError::ArtifactRegistrationPending {
-                    name: name.to_owned(),
-                    tx_hash,
-                })
-            }
-            _ => Err(TestkitError::ArtifactRegistrationPending {
-                name: name.to_owned(),
-                tx_hash,
-            }),
-        };
+        // Scheduler observations do not prove nonexecution or authorize another write.
+        return Err(TestkitError::ArtifactRegistrationPending {
+            name: name.to_owned(),
+            tx_hash,
+            signed_transaction: attempt.tx_hex.clone(),
+        });
     };
     verify_deployment_receipt(tx_hash, attempt.address, &attempt.tx_hex, &receipt)?;
-    if matches!(receipt.status, ExecStatus::Ok) {
+    if matches!(receipt.execution, ReceiptExecution::Return { .. }) {
         entry.mark_registered();
         if attempt.owner == caller {
             *pending = None;
@@ -620,7 +582,7 @@ async fn reconcile_pending_registration(
     } else {
         *pending = None;
         Err(TestkitError::Deploy {
-            detail: format!("{:?}", receipt.status),
+            detail: format!("{:?}", receipt.execution),
         })
     }
 }
@@ -649,7 +611,7 @@ async fn finish_registration_receipt(
     caller: RegistrationOwner,
 ) -> Result<Option<Deployed>> {
     verify_deployment_receipt(attempt.tx_hash, attempt.address, &attempt.tx_hex, &receipt)?;
-    let succeeded = matches!(receipt.status, ExecStatus::Ok);
+    let succeeded = matches!(receipt.execution, ReceiptExecution::Return { .. });
     if !succeeded || attempt.owner == caller {
         entry.finish_registration(attempt.tx_hash, succeeded).await;
     } else {
@@ -657,7 +619,7 @@ async fn finish_registration_receipt(
     }
     if !succeeded {
         return Err(TestkitError::Deploy {
-            detail: format!("{:?}", receipt.status),
+            detail: format!("{:?}", receipt.execution),
         });
     }
     Ok((attempt.owner == caller).then_some(Deployed {

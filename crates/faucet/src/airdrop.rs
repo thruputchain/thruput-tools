@@ -3,20 +3,26 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use thruput_json_rpc_types::base58::FixedIdentifier;
 
-use crate::telemetry::submit_transaction;
 use axum::{
     Json,
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use thruput_json_rpc_client::{GroundhogApiClient, HttpClientBuilder, poll_transaction_receipt};
+use thruput_json_rpc_client::native::{
+    NativeClient, NativeClientError,
+    receipt::{ReceiptPollCause, ReceiptPollConfig, ReceiptPollError, poll_receipt},
+};
 use thruput_json_rpc_types::airdrop::{AirdropAttemptResponse, HostedAirdropRequest};
 use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::network_descriptor::NetworkDescriptor;
-use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use thruput_json_rpc_types::receipt::ExecStatus;
+use thruput_json_rpc_types::transaction::TxHash;
 use thruput_json_rpc_types::{ContractAddress, SHA256Hash};
+use thruput_json_rpc_types::{
+    requests,
+    responses::{DecodedResponse, ReceiptExecution, ResponseData, TransactionReceipt},
+};
 use thruput_signing::default_wallet::{
     BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction,
 };
@@ -122,6 +128,7 @@ impl AirdropService {
             tx_hash: None,
             transaction: None,
             height: None,
+            return_data: None,
             error_code: None,
             created_at: now,
             updated_at: now,
@@ -420,8 +427,16 @@ impl AirdropService {
         if !amount_matches {
             return submit_amount_mismatch_response();
         }
-        if let Err(error) = self.submitter.submit_airdrop(&prepared, false).await {
-            attempt.status = AirdropAttemptStatus::Pending;
+        if let Err(error) = self.submitter.submit_airdrop(&prepared).await {
+            if error.proves_first_send_not_admitted(prepared.tx_hash) {
+                attempt.status = AirdropAttemptStatus::FailedTerminal;
+                attempt.expires_at = terminal_attempt_expiry(
+                    SystemTime::now(),
+                    self.policy_config.airdrop.recipient_cooldown_secs,
+                );
+            } else {
+                attempt.status = AirdropAttemptStatus::Pending;
+            }
             return self.finish_airdrop_error(request.recipient, attempt, error);
         }
         self.poll_airdrop_attempt(request.recipient, attempt).await
@@ -433,6 +448,13 @@ impl AirdropService {
         mut attempt: AirdropAttempt,
         error: AirdropSubmitError,
     ) -> Response {
+        tracing::warn!(
+            error = %error,
+            details = ?error,
+            status = ?attempt.status,
+            transaction_hash = ?attempt.tx_hash,
+            "airdrop attempt failed"
+        );
         let key = attempt.key.clone();
         attempt.error_code = Some(airdrop_error_code(&error).into());
         attempt.updated_at = SystemTime::now();
@@ -624,28 +646,21 @@ impl AirdropService {
         }
     }
 
-    async fn retry_airdrop_attempt(
+    async fn observed_funding_receipt(
         &self,
-        recipient: ContractAddress,
-        mut attempt: AirdropAttempt,
-        missing_evidence_error: AirdropSubmitError,
-    ) -> Response {
-        let key = attempt.key.clone();
-        let result = match &attempt.transaction {
-            Some(prepared) => self.submitter.submit_airdrop(prepared, true).await,
-            None => Err(missing_evidence_error),
-        };
-        attempt.status = AirdropAttemptStatus::Pending;
-        attempt.expires_at = None;
-        attempt.updated_at = SystemTime::now();
-        if let Err(error) = result {
-            return self.finish_airdrop_error(recipient, attempt, error);
+        tx_hash: TxHash,
+        committed_height: Option<i64>,
+    ) -> Result<TransactionReceipt, AirdropSubmitError> {
+        let receipt = self
+            .submitter
+            .poll_airdrop(tx_hash, committed_height)
+            .await?;
+        if !valid_funding_receipt(tx_hash, &receipt)
+            || committed_height.is_some_and(|height| height != *receipt.block_height)
+        {
+            return Err(AirdropSubmitError::InvalidReceipt);
         }
-        attempt.error_code = None;
-        match self.replace_executing_attempt(attempt) {
-            Ok(attempt) => response_from_attempt(StatusCode::ACCEPTED, recipient, attempt),
-            Err(error) => self.replace_attempt_error_response(recipient, &key, error),
-        }
+        Ok(receipt)
     }
 
     async fn poll_airdrop_attempt(
@@ -671,10 +686,22 @@ impl AirdropService {
                 "airdrop attempt has an invalid accepted transaction hash",
             );
         };
-        match self.submitter.poll_airdrop(tx_hash).await {
-            Ok(receipt) if matches!(receipt.status, ExecStatus::Ok) => {
+        let result = self.observed_funding_receipt(tx_hash, attempt.height).await;
+        if let Err(AirdropSubmitError::Poll(error)) = &result
+            && let Some(commitment) = &error.evidence.commitment
+            && commitment.transaction_hash == tx_hash
+            && *commitment.block_height >= 0
+        {
+            attempt.height.get_or_insert(*commitment.block_height);
+        }
+        match result {
+            Ok(receipt) if matches!(receipt.execution, ReceiptExecution::Return { .. }) => {
                 attempt.status = AirdropAttemptStatus::Succeeded;
-                attempt.height = Some(*receipt.height);
+                attempt.return_data = match receipt.execution {
+                    ReceiptExecution::Return { return_data } => Some(return_data),
+                    _ => None,
+                };
+                attempt.height = Some(*receipt.block_height);
                 attempt.error_code = None;
                 let now = SystemTime::now();
                 attempt.updated_at = now;
@@ -689,7 +716,7 @@ impl AirdropService {
             }
             Ok(receipt) => {
                 attempt.status = AirdropAttemptStatus::FailedTerminal;
-                attempt.height = Some(*receipt.height);
+                attempt.height = Some(*receipt.block_height);
                 attempt.error_code = Some("airdrop_transaction_failed".into());
                 let now = SystemTime::now();
                 attempt.updated_at = now;
@@ -702,39 +729,17 @@ impl AirdropService {
                     Err(error) => self.replace_attempt_error_response(recipient, &key, error),
                 }
             }
-            Err(
-                error @ AirdropSubmitError::Poll(
-                    thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
-                        status:
-                            TransactionStatus::Invalid { .. } | TransactionStatus::Dropped { .. },
-                        ..
-                    },
-                ),
-            ) => {
-                attempt.status = AirdropAttemptStatus::FailedTerminal;
-                attempt.error_code = Some("airdrop_transaction_failed".into());
-                let now = SystemTime::now();
-                attempt.updated_at = now;
-                attempt.expires_at = terminal_attempt_expiry(
-                    now,
-                    self.policy_config.airdrop.recipient_cooldown_secs,
+            Err(AirdropSubmitError::Poll(error))
+                if matches!(error.cause, ReceiptPollCause::Timeout) =>
+            {
+                // Scheduler diagnostics never establish safe redispatch. Repeated
+                // HTTP requests reconcile the retained hash without sending again.
+                tracing::info!(
+                    transaction_hash = %tx_hash.0,
+                    last_status = ?error.evidence.last_status,
+                    last_lookup_error = ?error.evidence.last_lookup_error,
+                    "airdrop receipt remains unresolved"
                 );
-                match self.replace_executing_attempt(attempt) {
-                    Ok(_) => error.into_response(),
-                    Err(error) => self.replace_attempt_error_response(recipient, &key, error),
-                }
-            }
-            Err(
-                error @ AirdropSubmitError::Poll(
-                    thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
-                        status: TransactionStatus::Retry { .. },
-                        ..
-                    },
-                ),
-            ) => self.retry_airdrop_attempt(recipient, attempt, error).await,
-            Err(AirdropSubmitError::Poll(
-                thruput_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout { .. },
-            )) => {
                 attempt.status = AirdropAttemptStatus::Pending;
                 attempt.updated_at = SystemTime::now();
                 match self.replace_executing_attempt(attempt) {
@@ -764,6 +769,10 @@ fn terminal_attempt_expiry(now: SystemTime, retention_secs: u64) -> Option<Syste
     ))
 }
 
+fn valid_funding_receipt(tx_hash: TxHash, receipt: &TransactionReceipt) -> bool {
+    receipt.transaction_hash == tx_hash && *receipt.block_height >= 0 && receipt.is_supported()
+}
+
 fn response_from_attempt(
     status: StatusCode,
     recipient: ContractAddress,
@@ -789,6 +798,7 @@ fn response_from_attempt(
                 raw_amount: attempt.raw_amount,
                 height: height.into(),
                 status: ExecStatus::Ok,
+                return_data: attempt.return_data,
             },
             None => {
                 return error_response(
@@ -834,12 +844,16 @@ fn policy_store_error_response(error: &PolicyStoreError) -> Response {
 fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
     match error {
         AirdropSubmitError::TransactionFailed { .. } => "airdrop_transaction_failed",
+        AirdropSubmitError::InvalidReceipt => "airdrop_receipt_invalid",
         AirdropSubmitError::RpcConnect(_)
-        | AirdropSubmitError::ChainTip(_)
+        | AirdropSubmitError::Preflight(_)
+        | AirdropSubmitError::Rpc { .. }
+        | AirdropSubmitError::Unsupported { .. }
         | AirdropSubmitError::EncodeTransferCalldata(_)
         | AirdropSubmitError::BuildTransaction(_)
         | AirdropSubmitError::SignTransaction(_)
         | AirdropSubmitError::Submit(_)
+        | AirdropSubmitError::Encoding(_)
         | AirdropSubmitError::Poll(_) => "airdrop_submit_failed",
     }
 }
@@ -881,18 +895,20 @@ pub trait AirdropSubmitter: Send + Sync + 'static {
         recipient: ContractAddress,
     ) -> Result<PreparedAirdrop, AirdropSubmitError>;
 
-    /// Submit the retained transaction without signing a replacement.
-    /// Set `check_expiry` for replays; freshly prepared first submissions already
-    /// used the current tip. Return only after admission of the expected hash.
-    async fn submit_airdrop(
-        &self,
-        transaction: &PreparedAirdrop,
-        check_expiry: bool,
-    ) -> Result<(), AirdropSubmitError>;
+    /// Submit a newly retained transaction once, without signing a replacement.
+    /// Return only after admission of the expected hash. `RpcConnect`, `Preflight`
+    /// and `Encoding` are valid only before any transaction bytes are sent.
+    /// After dispatch, retain uncertainty and return the original method-decoded
+    /// `Rpc` error (including transport failures), never a pre-dispatch error.
+    async fn submit_airdrop(&self, transaction: &PreparedAirdrop)
+    -> Result<(), AirdropSubmitError>;
 
-    /// Poll a previously accepted airdrop transaction.
-    async fn poll_airdrop(&self, tx_hash: TxHash)
-    -> Result<TransactionReceipt, AirdropSubmitError>;
+    /// Poll a previously accepted transaction without discarding known commitment.
+    async fn poll_airdrop(
+        &self,
+        tx_hash: TxHash,
+        committed_height: Option<i64>,
+    ) -> Result<TransactionReceipt, AirdropSubmitError>;
 }
 
 /// Faucet transaction ready to retain before broadcast.
@@ -904,22 +920,37 @@ pub struct PreparedAirdrop {
     pub tx_hash: TxHash,
     /// Original signed transaction, encoded as hexadecimal.
     pub signed_transaction: String,
-    /// Original transaction expiry; replay must not extend it.
+    /// Original expiry, retained as evidence.
     pub block_expiry_height: i64,
 }
 
 /// Errors produced while submitting a faucet airdrop.
 #[derive(Debug, thiserror::Error)]
 pub enum AirdropSubmitError {
+    /// Receipt metadata or execution output is inconsistent with the attempt.
+    #[error("faucet received an inconsistent transaction receipt")]
+    InvalidReceipt,
     /// The transaction committed but did not execute successfully.
-    #[error("airdrop transaction {tx_hash:?} did not commit successfully")]
+    #[error("airdrop transaction {tx_hash:?} committed but execution failed")]
     TransactionFailed { tx_hash: TxHash },
-    /// The RPC client could not be constructed.
+    /// The RPC client could not be constructed, before any transaction bytes were sent.
     #[error("failed to connect to RPC endpoint: {0}")]
     RpcConnect(String),
-    /// The chain tip could not be fetched for block-expiry calculation.
-    #[error("failed to fetch chain tip: {0}")]
-    ChainTip(String),
+    /// Endpoint or signing-network preflight failed before transaction dispatch.
+    #[error("RPC preflight failed: {0}")]
+    Preflight(Box<thruput_client::NativeRpcError>),
+    /// A native call failed, retaining its original application or transport error.
+    #[error("{method} failed: {source}")]
+    Rpc {
+        method: &'static str,
+        source: Box<NativeClientError>,
+    },
+    /// An unfamiliar response is retained without assuming its meaning.
+    #[error("unsupported {method} response: {raw}")]
+    Unsupported {
+        method: &'static str,
+        raw: serde_json::Value,
+    },
     /// The HOG transfer calldata could not be encoded.
     #[error("failed to encode HOG transfer calldata: {0}")]
     EncodeTransferCalldata(String),
@@ -929,48 +960,43 @@ pub enum AirdropSubmitError {
     /// The faucet transaction could not be signed.
     #[error("failed to sign airdrop transaction: {0}")]
     SignTransaction(String),
+    /// Locally retained transaction bytes are invalid hexadecimal; none were sent.
+    #[error("invalid retained transaction encoding: {0}")]
+    Encoding(hex::FromHexError),
     /// The signed faucet transaction was not accepted.
     #[error("failed to submit airdrop transaction: {0}")]
     Submit(String),
     /// The accepted faucet transaction could not be confirmed.
     #[error("failed to confirm airdrop transaction: {0}")]
-    Poll(#[from] thruput_json_rpc_client::PollTransactionReceiptError),
+    Poll(Box<ReceiptPollError>),
 }
 
 impl AirdropSubmitError {
+    // Only called for the first send, never after a dispatched/uncertain attempt.
+    fn proves_first_send_not_admitted(&self, expected_hash: TxHash) -> bool {
+        if matches!(
+            self,
+            Self::RpcConnect(_) | Self::Preflight(_) | Self::Encoding(_)
+        ) {
+            return true;
+        }
+        matches!(self, Self::Rpc { method: "sendTransaction", source }
+            if thruput_client::first_submission_not_admitted(source, expected_hash))
+    }
+
     fn into_response(self) -> Response {
         match self {
-            Self::Poll(
-                thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
-                    status: TransactionStatus::Dropped { error },
-                    ..
-                },
-            ) => error_response(
+            Self::InvalidReceipt => error_response(
                 StatusCode::BAD_GATEWAY,
-                "airdrop_transaction_failed",
-                format!(
-                    "airdrop transaction dropped: {:?} code {}",
-                    error.source, error.code
-                ),
+                "airdrop_receipt_invalid",
+                "faucet received an inconsistent transaction receipt",
             ),
-            Self::TransactionFailed { .. }
-            | Self::Poll(
-                thruput_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
-                    status: TransactionStatus::Invalid { .. },
-                    ..
-                },
-            ) => error_response(
+            Self::TransactionFailed { .. } => error_response(
                 StatusCode::BAD_GATEWAY,
                 "airdrop_transaction_failed",
                 "airdrop transaction did not commit successfully",
             ),
-            Self::RpcConnect(_)
-            | Self::ChainTip(_)
-            | Self::EncodeTransferCalldata(_)
-            | Self::BuildTransaction(_)
-            | Self::SignTransaction(_)
-            | Self::Submit(_)
-            | Self::Poll(_) => error_response(
+            _ => error_response(
                 StatusCode::BAD_GATEWAY,
                 "airdrop_submit_failed",
                 "failed to submit airdrop transaction",
@@ -1065,15 +1091,29 @@ impl RpcAirdropSubmitter {
         })
     }
 
-    async fn chain_height(&self) -> Result<i64, AirdropSubmitError> {
-        let client = HttpClientBuilder::default()
-            .build(&self.rpc_url)
-            .map_err(|error| AirdropSubmitError::RpcConnect(error.to_string()))?;
-        let tip = client
-            .chain_tip()
+    async fn client(
+        &self,
+    ) -> Result<NativeClient<thruput_json_rpc_client::HttpClient>, AirdropSubmitError> {
+        let client = NativeClient::new(
+            crate::telemetry::rpc_client(&self.rpc_url)
+                .map_err(|error| AirdropSubmitError::RpcConnect(error.to_string()))?,
+        );
+        thruput_client::check_endpoint(
+            &client,
+            &[
+                "getNetworkInfo",
+                "getChainTip",
+                "sendTransaction",
+                "getTransactionReceipt",
+                "getTransactionStatus",
+            ],
+        )
+        .await
+        .map_err(|error| AirdropSubmitError::Preflight(Box::new(error)))?;
+        thruput_client::validate_network(&client, &self.network_hash)
             .await
-            .map_err(|error| AirdropSubmitError::ChainTip(error.to_string()))?;
-        Ok(*tip.height)
+            .map_err(|error| AirdropSubmitError::Preflight(Box::new(error)))?;
+        Ok(client)
     }
 }
 
@@ -1087,10 +1127,11 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
         &self,
         recipient: ContractAddress,
     ) -> Result<PreparedAirdrop, AirdropSubmitError> {
-        let block_expiry_height = self
-            .chain_height()
-            .await?
-            .saturating_add(DEFAULT_BLOCK_EXPIRY_OFFSET);
+        let client = self.client().await?;
+        let block_expiry_height =
+            thruput_client::resolve_block_expiry_height(&client, DEFAULT_BLOCK_EXPIRY_OFFSET)
+                .await
+                .map_err(|error| AirdropSubmitError::Preflight(Box::new(error)))?;
         let transfer_calldata = encode_transfer_calldata(&recipient.0, self.raw_amount)?;
         let nonce = next_nonce()
             .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;
@@ -1128,17 +1169,30 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
     async fn submit_airdrop(
         &self,
         transaction: &PreparedAirdrop,
-        check_expiry: bool,
     ) -> Result<(), AirdropSubmitError> {
-        if check_expiry && self.chain_height().await? >= transaction.block_expiry_height {
-            return Err(AirdropSubmitError::Submit(
-                "retained transaction has expired; awaiting its original receipt".into(),
-            ));
+        let signed = &transaction.signed_transaction;
+        let bytes = hex::decode(signed.strip_prefix("0x").unwrap_or(signed))
+            .map_err(AirdropSubmitError::Encoding)?;
+        let span = tracing::info_span!(
+            target: "groundhog_otel", "jsonrpc.submit",
+            otel.name = "sendTransaction", otel.kind = "client",
+            rpc.system = "jsonrpc", rpc.method = "sendTransaction"
+        );
+        let actual = async {
+            // Validate and submit on the same traced transport, exactly once.
+            let client = self.client().await?;
+            known(
+                "sendTransaction",
+                client
+                    .send_transaction(requests::SendTransactionRequest {
+                        signed_transaction: HexBytes(bytes),
+                    })
+                    .await,
+            )
         }
-        let actual = submit_transaction(&self.rpc_url, &transaction.signed_transaction)
-            .await
-            .map_err(|error| AirdropSubmitError::Submit(error.to_string()))?;
-        if actual != transaction.tx_hash {
+        .instrument(span)
+        .await?;
+        if actual.transaction_hash != transaction.tx_hash {
             return Err(AirdropSubmitError::Submit(
                 "returned transaction hash differs from retained transaction".into(),
             ));
@@ -1149,10 +1203,45 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
     async fn poll_airdrop(
         &self,
         tx_hash: TxHash,
+        committed_height: Option<i64>,
     ) -> Result<TransactionReceipt, AirdropSubmitError> {
-        poll_transaction_receipt(&self.rpc_url, tx_hash)
-            .await
-            .map_err(Into::into)
+        let client = self.client().await?;
+        poll_receipt(
+            &client,
+            self.network_hash.clone().into_inner().into(),
+            tx_hash,
+            committed_height.map(|height| {
+                thruput_json_rpc_client::native::receipt::KnownCommitment {
+                    network_hash: self.network_hash.clone().into_inner().into(),
+                    transaction_hash: tx_hash,
+                    block_height: height.into(),
+                }
+            }),
+            ReceiptPollConfig::default(),
+            std::future::pending(),
+        )
+        .await
+        .map_err(|error| AirdropSubmitError::Poll(Box::new(error)))
+    }
+}
+
+fn known<T>(
+    method: &'static str,
+    result: Result<DecodedResponse<T>, NativeClientError>,
+) -> Result<T, AirdropSubmitError> {
+    match result {
+        Ok(DecodedResponse::Known(value)) => Ok(value),
+        Ok(DecodedResponse::Unsupported { raw }) => {
+            Err(AirdropSubmitError::Unsupported { method, raw })
+        }
+        Ok(_) => Err(AirdropSubmitError::Unsupported {
+            method,
+            raw: serde_json::Value::Null,
+        }),
+        Err(source) => Err(AirdropSubmitError::Rpc {
+            method,
+            source: Box::new(source),
+        }),
     }
 }
 

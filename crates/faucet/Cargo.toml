@@ -28,6 +28,7 @@ clap = { workspace = true }
 thruput-build-info = { workspace = true }
 groundhog-heap-profiling = { workspace = true }
 thruput-json-rpc-client = { workspace = true }
+thruput-client = { workspace = true }
 thruput-json-rpc-types = { workspace = true }
 thruput-signing = { workspace = true }
 thruput-xdr = { workspace = true }

@@ -1,5 +1,4 @@
-//! `groundhog_chainTip`, `groundhog_getBlockByNumber`, and
-//! `groundhog_pendingTransactionCount` handlers.
+//! Chain-tip, block and scheduler-count backend handlers.
 
 use thruput_json_rpc_server::{RpcRequestContext, RpcServerError, TipReading};
 use thruput_json_rpc_types::BlockHeight;

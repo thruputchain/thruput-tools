@@ -8,7 +8,7 @@
 //!
 //! Usage:
 //!   # Against a local JSON-RPC endpoint (smoke):
-//!   thruput-bench --url http://127.0.0.1:9545 --method chainTip --rate 1000 --duration 5
+//!   thruput-bench --url http://127.0.0.1:9545 --method getChainTip --rate 1000 --duration 5
 //!
 //!   # Against real gateway (load):
 //!   thruput-bench --url http://127.0.0.1:8545 --runtime-manifest /path/to/runtime-manifest.json --rate 100000 --duration 60 --workers 16
@@ -67,13 +67,13 @@ enum BenchError {
     InvalidRequestTimeout,
     #[error("--max-response-bytes must be >= 1")]
     InvalidMaxResponseBytes,
-    #[error("--accounts must be >= 1 for sendRawTransaction")]
+    #[error("--accounts must be >= 1 for sendTransaction")]
     MissingAccounts,
     #[error(
         "--accounts requested {requested} accounts, but the runtime manifest only contains {available}"
     )]
     NotEnoughAccounts { requested: usize, available: usize },
-    #[error("--runtime-manifest is required for sendRawTransaction")]
+    #[error("--runtime-manifest is required for sendTransaction")]
     MissingRuntimeManifest,
     #[error("unknown method `{method}`")]
     UnknownMethod { method: String },
@@ -241,10 +241,10 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
         None => None,
     };
     let manifest = loaded_manifest.as_ref().map(|loaded| &loaded.manifest);
-    let needs_transactions = cli.method == "sendRawTransaction";
+    let needs_transactions = cli.method == "sendTransaction";
     let accounts = transaction_inputs_for_method(
         if cli.seed_count.is_some() {
-            "sendRawTransaction"
+            "sendTransaction"
         } else {
             &cli.method
         },

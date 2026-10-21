@@ -11,8 +11,7 @@ use jsonrpsee::{
 use serde_json::{Value, json, value::RawValue};
 use thruput_json_rpc_api::native::{METHOD_NAMES, NativeApi};
 use thruput_json_rpc_client::{
-    DecodedError, DecodedResponse, HttpClient, HttpClientBuilder,
-    native::{NativeClient, NativeClientError},
+    DecodedError, DecodedResponse, HttpClient, HttpClientBuilder, NativeClient, NativeClientError,
 };
 use thruput_json_rpc_server::native::NativeModule;
 use thruput_json_rpc_types::requests::{AddressQuery, EmptyRequest, TransactionQuery};
@@ -292,8 +291,14 @@ async fn client_tolerates_future_results_but_rejects_malformed_known_variants() 
                 assert_eq!(expected, "unsupported");
                 assert_eq!(preserved, raw);
             }
-            Err(NativeClientError::Transport(jsonrpsee::core::client::Error::ParseError(_))) => {
+            Err(NativeClientError::InvalidResponse {
+                method,
+                raw: preserved,
+                ..
+            }) => {
                 assert_eq!(expected, "malformed");
+                assert_eq!(method, "getTransactionStatus");
+                assert_eq!(*preserved, raw);
             }
             other => panic!("unexpected {other:?}"),
         }
@@ -346,6 +351,48 @@ async fn submission_and_faucet_errors_do_not_repeat_writes() {
             service.calls.lock().unwrap().as_slice(),
             &[(method.into(), fixtures::request(method))]
         );
+        handle.stop().unwrap();
+        handle.stopped().await;
+    }
+}
+
+#[tokio::test]
+async fn malformed_write_results_preserve_raw_without_repeating_submission() {
+    for method in ["sendTransaction", "faucet_requestAirdrop"] {
+        let raw = json!({"transactionHash": false, "attemptStatus": "pending", "future": [1, 2]});
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut module = RpcModule::new((raw.clone(), calls.clone()));
+        module
+            .register_method(method, |_, context, _| {
+                context.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                context.0.clone()
+            })
+            .unwrap();
+        let (http, handle) = start(module).await;
+        let client = NativeClient::new(http);
+        let request = fixtures::request(method);
+        let error = if method == "sendTransaction" {
+            client
+                .send_transaction(serde_json::from_value(request).unwrap())
+                .await
+                .unwrap_err()
+        } else {
+            client
+                .request_airdrop(serde_json::from_value(request).unwrap())
+                .await
+                .unwrap_err()
+        };
+        let NativeClientError::InvalidResponse {
+            method: returned,
+            raw: preserved,
+            ..
+        } = error
+        else {
+            panic!("unexpected {error:?}")
+        };
+        assert_eq!(returned, method);
+        assert_eq!(*preserved, raw);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         handle.stop().unwrap();
         handle.stopped().await;
     }

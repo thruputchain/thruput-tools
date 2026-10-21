@@ -1,4 +1,4 @@
-/// Additive native error contracts; serving wire-13 errors remain below.
+/// Native RPC error contracts.
 pub mod native;
 
 use schemars::JsonSchema;

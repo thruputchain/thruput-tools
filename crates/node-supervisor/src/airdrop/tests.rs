@@ -175,13 +175,23 @@ async fn registered_http_small_array_waits_without_raising_execution_limit() {
             .await
             .unwrap();
         let address = server.local_addr().unwrap();
-        let handle = server.start(AirdropApiServer::into_rpc(rpc.clone()));
+        let mut module = jsonrpsee::RpcModule::new(rpc.clone());
+        module
+            .register_async_method("faucet_requestAirdrop", |params, funding, _| async move {
+                let request = thruput_json_rpc_server::params::parse_named(&params)?;
+                thruput_json_rpc_server::native::funding::NativeFundingPlane::request_airdrop(
+                    &*funding, request,
+                )
+                .await
+            })
+            .unwrap();
+        let handle = server.start(module);
         let body = serde_json::to_string(
             &(1..=20)
                 .map(|id| {
                     serde_json::json!({
-                        "jsonrpc": "2.0", "id": id, "method": "groundhog_requestAirdrop",
-                        "params": [test_request(id, id)]
+                        "jsonrpc": "2.0", "id": id, "method": "faucet_requestAirdrop",
+                        "params": test_request(id, id)
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -1098,7 +1108,7 @@ async fn committed_receipt_wins_over_retained_dropped_funding_status() {
         height: BlockHeight::from(9),
         status: ExecStatus::Ok,
         events: vec![],
-        return_data: None,
+        return_data: Some(HexBytes(vec![])),
         abort_data: None,
         gas_used: 1,
     });
@@ -1422,4 +1432,243 @@ fn fixture_journal() -> Arc<std::sync::Mutex<FundingJournal>> {
                 .address(),
         ),
     )))
+}
+
+fn assert_known_native_funding_error(method: &str, error: &jsonrpsee::types::ErrorObjectOwned) {
+    assert!(
+        matches!(
+            thruput_json_rpc_types::error::native::DecodedError::decode(
+                method,
+                serde_json::to_value(error).unwrap()
+            ),
+            thruput_json_rpc_types::error::native::DecodedError::Known { .. }
+        ),
+        "unclassified {method} error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn native_faucet_returns_pending_hash_after_one_submission() {
+    use thruput_json_rpc_server::native::funding::NativeFundingPlane;
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(TestBackend::new(vec![]));
+    let rpc = durable_rpc(dir.path(), true, backend.clone());
+    let request = test_request(0x44, 9);
+    let result = NativeFundingPlane::request_airdrop(
+        &rpc,
+        thruput_json_rpc_types::requests::AirdropRequest {
+            recipient: request.recipient,
+            client_nonce: request.client_nonce,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        result,
+        thruput_json_rpc_types::responses::AirdropAttempt::Pending {
+            transaction_hash: Some(_),
+            ..
+        }
+    ));
+    assert_eq!(backend.submissions.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn native_local_unresolved_retains_signed_bytes_and_stopped_cause() {
+    use thruput_json_rpc_server::native::funding::NativeFundingPlane;
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(
+        TestBackend::new(vec![Err(RpcServerError::TxRejected("expired".into()))])
+            .with_status_results(vec![Ok(TransactionStatus::Unknown)]),
+    );
+    let rpc = durable_rpc(dir.path(), true, backend.clone());
+    let request = funding_request("7");
+    let error = NativeFundingPlane::fund_account(
+        &rpc,
+        thruput_json_rpc_types::requests::FundAccountRequest {
+            recipient: request.recipient,
+            raw_amount: 7,
+            client_nonce: request.client_nonce,
+            faucet: request.faucet,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_known_native_funding_error("dev_fundAccount", &error);
+    let data: serde_json::Value = serde_json::from_str(error.data().unwrap().get()).unwrap();
+    assert_eq!(data["kind"], "localFundingUnresolved");
+    assert_eq!(data["cause"]["kind"], "fundingAttemptStopped");
+    assert_eq!(data["transactionHash"], data["cause"]["transactionHash"]);
+    assert_eq!(
+        data["signedTransaction"],
+        data["cause"]["signedTransaction"]
+    );
+    assert_eq!(backend.submissions.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn native_local_success_requires_matching_receipt_and_preserves_output() {
+    use thruput_json_rpc_server::native::funding::NativeFundingPlane;
+    for wrong_hash in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(TestBackend::new(vec![]));
+        let rpc = durable_rpc(dir.path(), true, backend.clone());
+        let request = funding_request(&rpc.raw_amount.to_string());
+        let original = rpc.fund(request.clone()).await.unwrap();
+        *backend.receipt.lock().unwrap() = Some(TransactionReceipt {
+            tx_hash: if wrong_hash {
+                test_tx_hash()
+            } else {
+                original.tx_hash
+            },
+            height: 9.into(),
+            status: ExecStatus::Ok,
+            events: vec![],
+            return_data: Some(HexBytes(vec![1, 2])),
+            abort_data: None,
+            gas_used: 1,
+        });
+        let result = NativeFundingPlane::request_airdrop(
+            &rpc,
+            thruput_json_rpc_types::requests::AirdropRequest {
+                recipient: request.recipient,
+                client_nonce: request.client_nonce,
+            },
+        )
+        .await;
+        if wrong_hash {
+            let error = result.unwrap_err();
+            assert_known_native_funding_error("faucet_requestAirdrop", &error);
+            assert_eq!(
+                error.code(),
+                thruput_json_rpc_types::error::native::codes::BACKEND_DATA_INVALID
+            );
+        } else {
+            let result = serde_json::to_value(result.unwrap()).unwrap();
+            assert_eq!(result["execution"]["returnData"], "0x0102");
+            assert_eq!(
+                result["transactionHash"],
+                serde_json::to_value(original.tx_hash).unwrap()
+            );
+        }
+        assert_eq!(backend.submissions.lock().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn native_faucet_errors_keep_method_contract_and_omit_lossy_receipts() {
+    use thruput_json_rpc_server::native::funding::NativeFundingPlane;
+    for failed_receipt in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(
+            TestBackend::new(vec![]).with_status_results(vec![Err(RpcServerError::BackendTimeout)]),
+        );
+        let rpc = durable_rpc(dir.path(), true, backend.clone());
+        let request = funding_request(&rpc.raw_amount.to_string());
+        let original = rpc.fund(request.clone()).await.unwrap();
+        if failed_receipt {
+            *backend.receipt.lock().unwrap() = Some(TransactionReceipt {
+                tx_hash: original.tx_hash,
+                height: 9.into(),
+                status: ExecStatus::Reverted { message: None },
+                events: vec![],
+                return_data: None,
+                abort_data: Some(HexBytes(vec![3, 4])),
+                gas_used: 17,
+            });
+        }
+        let error = NativeFundingPlane::request_airdrop(
+            &rpc,
+            thruput_json_rpc_types::requests::AirdropRequest {
+                recipient: request.recipient,
+                client_nonce: request.client_nonce,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_known_native_funding_error("faucet_requestAirdrop", &error);
+        let data: serde_json::Value = serde_json::from_str(error.data().unwrap().get()).unwrap();
+        assert_eq!(
+            data["kind"],
+            if failed_receipt {
+                "fundingAttemptStopped"
+            } else {
+                "backendTimeout"
+            }
+        );
+        if failed_receipt {
+            assert_eq!(
+                data["transactionHash"],
+                serde_json::to_value(original.tx_hash).unwrap()
+            );
+            assert_eq!(
+                data["signedTransaction"],
+                serde_json::to_value(original.signed_transaction).unwrap()
+            );
+            assert!(
+                data.get("receipt").is_none(),
+                "legacy events may be incomplete"
+            );
+        } else {
+            assert!(data.get("transactionHash").is_none());
+            assert!(data.get("signedTransaction").is_none());
+        }
+        assert_eq!(backend.submissions.lock().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn native_faucet_does_not_cache_a_contradictory_execution_as_terminal() {
+    use thruput_json_rpc_server::native::funding::NativeFundingPlane;
+    for (status, return_data, abort_data) in [
+        (ExecStatus::Ok, None, None),
+        (ExecStatus::Reverted { message: None }, None, None),
+        (
+            ExecStatus::Reverted { message: None },
+            Some(HexBytes(vec![1])),
+            None,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(TestBackend::new(vec![]));
+        let rpc = durable_rpc(dir.path(), true, backend.clone());
+        let request = funding_request(&rpc.raw_amount.to_string());
+        let original = rpc.fund(request.clone()).await.unwrap();
+        *backend.receipt.lock().unwrap() = Some(TransactionReceipt {
+            tx_hash: original.tx_hash,
+            height: 9.into(),
+            status,
+            events: vec![],
+            return_data,
+            abort_data,
+            gas_used: 1,
+        });
+        let request = thruput_json_rpc_types::requests::AirdropRequest {
+            recipient: request.recipient,
+            client_nonce: request.client_nonce,
+        };
+        let error = NativeFundingPlane::request_airdrop(&rpc, request.clone())
+            .await
+            .unwrap_err();
+        assert_known_native_funding_error("faucet_requestAirdrop", &error);
+        assert_eq!(
+            error.code(),
+            thruput_json_rpc_types::error::native::codes::BACKEND_DATA_INVALID
+        );
+        {
+            let mut receipt = backend.receipt.lock().unwrap();
+            let receipt = receipt.as_mut().unwrap();
+            receipt.status = ExecStatus::Ok;
+            receipt.return_data = Some(HexBytes(vec![]));
+            receipt.abort_data = None;
+        }
+        let result = NativeFundingPlane::request_airdrop(&rpc, request)
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            thruput_json_rpc_types::responses::AirdropAttempt::Succeeded { .. }
+        ));
+        assert_eq!(backend.submissions.lock().unwrap().len(), 1);
+    }
 }

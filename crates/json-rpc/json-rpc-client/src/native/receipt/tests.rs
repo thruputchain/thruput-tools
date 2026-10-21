@@ -131,7 +131,7 @@ async fn commitment_survives_scheduler_statuses_unknown_and_errors() {
                 json!({"status": "retry", "error": {"source": "scheduler", "code": 4}}),
             )),
             Ok(status(
-                json!({"status": "dropped", "error": {"source": "auth", "code": 2}}),
+                json!({"status": "dropped", "error": {"source": "auth", "code": 2}, "recentFailure": {"attemptBlockHeight":"6", "cause":{"kind":"contractRejected", "contractIndex":0, "code":"tooMany"}}}),
             )),
             Ok(status(json!({"status": "unknown"}))),
             Err(NativeClientError::Transport(TransportError::RequestTimeout)),
@@ -166,10 +166,10 @@ async fn retry_and_dropped_do_not_preempt_later_receipt_without_commitment() {
         ],
         vec![
             Ok(status(
-                json!({"status": "retry", "error": {"source": "scheduler", "code": 1}}),
+                json!({"status": "retry", "error": {"source": "scheduler", "code": 1}, "recentFailure": {"attemptBlockHeight":"6", "cause":{"kind":"contractRejected", "contractIndex":0, "code":"tooMany"}}}),
             )),
             Ok(status(
-                json!({"status": "dropped", "error": {"source": "auth", "code": 2}}),
+                json!({"status": "dropped", "error": {"source": "auth", "code": 2}, "recentFailure": {"attemptBlockHeight":"6", "cause":{"kind":"contractRejected", "contractIndex":0, "code":"tooMany"}}}),
             )),
         ],
     );
@@ -283,6 +283,51 @@ async fn unknown_status_retains_raw_and_prior_commitment() {
     assert!(
         matches!(error.cause, ReceiptPollCause::Unsupported { method: "getTransactionStatus", raw: retained } if retained == raw)
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn timeout_without_commitment_retains_the_recent_attempt_diagnostic() {
+    let raw = json!({
+        "status":"retry", "error":{"source":"executor", "code":3},
+        "recentFailure":{"attemptBlockHeight":"6", "cause":{
+            "kind":"contractRejected", "contractIndex":0, "code":"tooMany"
+        }}
+    });
+    let source = make_source(vec![], vec![Ok(status(raw.clone()))]);
+    let error = poll_receipt(
+        &source,
+        network(),
+        hash(),
+        None,
+        ReceiptPollConfig {
+            timeout: Duration::from_millis(10),
+            interval: Duration::from_secs(1),
+        },
+        pending(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error.cause, ReceiptPollCause::Timeout));
+    assert!(error.evidence.commitment.is_none());
+    assert_eq!(
+        serde_json::to_value(error.evidence.last_status.unwrap()).unwrap(),
+        raw
+    );
+    assert_eq!(*source.requested.lock().unwrap(), [hash(), hash()]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn unknown_attempt_diagnostic_retains_complete_status_and_prior_commitment() {
+    let raw = json!({
+        "status":"retry", "error":{"source":"executor", "code":3},
+        "recentFailure":{"attemptBlockHeight":"6", "cause":{"kind":"future", "payload":[1,2]}}
+    });
+    let source = make_source(vec![], vec![Ok(status(raw.clone()))]);
+    let error = wait(&source, Some(known())).await.unwrap_err();
+    assert_eq!(error.evidence.commitment, Some(known()));
+    assert!(matches!(error.cause,
+        ReceiptPollCause::Unsupported { method: "getTransactionStatus", raw: retained } if retained == raw));
+    assert!(source.statuses.lock().unwrap().is_empty());
 }
 
 #[tokio::test(start_paused = true)]

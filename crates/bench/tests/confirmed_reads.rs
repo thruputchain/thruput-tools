@@ -42,33 +42,32 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
     let request: Value = serde_json::from_slice(&body).unwrap();
     let method = request["method"].as_str().unwrap();
     let result = match method {
-        "groundhog_version" => {
-            json!({"wireFormat":"3.0.0","implementation":"fixture","commitHash":"target-commit"})
+        "getVersionInfo" => {
+            json!({"wireFormat":"14.0.0","supportedMethods":["getTransactionReceipt","getTransactionStatus"],"implementation":"fixture","commitHash":"target-commit"})
         }
-        "groundhog_networkInfo" => json!({"networkHash":NETWORK}),
-        "groundhog_chainTip" => json!({"height":"7"}),
-        "groundhog_getTransactionStatus" => {
-            assert_eq!(request["params"], json!([HASH]));
+        "getNetworkInfo" => json!({"networkHash":NETWORK}),
+        "getChainTip" => json!({"height":"7"}),
+        "getTransactionStatus" => {
+            assert_eq!(request["params"], json!({"transactionHash":HASH}));
             let count = state.statuses.fetch_add(1, Ordering::SeqCst);
             if count > 0 && state.invalid {
                 json!({"status":"pending"})
             } else {
-                json!({"status":"committed","height":"7"})
+                json!({"status":"committed","blockHeight":"7"})
             }
         }
-        "groundhog_getTransactionReceipt" => {
-            assert_eq!(request["params"], json!([HASH]));
+        "getTransactionReceipt" => {
+            assert_eq!(request["params"], json!({"transactionHash":HASH}));
             let count = state.receipts.fetch_add(1, Ordering::SeqCst);
             if count < state.missing_receipts {
                 Value::Null
             } else {
-                json!({"txHash":if count > 0 && state.invalid {NETWORK} else {HASH},"height":"7","status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":"1500"})
+                json!({"transactionHash":if count > 0 && state.invalid {NETWORK} else {HASH},"blockHeight":"7","execution":{"result":"fault"},"events":[],"gasUsed":"1500"})
             }
         }
         _ => panic!("unexpected method {method}"),
     };
-    let is_read =
-        method == "groundhog_getTransactionStatus" || method == "groundhog_getTransactionReceipt";
+    let is_read = method == "getTransactionStatus" || method == "getTransactionReceipt";
     if is_read {
         let active = state.active.fetch_add(1, Ordering::SeqCst) + 1;
         state.peak.fetch_max(active, Ordering::SeqCst);

@@ -192,7 +192,10 @@ impl ReceiptEvidence {
 /// Supplied commitment must match that context and the original transaction hash.
 /// Retry/Dropped statuses never end a wait; even without a prior commitment they
 /// do not prove nonexecution. Transient receipt failures use bounded jittered
-/// backoff. Status failures retain evidence and continue to the next receipt read.
+/// backoff. Transient status failures retain evidence and continue to the next
+/// receipt read. Unsupported or malformed status representations (including an
+/// unfamiliar optional attempt diagnostic) stop with the original response
+/// evidence; they never permit transaction resubmission.
 #[tracing::instrument(skip_all)]
 pub async fn poll_receipt<S, F>(
     source: &S,

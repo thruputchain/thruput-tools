@@ -817,9 +817,11 @@ mod tests {
     async fn start_status_http_server(
         ctx: Arc<GatewayContext>,
     ) -> (std::net::SocketAddr, jsonrpsee::server::ServerHandle) {
-        use thruput_json_rpc_api::GroundhogApiServer;
-        use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-        use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
+        use thruput_json_rpc_server::{
+            BuildVersion, RpcServerConfig,
+            native::service::{NativeCapabilities, NativeService},
+        };
+        use thruput_json_rpc_types::NetworkHash;
 
         let config = ctx.config.clone();
         let rpc_metrics = ctx.metrics.clone();
@@ -852,10 +854,14 @@ mod tests {
             .await
             .unwrap();
         let addr = server.local_addr().unwrap();
+        let backend = crate::backend::GatewayBackend::new(ctx.clone());
         let handle = server.start(
-            GroundhogRpcServer::unified(
-                crate::backend::GatewayBackend::new(ctx.clone()),
-                NetworkInfo::new(NetworkHash::from(SHA256Hash::from([0; 32]))),
+            NativeService::new(
+                backend.clone(),
+                backend.clone(),
+                backend.clone(),
+                backend,
+                NetworkHash::from(SHA256Hash::from([0; 32])),
                 RpcServerConfig::default()
                     .with_request_timeout_ms(config.request_timeout_ms.max(3))
                     .with_max_events_per_page(config.max_events_per_page)
@@ -863,9 +869,13 @@ mod tests {
                     .with_max_cursor_bytes(config.max_cursor_bytes)
                     .with_max_view_calldata_bytes(config.max_view_calldata_bytes)
                     .with_view_gas_limit(config.view_gas_limit),
-                BuildInfo::new("test", Some("test")),
+                BuildVersion::new("test", Some("test")),
+                NativeCapabilities::new(true, true, false, false),
             )
-            .into_rpc(),
+            .into_module()
+            .unwrap()
+            .into_rpc()
+            .remove_context(),
         );
         (addr, handle)
     }
@@ -890,7 +900,7 @@ mod tests {
                 .map(|id| {
                     serde_json::json!({
                         "jsonrpc": "2.0", "id": id,
-                        "method": "groundhog_getTransactionReceipt", "params": [test_hash()],
+                        "method": "getTransactionReceipt", "params": {"transactionHash": test_hash()},
                     })
                 })
                 .collect();
@@ -956,7 +966,7 @@ mod tests {
                 .map(|id| {
                     serde_json::json!({
                         "jsonrpc": "2.0", "id": id,
-                        "method": "groundhog_getTransactionStatus", "params": [test_hash()],
+                        "method": "getTransactionStatus", "params": {"transactionHash": test_hash()},
                     })
                 })
                 .collect();
@@ -1008,7 +1018,7 @@ mod tests {
                 &[],
             );
             let metrics = ctx.metrics.gather(&snapshot).unwrap();
-            assert!(metrics.contains("groundhog_gateway_rpc_requests_total{method=\"groundhog_getTransactionStatus\",outcome=\"ok\"} 20\n"));
+            assert!(metrics.contains("groundhog_gateway_rpc_requests_total{method=\"getTransactionStatus\",outcome=\"ok\"} 20\n"));
             assert!(metrics.contains("groundhog_gateway_http_requests_total{endpoint=\"jsonrpc\",status_class=\"2xx\"} 1\n"));
             assert!(metrics.contains("groundhog_gateway_rpc_batch_size_count 1\n"));
             handle.stop().unwrap();

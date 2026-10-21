@@ -9,12 +9,18 @@
 
 use std::{future::Future, io, net::SocketAddr, process::ExitStatus};
 
-use jsonrpsee::server::{RpcModule, Server, ServerConfig, ServerHandle};
+use jsonrpsee::server::{Server, ServerConfig, ServerHandle};
 use serde::Serialize;
 use thruput_bundle_identity::BundleIdentity;
-use thruput_json_rpc_api::{AirdropApiServer, GroundhogApiServer, LocalFundingApiServer};
 use thruput_json_rpc_server::batch::{ConcurrentBatchService, MAX_RPC_BATCH_REQUESTS};
-use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use thruput_json_rpc_server::{
+    RpcServerConfig,
+    native::{
+        read::{NativeBlockPlane, NativeHistoryPlane, NativeSimulationPlane, NativeStatePlane},
+        service::{NativeCapabilities, NativeService},
+        transaction::NativeTransactionReadPlane,
+    },
+};
 use thruput_json_rpc_types::protocol_token::protocol_text;
 use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
 use thruput_xdr::PROTOCOL_VERSION;
@@ -29,9 +35,6 @@ use crate::{
     stub_backend::StubBackend,
     view_backend::HogdDevViewBackend,
 };
-
-#[cfg(feature = "native-rpc-qualification")]
-pub mod qualification;
 
 /// Why a [`NodeSupervisorHandle::stopped`] call returned.
 ///
@@ -460,9 +463,7 @@ async fn start_rpc_server(
         .await
     } else {
         tracing::warn!(
-            "hogd-dev did not advertise indexer_block_explorer or db_gateway endpoints; read plane is stubbed \
-             (getTransactionReceipt / getTransactionStatus / getContractEvents / \
-              getStorageAt return NotImplemented)"
+            "hogd-dev did not advertise indexer or database endpoints; dependent RPC methods are unavailable"
         );
         start_rpc_server_with_read(
             listen_address,
@@ -561,8 +562,13 @@ async fn start_rpc_server_with_read<R, V>(
     options: RpcServerOptions,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
-    R: thruput_json_rpc_server::ReadPlane + Clone,
-    V: thruput_json_rpc_server::ViewPlane,
+    R: thruput_json_rpc_server::ReadPlane
+        + NativeStatePlane
+        + NativeTransactionReadPlane
+        + NativeBlockPlane
+        + NativeHistoryPlane
+        + Clone,
+    V: NativeSimulationPlane,
 {
     let RpcServerOptions {
         view_batch,
@@ -616,37 +622,42 @@ where
             block_driver_trigger,
         )
     });
-    let core_rpc = GroundhogRpcServer::new(
+    let core_rpc = NativeService::new(
         scheduler_backend.clone(),
         scheduler_backend,
         read,
         view,
-        network_info,
+        network_info.network_hash,
         RpcServerConfig::default()
             .with_view_gas_limit(view_gas_limit)
             .with_view_timeout_ms(view_timeout_ms)
             .with_view_batch(view_batch),
-        BuildInfo::from_build_version(
-            thruput_json_rpc_server::build_version!(),
-            option_env!("GIT_COMMIT"),
+        thruput_json_rpc_server::build_version!(),
+        NativeCapabilities::new(
+            true,
+            backend_planes.read.is_indexer_backed(),
+            matches!(backend_planes.chain, PlaneStatus::DbGateway),
+            matches!(backend_planes.view, PlaneStatus::ViewGateway),
         ),
-    );
+    )
+    .with_local_pending_count();
     let core_rpc = match bundle_identity.as_ref() {
         Some(identity) => core_rpc.with_bundle_identity(identity),
         None => core_rpc,
     };
-    let mut module = RpcModule::new(());
-    module
-        .merge(GroundhogApiServer::into_rpc(core_rpc))
-        .expect("bug: json-rpc-server methods register without conflicts");
-    if let Some(local_airdrop) = local_airdrop {
-        module
-            .merge(LocalFundingApiServer::into_rpc(local_airdrop.clone()))
-            .expect("bug: local funding methods register without conflicts");
-        module
-            .merge(AirdropApiServer::into_rpc(local_airdrop))
-            .expect("bug: local airdrop methods register without conflicts");
-    }
+    let module = match local_airdrop {
+        Some(funding) => core_rpc
+            .with_funding(funding)
+            .into_module()
+            .expect("bug: native methods register without conflicts")
+            .into_rpc()
+            .remove_context(),
+        None => core_rpc
+            .into_module()
+            .expect("bug: native methods register without conflicts")
+            .into_rpc()
+            .remove_context(),
+    };
 
     let rpc_handle = server.start(module);
     Ok(StartedRpcServer {

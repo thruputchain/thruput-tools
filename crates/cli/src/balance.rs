@@ -2,9 +2,10 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use serde_json::json;
-use thruput_json_rpc_client::GroundhogApiClient;
+use thruput_json_rpc_client::native::NativeClient;
+use thruput_json_rpc_types::requests::AddressQuery;
 use thruput_json_rpc_types::{
-    ContractAddress, balance::BalanceResponse, runtime_manifest::RuntimeManifestStorageCostModel,
+    ContractAddress, responses::BalanceResult, runtime_manifest::RuntimeManifestStorageCostModel,
 };
 
 use crate::account_resolution::resolve_address_target_or_default_wallet;
@@ -16,7 +17,7 @@ use crate::result::CommandResult;
 use crate::{CliError, Print};
 
 /// Schema version of the `balance --json` data payload.
-pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 2;
+pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 3;
 const LOW_LOCAL_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
 /// Read native HOG balance for a wallet, contract, dev account, or address.
@@ -37,21 +38,23 @@ pub fn run(
 
     let task = crate::print::progress::Task::start(print, "Fetching balance", true);
     let balance = fetch_balance_blocking(&rpc_url, address)?;
-    let raw_balance = parse_raw_balance(&balance.raw_balance)?;
+    let raw_balance = u128::try_from(balance.raw_balance).map_err(|_| {
+        crate::native_rpc::failure("negative free balance", json!({"result":balance}))
+    })?;
     let balance_hog = hog::format_amount(raw_balance);
 
     let warnings = task.finish();
     if print.has_human_ui() {
         let mut fields = vec![
             ("Balance".into(), format!("{balance_hog} HOG")),
-            ("Raw balance".into(), balance.raw_balance.clone()),
+            ("Raw balance".into(), balance.raw_balance.to_string()),
         ];
         if target != address_hex {
             fields.push(("Target".into(), target.clone()));
         }
         fields.extend([
             ("Address".into(), address_hex.clone()),
-            ("Height".into(), balance.height.to_string()),
+            ("Height".into(), balance.state_block_height.to_string()),
             ("Profile".into(), resolved_profile.name.clone()),
             ("RPC URL".into(), rpc_url.clone()),
         ]);
@@ -75,9 +78,9 @@ pub fn run(
             "rpcUrl": rpc_url,
             "target": target,
             "address": address_hex,
-            "rawBalance": balance.raw_balance,
+            "rawBalance": balance.raw_balance.to_string(),
             "balanceHog": balance_hog,
-            "height": balance.height.to_string(),
+            "stateBlockHeight": balance.state_block_height.to_string(),
         }),
     ))?;
 
@@ -87,23 +90,27 @@ pub fn run(
 pub(crate) fn fetch_balance_blocking(
     rpc_url: &str,
     address: ContractAddress,
-) -> Result<BalanceResponse, CliError> {
+) -> Result<BalanceResult, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     rt.block_on(fetch_balance(rpc_url, address))
 }
 
-async fn fetch_balance(
-    rpc_url: &str,
-    address: ContractAddress,
-) -> Result<BalanceResponse, CliError> {
-    let client = crate::http_client::rpc_client(rpc_url)?;
-    client
-        .get_balance(address)
+async fn fetch_balance(rpc_url: &str, address: ContractAddress) -> Result<BalanceResult, CliError> {
+    let client = NativeClient::new(crate::http_client::rpc_client(rpc_url)?);
+    thruput_client::check_endpoint(&client, &["getBalance"])
         .await
-        .map_err(|e| CliError::RpcMethodFailed {
-            method: "getBalance",
-            message: e.to_string(),
-        })
+        .map_err(|error| crate::native_rpc::rpc_error(&error))?;
+    let balance = crate::native_rpc::known(
+        "getBalance",
+        client.get_balance(AddressQuery { address }).await,
+    )?;
+    if balance.address != address || balance.raw_balance < 0 {
+        return Err(crate::native_rpc::failure(
+            "inconsistent balance response",
+            json!({"expectedAddress":address,"result":balance}),
+        ));
+    }
+    Ok(balance)
 }
 
 fn parse_raw_balance(raw: &str) -> Result<u128, CliError> {

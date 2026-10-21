@@ -17,7 +17,7 @@ pub(super) async fn fetch_event_page(
     continuation: bool,
 ) -> Result<EventPage, CliError> {
     let client = NativeClient::new(crate::http_client::rpc_client(url)?);
-    thruput_client::native::check_endpoint(&client, &["getEvents"])
+    thruput_client::check_endpoint(&client, &["getEvents"])
         .await
         .map_err(|error| native_rpc::rpc_error(&error))?;
     let response = client

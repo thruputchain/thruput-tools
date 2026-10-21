@@ -7,6 +7,7 @@ use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
 
 use super::{
     FinalizedNativeModule, NativeModule,
+    funding::{FundingCapabilities, NativeFundingPlane},
     read::{
         NativeBlockPlane, NativeHistoryPlane, NativeReadCapabilities, NativeReadService,
         NativeSimulationPlane, NativeStatePlane,
@@ -16,7 +17,7 @@ use super::{
 use crate::{BuildInfo, BuildVersion, ChainPlane, GroundhogRpcServer, RpcServerConfig};
 
 /// Configured backend planes. Transient health does not change registration.
-/// Optional funding remains outside this composition.
+/// Funding and local scheduler methods are attached before module finalization.
 #[derive(Debug, Clone, Copy)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -27,6 +28,8 @@ pub struct NativeCapabilities {
     indexer: bool,
     db: bool,
     simulation: bool,
+    funding: FundingCapabilities,
+    local_pending_count: bool,
 }
 
 impl NativeCapabilities {
@@ -41,6 +44,8 @@ impl NativeCapabilities {
             indexer,
             db,
             simulation,
+            funding: FundingCapabilities::None,
+            local_pending_count: false,
         }
     }
 
@@ -57,6 +62,12 @@ impl NativeCapabilities {
             "getChainTip" | "getChainConfig" | "getStorage" | "getBalance"
             | "getRegisteredAuth" => self.db,
             "simulateInvocation" | "simulateInvocations" => self.simulation,
+            "faucet_requestAirdrop" => matches!(
+                self.funding,
+                FundingCapabilities::Faucet | FundingCapabilities::Local
+            ),
+            "dev_fundAccount" => matches!(self.funding, FundingCapabilities::Local),
+            "dev_getPendingTransactionCount" => self.local_pending_count,
             _ => false,
         }
     }
@@ -76,12 +87,13 @@ impl NativeCapabilities {
 /// Shared native service over caller-owned backend connections.
 ///
 /// This assembles discovery, state, simulation, history and transaction lifecycle methods.
-/// It does not bind a socket or change either production binary's registration.
+/// Binaries select configured planes and bind the resulting module to a listener.
 #[derive(Debug)]
-pub struct NativeService<S, C, R, V> {
+pub struct NativeService<S, C, R, V, F = ()> {
     reads: NativeReadService<C, R, V>,
     transactions: GroundhogRpcServer<S, C, R, ()>,
     capabilities: NativeCapabilities,
+    funding: F,
 }
 
 impl<S, C: ChainPlane + Clone, R: Clone, V> NativeService<S, C, R, V> {
@@ -124,11 +136,31 @@ impl<S, C: ChainPlane + Clone, R: Clone, V> NativeService<S, C, R, V> {
             reads,
             transactions,
             capabilities,
+            funding: (),
         }
     }
 }
 
-impl<S, C, R, V> NativeService<S, C, R, V> {
+impl<S, C, R, V, F> NativeService<S, C, R, V, F> {
+    /// Attach configured optional funding before registration is finalized.
+    pub fn with_funding<N: NativeFundingPlane>(self, funding: N) -> NativeService<S, C, R, V, N> {
+        let mut capabilities = self.capabilities;
+        capabilities.funding = funding.capabilities();
+        NativeService {
+            reads: self.reads,
+            transactions: self.transactions,
+            capabilities,
+            funding,
+        }
+    }
+
+    /// Enable the local runtime's scheduler count. Hosted gateways must omit it.
+    #[must_use]
+    pub fn with_local_pending_count(mut self) -> Self {
+        self.capabilities.local_pending_count = true;
+        self
+    }
+
     /// Attach validated installed-bundle provenance to discovery.
     #[must_use]
     pub fn with_bundle_identity(mut self, identity: &BundleIdentity) -> Self {
@@ -138,12 +170,13 @@ impl<S, C, R, V> NativeService<S, C, R, V> {
     }
 }
 
-impl<S, C, R, V> NativeService<S, C, R, V>
+impl<S, C, R, V, F> NativeService<S, C, R, V, F>
 where
     S: NativeSubmitPlane,
     C: ChainPlane,
     R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane + NativeHistoryPlane,
     V: NativeSimulationPlane,
+    F: NativeFundingPlane,
 {
     /// Remove unavailable and unimplemented methods, then freeze discovery.
     /// The caller supplies transport policy and owns the returned module.
@@ -159,7 +192,7 @@ where
     }
 }
 
-fn method_not_found() -> ErrorObjectOwned {
+pub(super) fn method_not_found() -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
         jsonrpsee::types::error::METHOD_NOT_FOUND_CODE,
         "Method not found",
@@ -226,6 +259,15 @@ macro_rules! dispatch {
     (get_transaction_receipt, $s:expr, $r:expr) => {
         $s.transactions.native_transaction_receipt($r).await
     };
+    (request_airdrop, $s:expr, $r:expr) => {
+        $s.funding.request_airdrop($r).await
+    };
+    (fund_account, $s:expr, $r:expr) => {
+        $s.funding.fund_account($r).await
+    };
+    (get_pending_transaction_count, $s:expr, $r:expr) => {
+        $s.reads.get_pending_transaction_count($r).await
+    };
     ($name:ident, $s:expr, $r:expr) => {{
         let _ = $r;
         Err(method_not_found())
@@ -234,12 +276,13 @@ macro_rules! dispatch {
 
 macro_rules! implement {
     ($( $(#[$doc:meta])* $name:ident($wire:literal,$parse:ident,$decorate:ident): $request:ty => $response:ty; )*) => {
-        impl<S, C, R, V> NativeApi for NativeService<S, C, R, V>
+        impl<S, C, R, V, F> NativeApi for NativeService<S, C, R, V, F>
         where
             S: NativeSubmitPlane,
             C: ChainPlane,
             R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane + NativeHistoryPlane,
             V: NativeSimulationPlane,
+            F: NativeFundingPlane,
         {
             $(
                 #[tracing::instrument(skip_all)]

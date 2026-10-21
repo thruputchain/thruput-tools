@@ -18,7 +18,7 @@ pub(super) async fn fetch_transaction_page(
     continuation: bool,
 ) -> Result<TransactionRefPage, CliError> {
     let client = NativeClient::new(crate::http_client::rpc_client(url)?);
-    thruput_client::native::check_endpoint(&client, &["getTransactionsByRootAddress"])
+    thruput_client::check_endpoint(&client, &["getTransactionsByRootAddress"])
         .await
         .map_err(|error| native_rpc::rpc_error(&error))?;
     let response = client

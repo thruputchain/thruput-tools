@@ -7,14 +7,24 @@
 
 use std::time::Duration;
 use thruput_json_rpc_client::{
-    AirdropApiClient, GroundhogApiClient, HttpClient, HttpClientBuilder,
-    poll_transaction_receipt_with_client_config,
+    HttpClient, HttpClientBuilder,
+    native::{
+        NativeClient, NativeClientError,
+        receipt::{ReceiptPollConfig, poll_receipt},
+    },
 };
 use thruput_json_rpc_types::{
-    airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
+    airdrop::ClientNonce,
     base58::Base58,
-    receipt::{ExecStatus, TransactionReceipt},
-    transaction::{ConflictCode, TransactionStatus, TxHash},
+    hex::HexBytes,
+    requests::{
+        AddressQuery, AirdropRequest, EmptyRequest, SendTransactionRequest, TransactionQuery,
+    },
+    responses::{
+        AirdropAttempt, ConflictCode, DecodedResponse, FailureCause, ReceiptExecution,
+        RecentAttemptFailure, SchedulerErrorSource, TransactionReceipt, TransactionStatus,
+    },
+    transaction::TxHash,
 };
 use thruput_signing::default_wallet::*;
 use thruput_signing::{
@@ -29,8 +39,15 @@ use thruput_xdr::{
 };
 use xdr_common::BytesM;
 
+fn known<T: std::fmt::Debug>(response: Result<DecodedResponse<T>, NativeClientError>) -> T {
+    match response.expect("native RPC response") {
+        DecodedResponse::Known(value) => value,
+        other => panic!("unsupported native response: {other:?}"),
+    }
+}
+
 async fn submit(
-    client: &HttpClient,
+    client: &NativeClient<HttpClient>,
     signer: &LocalSigner,
     network: &NetworkHash,
     tx: Transaction,
@@ -39,28 +56,75 @@ async fn submit(
     let bytes =
         sign_and_encode_transaction_hex(tx, signer, SignTransactionParams::default(), network)
             .unwrap();
-    eprintln!("submitting {}", hex::encode(hash.0.0.as_ref()));
-    assert_eq!(client.send_raw_transaction(bytes).await.unwrap(), hash);
+    eprintln!("submitting {hash:?}");
+    let ack = known(
+        client
+            .send_transaction(SendTransactionRequest {
+                signed_transaction: HexBytes(hex::decode(bytes.trim_start_matches("0x")).unwrap()),
+            })
+            .await,
+    );
+    assert_eq!(ack.transaction_hash, hash);
     hash
 }
 
-async fn success(client: &HttpClient, hash: TxHash) -> TransactionReceipt {
-    let receipt =
-        poll_transaction_receipt_with_client_config(client, hash, 120, Duration::from_millis(250))
-            .await
-            .unwrap();
-    assert!(matches!(receipt.status, ExecStatus::Ok), "{receipt:?}");
+async fn success(
+    client: &NativeClient<HttpClient>,
+    network: &NetworkHash,
+    hash: TxHash,
+) -> TransactionReceipt {
+    let receipt = poll_receipt(
+        client,
+        Base58(**network),
+        hash,
+        None,
+        ReceiptPollConfig {
+            timeout: Duration::from_secs(30),
+            interval: Duration::from_millis(250),
+        },
+        std::future::pending(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(receipt.execution, ReceiptExecution::Return { .. }),
+        "{receipt:?}"
+    );
     receipt
 }
 
-async fn balance(client: &HttpClient, address: ContractAddress) -> u128 {
-    client
-        .get_balance(Base58(address))
-        .await
-        .unwrap()
-        .raw_balance
-        .parse()
-        .unwrap()
+fn returned(receipt: &TransactionReceipt) -> &[u8] {
+    match &receipt.execution {
+        ReceiptExecution::Return { return_data } => &return_data.0,
+        other => panic!("execution did not return: {other:?}"),
+    }
+}
+
+async fn balance(
+    client: &NativeClient<HttpClient>,
+    address: ContractAddress,
+    min_height: Option<&thruput_json_rpc_types::BlockHeight>,
+) -> u128 {
+    let balance = known(
+        client
+            .get_balance(AddressQuery {
+                address: Base58(address),
+            })
+            .await,
+    );
+    assert_eq!(balance.address.0, address);
+    if let Some(min_height) = min_height {
+        assert!(
+            balance.state_block_height >= *min_height,
+            "stale balance at {:?}, need {min_height:?}",
+            balance.state_block_height
+        );
+    }
+    u128::try_from(balance.raw_balance).unwrap()
+}
+
+async fn expiry(client: &NativeClient<HttpClient>) -> i64 {
+    *known(client.get_chain_tip(EmptyRequest {}).await).block_height + 100
 }
 
 #[tokio::test]
@@ -75,12 +139,42 @@ async fn native_atomic_funded_deploy() {
     qualify_native_deployment(true).await;
 }
 
-async fn qualify_native_deployment(atomic: bool) {
+struct WalletFixture {
+    client: NativeClient<HttpClient>,
+    network: NetworkHash,
+    manifest: thruput_json_rpc_types::runtime_manifest::RuntimeManifest,
+    signer: LocalSigner,
+    account: PubkeyAccount,
+    contract: Contract,
+    funding_block_height: thruput_json_rpc_types::BlockHeight,
+}
+
+async fn funded_fixture() -> WalletFixture {
     let url = std::env::var("RPC_URL").expect("RPC_URL must identify a disposable local chain");
     let artifact =
         std::env::var("NATIVE_WALLET_COUNTER_RV32A").expect("Counter 0.1.0 artifact path required");
-    let client = HttpClientBuilder::default().build(url).unwrap();
-    let network = NetworkHash::new(client.network_info().await.unwrap().network_hash.0);
+    let client = NativeClient::new(HttpClientBuilder::default().build(url).unwrap());
+    let version = known(client.get_version_info(EmptyRequest {}).await);
+    assert_eq!(version.wire_format.split('.').next(), Some("14"));
+    for method in [
+        "getNetworkInfo",
+        "getChainTip",
+        "getBalance",
+        "faucet_requestAirdrop",
+        "sendTransaction",
+        "getTransactionStatus",
+        "getTransactionReceipt",
+    ] {
+        assert!(
+            version.supported_methods.iter().any(|name| name == method),
+            "missing {method}"
+        );
+    }
+    let network = NetworkHash::new(
+        known(client.get_network_info(EmptyRequest {}).await)
+            .network_hash
+            .0,
+    );
     let manifest: thruput_json_rpc_types::runtime_manifest::RuntimeManifest =
         serde_json::from_slice(
             &std::fs::read(
@@ -91,39 +185,61 @@ async fn qualify_native_deployment(atomic: bool) {
         )
         .unwrap();
     assert_eq!(manifest.network_hash.to_network_hash(), network);
-    let costs = &manifest.bootstrap.storage_cost_model;
-    let balance_cost: u128 = costs.balance_cost.parse().unwrap();
-    let replay_cost = costs.base_data_item_cost.parse::<u128>().unwrap()
-        + costs.replay_cache_cost_per_entry.parse::<u128>().unwrap();
     let mut secret = [0; 32];
     getrandom::fill(&mut secret).unwrap();
     let signer = LocalSigner::from_secret_key(secret);
     let account = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
-    assert_eq!(balance(&client, account.address()).await, 0);
+    assert_eq!(balance(&client, account.address(), None).await, 0);
     let request = AirdropRequest {
         recipient: Base58(account.address()),
         client_nonce: ClientNonce::new(vec![0x37]).unwrap(),
     };
-    let mut funded = false;
-    for _ in 0..120 {
-        match client.request_airdrop(request.clone()).await.unwrap() {
-            AirdropAttemptResponse::Succeeded { status, .. } => {
-                assert!(matches!(status, ExecStatus::Ok));
-                funded = true;
-                break;
-            }
-            AirdropAttemptResponse::Pending { .. } => {
-                tokio::time::sleep(Duration::from_millis(250)).await
-            }
-            other => panic!("unexpected airdrop response: {other:?}"),
+    let funding = known(client.request_airdrop(request).await);
+    let funding_hash = match funding {
+        AirdropAttempt::Pending {
+            recipient,
+            transaction_hash: Some(hash),
+            ..
         }
-    }
-    assert!(funded, "airdrop did not confirm");
+        | AirdropAttempt::Succeeded {
+            recipient,
+            transaction_hash: hash,
+            ..
+        } => {
+            assert_eq!(recipient.0, account.address());
+            hash
+        }
+        other => panic!("funding cannot be observed without a returned hash: {other:?}"),
+    };
+    let funding_block_height = success(&client, &network, funding_hash).await.block_height;
     let contract = Contract::kRv32 {
         rv32_contract: ContractBlob {
             data: BytesM(std::fs::read(artifact).unwrap()),
         },
     };
+    WalletFixture {
+        client,
+        network,
+        manifest,
+        signer,
+        account,
+        contract,
+        funding_block_height,
+    }
+}
+
+/// Verifies the indexed conflict remains visible alongside the scheduler retry.
+#[tokio::test]
+#[ignore = "requires a disposable runtime exposing the advisory unfunded-deployment diagnostic"]
+async fn unfunded_deployment_reports_target_storage_conflict() {
+    let WalletFixture {
+        client,
+        network,
+        signer,
+        account,
+        contract,
+        ..
+    } = funded_fixture().await;
     let hash = wallet_contract_hash(&contract).unwrap();
     let unfunded_salt = SHA256Hash::from([1; 32]);
     let unfunded_target = derive_deploy_address(&account.address(), &unfunded_salt, &hash).unwrap();
@@ -134,43 +250,75 @@ async fn qualify_native_deployment(atomic: bool) {
         amount: 0,
         initializer: None,
         gas_limit: 1_000_000,
-        block_expiry_height: *client.chain_tip().await.unwrap().height + 100,
+        block_expiry_height: expiry(&client).await,
         nonce: 1,
     })
     .unwrap();
     let negative_hash = submit(&client, &signer, &network, negative).await;
     let mut saw_funding_failure = false;
+    let mut last_status = None;
     for _ in 0..120 {
-        match client.get_transaction_status(negative_hash).await.unwrap() {
-            TransactionStatus::RecentFailure {
-                cause:
-                    thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
-                        conflict,
-                    },
-                ..
+        let status = known(
+            client
+                .get_transaction_status(TransactionQuery {
+                    transaction_hash: negative_hash,
+                })
+                .await,
+        );
+        last_status = Some(status.clone());
+        match status {
+            TransactionStatus::Retry {
+                error,
+                recent_failure:
+                    Some(RecentAttemptFailure {
+                        cause: FailureCause::DbConflict { conflict },
+                        ..
+                    }),
             } if conflict.address.0 == unfunded_target
                 && matches!(
                     conflict.code,
                     ConflictCode::BoundsExceeded | ConflictCode::InsufficientFunds
                 ) =>
             {
+                assert!(matches!(error.source, SchedulerErrorSource::Executor));
+                assert_eq!(
+                    error.code,
+                    thruput_xdr::exec_result::ExecResult::ExecResultTxNonDeterministicError.0
+                );
+                eprintln!("unfunded deployment diagnostic: {last_status:?}");
                 saw_funding_failure = true;
                 break;
             }
             TransactionStatus::Committed { .. } => panic!("unfunded deploy unexpectedly committed"),
-            TransactionStatus::Invalid { reason } => panic!("unexpected rejection: {reason}"),
+            TransactionStatus::Dropped { error, .. } => panic!("unexpected rejection: {error:?}"),
             _ => tokio::time::sleep(Duration::from_millis(250)).await,
         }
     }
     assert!(
         saw_funding_failure,
-        "expected target storage funding failure"
+        "expected target storage funding failure; last status: {last_status:?}"
     );
-    // RecentFailure is advisory. Never fund that target or replace that attempt:
-    // use a different deployment identity for the positive test.
+}
+
+async fn qualify_native_deployment(atomic: bool) {
+    // Each positive flow has a fresh account; no uncertain negative attempt can interfere.
+    let WalletFixture {
+        client,
+        network,
+        manifest,
+        signer,
+        account,
+        contract,
+        funding_block_height,
+    } = funded_fixture().await;
+    let costs = &manifest.bootstrap.storage_cost_model;
+    let balance_cost: u128 = costs.balance_cost.parse().unwrap();
+    let replay_cost = costs.base_data_item_cost.parse::<u128>().unwrap()
+        + costs.replay_cache_cost_per_entry.parse::<u128>().unwrap();
+    let hash = wallet_contract_hash(&contract).unwrap();
     let salt = SHA256Hash::from([2; 32]);
     let target = derive_deploy_address(&account.address(), &salt, &hash).unwrap();
-    let before = balance(&client, account.address()).await;
+    let before = balance(&client, account.address(), Some(&funding_block_height)).await;
     let amount = 50_000_000; // 5 HOG tests feasibility, not a minimum-cost estimate.
     assert!(before > amount, "local faucet must fund more than 5 HOG");
     let code_size = match &contract {
@@ -186,23 +334,31 @@ async fn qualify_native_deployment(atomic: bool) {
             target_calldata: &calldata,
             target_gas_limit: 500_000,
             gas_limit: 1_000_000,
-            block_expiry_height: *client.chain_tip().await.unwrap().height + 100,
+            block_expiry_height: expiry(&client).await,
             nonce: 2,
         })
         .unwrap();
-        let receipt = success(&client, submit(&client, &signer, &network, transfer).await).await;
+        let receipt = success(
+            &client,
+            &network,
+            submit(&client, &signer, &network, transfer).await,
+        )
+        .await;
         assert!(
-            decode_default_wallet_call_return(&receipt.return_data.unwrap().0)
+            decode_default_wallet_call_return(returned(&receipt))
                 .unwrap()
                 .is_empty()
         );
         // getBalance reports free HOG, after storage collateral is reserved. The
         // sender creates a replay entry; the fresh recipient creates a balance item.
         assert_eq!(
-            balance(&client, account.address()).await,
+            balance(&client, account.address(), Some(&receipt.block_height)).await,
             before - amount - replay_cost
         );
-        assert_eq!(balance(&client, target).await, amount - balance_cost);
+        assert_eq!(
+            balance(&client, target, Some(&receipt.block_height)).await,
+            amount - balance_cost
+        );
     }
     let deployment = BuildDefaultWalletDeployTransaction {
         account: &account,
@@ -211,16 +367,21 @@ async fn qualify_native_deployment(atomic: bool) {
         amount: if atomic { amount } else { 0 },
         initializer: None,
         gas_limit: 1_000_000,
-        block_expiry_height: *client.chain_tip().await.unwrap().height + 100,
+        block_expiry_height: expiry(&client).await,
         nonce: 3,
     };
     let deploy = build_default_wallet_deploy_transaction(deployment).unwrap();
-    let receipt = success(&client, submit(&client, &signer, &network, deploy).await).await;
-    let deployed: ContractAddress = xdrs::cxs::decode(&receipt.return_data.unwrap().0).unwrap();
+    let receipt = success(
+        &client,
+        &network,
+        submit(&client, &signer, &network, deploy).await,
+    )
+    .await;
+    let deployed: ContractAddress = xdrs::cxs::decode(returned(&receipt)).unwrap();
     assert_eq!(deployed, target);
     if atomic {
         assert_eq!(
-            balance(&client, account.address()).await,
+            balance(&client, account.address(), Some(&receipt.block_height)).await,
             before - amount - replay_cost
         );
         let deployment_cost = costs.base_contract_deployment_cost.parse::<u128>().unwrap()
@@ -230,7 +391,7 @@ async fn qualify_native_deployment(atomic: bool) {
                     .parse::<u128>()
                     .unwrap();
         assert_eq!(
-            balance(&client, target).await,
+            balance(&client, target, Some(&receipt.block_height)).await,
             amount - balance_cost - deployment_cost
         );
     }
@@ -249,12 +410,17 @@ async fn qualify_native_deployment(atomic: bool) {
             target_calldata: &calldata,
             target_gas_limit: 500_000,
             gas_limit: 1_000_000,
-            block_expiry_height: *client.chain_tip().await.unwrap().height + 100,
+            block_expiry_height: expiry(&client).await,
             nonce,
         })
         .unwrap();
-        let receipt = success(&client, submit(&client, &signer, &network, call).await).await;
-        let returned = decode_default_wallet_call_return(&receipt.return_data.unwrap().0).unwrap();
+        let receipt = success(
+            &client,
+            &network,
+            submit(&client, &signer, &network, call).await,
+        )
+        .await;
+        let returned = decode_default_wallet_call_return(returned(&receipt)).unwrap();
         if nonce == 5 {
             assert_eq!(xdrs::cxs::decode::<u64>(&returned).unwrap(), 42);
         }

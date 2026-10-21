@@ -1,4 +1,4 @@
-//! Explicit native invocation simulation for qualification builds.
+//! Native invocation simulation and reports.
 
 use jsonrpsee::core::client::ClientT;
 use schemars::JsonSchema;
@@ -10,12 +10,13 @@ use thruput_json_rpc_types::{
 };
 
 use super::{
-    ArtifactOptions, CliError, CommandResult, ContractAddress, HexBytes, Path, PreparedView, Print,
-    ProfileOverrides, decode_abort, decode_return, format_contract_address, prefixed_hex,
-    prepare_view, selector_json,
+    ArtifactOptions, CliError, ContractAddress, HexBytes, Path, PreparedView, ProfileOverrides,
+    format_contract_address, prefixed_hex, prepare_view, selector_json,
 };
+use crate::Print;
 use crate::abort_json::AbortReport;
-use crate::result::CommandError;
+use crate::codec::{decode_abort, decode_return};
+use crate::result::{CommandError, CommandResult};
 
 /// Resolve the same local inputs as `view`, then simulate through an explicitly
 /// selected native endpoint. No signing key is needed and no transaction is sent.
@@ -121,11 +122,11 @@ async fn fetch_simulation<C: ClientT + Sync>(
     } else {
         &["simulateInvocation"][..]
     };
-    thruput_client::native::check_endpoint(client, required)
+    thruput_client::check_endpoint(client, required)
         .await
         .map_err(|error| crate::native_rpc::rpc_error(&error))?;
     if let Some(expected) = expected_network {
-        thruput_client::native::validate_network(client, expected)
+        thruput_client::validate_network(client, expected)
             .await
             .map_err(|error| crate::native_rpc::rpc_error(&error))?;
     }

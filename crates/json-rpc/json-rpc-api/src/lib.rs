@@ -1,7 +1,5 @@
-//! Shared JSON-RPC trait definitions for the Groundhog RPC surface.
-//!
-//! Both the production gateway and local node implement
-//! `GroundhogApiServer`. The client crate uses `GroundhogApiClient`.
+//! Shared JSON-RPC contracts. Production endpoints use [`native::NativeApi`].
+//! The older traits remain for internal adapters during consumer migration.
 
 pub use thruput_json_rpc_types as types;
 pub mod params;
@@ -36,7 +34,7 @@ use thruput_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "13.0.0";
+pub const WIRE_FORMAT_VERSION: &str = "14.0.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -218,5 +216,5 @@ pub trait GroundhogApi {
     async fn version(&self) -> RpcResult<VersionInfo>;
 }
 
-/// Candidate native transport; production activation is separate.
+/// Native JSON-RPC transport.
 pub mod native;

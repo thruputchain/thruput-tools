@@ -1,15 +1,13 @@
-//! One receipt-polling loop, shared by every consumer that waits on a
-//! transaction.
+//! Receipt polling for explicit adapters into stable report models.
 //!
-//! [`poll_receipt`] drives the loop over a [`ReceiptSource`] rather than a
-//! concrete client, so a caller that meters its own requests, wraps the typed
-//! client behind its own error type, or substitutes a test double reuses the
-//! loop instead of copying it.
+//! The simulator uses [`ReceiptSource`] to meter reads and project native responses
+//! into its report types. This module does not implement HTTP calls. Public native
+//! clients should use [`crate::native::receipt::poll_receipt`], which preserves
+//! commitment and unsupported response evidence.
 
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use thruput_json_rpc_api::GroundhogApiClient;
 use thruput_json_rpc_types::receipt::TransactionReceipt;
 use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
 
@@ -26,10 +24,9 @@ pub const DEFAULT_RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The chain reads a receipt poll makes.
 ///
-/// Implement this to poll through something other than a bare JSON-RPC client:
-/// a connection pool that takes a permit per request, a handle that reports its
-/// own error type, or a test double. Every [`GroundhogApiClient`] already
-/// satisfies it, so an `HttpClient` can be polled directly.
+/// Implement this for a connection pool that takes a permit per request, a handle
+/// that reports its own error type, or a test double. Sources supply their read behavior;
+/// a bare HTTP client does not implement this report-model adapter.
 pub trait ReceiptSource {
     /// What this source reports when an RPC round trip fails.
     type Error;
@@ -51,33 +48,6 @@ pub trait ReceiptSource {
         _tx_hash: TxHash,
     ) -> impl Future<Output = Result<Option<TransactionStatus>, Self::Error>> + Send {
         async { Ok(None) }
-    }
-}
-
-impl<C> ReceiptSource for C
-where
-    C: GroundhogApiClient + Sync,
-{
-    type Error = jsonrpsee::core::client::Error;
-
-    #[allow(clippy::manual_async_fn)]
-    fn transaction_receipt(
-        &self,
-        tx_hash: TxHash,
-    ) -> impl Future<Output = Result<Option<TransactionReceipt>, Self::Error>> + Send {
-        async move { GroundhogApiClient::get_transaction_receipt(self, tx_hash).await }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn transaction_status(
-        &self,
-        tx_hash: TxHash,
-    ) -> impl Future<Output = Result<Option<TransactionStatus>, Self::Error>> + Send {
-        async move {
-            GroundhogApiClient::get_transaction_status(self, tx_hash)
-                .await
-                .map(Some)
-        }
     }
 }
 
@@ -181,7 +151,8 @@ pub enum ReceiptPollError<E> {
 /// Wait for a transaction's receipt, retrying on the schedule `config` sets.
 ///
 /// Receipts are authoritative. While one is missing, an `Invalid` status ends
-/// polling early, as do scheduler `Retry` and `Dropped` outcomes. A best-effort
+/// polling early, as do scheduler `Retry` and `Dropped` outcomes. These report-model
+/// stops do not prove nonexecution or authorize resubmission. A best-effort
 /// `RecentFailure` diagnostic is retained while polling continues, because the same transaction may still commit; if no
 /// receipt appears, that diagnostic is returned instead of a bare timeout.
 pub async fn poll_receipt<S>(

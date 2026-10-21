@@ -1,5 +1,4 @@
 //! Native call preflight and ambiguous-submission evidence through the CLI binary.
-#![cfg(feature = "native-rpc-qualification")]
 
 use std::{
     process::{Command, Output},
@@ -85,7 +84,6 @@ impl Fixture {
             &thruput_encoding::encode(&[0x42; 32]),
             "0x0102030405060708",
             "0xabcd",
-            "--native-rpc-qualification",
             "--force",
         ]);
         command

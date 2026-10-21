@@ -75,13 +75,14 @@ Local signing and artifact scenarios require explicit `accounts.kind: "native"`
 and a fixture-owned seed. Pre-funded local targets pass public initial allocations
 before launch; `fundingAmountRaw` sets the exact raw allocation (default 100 HOG).
 Faucet mode starts those actors empty and requires an explicit positive
-`fundingAmountRaw`. Setup saves the request before sending, retries the same nonce,
-and verifies a successful receipt plus the configured minimum balance before load.
+`fundingAmountRaw`. Setup saves the request before sending, calls
+`dev_fundAccount` once, and verifies a successful receipt plus the configured
+minimum balance before load.
 Local faucet setup requires Unix directory syncing; other platforms can use
 pre-funded fixtures. Read-only local scenarios need no allocated signing accounts.
 
 Only hosted schema-3 targets retain implicit bootstrap derivation and actor
-provisioning. Their faucet keeps its fixed `requestAirdrop` amount. Native
+provisioning. Their faucet keeps its fixed `faucet_requestAirdrop` amount. Native
 contract deployment requires `accounts.deploymentCollateralRaw`; funding and
 deployment remain atomic through DefaultWallet.
 
@@ -154,3 +155,10 @@ pass. See [compare.rs](../../crates/sim/src/compare.rs) and
 transaction hashes and contract hashes are unprefixed base58. Payload bytes,
 storage keys, deployment nonces and artifact checksums retain hex encoding.
 Regenerate older run reports before comparing them with current results.
+
+The simulator uses wire 14 native methods. Existing report fields remain stable:
+native receipt execution maps to report status and return/abort fields, preserving
+gas and events. Unsupported responses fail with raw evidence. Funding errors stop
+setup without another funding call or balance-based recovery. Pending funding
+waits on a returned transaction hash; pending without a hash stops setup. Reconcile
+`native-accounts.json` before starting another run.

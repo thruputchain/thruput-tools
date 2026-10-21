@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use thruput_json_rpc_types::{error::outcome_for_code, transaction::TransactionStatus};
+use thruput_json_rpc_types::{error::native::outcome_for_code, responses::TransactionStatus};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "kind", content = "code", rename_all = "snake_case")]
@@ -61,7 +61,7 @@ fn classify(value: Value, id: u64) -> Outcome {
     }
     match (value.get("result"), value.get("error")) {
         (Some(result), None) => match serde_json::from_value::<TransactionStatus>(result.clone()) {
-            Ok(TransactionStatus::Unknown) => Outcome::Unknown,
+            Ok(TransactionStatus::Unknown {}) => Outcome::Unknown,
             Ok(_) => Outcome::UnexpectedStatus,
             Err(_) => Outcome::InvalidResponse,
         },
@@ -96,7 +96,7 @@ pub(super) async fn request(
         let response = client
             .post(url)
             .json(&json!({"jsonrpc":"2.0", "id":id,
-                "method":"groundhog_getTransactionStatus", "params":[hash]}))
+                "method":"getTransactionStatus", "params":{"transactionHash":hash}}))
             .send()
             .await
             .map_err(|error| {
@@ -151,6 +151,7 @@ mod tests {
         );
         for (code, expected) in [
             (-32053, Outcome::Overloaded(-32053)),
+            (-32009, Outcome::Overloaded(-32009)),
             (-32011, Outcome::RpcError(-32011)),
         ] {
             assert_eq!(

@@ -75,6 +75,11 @@ indexer without exercising scheduler lookup capacity.
 
 ## Measurement and comparison
 
+`thruput-bench` sends native wire 14 requests. It records `getVersionInfo` as
+diagnostic metadata only; an unavailable response is recorded, not enforced.
+Errors from the benchmarked method count as failed requests. A successful run
+does not qualify a server release or the full API surface.
+
 Results distinguish warmup, the measured window, and drain. In schema v2,
 successful throughput counts requests that both start and finish inside the
 measured window. Requests completing after cutoff are recorded separately.

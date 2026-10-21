@@ -69,7 +69,7 @@ re-derive protocol primitives in the CLI.
   `json-rpc-types::decimal` adapters with matching schema annotations; preserve
   Rust integer types and binary XDR. Reject numeric JSON and noncanonical or
   out-of-range decimal strings rather than supporting legacy representations.
-- `sendRawTransaction` succeeds only after authoritative mempool admission.
+- `sendTransaction` succeeds only after authoritative mempool admission.
   Admission does not imply nomination or commitment. Keep advisory executor
   pre-checks in `tx-validation`, using the shared tip/config cache. Recheck
   cached bound violations against a fresh tip before rejecting; a missing

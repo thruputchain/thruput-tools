@@ -1,22 +1,17 @@
 use std::path::{Path, PathBuf};
-use thruput_json_rpc_types::hex::prefixed_hex;
 
 use serde_json::json;
 use thruput_client::codec::method_entrypoint_id;
-use thruput_client::{CallRequest, PollOptions, SignedCall, UnsignedCall};
-use thruput_json_rpc_types::receipt::ExecStatus;
-use thruput_json_rpc_types::receipt::TransactionReceipt;
-use thruput_json_rpc_types::transaction::TxHash;
+use thruput_client::{CallRequest, SignedCall, UnsignedCall};
 use thruput_signing::SchemeSigner;
 use thruput_xdr::contract::ContractEntrypointID;
 
 use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
 use crate::artifacts::ArtifactOptions;
-use crate::balance::fetch_balance_blocking;
 use crate::build::{CargoMetadata, cargo_metadata_with_artifacts, resolve_package};
 use crate::codec::{
-    CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
-    format_contract_address, parse_contract_address,
+    CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, encode_args,
+    format_contract_address,
 };
 use crate::config::{
     ProfileOverrides, ResolvedProfile, find_project_config, resolve_profile_with_overrides,
@@ -24,20 +19,15 @@ use crate::config::{
 use crate::contract_spec::{
     InterfaceSpec, load_built_contract_spec, load_built_registered_interfaces,
 };
-use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 
-use crate::result::CommandResult;
-use crate::tx_utils::{
-    command_error_for_exec_status, decode_receipt_abort, format_tx_hash, nonce_from_timestamp,
-    print_failed_receipt_data, resolve_block_expiry_height, summarize_exec_status,
-};
+use crate::tx_utils::nonce_from_timestamp;
 use crate::{CliError, Print};
 
 /// Default gas budget for a contract call and its inner invocation.
 pub const DEFAULT_CALL_GAS_LIMIT: u64 = 25_000_000;
 
 /// Current schema version for `call --json` data payloads.
-pub const CALL_JSON_SCHEMA_VERSION: u32 = 3;
+pub const CALL_JSON_SCHEMA_VERSION: u32 = 4;
 
 /// Resolved contract entrypoint plus any metadata used for codec work.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +49,6 @@ pub(crate) struct PreparedCall {
     pub(crate) calldata: Vec<u8>,
     pub(crate) tx_hex: String,
     signed: SignedCall,
-    #[cfg(feature = "native-rpc-qualification")]
     network_hash: thruput_xdr::types::NetworkHash,
 }
 
@@ -76,92 +65,11 @@ struct CallPlan {
     calldata: Vec<u8>,
     transaction: UnsignedCall,
     signer: SchemeSigner,
-    #[cfg(feature = "native-rpc-qualification")]
     network_hash: thruput_xdr::types::NetworkHash,
 }
 
-/// Call a method on a deployed contract.
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
-pub fn run(
-    contract: &str,
-    method: &str,
-    args: &[String],
-    package: Option<&str>,
-    dry_run: bool,
-    gas_limit: u64,
-    force: bool,
-    wallet: Option<&str>,
-    artifacts: &ArtifactOptions,
-    profile: Option<&str>,
-    overrides: &ProfileOverrides,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    run_with_rpc(
-        InvocationRpc::Legacy,
-        contract,
-        method,
-        args,
-        package,
-        dry_run,
-        gas_limit,
-        force,
-        wallet,
-        artifacts,
-        profile,
-        overrides,
-        cmd,
-        print,
-    )
-}
-
-/// Call through the explicitly selected native candidate RPC.
-#[cfg(feature = "native-rpc-qualification")]
-#[allow(clippy::too_many_arguments)]
-pub fn run_native(
-    contract: &str,
-    method: &str,
-    args: &[String],
-    package: Option<&str>,
-    dry_run: bool,
-    gas_limit: u64,
-    force: bool,
-    wallet: Option<&str>,
-    artifacts: &ArtifactOptions,
-    profile: Option<&str>,
-    overrides: &ProfileOverrides,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    run_with_rpc(
-        InvocationRpc::Native,
-        contract,
-        method,
-        args,
-        package,
-        dry_run,
-        gas_limit,
-        force,
-        wallet,
-        artifacts,
-        profile,
-        overrides,
-        cmd,
-        print,
-    )
-}
-
-#[derive(Clone, Copy)]
-enum InvocationRpc {
-    Legacy,
-    #[cfg(feature = "native-rpc-qualification")]
-    Native,
-}
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn run_with_rpc(
-    rpc: InvocationRpc,
+pub fn run(
     contract: &str,
     method: &str,
     args: &[String],
@@ -182,7 +90,6 @@ fn run_with_rpc(
         print.require_confirmation_available(force, "call a contract")?;
     }
     let plan = prepare_call_plan(
-        rpc,
         &cwd,
         resolved_profile,
         contract,
@@ -211,265 +118,18 @@ fn run_with_rpc(
         }
         // An underfunded call can be dropped without a receipt; give funding
         // guidance here instead of waiting for a timeout.
-        match rpc {
-            InvocationRpc::Legacy => {
-                check_call_gas_balance(&plan.rpc_url, &plan.wallet_address_hex, gas_limit)?;
-            }
-            #[cfg(feature = "native-rpc-qualification")]
-            InvocationRpc::Native => {
-                native::check_balance(&plan.rpc_url, &plan.wallet_address_hex, gas_limit)?;
-            }
-        }
+        native::check_balance(&plan.rpc_url, &plan.wallet_address_hex, gas_limit)?;
     }
     let prepared = sign_call_plan(plan)?;
     if dry_run {
-        #[cfg(feature = "native-rpc-qualification")]
-        if matches!(rpc, InvocationRpc::Native) {
-            return native::print_dry_run(&prepared, cmd, print);
-        }
-        return print_dry_run(&prepared, cmd, print);
-    }
-    #[cfg(feature = "native-rpc-qualification")]
-    if matches!(rpc, InvocationRpc::Native) {
-        return native::execute(&prepared, cmd, print);
-    }
-
-    print.detail(
-        "prepared transaction",
-        format_tx_hash(&prepared.signed.tx_hash()),
-    );
-    let task = crate::print::progress::Task::start(print, "Submitting contract call", true);
-    task.print()
-        .phase(format_args!("Calling `{}`", prepared.method));
-
-    let (tx_hash, receipt) = submit_prepared_call(&prepared)?;
-    let transaction_detail =
-        fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, task.print());
-    let warnings = task.finish();
-    let tx_hash_formatted = format_tx_hash(&tx_hash);
-    let status_summary = summarize_exec_status(&receipt.status);
-    let diagnostics = (!matches!(receipt.status, ExecStatus::Ok))
-        .then(|| call_diagnostics_json(&prepared, transaction_detail.is_some()));
-    if matches!(receipt.status, ExecStatus::Ok)
-        && prepared.signed.is_native()
-        && receipt.return_data.is_none()
-    {
-        return Err(CliError::Other(format!(
-            "transaction {tx_hash_formatted} succeeded but its native wallet return is missing"
-        )));
-    }
-    let child_return = if matches!(receipt.status, ExecStatus::Ok) {
-        receipt.return_data.as_ref().map(|data| prepared.signed.decode_return(&data.0))
-            .transpose().map_err(|error| CliError::Other(format!("transaction {tx_hash_formatted} succeeded but its wallet return is invalid: {error}")))?
+        native::print_dry_run(&prepared, cmd, print)
     } else {
-        None
-    };
-    let decoded_return = child_return
-        .as_ref()
-        .and_then(|data| decode_return(data, prepared.resolved.metadata.as_ref()));
-    // Native wallets can forward child exceptions. Match the wire selector
-    // against the supplied spec or standard registry, retaining unknown bytes.
-    let decoded_abort = decode_receipt_abort(&receipt, prepared.resolved.metadata.as_ref());
-
-    // Print result
-    print.group(
-        if matches!(receipt.status, ExecStatus::Ok) {
-            crate::print::Outcome::Success
-        } else {
-            crate::print::Outcome::Error
-        },
-        "Contract call",
-        |print| {
-            match &receipt.status {
-                ExecStatus::Ok => {
-                    print.success("Call succeeded");
-                    if prepared.resolved.metadata.is_some() {
-                        print.detail("method", &prepared.method);
-                        if let Some(ref value) = decoded_return {
-                            print.detail("value", value);
-                        }
-                    } else {
-                        print.detail("entrypoint", &prepared.method);
-                    }
-                    print.detail("contract", &prepared.contract_address_hex);
-                    print.detail("tx", &tx_hash_formatted);
-                    print.detail("height", *receipt.height);
-                    print.detail("gas used", receipt.gas_used);
-                    if decoded_return.is_none()
-                        && let Some(ref data) = child_return
-                        && !data.is_empty()
-                    {
-                        print.detail("return", format_args!("0x{}", hex::encode(data)));
-                    }
-                }
-                ExecStatus::Reverted { .. } => {
-                    print.warn(format_args!("Call {status_summary}"));
-                    print.detail("method", &prepared.method);
-                    print.detail("contract", &prepared.contract_address_hex);
-                    print.detail("tx", &tx_hash_formatted);
-                    print.detail("height", *receipt.height);
-                    print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
-                    print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
-                }
-                other => {
-                    print.warn(format_args!("Call {}", summarize_exec_status(other)));
-                    print.detail("method", &prepared.method);
-                    print.detail("contract", &prepared.contract_address_hex);
-                    print.detail("tx", &tx_hash_formatted);
-                    print.detail("height", *receipt.height);
-                    print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
-                    print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
-                }
-            }
-
-            if let Some(detail) = transaction_detail.as_ref() {
-                print_transaction_detail(detail, print);
-            }
-            for warning in &warnings {
-                print.warn(warning);
-            }
-        },
-    );
-
-    let mut data = json!({
-        "schemaVersion": CALL_JSON_SCHEMA_VERSION,
-        "txHash": tx_hash_formatted,
-        "contract": prepared.contract_address_hex,
-        "method": prepared.method,
-        "height": receipt.height.to_string(),
-        "status": receipt.status,
-        "gasUsed": receipt.gas_used.to_string(),
-        "statusSummary": status_summary,
-        "returnData": receipt.return_data,
-        "abortData": receipt.abort_data,
-        "returnValue": decoded_return,
-        "transactionDetail": transaction_detail,
-        "diagnostics": diagnostics,
-        "walletEntrypointId": prepared.wallet_entrypoint_id,
-        "walletEntrypointSource": prepared.wallet_entrypoint_source,
-    });
-    crate::tx_utils::insert_abort_json(&mut data, decoded_abort.as_ref());
-    if let Some(error) = command_error_for_exec_status(&receipt.status) {
-        print.json(&CommandResult::failure_with_error(cmd, data, error))?;
-        return Err(CliError::CommandReportedFailure);
+        native::execute(&prepared, cmd, print)
     }
-    print.json(&CommandResult::new(cmd, data))?;
-
-    Ok(())
-}
-
-fn print_failed_call_diagnostics(
-    prepared: &PreparedCall,
-    transaction_detail_available: bool,
-    print: &Print,
-) {
-    print.detail(
-        "wallet",
-        format_args!(
-            "{} entrypoint={} source={}",
-            prepared.wallet_address_hex,
-            prepared.wallet_entrypoint_id,
-            prepared.wallet_entrypoint_source
-        ),
-    );
-    print.detail(
-        "target entrypoint",
-        format_entrypoint_id(prepared.resolved.entrypoint),
-    );
-    if !transaction_detail_available {
-        print.detail(
-            "transaction detail",
-            "unavailable from groundhog_dev_getTransactionDetail",
-        );
-    }
-}
-
-fn call_diagnostics_json(
-    prepared: &PreparedCall,
-    transaction_detail_available: bool,
-) -> serde_json::Value {
-    json!({
-        "wallet": {
-            "address": prepared.wallet_address_hex,
-            "entrypointId": prepared.wallet_entrypoint_id,
-            "entrypointSource": prepared.wallet_entrypoint_source,
-        },
-        "target": {
-            "contract": prepared.contract_address_hex,
-            "method": prepared.method,
-            "entrypointId": format_entrypoint_id(prepared.resolved.entrypoint),
-        },
-        "transactionDetail": {
-            "rpcMethod": "groundhog_dev_getTransactionDetail",
-            "available": transaction_detail_available,
-        },
-    })
-}
-
-fn print_dry_run(
-    prepared: &PreparedCall,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    let entrypoint_id = format_entrypoint_id(prepared.resolved.entrypoint);
-    let calldata_hex = prefixed_hex(&prepared.calldata);
-
-    print.group(crate::print::Outcome::DryRun, "Contract call", |print| {
-        print.status(format_args!(
-            "Prepared dry-run call {} on {} via {}.",
-            prepared.method, prepared.contract_address_hex, prepared.rpc_url
-        ));
-        print.status(format_args!(
-            "  selector: {}",
-            selector_summary(&prepared.resolved)
-        ));
-        print.status(format_args!("  entrypoint: {entrypoint_id}"));
-        print.status(format_args!("  calldata: {calldata_hex}"));
-        print.status(format_args!("  signed tx: {}", prepared.tx_hex));
-        print.status("  submitted: no (--dry-run)");
-    });
-
-    print.json(&CommandResult::new(
-        cmd,
-        json!({
-            "schemaVersion": CALL_JSON_SCHEMA_VERSION,
-            "dryRun": true,
-            "submitted": false,
-            "rpcUrl": prepared.rpc_url,
-            "contract": prepared.contract_address_hex,
-            "method": prepared.method,
-            "entrypointId": entrypoint_id,
-            "walletEntrypointId": prepared.wallet_entrypoint_id,
-            "walletEntrypointSource": prepared.wallet_entrypoint_source,
-            "calldata": calldata_hex,
-            "signedTx": prepared.tx_hex,
-            "selector": selector_json(&prepared.resolved),
-        }),
-    ))?;
-
-    Ok(())
 }
 
 pub(crate) fn format_entrypoint_id(entrypoint: ContractEntrypointID) -> String {
     format!("0x{}", hex::encode(entrypoint.into_inner()))
-}
-
-fn selector_summary(resolved: &ResolvedCall) -> String {
-    match &resolved.metadata {
-        Some(CallMetadata::Spec(metadata)) => {
-            format!(
-                "contract spec {} v{}",
-                metadata.interface_name, metadata.version
-            )
-        }
-        Some(CallMetadata::Local(metadata)) => {
-            format!(
-                "local metadata {} v{}",
-                metadata.interface_name, metadata.version
-            )
-        }
-        None => "explicit entrypoint".into(),
-    }
 }
 
 pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
@@ -502,7 +162,6 @@ pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
 
 #[allow(clippy::too_many_arguments)]
 fn prepare_call_plan(
-    rpc: InvocationRpc,
     cwd: &Path,
     resolved_profile: ResolvedProfile,
     contract: &str,
@@ -515,7 +174,6 @@ fn prepare_call_plan(
 ) -> Result<CallPlan, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     prepare_call_plan_with_runtime(
-        rpc,
         cwd,
         resolved_profile,
         contract,
@@ -531,7 +189,6 @@ fn prepare_call_plan(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn prepare_call_plan_with_runtime(
-    rpc: InvocationRpc,
     cwd: &Path,
     resolved_profile: ResolvedProfile,
     contract: &str,
@@ -556,16 +213,9 @@ fn prepare_call_plan_with_runtime(
     let wallet_address = sender.wallet_address;
     let wallet_address_hex = format_contract_address(&wallet_address);
 
-    let (wallet_context, block_expiry_height) = match rpc {
-        InvocationRpc::Legacy => (
-            sender.signing_context(&resolved_profile, rt)?,
-            rt.block_on(resolve_block_expiry_height(rpc_url))?,
-        ),
-        #[cfg(feature = "native-rpc-qualification")]
-        InvocationRpc::Native => native::prepare_context(&sender, rpc_url, rt)?,
-    };
+    let (wallet_context, block_expiry_height) =
+        native::prepare_context(&sender, &resolved_profile, rpc_url, rt)?;
     let wallet_entrypoint_id = format_entrypoint_id(wallet_context.entrypoints.do_action);
-    #[cfg(feature = "native-rpc-qualification")]
     let network_hash = wallet_context.network_hash.clone();
 
     let tx = thruput_client::prepare_call(
@@ -595,31 +245,8 @@ fn prepare_call_plan_with_runtime(
         calldata,
         transaction: tx,
         signer: sender.signer,
-        #[cfg(feature = "native-rpc-qualification")]
         network_hash,
     })
-}
-
-fn check_call_gas_balance(rpc_url: &str, wallet: &str, gas_limit: u64) -> Result<(), CliError> {
-    let address = parse_contract_address(wallet)?;
-    let balance = fetch_balance_blocking(
-        rpc_url,
-        thruput_json_rpc_types::ContractAddress::from(address),
-    )?;
-    let available = balance.raw_balance.parse::<u128>().map_err(|error| {
-        CliError::Other(format!(
-            "invalid raw balance `{}` from RPC: {error}",
-            balance.raw_balance
-        ))
-    })?;
-    if available < u128::from(gas_limit) {
-        return Err(CliError::CallGasBalanceInsufficient {
-            wallet: wallet.to_owned(),
-            available_raw: available,
-            required_raw: gas_limit,
-        });
-    }
-    Ok(())
 }
 
 fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {
@@ -639,35 +266,7 @@ fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {
         calldata: plan.calldata,
         tx_hex,
         signed,
-        #[cfg(feature = "native-rpc-qualification")]
         network_hash: plan.network_hash,
-    })
-}
-
-/// Submit a previously prepared call transaction and wait for its receipt.
-pub(crate) fn submit_prepared_call(
-    prepared: &PreparedCall,
-) -> Result<(TxHash, TransactionReceipt), CliError> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    submit_prepared_call_with_runtime(prepared, &rt)
-}
-
-fn submit_prepared_call_with_runtime(
-    prepared: &PreparedCall,
-    rt: &tokio::runtime::Runtime,
-) -> Result<(TxHash, TransactionReceipt), CliError> {
-    rt.block_on(async {
-        let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
-        let submitted = prepared
-            .signed
-            .submit(&client)
-            .await
-            .map_err(crate::tx_utils::map_submit_call_error)?;
-        let receipt = submitted
-            .wait(&client, PollOptions::default())
-            .await
-            .map_err(crate::tx_utils::map_poll_receipt_error)?;
-        Ok((submitted.tx_hash, receipt))
     })
 }
 
@@ -1174,7 +773,6 @@ mod tests {
         filter_candidates_by_interfaces, format_entrypoint_id, method_entrypoint_id,
         parse_contract_attr_value, parse_method_metadata, resolve_call,
         resolve_local_contract_metadata, resolve_spec_method, select_package, selector_json,
-        selector_summary,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
@@ -1194,7 +792,6 @@ mod tests {
         ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
         ContractVectorType,
     };
-    use thruput_json_rpc_types::receipt::ExecStatus;
 
     #[test]
     fn parses_contract_attr_values() {
@@ -1304,7 +901,6 @@ mod tests {
             metadata: None,
         };
 
-        assert_eq!(selector_summary(&resolved), "explicit entrypoint");
         assert_eq!(
             selector_json(&resolved),
             json!({
@@ -1322,7 +918,6 @@ mod tests {
             metadata: Some(CallMetadata::Spec(metadata)),
         };
 
-        assert_eq!(selector_summary(&resolved), "contract spec Counter v0.1.0");
         assert_eq!(
             selector_json(&resolved),
             json!({
@@ -1350,7 +945,6 @@ mod tests {
             })),
         };
 
-        assert_eq!(selector_summary(&resolved), "local metadata Counter v0.1.0");
         assert_eq!(
             selector_json(&resolved),
             json!({
@@ -2173,8 +1767,12 @@ mod tests {
     #[test]
     fn summarizes_revert_without_message() {
         assert_eq!(
-            summarize_exec_status(&ExecStatus::Reverted { message: None }),
-            "reverted"
+            summarize_exec_status(
+                &thruput_json_rpc_types::responses::ReceiptExecution::Abort {
+                    abort_data: thruput_json_rpc_types::hex::HexBytes(vec![])
+                }
+            ),
+            "aborted"
         );
     }
 
@@ -2613,5 +2211,4 @@ mod tests {
     }
 }
 
-#[cfg(feature = "native-rpc-qualification")]
 mod native;

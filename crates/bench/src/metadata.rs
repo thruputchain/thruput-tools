@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use thruput_json_rpc_types::version::VersionInfo;
+use thruput_json_rpc_types::responses::VersionInfo;
 
 use crate::{
     BenchError,
@@ -112,7 +112,7 @@ pub(super) async fn collect(
     cli: &Cli,
     client: &reqwest::Client,
 ) -> Result<TargetMetadata, BenchError> {
-    let gateway_version = match rpc(client, cli, "version", serde_json::json!([])).await {
+    let gateway_version = match rpc(client, cli, "getVersionInfo", serde_json::json!({})).await {
         Ok(value) => match serde_json::from_value::<VersionInfo>(value) {
             Ok(value) => Observation::Observed { value },
             Err(error) => Observation::Unavailable {

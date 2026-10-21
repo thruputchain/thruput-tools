@@ -10,7 +10,7 @@ use jsonrpsee::core::RpcResult;
 use thruput_json_rpc_api::{AirdropApiServer, LocalFundingApiServer};
 use thruput_json_rpc_server::{
     ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane,
-    tx::validate_raw_transaction_bytes,
+    native::transaction::NativeTransactionReadPlane, tx::validate_raw_transaction_bytes,
 };
 use thruput_json_rpc_types::{
     ContractAddress,
@@ -110,7 +110,7 @@ impl LocalAirdropRpc {
     ) -> Self
     where
         S: SubmitPlane + ChainPlane,
-        R: ReadPlane,
+        R: ReadPlane + NativeTransactionReadPlane,
     {
         let faucet = Base58(
             PubkeyAccount::from_public_key_bytes(context.signer.verifying_key_bytes(), 0).address(),
@@ -331,6 +331,25 @@ impl LocalAirdropRpc {
         Ok(signed)
     }
 
+    async fn observed_receipt(
+        &self,
+        context: RpcRequestContext,
+        hash: TxHash,
+    ) -> Result<Option<thruput_json_rpc_types::receipt::TransactionReceipt>, RpcServerError> {
+        let receipt = self.backend.receipt(context, hash).await?;
+        if receipt.as_ref().is_some_and(|receipt| {
+            receipt.tx_hash != hash
+                || *receipt.height < 0
+                || !receipt.has_consistent_execution_output()
+        }) {
+            return Err(RpcServerError::invalid_data(
+                thruput_json_rpc_types::error::native::BackendDataInvalidReason::InconsistentResult,
+                "funding receipt identity, height or execution output is invalid",
+            ));
+        }
+        Ok(receipt)
+    }
+
     async fn fund(
         &self,
         request: FundAccountRequest,
@@ -360,6 +379,7 @@ impl LocalAirdropRpc {
                 match evidence {
                     Some(retained) => RpcServerError::LocalFundingUnresolved {
                         reason: error.to_string(),
+                        cause: Some(Box::new(error)),
                         evidence: LocalFundingErrorData::new(
                             retained.tx_hash,
                             retained.signed_transaction,
@@ -393,8 +413,7 @@ impl LocalAirdropRpc {
         };
         if replay {
             if self
-                .backend
-                .receipt(context, signed.tx_hash)
+                .observed_receipt(context, signed.tx_hash)
                 .await?
                 .is_some()
             {
@@ -432,8 +451,7 @@ impl LocalAirdropRpc {
                 // A request-scoped admission error must not overwrite an older
                 // accepted or committed copy of this same retained transaction.
                 if self
-                    .backend
-                    .receipt(context, signed.tx_hash)
+                    .observed_receipt(context, signed.tx_hash)
                     .await?
                     .is_some()
                 {
@@ -476,7 +494,7 @@ impl LocalAirdropRpc {
         recipient: ContractAddress,
         context: RpcRequestContext,
     ) -> Result<Option<AirdropAttemptResponse>, RpcServerError> {
-        if let Some(receipt) = self.backend.receipt(context, signed.tx_hash).await? {
+        if let Some(receipt) = self.observed_receipt(context, signed.tx_hash).await? {
             if matches!(receipt.status, ExecStatus::Ok) {
                 return Ok(Some(AirdropAttemptResponse::Succeeded {
                     recipient,
@@ -484,6 +502,7 @@ impl LocalAirdropRpc {
                     raw_amount: self.raw_amount.to_string(),
                     height: receipt.height,
                     status: receipt.status,
+                    return_data: receipt.return_data,
                 }));
             }
             return Err(RpcServerError::TxRejected(format!(
@@ -538,7 +557,7 @@ impl LocalAirdropRpc {
             return Err(error);
         }
 
-        match self.backend.receipt(context, signed.tx_hash).await {
+        match self.observed_receipt(context, signed.tx_hash).await {
             Ok(Some(receipt)) if matches!(receipt.status, ExecStatus::Ok) => {
                 attempt.set_terminal(true)?;
                 Ok(AirdropAttemptResponse::Succeeded {
@@ -547,6 +566,7 @@ impl LocalAirdropRpc {
                     raw_amount: self.raw_amount.to_string(),
                     height: receipt.height,
                     status: receipt.status,
+                    return_data: receipt.return_data,
                 })
             }
             Ok(Some(receipt)) => {
@@ -873,6 +893,78 @@ trait AirdropBackend: Send + Sync + 'static {
     ) -> Result<TransactionStatus, RpcServerError>;
 }
 
+/// Read once through the native validator before adapting for the existing funding state machine.
+#[tracing::instrument(skip_all, fields(?hash))]
+pub(crate) async fn read_funding_receipt<R: NativeTransactionReadPlane>(
+    read: &R,
+    context: RpcRequestContext,
+    hash: TxHash,
+) -> Result<Option<thruput_json_rpc_types::receipt::TransactionReceipt>, RpcServerError> {
+    use thruput_json_rpc_types::{
+        error::native::BackendDataInvalidReason,
+        events::EmittedEvent,
+        receipt::{DETERMINISTIC_ERROR_KIND_FAULT, TransactionReceipt},
+        responses::ReceiptExecution,
+    };
+    let value = within_request_deadline(context, async {
+        read.native_receipt(context, hash)
+            .await
+            .map_err(|error| error.error)
+    })
+    .await?;
+    value
+        .map(|receipt| {
+            let (status, return_data, abort_data) = match receipt.execution {
+                ReceiptExecution::Return { return_data } => {
+                    (ExecStatus::Ok, Some(return_data), None)
+                }
+                ReceiptExecution::Abort { abort_data } => (
+                    ExecStatus::Reverted { message: None },
+                    None,
+                    Some(abort_data),
+                ),
+                ReceiptExecution::Fault {} => (
+                    ExecStatus::DeterministicError {
+                        kind: DETERMINISTIC_ERROR_KIND_FAULT.into(),
+                    },
+                    None,
+                    None,
+                ),
+                ReceiptExecution::NonDeterministicError {} => {
+                    (ExecStatus::NonDeterministicError, None, None)
+                }
+                ReceiptExecution::FailedGasSponsorship {} => {
+                    (ExecStatus::FailedGasSponsorship, None, None)
+                }
+                ReceiptExecution::Other {} => (ExecStatus::Other, None, None),
+                _ => {
+                    return Err(RpcServerError::invalid_data(
+                        BackendDataInvalidReason::UnsupportedValue,
+                        "unsupported funding receipt execution",
+                    ));
+                }
+            };
+            Ok(TransactionReceipt {
+                tx_hash: receipt.transaction_hash,
+                height: receipt.block_height,
+                status,
+                return_data,
+                abort_data,
+                gas_used: receipt.gas_used,
+                events: receipt
+                    .events
+                    .into_iter()
+                    .map(|event| EmittedEvent {
+                        contract_address: event.address,
+                        topics: event.topics,
+                        data: event.data,
+                    })
+                    .collect(),
+            })
+        })
+        .transpose()
+}
+
 struct PlaneAirdropBackend<S, R> {
     submit_chain: S,
     read: R,
@@ -882,7 +974,7 @@ struct PlaneAirdropBackend<S, R> {
 impl<S, R> AirdropBackend for PlaneAirdropBackend<S, R>
 where
     S: SubmitPlane + ChainPlane,
-    R: ReadPlane,
+    R: ReadPlane + NativeTransactionReadPlane,
 {
     async fn chain_tip(
         &self,
@@ -923,7 +1015,7 @@ where
         context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<Option<thruput_json_rpc_types::receipt::TransactionReceipt>, RpcServerError> {
-        within_request_deadline(context, self.read.transaction_receipt(context, tx_hash)).await
+        read_funding_receipt(&self.read, context, tx_hash).await
     }
 
     async fn status(
@@ -966,3 +1058,64 @@ fn nonce_from_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests;
+
+#[async_trait]
+impl thruput_json_rpc_server::native::funding::NativeFundingPlane for LocalAirdropRpc {
+    fn capabilities(&self) -> thruput_json_rpc_server::native::funding::FundingCapabilities {
+        thruput_json_rpc_server::native::funding::FundingCapabilities::Local
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn request_airdrop(
+        &self,
+        request: thruput_json_rpc_types::requests::AirdropRequest,
+    ) -> RpcResult<thruput_json_rpc_types::responses::AirdropAttempt> {
+        use thruput_json_rpc_server::native::funding;
+        let recipient = request.recipient;
+        let retained_request = FundAccountRequest {
+            recipient,
+            raw_amount: self.raw_amount.to_string(),
+            client_nonce: request.client_nonce.clone(),
+            faucet: self.faucet,
+        };
+        match self
+            .request(AirdropRequest {
+                recipient,
+                client_nonce: request.client_nonce,
+            })
+            .await
+        {
+            Ok(result) => funding::airdrop_result(recipient, result)
+                .map_err(|error| funding::rpc_error(&error)),
+            Err(error) => {
+                let retained = self
+                    .journal
+                    .try_lock()
+                    .ok()
+                    .and_then(|journal| journal.durable_signed(&retained_request));
+                let evidence =
+                    retained.map(|v| LocalFundingErrorData::new(v.tx_hash, v.signed_transaction));
+                Err(funding::rpc_error_with_evidence(&error, evidence.as_ref()))
+            }
+        }
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn fund_account(
+        &self,
+        request: thruput_json_rpc_types::requests::FundAccountRequest,
+    ) -> RpcResult<thruput_json_rpc_types::responses::FundingSubmission> {
+        use thruput_json_rpc_server::native::funding;
+        let legacy = FundAccountRequest {
+            recipient: request.recipient,
+            raw_amount: request.raw_amount.to_string(),
+            client_nonce: request.client_nonce.clone(),
+            faucet: request.faucet,
+        };
+        let result = self
+            .fund(legacy)
+            .await
+            .map_err(|error| funding::rpc_error(&error))?;
+        funding::submission_result(&request, result).map_err(|error| funding::rpc_error(&error))
+    }
+}

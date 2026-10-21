@@ -119,7 +119,7 @@ try:
                 assert startup['ok'], startup
                 data = startup['data']
                 request = urllib.request.Request(data['rpcUrl'], data=json.dumps({
-                    'jsonrpc': '2.0', 'id': 1, 'method': 'groundhog_chainTip', 'params': []
+                    'jsonrpc': '2.0', 'id': 1, 'method': 'getChainTip', 'params': {}
                 }).encode(), headers={'Content-Type': 'application/json'})
                 with urllib.request.urlopen(request, timeout=10) as response:
                     rpc = json.load(response)
