@@ -249,6 +249,28 @@ The design note proposed content-addressed payload files and a height index.
 This slice keeps payloads in immutable height files with their content hashes,
 without a second content-addressed file layout or deduplication layer.
 
+## Inspecting records
+
+Inspect one or more archived `.xdr` records offline (one JSON object per file):
+
+```sh
+cargo run -p thruput-firehose --example inspect_record --offline -- /path/to/00000000000000000001.xdr
+# Use --text for an indented report; --json is the default.
+```
+
+The report includes encoded byte sizes, transaction and event breakdowns, and
+execution outcomes. At this protocol version transactions have no explicit
+sender field or operation-kind union; the report explains unavailable fields.
+Selectors and topics are hexadecimal identifiers, without inferred names.
+
+Records decode only with the XDR of the protocol that produced them: build the
+example from the tools release the deployed network runs (the same version the
+firehose binaries are pinned to). Any record can be fetched without host access
+by subscribing with `{"from":"height","height":H}`; the notification's `record`
+field is the exact stored XDR, hex-encoded.
+This is a decoder/analyser, not a commitment audit; use the store's `verify`
+command to audit an archive.
+
 ## Observability
 
 Store `/health` returns 200 for a working ingester, including after each verified
