@@ -638,7 +638,7 @@ fn read_layer(path: &Path) -> Result<PersistedConfigLayer, CliError> {
     })
 }
 
-fn read_optional_root(path: &Path) -> Result<Option<toml::Value>, CliError> {
+pub(super) fn read_optional_root(path: &Path) -> Result<Option<toml::Value>, CliError> {
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),

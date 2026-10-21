@@ -6,6 +6,11 @@
 
 default_profile = "local"
 
+# Genesis parameter overrides for local nodes started by `thruput node` and
+# `thruput test --integration`. A `--network-config` flag replaces a value here.
+# [node.network_config]
+# max_rv32_code_bytes = "256K"
+
 [profile.local]
 network = "local"
 # Set with `thruput wallet use <NAME> --profile local`.

@@ -312,7 +312,10 @@ fn run_integration_with_dev_node(
         pid_file: crate::node::LocalNodePidFile::Disabled,
         hogd_protocol,
         hogd_dev_version: integration.hog_devnode_version.clone(),
-        network_config_overrides: integration.network_config_overrides.clone(),
+        network_config_overrides: crate::node::with_project_network_config(
+            &build.project_root,
+            integration.network_config_overrides.clone(),
+        )?,
         node_args: integration.node_args.clone(),
         offline: integration.offline,
         ..crate::node::LocalNodeOptions::default()

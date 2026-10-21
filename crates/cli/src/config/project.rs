@@ -267,6 +267,55 @@ pub fn load_project_profiles(
     }))
 }
 
+/// Load the `[node.network_config]` genesis overrides from the nearest `thruput.toml`.
+///
+/// Each key is a parameter name and each value a byte count, as an integer or
+/// a string in `--network-config` notation (`"256K"`, `"0x8000"`). The table
+/// applies to every local node the project starts, `thruput node` and
+/// `thruput test --integration` alike, so it is not scoped to a profile.
+pub fn load_project_network_config(
+    start: &Path,
+) -> Result<Vec<(thruput_node_supervisor::ConfigParamName, u32)>, CliError> {
+    let Some(path) = find_project_config(start) else {
+        return Ok(Vec::new());
+    };
+    let Some(root) = super::read::read_optional_root(&path)? else {
+        return Ok(Vec::new());
+    };
+    let invalid = |message: String| CliError::ConfigFileInvalid {
+        path: path.clone(),
+        message,
+    };
+    let Some(node) = root.get("node") else {
+        return Ok(Vec::new());
+    };
+    let node = node
+        .as_table()
+        .ok_or_else(|| invalid("node must be a table".into()))?;
+    let Some(network_config) = node.get("network_config") else {
+        return Ok(Vec::new());
+    };
+    let network_config = network_config
+        .as_table()
+        .ok_or_else(|| invalid("node.network_config must be a table".into()))?;
+    network_config
+        .iter()
+        .map(|(name, value)| {
+            let value = match value {
+                toml::Value::Integer(value) => value.to_string(),
+                toml::Value::String(value) => value.clone(),
+                _ => {
+                    return Err(invalid(format!(
+                        "node.network_config.{name} must be an integer or a string such as \"256K\""
+                    )));
+                }
+            };
+            crate::node::parse_network_config_override(&format!("{name}={value}"))
+                .map_err(|error| invalid(format!("node.network_config.{name}: {error}")))
+        })
+        .collect()
+}
+
 /// Persist a contract alias under the selected project profile.
 ///
 /// Creates `thruput.toml` if it does not already exist.
@@ -1027,5 +1076,61 @@ mod tests {
         assert_eq!(error.code(), "config_changed_during_confirmation");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         assert_eq!(std::fs::read_to_string(peer_path).unwrap(), changed);
+    }
+
+    #[test]
+    fn project_network_config_reads_integers_and_byte_sizes() {
+        use thruput_node_supervisor::ConfigParamName;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let member = temp.path().join("contracts/demo");
+        std::fs::create_dir_all(&member).unwrap();
+        assert!(
+            super::load_project_network_config(&member)
+                .unwrap()
+                .is_empty()
+        );
+
+        std::fs::write(temp.path().join("thruput.toml"), "[profile.local]\n").unwrap();
+        assert!(
+            super::load_project_network_config(&member)
+                .unwrap()
+                .is_empty()
+        );
+
+        std::fs::write(
+            temp.path().join("thruput.toml"),
+            "[node.network_config]\nmax_rv32_code_bytes = \"256K\"\nmax_bytestring_len = 32768\n",
+        )
+        .unwrap();
+        assert_eq!(
+            super::load_project_network_config(&member).unwrap(),
+            vec![
+                (ConfigParamName::MaxBytestringLen, 32_768),
+                (ConfigParamName::MaxRv32CodeBytes, 262_144),
+            ]
+        );
+    }
+
+    #[test]
+    fn project_network_config_rejects_unknown_names_and_bad_values() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("thruput.toml");
+        for contents in [
+            "node = 1\n",
+            "[node]\nnetwork_config = 1\n",
+            "[node.network_config]\nmax_rv32_memmory_bytes = 1\n",
+            "[node.network_config]\nmax_rv32_memory_bytes = true\n",
+            "[node.network_config]\nmax_rv32_memory_bytes = \"lots\"\n",
+            "[node.network_config]\nmax_rv32_memory_bytes = -1\n",
+            "[node.network_config]\nmax_rv32_memory_bytes = \"8G\"\n",
+        ] {
+            std::fs::write(&path, contents).unwrap();
+            let error = super::load_project_network_config(temp.path()).unwrap_err();
+            assert!(
+                matches!(error, crate::CliError::ConfigFileInvalid { .. }),
+                "{contents}: {error}"
+            );
+        }
     }
 }
