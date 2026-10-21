@@ -50,7 +50,7 @@ endif
 # Binaries `make install` copies. The workspace builds more (thruput-bench,
 # rv32-lower, thruput-open-rpc-spec, thruput-faucet); add them here when a
 # deployment needs them rather than installing the whole target directory.
-BINS ?= thruput hogsim hog-gateway
+BINS ?= thruput hog-gateway
 
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin

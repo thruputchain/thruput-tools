@@ -26,6 +26,7 @@ fn test_counter_rv32() {
             let addr = deploy_contract(&NONCE, &contract_hash);
             let client = CounterClient::new(&addr);
 
+            assert_eq!(client.get(), 0);
             client.initialize(10);
             assert_eq!(client.get(), 10);
 

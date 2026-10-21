@@ -284,6 +284,8 @@ fn scaffold_counter_creates_expected_files() {
 
     let imp = fs::read_to_string(dir.join("src/implementation.rs")).unwrap();
     assert!(imp.contains("pub struct Counter"));
+    assert!(imp.contains("value: Balance"));
+    assert!(!imp.contains("NNInt"));
     assert!(imp.contains("#[contract_exception]"));
     assert!(!imp.contains("#[contract_error]"));
     // Under sdk 0.15.x's declaration-based event inclusion, the event only

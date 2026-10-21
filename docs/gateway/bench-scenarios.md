@@ -3,7 +3,6 @@
 Use a benchmark to answer a specific workload question. Keep method semantics,
 load controls, binary identities, topology, and logging policy with the results.
 A successful local run does not establish safe capacity for a hosted network.
-For stateful mixed traffic and fault scenarios, use [hogsim](../sim/README.md).
 
 ## Local scenario runner
 

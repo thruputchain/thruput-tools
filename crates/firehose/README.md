@@ -249,6 +249,12 @@ The design note proposed content-addressed payload files and a height index.
 This slice keeps payloads in immutable height files with their content hashes,
 without a second content-addressed file layout or deduplication layer.
 
+## Inspecting records
+
+The `inspect_record` example decodes archived records offline. See
+[Inspecting firehose records](../../docs/firehose/inspecting-records.md) for how
+to get a record, which build to use, and what the report contains.
+
 ## Observability
 
 Store `/health` returns 200 for a working ingester, including after each verified
