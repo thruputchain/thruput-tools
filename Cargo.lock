@@ -4653,6 +4653,7 @@ dependencies = [
  "thruput-xdr",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "xdr-common",
  "xdrs",
  "zeroize",

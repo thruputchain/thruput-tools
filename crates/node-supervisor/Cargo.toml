@@ -49,6 +49,7 @@ xdr-common = { workspace = true }
 xdrs = { workspace = true }
 
 [dev-dependencies]
+tracing-subscriber = { workspace = true }
 thruput-json-rpc-client = { workspace = true }
 thruput-trace = { workspace = true }
 jsonrpsee = { workspace = true, features = ["http-client"] }

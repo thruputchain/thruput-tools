@@ -22,6 +22,24 @@ The script starts a local node, reads its runtime manifest, exercises the CLI
 endpoint, starts a standalone gateway, and repeats the benchmark checks there.
 See [benchmark scenarios](bench-scenarios.md) for heavier runs and saved results.
 
+## History qualification
+
+Build `hog-gateway` from this checkout, then run the real-runtime history tests:
+
+```sh
+cargo build --locked -p thruput-json-rpc-gateway --bin hog-gateway
+THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
+THRUPUT_GATEWAY_BINARY=/absolute/path/to/hog-gateway \
+  cargo test --locked -p thruput-node-supervisor --test real_block_queries -- --ignored --test-threads=1
+```
+
+The tests compare local RPC and a standalone gateway using the same runtime
+manifest. They exercise persistent history, sparse event scans beyond the runtime's
+candidate cap, and cursors replayed after restoring a stopped node's earlier
+snapshot. CI runs them against the CLI catalog's default runtime. This covers
+local processes and real index data; physical I/O faults and hosted consensus
+qualification remain separate.
+
 ## Manual local loop
 
 Use an installed CLI or build the binaries from this checkout. A write benchmark

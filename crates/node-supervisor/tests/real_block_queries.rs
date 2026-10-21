@@ -364,3 +364,6 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
     process.wait().await.unwrap();
     node.stop().await.unwrap();
 }
+
+#[path = "real_block_queries/history.rs"]
+mod history;
