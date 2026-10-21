@@ -2689,3 +2689,114 @@ fn unrelated_global_writes_preserve_ignored_legacy_executor_table() {
     );
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
+
+#[test]
+#[serial]
+fn profile_network_config_merges_layers_and_yields_to_flags() {
+    use thruput_node_supervisor::ConfigParamName;
+
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
+    fs::create_dir(&project).unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::write(
+        global_config_path(&tmp),
+        r#"
+[profile.local.network_config]
+max_rv32_memory_bytes = "16M"
+max_bytestring_len = 4096
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("thruput.toml"),
+        r#"
+default_profile = "local"
+
+[profile.local]
+network = "local"
+
+[profile.local.network_config]
+max_rv32_code_bytes = "256K"
+max_bytestring_len = "32K"
+
+[profile.devnet]
+network = "devnet"
+"#,
+    )
+    .unwrap();
+
+    let merged = thruput_cli::node::with_profile_network_config(
+        &project,
+        None,
+        vec![(ConfigParamName::MaxRv32CodeBytes, 524_288)],
+    )
+    .unwrap();
+    assert_eq!(
+        merged,
+        vec![
+            (ConfigParamName::MaxBytestringLen, 32_768),
+            (ConfigParamName::MaxRv32MemoryBytes, 16_777_216),
+            (ConfigParamName::MaxRv32CodeBytes, 524_288),
+        ]
+    );
+
+    assert!(
+        thruput_cli::node::with_profile_network_config(&project, Some("devnet"), Vec::new())
+            .unwrap()
+            .is_empty()
+    );
+
+    let report = thruput_cli::config::ConfigGetReport::new(
+        thruput_cli::config::resolve_persisted_profile(&project, None)
+            .unwrap()
+            .0,
+        None,
+        thruput_cli::config::ConfigScope::Resolved,
+        true,
+    );
+    assert_eq!(
+        report.network_config.get("max_rv32_code_bytes"),
+        Some(&262_144)
+    );
+    let sources = report.sources.unwrap();
+    assert_eq!(
+        sources.network_config["max_rv32_code_bytes"].kind,
+        thruput_cli::config::ConfigSourceKind::Project
+    );
+    assert_eq!(
+        sources.network_config["max_rv32_memory_bytes"].kind,
+        thruput_cli::config::ConfigSourceKind::Global
+    );
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn profile_network_config_rejects_unknown_names_and_bad_values() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    for table in [
+        "network_config = 1",
+        "network_config.max_rv32_memmory_bytes = 1",
+        "network_config.max_rv32_memory_bytes = true",
+        "network_config.max_rv32_memory_bytes = \"lots\"",
+        "network_config.max_rv32_memory_bytes = -1",
+        "network_config.max_rv32_memory_bytes = \"8G\"",
+    ] {
+        fs::write(
+            tmp.path().join("thruput.toml"),
+            format!("default_profile = \"local\"\n\n[profile.local]\n{table}\n"),
+        )
+        .unwrap();
+        let error = thruput_cli::node::with_profile_network_config(tmp.path(), None, Vec::new())
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("network_config"),
+            "{table}: {error}"
+        );
+    }
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}

@@ -133,13 +133,16 @@ ephemeral node:
 thruput test --integration --network-config max_rv32_memory_bytes=16M
 ```
 
-To apply overrides on every run, put them in the project's `thruput.toml`.
-Both `thruput node` and `thruput test --integration` read the table from the
-nearest `thruput.toml`. Values are integers or strings in the same notation.
-A `--network-config` flag for the same parameter replaces the file's value:
+To apply overrides on every run, set them in a profile's `network_config`
+table, in `thruput.toml` or the global config. `thruput node` and
+`thruput test --integration` both read the active profile's table (select
+another with `THRUPUT_PROFILE`, or `--profile` on `thruput test`). Values are integers or
+strings in the same notation, project entries replace global ones per
+parameter, and a `--network-config` flag for the same parameter replaces the
+profile's value:
 
 ```toml
-[node.network_config]
+[profile.local.network_config]
 max_rv32_code_bytes = "256K"
 max_bytestring_len = 32768
 ```

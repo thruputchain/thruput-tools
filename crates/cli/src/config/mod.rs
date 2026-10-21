@@ -32,8 +32,8 @@ pub use mutate::{
 pub(crate) use mutate::{prepare_profile_removal, remove_confirmed_profile};
 pub use project::{
     Network, ProfileOverrides, ProjectProfile, ResolvedProfile, SavedWalletBinding, WalletKind,
-    active_profile_name, find_project_config, load_project_network_config, load_project_profiles,
-    parse_contract_alias, remove_profile_wallet_address, resolve_default_key,
+    active_profile_name, find_project_config, load_project_profiles, parse_contract_alias,
+    profile_network_config, remove_profile_wallet_address, resolve_default_key,
     resolve_default_key_for_profile, resolve_profile, resolve_profile_with_overrides,
     save_profile_contract_alias, save_profile_default_wallet, save_profile_wallet_address,
     save_profile_wallet_address_with_default,

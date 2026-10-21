@@ -184,15 +184,16 @@ pub enum NetworkConfigOverrideError {
     },
 }
 
-/// Combine the project's `[node.network_config]` with `--network-config` flags.
+/// Combine the selected profile's `network_config` with `--network-config` flags.
 ///
-/// A flag replaces the project value for the same parameter; a parameter
+/// A flag replaces the profile value for the same parameter; a parameter
 /// flagged twice is still left for startup to reject.
-pub fn with_project_network_config(
-    project_root: &Path,
+pub fn with_profile_network_config(
+    start: &Path,
+    explicit_profile: Option<&str>,
     flags: Vec<(ConfigParamName, u32)>,
 ) -> Result<Vec<(ConfigParamName, u32)>, CliError> {
-    let mut overrides = crate::config::load_project_network_config(project_root)?;
+    let mut overrides = crate::config::profile_network_config(start, explicit_profile)?;
     overrides.retain(|(name, _)| !flags.iter().any(|(flagged, _)| flagged == name));
     overrides.extend(flags);
     Ok(overrides)
@@ -1509,30 +1510,6 @@ mod tests {
         invalid["seed"] = serde_json::json!("old-runtime-magic");
         fs::write(file.path(), serde_json::to_vec(&vec![invalid]).unwrap()).unwrap();
         assert!(super::load_bootstrap_allocations(file.path()).is_err());
-    }
-
-    #[test]
-    fn network_config_flags_replace_project_values_by_name() {
-        let temp = tempfile::TempDir::new().unwrap();
-        std::fs::write(
-            temp.path().join("thruput.toml"),
-            "[node.network_config]\nmax_rv32_code_bytes = \"256K\"\nmax_bytestring_len = \"32K\"\n",
-        )
-        .unwrap();
-
-        let merged = super::with_project_network_config(
-            temp.path(),
-            vec![(ConfigParamName::MaxBytestringLen, 65_536)],
-        )
-        .unwrap();
-
-        assert_eq!(
-            merged,
-            vec![
-                (ConfigParamName::MaxRv32CodeBytes, 262_144),
-                (ConfigParamName::MaxBytestringLen, 65_536),
-            ]
-        );
     }
 
     #[test]

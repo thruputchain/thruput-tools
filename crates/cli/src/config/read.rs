@@ -145,7 +145,7 @@ pub struct ProfileSelection {
 /// A decoded profile or an isolated schema error for that profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersistedProfileState {
-    Valid(ProjectProfile),
+    Valid(Box<ProjectProfile>),
     Invalid { reason: String },
 }
 
@@ -189,6 +189,8 @@ pub struct ProfileSources {
     pub contracts: BTreeMap<String, ConfigSource>,
     #[serde(default)]
     pub wallets: BTreeMap<String, ConfigSource>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub network_config: BTreeMap<String, ConfigSource>,
 }
 
 /// A valid persisted profile with global/project provenance.
@@ -229,6 +231,9 @@ pub struct ConfigGetReport {
     pub runtime_artifacts_dir: Option<PathBuf>,
     pub contracts: BTreeMap<String, String>,
     pub wallets: BTreeMap<String, ConfigWalletBinding>,
+    /// Genesis parameter overrides for local nodes, keyed by parameter name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub network_config: BTreeMap<String, u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<ProfileSources>,
 }
@@ -486,6 +491,7 @@ impl ConfigGetReport {
             runtime_artifacts_dir,
             contracts,
             wallets,
+            network_config,
         } = profile.values;
         Self {
             schema_version: CONFIG_GET_JSON_SCHEMA_VERSION,
@@ -514,6 +520,10 @@ impl ConfigGetReport {
                         },
                     )
                 })
+                .collect(),
+            network_config: network_config
+                .into_iter()
+                .map(|(name, value)| (name.as_str().to_owned(), value))
                 .collect(),
             sources: include_sources.then_some(profile.sources),
         }
@@ -638,7 +648,7 @@ fn read_layer(path: &Path) -> Result<PersistedConfigLayer, CliError> {
     })
 }
 
-pub(super) fn read_optional_root(path: &Path) -> Result<Option<toml::Value>, CliError> {
+fn read_optional_root(path: &Path) -> Result<Option<toml::Value>, CliError> {
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -670,7 +680,7 @@ fn decode_profile(name: &str, value: &toml::Value) -> PersistedProfileState {
         })
         .and_then(|profile| validate_profile(profile).map_err(|error| error.to_string()));
     match result {
-        Ok(profile) => PersistedProfileState::Valid(profile),
+        Ok(profile) => PersistedProfileState::Valid(Box::new(profile)),
         Err(reason) => PersistedProfileState::Invalid { reason },
     }
 }
@@ -733,7 +743,7 @@ fn invalid_field(field: ConfigField, message: &str) -> CliError {
 
 fn valid_profile(state: Option<&PersistedProfileState>) -> Option<ProjectProfile> {
     match state {
-        Some(PersistedProfileState::Valid(profile)) => Some(profile.clone()),
+        Some(PersistedProfileState::Valid(profile)) => Some(ProjectProfile::clone(profile)),
         Some(PersistedProfileState::Invalid { .. }) | None => None,
     }
 }
@@ -766,9 +776,12 @@ fn profile_from_state(
     normalize: bool,
 ) -> Result<PersistedProfile, CliError> {
     match state {
-        Some(PersistedProfileState::Valid(profile)) => {
-            Ok(profile_from_layer(name, profile.clone(), source, normalize))
-        }
+        Some(PersistedProfileState::Valid(profile)) => Ok(profile_from_layer(
+            name,
+            ProjectProfile::clone(profile),
+            source,
+            normalize,
+        )),
         Some(PersistedProfileState::Invalid { reason }) => Err(CliError::ProfileConfigInvalid {
             profile: name.to_owned(),
             message: invalid_source_reason(source, reason),
@@ -827,6 +840,11 @@ fn sources_for_profile(profile: &ProjectProfile, source: &ConfigSource) -> Profi
             .keys()
             .map(|name| (name.clone(), source.clone()))
             .collect(),
+        network_config: profile
+            .network_config
+            .keys()
+            .map(|name| (name.as_str().to_owned(), source.clone()))
+            .collect(),
     }
 }
 
@@ -851,6 +869,14 @@ fn merge_profiles(mut global: PersistedProfile, project: PersistedProfile) -> Pe
     global.values.wallets.extend(project.values.wallets);
     global.sources.contracts.extend(project.sources.contracts);
     global.sources.wallets.extend(project.sources.wallets);
+    global
+        .values
+        .network_config
+        .extend(project.values.network_config);
+    global
+        .sources
+        .network_config
+        .extend(project.sources.network_config);
     global.project = true;
     global
 }
