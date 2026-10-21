@@ -134,7 +134,7 @@ jobs:
             test "$("target/debug/$app" --version)" = "$app $expected_version"
           done
 
-      - name: Native history through local RPC and gateway
+      - name: Native history and duplicate submission through both HTTP adapters
         timeout-minutes: 10
         run: |
           set -euo pipefail

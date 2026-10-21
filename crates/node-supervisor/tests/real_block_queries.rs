@@ -367,3 +367,6 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
 
 #[path = "real_block_queries/history.rs"]
 mod history;
+
+#[path = "real_block_queries/duplicates.rs"]
+mod duplicates;
