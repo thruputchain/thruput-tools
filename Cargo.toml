@@ -50,7 +50,10 @@ categories = ["development-tools"]
 
 [workspace.dependencies]
 shlex = "2"
-reqwest = "0.12"
+# Consumers choose the TLS backend per target: rustls with native roots on Linux, so the
+# rustls-webpki distrust list applies where OpenSSL does not check revocation, and the platform
+# verifier through native-tls elsewhere. Enforced by crates/cli/tests/linux_tls_backend.rs.
+reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy"] }
 fs2 = "0.4"
 flate2 = "1"
 tar = { version = "0.4.46", default-features = false }

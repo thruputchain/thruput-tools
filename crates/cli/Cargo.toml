@@ -79,6 +79,12 @@ tempfile = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 signal-hook = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+reqwest = { workspace = true, features = ["rustls-tls-native-roots"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+reqwest = { workspace = true, features = ["default-tls"] }
+
 [dev-dependencies]
 thruput-json-rpc-server = { workspace = true }
 thruput-domain-separator = { workspace = true }

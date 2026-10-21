@@ -79,3 +79,7 @@ heap-profiling = ["groundhog-heap-profiling/jemalloc", "dep:tikv-jemallocator"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = { workspace = true, optional = true }
+reqwest = { workspace = true, features = ["rustls-tls-native-roots"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+reqwest = { workspace = true, features = ["default-tls"] }

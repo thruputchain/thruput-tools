@@ -32,7 +32,7 @@ pub(crate) fn blocking_client(timeout: Duration) -> Result<reqwest::blocking::Cl
 }
 
 pub(crate) fn build_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client, CliError> {
-    // Keep reqwest's default TLS backend so the operating-system trust store remains authoritative.
+    // Keep the manifest-selected TLS backend: the OS verifier on macOS, rustls with OS roots on Linux.
     validate_proxy_environment()?;
     builder.build().map_err(|_| CliError::HttpClientInit)
 }

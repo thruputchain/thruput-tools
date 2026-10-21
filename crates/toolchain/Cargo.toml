@@ -29,3 +29,9 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+reqwest = { workspace = true, features = ["rustls-tls-native-roots"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+reqwest = { workspace = true, features = ["default-tls"] }
