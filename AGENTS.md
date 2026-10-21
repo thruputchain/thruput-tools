@@ -173,15 +173,13 @@ Report checks actually run and any environment blockers.
   | --- | --- |
   | CLI contract loop and persistent restart | `scripts/smoke-local-dx.sh` |
   | Gateway/runtime manifest/bench | `scripts/smoke-runtime-manifest-bench.sh` |
-  | Simulator local/existing providers | `scripts/smoke-sim-local.sh` |
   | Testkit contract flow | `scripts/smoke-testkit-local.sh` (also set `GROUNDHOG_EXAMPLES_ROOT`) |
 
   Sandbox permission failures are not product failures: obtain the necessary
   execution permissions instead of changing the workflow to bypass checks.
   Pass the emitted runtime manifest to gateway/bench consumers rather than
   reconstructing backend configuration. See
-  [runtime-manifest docs](docs/gateway/runtime-manifest.md) and
-  [simulator docs](docs/sim/README.md) for details.
+  [runtime-manifest docs](docs/gateway/runtime-manifest.md) for details.
 
 ## Agent guidance and releases
 

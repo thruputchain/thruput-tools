@@ -8,9 +8,8 @@ users interacting, rather than on one contract call in isolation.
 ## Relationship to other test tools
 
 `thruput test --integration` provides the single-project build/deploy/test
-loop. `hogsim` drives a configured traffic mix and evaluates aggregate behavior.
-Testkit lets a small group of actors execute arbitrary application logic and
-make concrete assertions. It is not a load generator or a cloud launcher.
+loop. Testkit lets a small group of actors execute arbitrary application logic
+and make concrete assertions. It is not a load generator or a cloud launcher.
 
 The scenario owns setup, actor lifetimes, and result collection. It uses a
 network handle for chain access. A local network owns an ephemeral `hog-devnode`

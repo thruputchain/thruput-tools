@@ -101,14 +101,12 @@ jobs:
             -p thruput-json-rpc-gateway
             -p thruput-cli
             -p thruput-rv32-lower
-            -p thruput-sim
             -p thruput-faucet
           )
           targets=(
             thruput-json-rpc-gateway:hog-gateway
             thruput-cli:thruput
             thruput-rv32-lower:rv32-lower
-            thruput-sim:hogsim
             thruput-faucet:thruput-faucet
           )
           source_commit=$(git rev-parse HEAD)
