@@ -28,7 +28,6 @@ members = [
     "crates/firehose",
     "crates/e2e-tests",
     "crates/bench",
-    "crates/sim",
     "crates/testkit",
 ]
 

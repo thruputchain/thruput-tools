@@ -4807,32 +4807,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "thruput-sim"
-version = "0.33.0"
-dependencies = [
- "clap",
- "hdrhistogram",
- "hex",
- "jsonrpsee",
- "libc",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.21",
- "thruput-build-info",
- "thruput-client",
- "thruput-contract-util",
- "thruput-json-rpc-client",
- "thruput-json-rpc-types",
- "thruput-signing",
- "thruput-xdr",
- "tokio",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
 name = "thruput-spec"
 version = "0.56.4"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"

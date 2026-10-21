@@ -25,7 +25,6 @@ Read the guide for the area you are changing:
 - [Benchmark scenarios and comparisons](gateway/bench-scenarios.md)
 - [Transaction-status miss benchmark](gateway/lookup-bench.md)
 - [Gateway health and observability checks](gateway/observability-smoke-test.md)
-- [Simulator quickstart and results](sim/README.md)
 - [Inspecting firehose records](firehose/inspecting-records.md)
 - [Releases](releases.md)
 - [Bundled documentation maintenance](bundled-documentation.md)

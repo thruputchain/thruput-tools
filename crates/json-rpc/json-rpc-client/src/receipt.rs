@@ -1,7 +1,7 @@
 //! Receipt polling for explicit adapters into stable report models.
 //!
-//! The simulator uses [`ReceiptSource`] to meter reads and project native responses
-//! into its report types. This module does not implement HTTP calls. Public native
+//! Callers implement [`ReceiptSource`] to meter reads and project native responses
+//! into their own report types. This module does not implement HTTP calls. Public native
 //! clients should use [`crate::native::receipt::poll_receipt`], which preserves
 //! commitment and unsupported response evidence.
 

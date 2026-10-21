@@ -39,7 +39,7 @@ jobs:
             runner: namespace-profile-hogd-linux-2604
             artifact_name: groundhog-rpc-x86_64-release-artifacts
             release_apps: >-
-              hog-gateway thruput rv32-lower hogsim thruput-faucet
+              hog-gateway thruput rv32-lower thruput-faucet
               hog-firehose-store hog-firehose-serve
           - architecture: arm64
             machine: aarch64
@@ -48,7 +48,7 @@ jobs:
             runner: namespace-profile-hogd-linux-arm64
             artifact_name: groundhog-rpc-arm64-release-artifacts
             release_apps: >-
-              hog-gateway thruput rv32-lower hogsim thruput-faucet
+              hog-gateway thruput rv32-lower thruput-faucet
               hog-firehose-store hog-firehose-serve
           - architecture: arm64
             machine: arm64
@@ -121,7 +121,6 @@ jobs:
             -p thruput-json-rpc-gateway \
             -p thruput-cli \
             -p thruput-rv32-lower \
-            -p thruput-sim \
             -p thruput-faucet \
             -p thruput-firehose \
             --bins
@@ -160,7 +159,6 @@ jobs:
                 ;;
               thruput) package_args+=(-p thruput-cli) ;;
               rv32-lower) package_args+=(-p thruput-rv32-lower) ;;
-              hogsim) package_args+=(-p thruput-sim) ;;
               thruput-faucet)
                 package_args+=(-p thruput-faucet)
                 features+=(thruput-faucet/heap-profiling)
