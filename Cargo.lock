@@ -4427,6 +4427,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.21",
+ "thruput-domain-separator",
  "thruput-indexer",
  "thruput-json-rpc-types",
  "thruput-scheduler",
