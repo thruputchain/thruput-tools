@@ -1488,7 +1488,7 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
 
     let local = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(local.rpc_url.as_deref(), Some("http://127.0.0.1:9999"));
-    for name in ["local", "devnet"] {
+    for name in ["local", "futurenet"] {
         let profile = thruput_cli::config::resolve_profile(tmp.path(), Some(name)).unwrap();
         let address = thruput_signing::strkey::parse_contract_address(&profile.contracts["HOG"])
             .expect("initialized HOG alias must resolve");
@@ -1496,6 +1496,133 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
     }
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains("plugin = \"keep\""));
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn initialize_futurenet_preserves_existing_networks_and_user_defaults() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let path = global_config_path(&tmp);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "# keep\ndefault_profile = 'devnet'\n\n[profile.devnet]\nnetwork = 'devnet'\nrpc_url = 'https://legacy.example'\n\n[profile.futurenet]\nnetwork = 'futurenet'\nrpc_url = 'https://custom.example'\nfaucet_url = 'https://custom-faucet.example'\n\n[profile.futurenet.contracts]\ncounter = '11111111111111111111111111111112'\n";
+    fs::write(&path, original).unwrap();
+
+    thruput_cli::config::initialize_global_profiles().unwrap();
+    let first = fs::read_to_string(&path).unwrap();
+    thruput_cli::config::initialize_global_profiles().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), first);
+    assert!(first.starts_with("# keep\ndefault_profile = 'devnet'"));
+    let legacy = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    assert_eq!(legacy.name, "devnet");
+    assert_eq!(legacy.network, Some(thruput_cli::config::Network::Devnet));
+    assert_eq!(legacy.rpc_url.as_deref(), Some("https://legacy.example"));
+    let future = thruput_cli::config::resolve_profile(tmp.path(), Some("futurenet")).unwrap();
+    assert_eq!(
+        future.network,
+        Some(thruput_cli::config::Network::Futurenet)
+    );
+    assert_eq!(future.rpc_url.as_deref(), Some("https://custom.example"));
+    assert_eq!(
+        future.faucet_url.as_deref(),
+        Some("https://custom-faucet.example")
+    );
+    assert!(future.contracts.contains_key("counter"));
+    assert!(future.network_hash.is_none());
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn initialize_profiles_preserves_non_hosted_use_of_hosted_profile_names() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let path = global_config_path(&tmp);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        "[profile.futurenet]\nnetwork = 'local'\n\n[profile.devnet]\nnetwork = 'mainnet'\n",
+    )
+    .unwrap();
+
+    thruput_cli::config::initialize_global_profiles().unwrap();
+
+    for name in ["futurenet", "devnet"] {
+        let profile = thruput_cli::config::resolve_profile(tmp.path(), Some(name)).unwrap();
+        assert!(profile.rpc_url.is_none());
+        assert!(profile.faucet_url.is_none());
+        assert!(profile.contracts.is_empty());
+    }
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn futurenet_project_overlay_inherits_global_endpoints_and_selection() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    thruput_cli::config::initialize_global_profiles().unwrap();
+    let initial: toml::Value =
+        toml::from_str(&fs::read_to_string(global_config_path(&tmp)).unwrap()).unwrap();
+    assert_eq!(initial["default_profile"].as_str(), Some("local"));
+    assert!(initial["profile"].get("devnet").is_none());
+    thruput_cli::config::use_profile(tmp.path(), "futurenet", true, false).unwrap();
+    let project = tmp.path().join("counter");
+    fs::create_dir(&project).unwrap();
+    thruput_cli::scaffold::generate(&project, "counter", Some("counter")).unwrap();
+
+    let resolved = thruput_cli::config::resolve_profile(&project, None).unwrap();
+    assert_eq!(resolved.name, "futurenet");
+    assert_eq!(
+        resolved.network,
+        Some(thruput_cli::config::Network::Futurenet)
+    );
+    assert_eq!(
+        resolved.rpc_url.as_deref(),
+        Some("https://rpc.thruput.network")
+    );
+    assert_eq!(
+        resolved.faucet_url.as_deref(),
+        Some("https://faucet.thruput.network")
+    );
+    assert!(resolved.network_hash.is_none());
+
+    thruput_cli::config::set_profile_field(
+        tmp.path(),
+        "futurenet",
+        thruput_cli::config::ConfigField::RpcUrl,
+        "https://custom.example",
+        true,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        thruput_cli::config::resolve_profile(&project, None)
+            .unwrap()
+            .rpc_url
+            .as_deref(),
+        Some("https://custom.example")
+    );
+
+    // A later global selection still applies inside the generated project.
+    thruput_cli::config::use_profile(tmp.path(), "local", true, false).unwrap();
+    assert_eq!(
+        thruput_cli::config::resolve_profile(&project, None)
+            .unwrap()
+            .name,
+        "local"
+    );
+    // An explicit project selection takes precedence.
+    thruput_cli::config::use_profile(&project, "futurenet", false, true).unwrap();
+    assert_eq!(
+        thruput_cli::config::resolve_profile(&project, None)
+            .unwrap()
+            .name,
+        "futurenet"
+    );
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -1534,7 +1661,7 @@ fn concurrent_global_writers_preserve_independent_updates() {
         Some("alice")
     );
     assert_eq!(
-        thruput_cli::config::resolve_profile(tmp.path(), Some("devnet"))
+        thruput_cli::config::resolve_profile(tmp.path(), Some("futurenet"))
             .unwrap()
             .rpc_url
             .as_deref(),

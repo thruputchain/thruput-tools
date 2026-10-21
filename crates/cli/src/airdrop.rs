@@ -1561,53 +1561,62 @@ mod tests {
 
     #[test]
     #[serial]
-    fn airdrop_devnet_missing_faucet_reports_devnet_error() {
+    fn airdrop_hosted_missing_faucet_reports_network_error() {
         let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
-        let mut profile = test_profile(BTreeMap::new());
-        profile.name = "devnet".into();
-        profile.network = Some(Network::Devnet);
+        for network in [Network::Futurenet, Network::Devnet] {
+            let name = network.as_str();
+            let mut profile = test_profile(BTreeMap::new());
+            profile.name = name.into();
+            profile.network = Some(network);
 
-        let error = resolve_faucet_backend(&profile, "airdrop")
-            .expect_err("bug: missing devnet faucet should fail");
+            let error = resolve_faucet_backend(&profile, "airdrop")
+                .expect_err("bug: missing hosted faucet should fail");
 
-        assert_eq!(
-            error.to_string(),
-            "profile `devnet` targets devnet, but airdrop requires `faucet_url`"
-        );
+            assert_eq!(
+                error.to_string(),
+                format!("profile `{name}` targets {name}, but airdrop requires `faucet_url`")
+            );
+        }
     }
 
     #[test]
     #[serial]
-    fn airdrop_devnet_missing_rpc_reports_devnet_error() {
+    fn airdrop_hosted_missing_rpc_reports_network_error() {
         let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
-        let mut profile = test_profile(BTreeMap::new());
-        profile.name = "devnet".into();
-        profile.network = Some(Network::Devnet);
-        profile.rpc_url = None;
-        profile.faucet_url = Some("http://127.0.0.1:8081".into());
+        for network in [Network::Futurenet, Network::Devnet] {
+            let name = network.as_str();
+            let mut profile = test_profile(BTreeMap::new());
+            profile.name = name.into();
+            profile.network = Some(network);
+            profile.rpc_url = None;
+            profile.faucet_url = Some("http://127.0.0.1:8081".into());
 
-        let error = resolve_faucet_backend(&profile, "airdrop")
-            .expect_err("bug: missing devnet rpc should fail");
+            let error = resolve_faucet_backend(&profile, "airdrop")
+                .expect_err("bug: missing hosted rpc should fail");
 
-        assert_eq!(
-            error.to_string(),
-            "profile `devnet` targets devnet, but airdrop requires `rpc_url`"
-        );
+            assert_eq!(
+                error.to_string(),
+                format!("profile `{name}` targets {name}, but airdrop requires `rpc_url`")
+            );
+        }
     }
 
     #[test]
     #[serial]
-    fn airdrop_devnet_with_urls_uses_remote_faucet() {
+    fn airdrop_hosted_with_urls_uses_remote_faucet() {
         let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
-        let mut profile = test_profile(BTreeMap::new());
-        profile.name = "devnet".into();
-        profile.network = Some(Network::Devnet);
-        profile.faucet_url = Some("http://127.0.0.1:8081".into());
+        for network in [Network::Futurenet, Network::Devnet] {
+            let name = network.as_str();
+            let mut profile = test_profile(BTreeMap::new());
+            profile.name = name.into();
+            profile.network = Some(network);
+            profile.faucet_url = Some("http://127.0.0.1:8081".into());
 
-        let backend = resolve_faucet_backend(&profile, "airdrop")
-            .expect("bug: configured devnet profile should resolve");
+            let backend = resolve_faucet_backend(&profile, "airdrop")
+                .expect("bug: configured hosted profile should resolve");
 
-        assert_eq!(backend, FaucetBackend::RemoteFaucet);
+            assert_eq!(backend, FaucetBackend::RemoteFaucet);
+        }
     }
 
     #[test]

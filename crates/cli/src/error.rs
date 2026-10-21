@@ -220,8 +220,8 @@ pub enum CliError {
     ConfigFieldUnsupported(String),
     #[error("invalid value for config field `{field}`: {message}")]
     #[hint(
-        "use local, devnet, or mainnet for network; absolute HTTP(S) URLs; 64 lowercase \
-         hexadecimal digits for network-hash; and a non-empty default key"
+        "use local, futurenet, devnet (compatibility alias), or mainnet for network; absolute HTTP(S) URLs; \
+         base58 encoding of exactly 32 bytes for network-hash; and a non-empty default key"
     )]
     #[details]
     ConfigValueInvalid { field: String, message: String },
@@ -430,7 +430,7 @@ pub enum CliError {
     )]
     #[code("missing_rpc_url")]
     #[hint(
-        "start `thruput node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile devnet`) or `--rpc-url <URL>`"
+        "start `thruput node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile futurenet`) or `--rpc-url <URL>`"
     )]
     #[details(expr = Some(json!({ "profile": profile, "network": "local" })))]
     LocalNodeUnavailable { profile: String },
@@ -479,10 +479,10 @@ pub enum CliError {
          profile.<name>.runtime_manifest"
     )]
     MissingNetworkHash,
-    #[error("profile network_hash {value:?} is not 64 lowercase hexadecimal digits")]
+    #[error("profile network_hash {value:?} is not base58 encoding of exactly 32 bytes")]
     #[hint(
-        "network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, \
-         optionally 0x-prefixed, as `getNetworkInfo` reports it"
+        "network_hash is the 32-byte network hash in unprefixed base58, \
+         as `getNetworkInfo` reports it"
     )]
     InvalidNetworkHash { value: String },
     #[error("invalid HOG amount `{input}`: {message}")]

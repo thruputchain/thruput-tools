@@ -147,7 +147,7 @@ fn missing_local_endpoint_explains_the_selected_profile_and_node_startup() {
             error["error"]["hint"]
                 .as_str()
                 .unwrap()
-                .contains("--profile devnet")
+                .contains("--profile futurenet")
         );
     }
     let remote = thruput()

@@ -877,9 +877,10 @@ impl FromStr for Network {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "local" => Ok(Self::Local),
+            "futurenet" => Ok(Self::Futurenet),
             "devnet" => Ok(Self::Devnet),
             "mainnet" => Ok(Self::Mainnet),
-            _ => Err("must be one of local, devnet, or mainnet"),
+            _ => Err("must be one of local, futurenet, devnet (compatibility alias), or mainnet"),
         }
     }
 }

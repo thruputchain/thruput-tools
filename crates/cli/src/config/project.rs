@@ -22,11 +22,11 @@ pub struct ProjectProfile {
     pub network: Option<Network>,
     #[serde(default)]
     pub rpc_url: Option<String>,
-    /// Network the profile's endpoint serves, as base58 encoding of exactly 32 bytes.
+    /// Optional signing-network pin, as base58 encoding of exactly 32 bytes.
     ///
     /// Bound into every transaction signature, so a profile carrying the wrong
-    /// one produces transactions the network rejects. One endpoint serves one
-    /// network, so this is configured beside `rpc_url` rather than discovered.
+    /// one produces transactions the network rejects. Without a pin, hosted
+    /// profiles discover the identity from matching RPC and faucet metadata.
     #[serde(default)]
     pub network_hash: Option<String>,
     #[serde(default)]
@@ -49,8 +49,21 @@ pub struct ProjectProfile {
 #[serde(rename_all = "lowercase")]
 pub enum Network {
     Local,
+    Futurenet,
+    /// Compatibility name for the hosted network. New profiles use Futurenet.
     Devnet,
     Mainnet,
+}
+
+impl Network {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Futurenet => "futurenet",
+            Self::Devnet => "devnet",
+            Self::Mainnet => "mainnet",
+        }
+    }
 }
 
 /// Transaction format used by a saved wallet. Untyped historical bindings are legacy.

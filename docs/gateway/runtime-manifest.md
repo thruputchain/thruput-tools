@@ -100,7 +100,7 @@ and opaque payloads retain hex. Local data-directory metadata uses schema 5;
 older directories require their original runtime and tools or a fresh directory.
 Local accounts have public keys, addresses and initial raw allocations,
 with no derivation seed or account indices. The supervisor owns the private
-faucet key; users and harnesses own their signing keys. Hosted Devnet retains its
+faucet key; users and harnesses own their signing keys. Hosted Futurenet retains its
 separate schema-4 deterministic adapter. Every native account has nonce zero and
 an address matching its public key. Bootstrap metadata contains the storage cost
 model; native wallets need no RV32 artifact.

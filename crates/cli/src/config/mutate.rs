@@ -9,7 +9,7 @@ use super::atomic::{
     ConfigFileKind, insert_preserving_decor, transact_document, transact_document_with_peer,
 };
 use super::dirs::config_file_path;
-use super::project::{Network, ProjectProfile, find_project_config};
+use super::project::{ProjectProfile, find_project_config};
 use super::read::{ConfigField, ConfigFieldValue, ConfigScope, validate_profile_name};
 use crate::CliError;
 
@@ -652,23 +652,15 @@ fn field_key(field: ConfigField) -> &'static str {
 
 fn field_item(field_value: ConfigFieldValue) -> Item {
     match field_value {
-        ConfigFieldValue::Network(network) => value(network_name(network)),
+        ConfigFieldValue::Network(network) => value(network.as_str()),
         ConfigFieldValue::String(string) => value(string),
     }
 }
 
 fn field_value_str(field_value: &ConfigFieldValue) -> &str {
     match field_value {
-        ConfigFieldValue::Network(network) => network_name(*network),
+        ConfigFieldValue::Network(network) => network.as_str(),
         ConfigFieldValue::String(string) => string,
-    }
-}
-
-fn network_name(network: Network) -> &'static str {
-    match network {
-        Network::Local => "local",
-        Network::Devnet => "devnet",
-        Network::Mainnet => "mainnet",
     }
 }
 

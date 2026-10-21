@@ -149,7 +149,6 @@ struct IntegrationBuild {
     project_root: PathBuf,
     package_root: PathBuf,
     target_directory: PathBuf,
-    profile: crate::config::ResolvedProfile,
     test_features: &'static str,
     artifact: ResolvedArtifact,
     warnings: Vec<crate::checks::Finding>,
@@ -380,7 +379,7 @@ fn report_integration_startup_interrupted(
         let mut report = build_test_report(
             &build.project_name,
             &build.project_root,
-            &build.profile,
+            &integration_profile(),
             TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
             &[],
             false,
@@ -547,12 +546,10 @@ fn run_integration_against_node(
     };
     let outputs = run_test_commands(&context, options, &[filter])?;
 
-    let mut profile = build.profile.clone();
-    profile.name = "integration".into();
+    let mut profile = integration_profile();
     profile.rpc_url = Some(rpc_url.to_owned());
     profile.default_key = Some(default_key.into());
     profile.runtime_manifest = runtime_manifest;
-    profile.source = None;
     profile
         .contracts
         .insert(build.project_name.clone(), contract_address.clone());
@@ -604,6 +601,25 @@ fn run_integration_against_node(
     })
 }
 
+fn integration_profile() -> crate::config::ResolvedProfile {
+    crate::config::ResolvedProfile {
+        name: "integration".into(),
+        network: Some(crate::config::Network::Local),
+        rpc_url: None,
+        network_hash: None,
+        faucet_url: None,
+        rpc_url_cli_override: false,
+        default_key: None,
+        default_wallet: None,
+        runtime_manifest: None,
+        runtime_manifest_cli_override: false,
+        runtime_artifacts_dir: None,
+        contracts: BTreeMap::new(),
+        wallets: BTreeMap::new(),
+        source: None,
+    }
+}
+
 fn build_integration_artifact(
     package: Option<&str>,
     artifacts: &ArtifactOptions,
@@ -625,7 +641,6 @@ fn build_integration_artifact(
         project_root: build.project_root,
         package_root: build.package_root,
         target_directory: build.target_directory,
-        profile: build.profile,
         test_features,
         artifact: ResolvedArtifact {
             kind: ArtifactKind::Rv32,

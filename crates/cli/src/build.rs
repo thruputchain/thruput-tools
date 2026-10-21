@@ -423,7 +423,17 @@ pub fn build_rv32_project(
         &metadata.workspace_root,
         cargo_args,
     )?;
-    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
+    // Builds are offline. A fresh scaffold can use its local overlay for the
+    // report before setup selects a global default. Never hide a bad selection.
+    let profile = match crate::config::resolve_profile(&metadata.workspace_root, explicit_profile) {
+        Err(CliError::NoActiveProfile) => {
+            match crate::config::resolve_profile(&metadata.workspace_root, Some("local")) {
+                Err(CliError::ProfileNotFound(_)) => Err(CliError::NoActiveProfile),
+                result => result,
+            }
+        }
+        result => result,
+    }?;
 
     if let Some(bytes) = layout.initial_memory_bytes {
         print.status(format_args!(

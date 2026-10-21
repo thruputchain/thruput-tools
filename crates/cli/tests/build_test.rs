@@ -407,29 +407,48 @@ fn build_rejects_missing_active_profile_before_compiling() {
     let _path = PathGuard::set(fake_bin.as_os_str());
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
 
-    let error = thruput_cli::build::build_rv32_project(
-        Some("demo-contract"),
-        &[],
-        &thruput_cli::artifacts::ArtifactOptions::default(),
-        None,
-        None,
-        &[],
-        &thruput_cli::Print::quiet(),
-    )
-    .unwrap_err();
-
-    assert_eq!(error.code(), "no_active_profile");
-    assert!(!compile_marker.exists());
+    for (config, explicit_profile, expected_code) in [
+        ("", None, "no_active_profile"),
+        (
+            "[profile.local]\nnetwork = 'local'\n",
+            Some("missing"),
+            "profile_not_found",
+        ),
+        (
+            "default_profile = 'missing'\n[profile.local]\nnetwork = 'local'\n",
+            None,
+            "profile_not_found",
+        ),
+    ] {
+        fs::write(tmp.path().join("thruput.toml"), config).unwrap();
+        let error = thruput_cli::build::build_rv32_project(
+            Some("demo-contract"),
+            &[],
+            &thruput_cli::artifacts::ArtifactOptions::default(),
+            explicit_profile,
+            None,
+            &[],
+            &thruput_cli::Print::quiet(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), expected_code);
+        assert!(!compile_marker.exists());
+    }
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
-fn build_rv32_project_compiles_and_lowers_elf() {
+fn build_rv32_project_compiles_and_lowers_elf_without_global_setup() {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
-    write_active_profile(&project_root);
+    fs::write(
+        project_root.join("thruput.toml"),
+        include_str!("../templates/thruput.toml.tmpl"),
+    )
+    .unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
     fs::write(
         project_root.join("Cargo.toml"),
         "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
@@ -508,6 +527,11 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     )
     .expect("bug: rv32 build should succeed");
 
+    assert_eq!(result.profile.name, "local");
+    assert_eq!(
+        result.profile.network,
+        Some(thruput_cli::config::Network::Local)
+    );
     assert_eq!(result.elf, raw_elf);
     assert_eq!(result.rv32, processed_rv32);
     assert_eq!(result.metadata, processed_metadata);
@@ -561,6 +585,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         metadata["build_flags"],
         "cargo --config .cargo/contract.toml build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
     );
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]

@@ -674,12 +674,7 @@ fn network_label(network: Option<Network>) -> String {
 }
 
 fn network_table_label(network: Option<Network>) -> &'static str {
-    match network {
-        Some(Network::Local) => "local",
-        Some(Network::Devnet) => "devnet",
-        Some(Network::Mainnet) => "mainnet",
-        None => "-",
-    }
+    network.map_or("-", Network::as_str)
 }
 
 fn safe_option_label(value: Option<&str>) -> String {

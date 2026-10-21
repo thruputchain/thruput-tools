@@ -131,7 +131,7 @@ ConfigFieldUnsupported
 
 ConfigValueInvalid
   code: config_value_invalid
-  hint text: use local, devnet, or mainnet for network; absolute HTTP(S) URLs; 64 lowercase hexadecimal digits for network-hash; and a non-empty default key
+  hint text: use local, futurenet, devnet (compatibility alias), or mainnet for network; absolute HTTP(S) URLs; base58 encoding of exactly 32 bytes for network-hash; and a non-empty default key
   details: field, message
 
 ConfigParse
@@ -287,7 +287,7 @@ MissingRpcUrl
 
 LocalNodeUnavailable
   code: missing_rpc_url
-  hint text: start `thruput node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile devnet`) or `--rpc-url <URL>`
+  hint text: start `thruput node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile futurenet`) or `--rpc-url <URL>`
   details: computed
 
 ProfileConfigInvalid
@@ -318,7 +318,7 @@ MissingNetworkHash
 
 InvalidNetworkHash
   code: invalid_network_hash
-  hint text: network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, optionally 0x-prefixed, as `getNetworkInfo` reports it
+  hint text: network_hash is the 32-byte network hash in unprefixed base58, as `getNetworkInfo` reports it
 
 InvalidHogAmount
   code: invalid_hog_amount

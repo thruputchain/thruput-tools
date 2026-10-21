@@ -23,7 +23,7 @@ new snapshot.
 pin. The Rust bundle test checks the same pin/content contract and cache recovery.
 The full documentation set can evolve independently of CLI releases; changing
 what a CLI ships is an explicit selection. A guide version in the manifest does
-not assert that every SDK example or deployed Devnet matches that version.
+not assert that every SDK example or deployed Futurenet matches that version.
 
 ## Markdown snapshot contract
 
