@@ -30,6 +30,8 @@ members = [
     "crates/bench",
     "crates/testkit",
 ]
+# Builds the same `thruput` binary as crates/cli; see its Cargo.toml.
+exclude = ["crates/thruput"]
 
 [workspace.package]
 version = "0.33.0"
