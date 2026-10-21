@@ -25,7 +25,7 @@ SHA256SUMS
 ```
 
 Each binary archive also has a `<binary-archive-base>-debuginfo.tar.gz`
-companion covered by `SHA256SUMS` (32 archives total).
+companion covered by `SHA256SUMS` (28 archives total).
 
 - The trailing `-debuginfo` prevents it matching binary selectors ending in the
   target or `-znver5`.

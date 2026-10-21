@@ -309,7 +309,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
-          test "${#archives[@]}" -eq 32
+          test "${#archives[@]}" -eq 28
           for archive in "${archives[@]}"; do
             test -s "$archive"
           done
