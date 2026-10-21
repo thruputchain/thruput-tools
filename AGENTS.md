@@ -34,7 +34,7 @@ for setup and [docs/README.md](docs/README.md) for focused documentation.
 | hogd result mapping | `crates/x23/hogd-backend`: shared decoding, submit packing, and transaction-status probe ordering; no connections, timeout/retry policy, or metrics |
 | Internal transport | `crates/x23/x23-transport`: x23 pool and connection helpers; not a public SDK API |
 | Embeddable client | `crates/client`: supplied-spec codecs and contract invocation with resolved inputs and caller-owned RPC clients; no CLI config, discovery, terminal output, compiler, or node supervision |
-| CLI | `crates/cli`: command logic in the library; `main.rs` dispatches |
+| CLI | `crates/cli`: command logic in the library; `app.rs` parses and dispatches. `crates/thruput` publishes the same binary under the bare `thruput` name and holds no code |
 | Transaction bounds | `crates/tx-validation`: off-chain mirror of executor checks |
 | Runtime acquisition | `crates/toolchain`: trusted catalog, acquisition, and cache; lookup is local and non-mutating, acquisition is explicit |
 | RV32 format/build | `crates/rv32/artifact` owns the format and validation; `crates/rv32/lower` lowers ELF to `.rv32a` |
@@ -173,15 +173,13 @@ Report checks actually run and any environment blockers.
   | --- | --- |
   | CLI contract loop and persistent restart | `scripts/smoke-local-dx.sh` |
   | Gateway/runtime manifest/bench | `scripts/smoke-runtime-manifest-bench.sh` |
-  | Simulator local/existing providers | `scripts/smoke-sim-local.sh` |
   | Testkit contract flow | `scripts/smoke-testkit-local.sh` (also set `GROUNDHOG_EXAMPLES_ROOT`) |
 
   Sandbox permission failures are not product failures: obtain the necessary
   execution permissions instead of changing the workflow to bypass checks.
   Pass the emitted runtime manifest to gateway/bench consumers rather than
   reconstructing backend configuration. See
-  [runtime-manifest docs](docs/gateway/runtime-manifest.md) and
-  [simulator docs](docs/sim/README.md) for details.
+  [runtime-manifest docs](docs/gateway/runtime-manifest.md) for details.
 
 ## Agent guidance and releases
 

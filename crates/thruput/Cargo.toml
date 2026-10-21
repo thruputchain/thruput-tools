@@ -1,0 +1,44 @@
+# Publishes the CLI under the bare `thruput` name, so `cargo install thruput`
+# works. All of the code lives in `thruput-cli`; this package only provides
+# the binary.
+#
+# Not a workspace member: it builds a binary named `thruput`, as `thruput-cli`
+# does, and two members with the same binary name collide in the shared
+# target directory. It has its own Cargo.lock and target directory instead.
+# Because it can't inherit from the workspace, the version and the
+# `thruput-cli` pin below must be bumped together with
+# `workspace.package.version`.
+[package]
+name = "thruput"
+version = "0.33.0"
+edition = "2024"
+rust-version = "1.96"
+authors = ["Stellar Development Foundation"]
+license = "Apache-2.0"
+publish = ["thruput"]
+repository = "https://github.com/thruputchain/thruput-tools"
+homepage = "https://github.com/thruputchain/thruput-tools"
+keywords = ["thruput"]
+categories = ["development-tools", "command-line-utilities"]
+description = "Thruput smart contract development tools"
+readme = "README.md"
+
+[[bin]]
+name = "thruput"
+path = "src/main.rs"
+
+[dependencies]
+thruput-cli = { path = "../cli", version = "=0.33.0", registry = "thruput" }
+
+# Profiles come from the root package being built, so this crate does not get
+# the workspace's. Keep it identical to the workspace `[profile.release]`.
+[profile.release]
+overflow-checks = true
+debug = "line-tables-only"
+
+[lints.rust]
+unused-must-use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

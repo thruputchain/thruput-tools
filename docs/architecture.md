@@ -46,13 +46,11 @@ and [RV32 design](rv32/design.md).
 | `thruput test` | Does this project's contract pass executor-backed tests? |
 | `thruput test --integration` | Does the project work through a real local node? |
 | `thruput-testkit` | Do several application actors interact correctly? |
-| `hogsim` | How does a stateful traffic mix behave over time and during faults? |
 | `thruput-bench` | How does a specific RPC workload perform under controlled load? |
 
-The [testkit design](testkit/DESIGN.md) and [simulator design](sim/sim-design.md)
-explain their different ownership and timing models. Benchmark and simulation
-results describe the measured workload and environment, not general network
-capacity.
+The [testkit design](testkit/DESIGN.md) explains its ownership and timing model.
+Benchmark results describe the measured workload and environment, not general
+network capacity.
 
 ## Where to read the code
 

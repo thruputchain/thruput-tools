@@ -59,6 +59,14 @@ jobs:
       - name: Clippy (heap-profiling feature)
         run: cargo clippy --locked -p groundhog-heap-profiling -p thruput-json-rpc-gateway -p thruput-faucet --all-targets --features groundhog-heap-profiling/jemalloc,thruput-json-rpc-gateway/heap-profiling,thruput-faucet/heap-profiling -- -D warnings
 
+      # Outside the workspace (see its Cargo.toml), so the steps above skip it.
+      # --locked fails if its Cargo.lock no longer matches its manifest.
+      - name: Clippy (bare thruput crate)
+        working-directory: crates/thruput
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
+
   test:
     needs: dependency-policy # Check deps before building anything
     name: Test
@@ -101,14 +109,12 @@ jobs:
             -p thruput-json-rpc-gateway
             -p thruput-cli
             -p thruput-rv32-lower
-            -p thruput-sim
             -p thruput-faucet
           )
           targets=(
             thruput-json-rpc-gateway:hog-gateway
             thruput-cli:thruput
             thruput-rv32-lower:rv32-lower
-            thruput-sim:hogsim
             thruput-faucet:thruput-faucet
           )
           source_commit=$(git rev-parse HEAD)

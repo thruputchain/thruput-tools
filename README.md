@@ -159,7 +159,6 @@ behavior. Include tests for changed behavior and describe what you verified.
 
 - [Workspace architecture](docs/architecture.md): component boundaries and source map.
 - [Documentation index](docs/README.md): design rationale, operating guides, and proposals.
-- [Simulator guide](docs/sim/README.md): stateful traffic and soak tests.
 - [Release instructions](docs/releases.md): publishing and binary artifacts.
 - [Bundled documentation maintenance](docs/bundled-documentation.md): updating
   the developer guide shipped with the CLI.
