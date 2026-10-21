@@ -370,3 +370,6 @@ mod history;
 
 #[path = "real_block_queries/duplicates.rs"]
 mod duplicates;
+
+#[path = "real_block_queries/pubkey_auth.rs"]
+mod pubkey_auth;
