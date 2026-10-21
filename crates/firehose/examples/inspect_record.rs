@@ -5,6 +5,7 @@ use clap::Parser;
 use serde_json::{Value, json};
 use thruput_firehose::Error;
 use thruput_indexer::EventIndexerPulledBlock;
+use thruput_xdr::auth_claim::AuthClaim;
 use thruput_xdr::exec_result::ExecResult;
 
 #[derive(Debug, Parser)]
@@ -35,6 +36,39 @@ fn hex<T: xdrs::WriteXDR>(value: &T) -> Result<String, Error> {
 
 fn increment<K: Ord>(counts: &mut BTreeMap<K, usize>, key: K) {
     *counts.entry(key).or_default() += 1;
+}
+
+fn sender(claim: &AuthClaim) -> Result<Option<String>, Error> {
+    match claim {
+        AuthClaim::kPubkeySignature { pubkey_preimage } => hex(
+            &thruput_domain_separator::sha2::pubkey_account_address(pubkey_preimage),
+        )
+        .map(Some),
+        _ => Ok(None),
+    }
+}
+
+#[derive(Debug)]
+struct SenderStats {
+    count: usize,
+    nonce_min: u64,
+    nonce_max: u64,
+    self_invocations: usize,
+}
+
+fn top_senders(counts: BTreeMap<String, SenderStats>, total: usize) -> Vec<Value> {
+    let mut rows: Vec<_> = counts.into_iter().collect();
+    rows.sort_by(|a, b| b.1.count.cmp(&a.1.count).then_with(|| a.0.cmp(&b.0)));
+    rows.into_iter()
+        .take(20)
+        .map(|(value, stats)| {
+            json!({"value": value, "count": stats.count,
+                   "share": stats.count as f64 / total as f64,
+                   "nonce_min": stats.nonce_min.to_string(),
+                   "nonce_max": stats.nonce_max.to_string(),
+                   "self_invocations": stats.self_invocations})
+        })
+        .collect()
 }
 
 // Numeric keys stay numeric while sorting, including tie breaks. Wide values
@@ -72,6 +106,7 @@ fn transaction_report(
             "index": index,
             "tx_hash": hex(&log.tx_hash)?,
             "kind": kind,
+            "sender": sender(&tx.auth_claim)?,
             "contract_id": hex(&tx.invocation.invoked_address)?,
             "selector": hex(&tx.invocation.entrypoint)?,
             "nonce": tx.uniquifier.nonce.to_string(),
@@ -101,6 +136,7 @@ fn inspect(bytes: &[u8]) -> Result<Value, Error> {
     let mut size_counts = BTreeMap::new();
     let mut kinds = BTreeMap::new();
     let mut contracts = BTreeMap::new();
+    let mut senders = BTreeMap::<String, SenderStats>::new();
     let mut functions = BTreeMap::new();
     let mut gas = BTreeMap::new();
     let mut expiries = BTreeMap::new();
@@ -124,6 +160,18 @@ fn inspect(bytes: &[u8]) -> Result<Value, Error> {
         };
         increment(&mut kinds, kind);
         let contract = hex(&tx.invocation.invoked_address)?;
+        if let Some(sender) = sender(&tx.auth_claim)? {
+            let stats = senders.entry(sender.clone()).or_insert(SenderStats {
+                count: 0,
+                nonce_min: tx.uniquifier.nonce,
+                nonce_max: tx.uniquifier.nonce,
+                self_invocations: 0,
+            });
+            stats.count += 1;
+            stats.nonce_min = stats.nonce_min.min(tx.uniquifier.nonce);
+            stats.nonce_max = stats.nonce_max.max(tx.uniquifier.nonce);
+            stats.self_invocations += usize::from(sender == contract);
+        }
         let selector = hex(&tx.invocation.entrypoint)?;
         increment(&mut contracts, contract.clone());
         increment(&mut functions, format!("{contract}:{selector}"));
@@ -175,6 +223,7 @@ fn inspect(bytes: &[u8]) -> Result<Value, Error> {
         "transaction_size_histogram_top10": top(size_counts, 10),
         "by_kind": top(kinds, usize::MAX),
         "by_contract_top10": top(contracts, 10),
+        "by_sender_top20": top_senders(senders, sizes.len()),
         "by_function_top10": top(functions, 10),
         "gas_limit_histogram_top5": top(gas, 5),
         "expiry_heights_top5": top(expiries, 5),
@@ -184,7 +233,7 @@ fn inspect(bytes: &[u8]) -> Result<Value, Error> {
         "outcomes": {"success": success, "failure": sizes.len() - success,
                      "by_result": top(outcomes, usize::MAX)},
         "notes": [
-            "No explicit sender/source account exists in Transaction or Invocation at XDR 0.54.1; sender counts, shares and per-sender nonce ranges are unavailable. Auth claims do not name a source address.",
+            "Pubkey-signature senders are derived offline from their auth preimages. For auth variants without a derivable preimage, sender/source is unavailable (null); auth.variant identifies the variant. Sender shares use all transactions as the denominator; nonce ranges and self_invocations cover each derived sender's transactions.",
             "Transaction is a struct, not an operation union: all transactions invoke a contract, optionally carrying contracts_to_deploy. Native transfers cannot be distinguished without contract-specific calldata knowledge.",
             "No fee limit or function/event names are stored. Selectors and topics are reported as hex; function groups use contract:selector and topic counts include every topic position.",
             "Size distribution uses encoded ProposedTransaction bytes, including signatures and proposal data; batch byte totals also include the XDR array length. p50 is the nearest-rank median (lower middle for even counts).",
@@ -264,6 +313,8 @@ mod tests {
         assert_eq!(bootstrap["events"]["count"], 4);
         assert_eq!(bootstrap["outcomes"]["success"], 1);
         assert_eq!(bootstrap["transactions"][0]["deployment_count"], 0);
+        assert!(bootstrap["transactions"][0]["sender"].is_null());
+        assert_eq!(bootstrap["by_sender_top20"], json!([]));
         assert_eq!(
             bootstrap["transactions"][0]["auth"]["variant"],
             "AuthClaimType::kSourceAddressAuthData"
@@ -277,6 +328,47 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(hundred["transaction_count"], 100);
+        let block: EventIndexerPulledBlock = xdrs::txs::decode(&fixture(include_str!(
+            "../tests/fixtures/hundred-transactions.hex"
+        )))
+        .unwrap();
+        let tx = &block.block.payload.tx_bodies[0].signed_tx.tx;
+        let AuthClaim::kPubkeySignature { pubkey_preimage } = &tx.auth_claim else {
+            panic!("fixture must carry a pubkey-signature claim");
+        };
+        let expected = hex(&thruput_domain_separator::sha2::pubkey_account_address(
+            pubkey_preimage,
+        ))
+        .unwrap();
+        assert_eq!(hundred["transactions"][0]["sender"], expected);
+        let matching: Vec<_> = block
+            .block
+            .payload
+            .tx_bodies
+            .iter()
+            .filter(|body| {
+                sender(&body.signed_tx.tx.auth_claim).unwrap().as_ref() == Some(&expected)
+            })
+            .collect();
+        let nonces: Vec<_> = matching
+            .iter()
+            .map(|body| body.signed_tx.tx.uniquifier.nonce)
+            .collect();
+        let self_invocations = matching
+            .iter()
+            .filter(|body| hex(&body.signed_tx.tx.invocation.invoked_address).unwrap() == expected)
+            .count();
+        let row = hundred["by_sender_top20"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["value"] == expected)
+            .unwrap();
+        assert_eq!(row["count"], matching.len());
+        assert_eq!(row["share"], matching.len() as f64 / 100.0);
+        assert_eq!(row["nonce_min"], nonces.iter().min().unwrap().to_string());
+        assert_eq!(row["nonce_max"], nonces.iter().max().unwrap().to_string());
+        assert_eq!(row["self_invocations"], self_invocations);
         assert_eq!(
             hundred["transaction_size_distribution"],
             json!({"min":324,"p50":324,"max":324})
@@ -298,6 +390,7 @@ mod tests {
         block.block.payload.event_logs.0.clear();
         let report = inspect(&encode(&block).unwrap()).unwrap();
         assert_eq!(report["transaction_count"], 0);
+        assert_eq!(report["by_sender_top20"], json!([]));
         assert!(report["transaction_size_distribution"].is_null());
         let mut trailing = bytes.clone();
         trailing.extend_from_slice(&[0; 4]);
