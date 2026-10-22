@@ -5,9 +5,8 @@ use std::{
 
 use async_trait::async_trait;
 use jsonrpsee::{core::RpcResult, types::ErrorObjectOwned};
-use reqwest::{StatusCode, Url};
+use reqwest::Url;
 use serde::Deserialize;
-use thruput_json_rpc_api::AirdropApiServer;
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::{
     SHA256Hash,
@@ -16,7 +15,6 @@ use thruput_json_rpc_types::{
         NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
     },
     network_info::NetworkInfo,
-    receipt::ExecStatus,
 };
 use tokio::sync::Semaphore;
 
@@ -270,12 +268,10 @@ impl HostedAirdrop {
         self.inner.validation.read().await.validated
     }
 
-    async fn forward<T>(
+    async fn forward(
         &self,
         request: AirdropRequest,
-        native: bool,
-        project: impl FnOnce(AirdropAttemptResponse) -> Result<T, RpcServerError>,
-    ) -> Result<T, HostedFailure> {
+    ) -> Result<thruput_json_rpc_types::responses::AirdropAttempt, HostedFailure> {
         let deadline = tokio::time::Instant::now() + self.inner.request_timeout;
         let _permit =
             self.inner.admission.try_acquire().map_err(|_| {
@@ -292,8 +288,9 @@ impl HostedAirdrop {
             .await
             .map_err(|_| RpcServerError::BackendTimeout)?
             .map_err(map_probe_error)?;
+        let recipient = request.recipient;
         let hosted = HostedAirdropRequest {
-            recipient: request.recipient,
+            recipient,
             client_nonce: request.client_nonce,
             network_id: self.inner.network_id.clone(),
             network_hash: self.inner.network.network_hash,
@@ -302,7 +299,7 @@ impl HostedAirdrop {
         let url = endpoint(&self.inner.base_url, "v1/airdrop")
             .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
         let started = Instant::now();
-        let result = tokio::time::timeout_at(deadline, self.post_airdrop(url, &hosted, native))
+        let result = tokio::time::timeout_at(deadline, self.post_airdrop(url, &hosted))
             .await
             .unwrap_or(Err(RpcServerError::BackendTimeout.into()))
             .and_then(|response| {
@@ -311,7 +308,7 @@ impl HostedAirdrop {
                     AirdropAttemptResponse::Succeeded { .. } => AirdropRequestOutcome::Succeeded,
                     _ => AirdropRequestOutcome::Error,
                 };
-                project(response)
+                thruput_json_rpc_server::native::funding::airdrop_result(recipient, response)
                     .map(|value| (value, outcome))
                     .map_err(HostedFailure::from)
             });
@@ -332,7 +329,6 @@ impl HostedAirdrop {
         &self,
         url: Url,
         hosted: &HostedAirdropRequest,
-        native: bool,
     ) -> Result<AirdropAttemptResponse, HostedFailure> {
         let response = self
             .inner
@@ -348,58 +344,20 @@ impl HostedAirdrop {
         if status.is_success()
             && let Ok(response) = decoded_response
         {
-            if response.recipient() != &hosted.recipient {
-                return Err(RpcServerError::invalid_data(
-                    thruput_json_rpc_types::error::native::BackendDataInvalidReason::InconsistentResult,
-                    "faucet response recipient does not match the request",
-                )
-                .into());
-            }
-            if matches!(
-                &response,
-                AirdropAttemptResponse::Succeeded { status, .. }
-                    if !matches!(status, ExecStatus::Ok)
-            ) {
-                return Err(RpcServerError::invalid_data(
-                    thruput_json_rpc_types::error::native::BackendDataInvalidReason::InconsistentResult,
-                    "faucet returned a succeeded response with a failed execution status",
-                )
-                .into());
-            }
             return Ok(response);
         }
         if let Ok(error) = serde_json::from_slice::<FaucetErrorEnvelope>(&body) {
-            return Err(HostedFailure::Service {
-                status,
-                error: error.error,
-            });
+            return Err(HostedFailure::Service(error.error));
         }
         let detail = match decoded_response {
             Ok(_) => "success response body returned with a non-success HTTP status".to_owned(),
             Err(error) => error.to_string(),
         };
-        if native {
-            return Err(RpcServerError::invalid_data(
-                thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidEncoding,
-                format!("faucet returned malformed HTTP {status} response: {detail}"),
-            )
-            .into());
-        }
-        Err(RpcServerError::BackendUnavailable(if status.is_success() {
-            format!("faucet returned a malformed success response: {detail}")
-        } else {
-            format!("faucet returned malformed HTTP {status} error: {detail}")
-        })
+        Err(RpcServerError::invalid_data(
+            thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidEncoding,
+            format!("faucet returned malformed HTTP {status} response: {detail}"),
+        )
         .into())
-    }
-}
-
-#[async_trait]
-impl AirdropApiServer for HostedAirdrop {
-    async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse> {
-        self.forward(request, false, Ok)
-            .await
-            .map_err(|error| ErrorObjectOwned::from(error.legacy()))
     }
 }
 
@@ -427,10 +385,7 @@ fn present_retry_hint<'de, D: serde::Deserializer<'de>>(
 #[derive(Debug)]
 enum HostedFailure {
     Backend(RpcServerError),
-    Service {
-        status: StatusCode,
-        error: FaucetError,
-    },
+    Service(FaucetError),
 }
 impl From<RpcServerError> for HostedFailure {
     fn from(error: RpcServerError) -> Self {
@@ -438,47 +393,13 @@ impl From<RpcServerError> for HostedFailure {
     }
 }
 impl HostedFailure {
-    fn legacy(self) -> RpcServerError {
-        match self {
-            Self::Backend(error) => error,
-            Self::Service { status, error } => map_faucet_error(status, error),
-        }
-    }
     fn native(self) -> ErrorObjectOwned {
         use thruput_json_rpc_server::native::funding;
         match self {
             Self::Backend(error) => funding::rpc_error(&error),
-            Self::Service { error, .. } => native_faucet_error(error),
+            Self::Service(error) => native_faucet_error(error),
         }
     }
-}
-
-fn map_faucet_error(status: StatusCode, error: FaucetError) -> RpcServerError {
-    let FaucetError { code, message, .. } = error;
-    let (mapped, bounded_code) = match code.as_str() {
-        code @ "airdrop_invalid_client_nonce" => (RpcServerError::InvalidParam(message), code),
-        code @ ("airdrop_quota_exceeded"
-        | "airdrop_recipient_pending_limit_exceeded"
-        | "airdrop_capacity_exceeded"
-        | "airdrop_already_pending") => (RpcServerError::Overloaded(message), code),
-        code @ ("airdrop_attempt_terminal" | "airdrop_transaction_failed") => {
-            (RpcServerError::TxRejected(message), code)
-        }
-        code @ ("airdrop_network_mismatch"
-        | "airdrop_attempt_conflict"
-        | "airdrop_attempt_state_invalid"
-        | "faucet_policy_store_unavailable"
-        | "airdrop_submit_amount_mismatch"
-        | "airdrop_submit_failed") => (RpcServerError::BackendUnavailable(message), code),
-        _ => (
-            RpcServerError::BackendUnavailable(format!(
-                "faucet returned HTTP {status}: {message} ({code})"
-            )),
-            "unknown",
-        ),
-    };
-    tracing::debug!(faucet_code = bounded_code, http_status = %status, "faucet rejected airdrop request");
-    mapped
 }
 
 fn map_http_error(error: &reqwest::Error) -> RpcServerError {
@@ -567,7 +488,7 @@ mod tests {
         routing::{get, post},
     };
     use serde_json::json;
-    use thruput_json_rpc_types::error::codes;
+    use thruput_json_rpc_types::error::native::codes;
     use tokio::{
         net::{TcpListener, TcpSocket},
         sync::Notify,
@@ -777,7 +698,7 @@ mod tests {
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..MAX_IN_FLIGHT * 16 {
             let facade = facade.clone();
-            tasks.spawn(async move { facade.request_airdrop(airdrop_request()).await });
+            tasks.spawn(async move { request_airdrop(&facade, airdrop_request()).await });
         }
         tokio::time::timeout(Duration::from_secs(5), async {
             while facade.inner.admission.available_permits() != 0 {
@@ -787,8 +708,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            facade
-                .request_airdrop(airdrop_request())
+            request_airdrop(&facade, airdrop_request())
                 .await
                 .unwrap_err()
                 .code(),
@@ -802,8 +722,7 @@ mod tests {
             MAX_IN_FLIGHT * 16
         );
         assert_eq!(
-            facade
-                .request_airdrop(airdrop_request())
+            request_airdrop(&facade, airdrop_request())
                 .await
                 .unwrap_err()
                 .code(),
@@ -815,7 +734,7 @@ mod tests {
         );
         assert_eq!(requests.load(Ordering::SeqCst), 0);
         drop(execution);
-        facade.request_airdrop(airdrop_request()).await.unwrap();
+        request_airdrop(&facade, airdrop_request()).await.unwrap();
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         faucet.abort();
     }
@@ -849,7 +768,7 @@ mod tests {
             .unwrap();
         let cancelled = tokio::spawn({
             let facade = facade.clone();
-            async move { facade.request_airdrop(airdrop_request()).await }
+            async move { request_airdrop(&facade, airdrop_request()).await }
         });
         tokio::time::timeout(Duration::from_secs(5), async {
             while bodies.lock().unwrap().is_empty() {
@@ -866,8 +785,7 @@ mod tests {
             MAX_IN_FLIGHT * 16
         );
         assert_eq!(
-            facade
-                .request_airdrop(airdrop_request())
+            request_airdrop(&facade, airdrop_request())
                 .await
                 .unwrap_err()
                 .code(),
@@ -879,7 +797,7 @@ mod tests {
             MAX_IN_FLIGHT * 16
         );
         gate.add_permits(3);
-        facade.request_airdrop(airdrop_request()).await.unwrap();
+        request_airdrop(&facade, airdrop_request()).await.unwrap();
         let bodies = bodies.lock().unwrap();
         assert_eq!(bodies.len(), 3);
         assert!(bodies.windows(2).all(|pair| pair[0] == pair[1]));
@@ -1058,8 +976,7 @@ mod tests {
         }))
         .expect("bug: request fixture should decode");
 
-        let error = facade
-            .request_airdrop(request)
+        let error = request_airdrop(&facade, request)
             .await
             .expect_err("quota response should fail the RPC");
 
@@ -1108,10 +1025,10 @@ mod tests {
         let request = airdrop_request();
 
         let (a, b, c, d) = tokio::join!(
-            facade.request_airdrop(request.clone()),
-            facade.request_airdrop(request.clone()),
-            facade.request_airdrop(request.clone()),
-            facade.request_airdrop(request),
+            request_airdrop(&facade, request.clone()),
+            request_airdrop(&facade, request.clone()),
+            request_airdrop(&facade, request.clone()),
+            request_airdrop(&facade, request),
         );
 
         for result in [a, b, c, d] {
@@ -1156,7 +1073,7 @@ mod tests {
             .expect("configured facade should exist");
         let active_validation = {
             let facade = facade.clone();
-            tokio::spawn(async move { facade.request_airdrop(airdrop_request()).await })
+            tokio::spawn(async move { request_airdrop(&facade, airdrop_request()).await })
         };
         tokio::time::timeout(Duration::from_secs(1), validation_started.notified())
             .await
@@ -1211,7 +1128,7 @@ mod tests {
             .expect("configured facade should exist");
         let active_request = {
             let facade = facade.clone();
-            tokio::spawn(async move { facade.request_airdrop(airdrop_request()).await })
+            tokio::spawn(async move { request_airdrop(&facade, airdrop_request()).await })
         };
         tokio::time::timeout(Duration::from_secs(1), post_started.notified())
             .await
@@ -1273,7 +1190,8 @@ mod tests {
                                 "rawAmount": "100000000",
                                 "txHash": SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22; 32])),
                                 "height": "42",
-                                "status": { "result": "ok" }
+                                "status": { "result": "ok" },
+                                "returnData": "0x0102"
                             }))
                         }
                     }
@@ -1286,7 +1204,7 @@ mod tests {
             .expect("configured facade should exist");
         let active_request = {
             let facade = facade.clone();
-            tokio::spawn(async move { facade.request_airdrop(airdrop_request()).await })
+            tokio::spawn(async move { request_airdrop(&facade, airdrop_request()).await })
         };
         tokio::time::timeout(Duration::from_secs(1), post_started.notified())
             .await
@@ -1305,8 +1223,7 @@ mod tests {
             .expect("request task should complete")
             .expect("request validated before descriptor changed");
 
-        let error = facade
-            .request_airdrop(airdrop_request())
+        let error = request_airdrop(&facade, airdrop_request())
             .await
             .expect_err("mismatched descriptor must disable later execution");
         assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
@@ -1332,12 +1249,15 @@ mod tests {
         let pending = HostedAirdrop::from_config(&config(&pending_url), network_info())
             .await
             .expect("matching descriptor should pass startup")
-            .expect("configured facade should exist")
-            .request_airdrop(airdrop_request())
+            .expect("configured facade should exist");
+        let pending = request_airdrop(&pending, airdrop_request())
             .await
             .expect("pending response should round-trip");
 
-        assert!(matches!(pending, AirdropAttemptResponse::Pending { .. }));
+        assert!(matches!(
+            pending,
+            thruput_json_rpc_types::responses::AirdropAttempt::Pending { .. }
+        ));
 
         let succeeded_body = json!({
             "attemptStatus": "succeeded",
@@ -1345,7 +1265,8 @@ mod tests {
             "rawAmount": "100000000",
             "txHash": SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22; 32])),
             "height": "42",
-            "status": { "result": "ok" }
+            "status": { "result": "ok" },
+            "returnData": "0x0102"
         });
         let (succeeded_url, _succeeded_server) = spawn_server(
             network_descriptor("devnet"),
@@ -1357,14 +1278,14 @@ mod tests {
         let succeeded = HostedAirdrop::from_config(&config(&succeeded_url), network_info())
             .await
             .expect("matching descriptor should pass startup")
-            .expect("configured facade should exist")
-            .request_airdrop(airdrop_request())
+            .expect("configured facade should exist");
+        let succeeded = request_airdrop(&succeeded, airdrop_request())
             .await
             .expect("succeeded response should round-trip");
 
         assert!(matches!(
             succeeded,
-            AirdropAttemptResponse::Succeeded { .. }
+            thruput_json_rpc_types::responses::AirdropAttempt::Succeeded { .. }
         ));
     }
 
@@ -1394,8 +1315,7 @@ mod tests {
             .expect("matching descriptor should pass startup")
             .expect("configured facade should exist");
 
-        let error = facade
-            .request_airdrop(airdrop_request())
+        let error = request_airdrop(&facade, airdrop_request())
             .await
             .expect_err("slow faucet POST should time out");
 
@@ -1421,8 +1341,7 @@ mod tests {
         }))
         .expect("bug: request fixture should decode");
 
-        let error = facade
-            .request_airdrop(request)
+        let error = request_airdrop(&facade, request)
             .await
             .expect_err("structured 202 error should fail the RPC");
 
@@ -1430,7 +1349,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_success_response_maps_to_backend_unavailable() {
+    async fn malformed_success_response_maps_to_backend_data_invalid() {
         let (base_url, _server) = spawn_server(
             network_descriptor("devnet"),
             StatusCode::OK,
@@ -1448,16 +1367,15 @@ mod tests {
         }))
         .expect("bug: request fixture should decode");
 
-        let error = facade
-            .request_airdrop(request)
+        let error = request_airdrop(&facade, request)
             .await
             .expect_err("malformed success should fail the RPC");
 
-        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+        assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
     }
 
     #[tokio::test]
-    async fn succeeded_response_with_failed_status_maps_to_backend_unavailable() {
+    async fn succeeded_response_with_failed_status_maps_to_backend_data_invalid() {
         let (base_url, _server) = spawn_server(
             network_descriptor("devnet"),
             StatusCode::OK,
@@ -1477,12 +1395,11 @@ mod tests {
             .expect("matching descriptor should pass startup")
             .expect("configured facade should exist");
 
-        let error = facade
-            .request_airdrop(airdrop_request())
+        let error = request_airdrop(&facade, airdrop_request())
             .await
             .expect_err("failed execution status must not be reported as succeeded");
 
-        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+        assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
     }
 
     #[tokio::test]
@@ -1521,8 +1438,7 @@ mod tests {
             .expect("matching descriptor should pass startup")
             .expect("configured facade should exist");
 
-        facade
-            .request_airdrop(airdrop_request())
+        request_airdrop(&facade, airdrop_request())
             .await
             .expect("airdrop should be forwarded");
 
@@ -1544,7 +1460,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn success_body_with_error_status_maps_to_backend_unavailable() {
+    async fn success_body_with_error_status_maps_to_backend_data_invalid() {
         let (base_url, _server) = spawn_server(
             network_descriptor("devnet"),
             StatusCode::BAD_GATEWAY,
@@ -1567,16 +1483,15 @@ mod tests {
         }))
         .expect("bug: request fixture should decode");
 
-        let error = facade
-            .request_airdrop(request)
+        let error = request_airdrop(&facade, request)
             .await
             .expect_err("HTTP error with a success body should fail the RPC");
 
-        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+        assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
     }
 
     #[tokio::test]
-    async fn mismatched_response_recipient_maps_to_backend_unavailable() {
+    async fn mismatched_response_recipient_maps_to_backend_data_invalid() {
         let (base_url, _server) = spawn_server(
             network_descriptor("devnet"),
             StatusCode::ACCEPTED,
@@ -1594,99 +1509,48 @@ mod tests {
             .expect("matching descriptor should pass startup")
             .expect("configured facade should exist");
 
-        let error = facade
-            .request_airdrop(airdrop_request())
+        let error = request_airdrop(&facade, airdrop_request())
             .await
             .expect_err("faucet must not redirect an airdrop response to another recipient");
 
-        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+        assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
     }
 
     #[test]
     fn structured_faucet_errors_map_to_public_categories() {
         let cases = [
+            ("airdrop_invalid_client_nonce", codes::INVALID_PARAMS),
+            ("airdrop_quota_exceeded", codes::OVERLOADED),
             (
-                StatusCode::BAD_REQUEST,
-                "airdrop_invalid_client_nonce",
-                codes::INVALID_PARAMS,
-            ),
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                "airdrop_quota_exceeded",
-                codes::OVERLOADED,
-            ),
-            (
-                StatusCode::TOO_MANY_REQUESTS,
                 "airdrop_recipient_pending_limit_exceeded",
                 codes::OVERLOADED,
             ),
+            ("airdrop_capacity_exceeded", codes::OVERLOADED),
+            ("airdrop_already_pending", codes::OVERLOADED),
+            ("airdrop_attempt_terminal", codes::FUNDING_ATTEMPT_STOPPED),
+            ("airdrop_transaction_failed", codes::FUNDING_ATTEMPT_STOPPED),
+            ("airdrop_submit_failed", codes::BACKEND_UNAVAILABLE),
+            ("airdrop_network_mismatch", codes::BACKEND_UNAVAILABLE),
+            ("airdrop_attempt_conflict", codes::BACKEND_UNAVAILABLE),
+            ("airdrop_attempt_state_invalid", codes::BACKEND_UNAVAILABLE),
             (
-                StatusCode::TOO_MANY_REQUESTS,
-                "airdrop_capacity_exceeded",
-                codes::OVERLOADED,
-            ),
-            (
-                StatusCode::ACCEPTED,
-                "airdrop_already_pending",
-                codes::OVERLOADED,
-            ),
-            (
-                StatusCode::CONFLICT,
-                "airdrop_attempt_terminal",
-                codes::TX_REJECTED,
-            ),
-            (
-                StatusCode::BAD_GATEWAY,
-                "airdrop_transaction_failed",
-                codes::TX_REJECTED,
-            ),
-            (
-                StatusCode::BAD_GATEWAY,
-                "airdrop_submit_failed",
-                codes::BACKEND_UNAVAILABLE,
-            ),
-            (
-                StatusCode::BAD_REQUEST,
-                "airdrop_network_mismatch",
-                codes::BACKEND_UNAVAILABLE,
-            ),
-            (
-                StatusCode::CONFLICT,
-                "airdrop_attempt_conflict",
-                codes::BACKEND_UNAVAILABLE,
-            ),
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "airdrop_attempt_state_invalid",
-                codes::BACKEND_UNAVAILABLE,
-            ),
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
                 "faucet_policy_store_unavailable",
                 codes::BACKEND_UNAVAILABLE,
             ),
             (
-                StatusCode::BAD_GATEWAY,
                 "airdrop_submit_amount_mismatch",
-                codes::BACKEND_UNAVAILABLE,
+                codes::FUNDING_ATTEMPT_STOPPED,
             ),
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                "unknown_future_code",
-                codes::BACKEND_UNAVAILABLE,
-            ),
+            ("unknown_future_code", codes::BACKEND_UNAVAILABLE),
+            ("airdrop_receipt_invalid", codes::BACKEND_DATA_INVALID),
         ];
 
-        for (status, code, expected) in cases {
-            let mapped = map_faucet_error(
-                status,
-                FaucetError {
-                    code: code.into(),
-                    message: "test error".into(),
-                    retry_after_seconds: None,
-                },
-            );
-            let rpc_error = ErrorObjectOwned::from(mapped);
+        for (code, expected) in cases {
+            let rpc_error = native_faucet_error(FaucetError {
+                code: code.into(),
+                message: "test error".into(),
+                retry_after_seconds: None,
+            });
             assert_eq!(rpc_error.code(), expected, "wrong mapping for {code}");
         }
     }
@@ -1820,6 +1684,20 @@ mod tests {
         (format!("http://{address}"), server)
     }
 
+    async fn request_airdrop(
+        facade: &HostedAirdrop,
+        request: AirdropRequest,
+    ) -> RpcResult<thruput_json_rpc_types::responses::AirdropAttempt> {
+        thruput_json_rpc_server::native::funding::NativeFundingPlane::request_airdrop(
+            facade,
+            thruput_json_rpc_types::requests::AirdropRequest {
+                recipient: request.recipient,
+                client_nonce: request.client_nonce,
+            },
+        )
+        .await
+    }
+
     fn airdrop_request() -> AirdropRequest {
         serde_json::from_value(json!({
             "recipient": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x11; 32])),
@@ -1892,16 +1770,10 @@ impl thruput_json_rpc_server::native::funding::NativeFundingPlane for HostedAird
         &self,
         request: thruput_json_rpc_types::requests::AirdropRequest,
     ) -> RpcResult<thruput_json_rpc_types::responses::AirdropAttempt> {
-        use thruput_json_rpc_server::native::funding;
-        let recipient = request.recipient;
-        self.forward(
-            AirdropRequest {
-                recipient,
-                client_nonce: request.client_nonce,
-            },
-            true,
-            |result| funding::airdrop_result(recipient, result),
-        )
+        self.forward(AirdropRequest {
+            recipient: request.recipient,
+            client_nonce: request.client_nonce,
+        })
         .await
         .map_err(HostedFailure::native)
     }
