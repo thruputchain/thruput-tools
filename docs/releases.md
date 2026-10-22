@@ -7,8 +7,10 @@ require publishing a release.
 Run the **Release package** GitHub Actions workflow for a normal release.
 
 - [`publish.yml`](../.github/workflows/publish.yml) publishes the Rust crates to the private
-  `thruput` Cargo registry, creates and pushes the matching `vX.Y.Z` tag, then
-  dispatches binary packaging.
+  `thruput` Cargo registry, including the standalone `thruput` install crate
+  after `thruput-cli`. It creates and pushes the matching `vX.Y.Z` tag, then
+  dispatches binary packaging. Registry smoke tests install that published CLI
+  and build and test both generated templates without checkout dependencies.
 - [`release.yml`](../.github/workflows/release.yml) is dispatch-only and internal to
   `publish.yml`. Do not run it directly for normal releases.
 
