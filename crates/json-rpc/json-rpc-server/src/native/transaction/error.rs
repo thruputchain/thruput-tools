@@ -151,6 +151,9 @@ fn bound(detail: &TxInvalidDetail) -> Option<ExecutorBoundDetail> {
             code_bytes,
             max_bytes,
         },
+        TxInvalidDetail::GasLimitTooHigh { gas_limit, max_gas } => {
+            ExecutorBoundDetail::GasLimitTooHigh { gas_limit, max_gas }
+        }
         _ => return None,
     })
 }

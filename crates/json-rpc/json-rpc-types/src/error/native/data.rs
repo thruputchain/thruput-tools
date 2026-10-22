@@ -530,6 +530,14 @@ pub enum ExecutorBoundDetail {
         #[schemars(schema_with = "u32_schema")]
         max_bytes: u32,
     },
+    GasLimitTooHigh {
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "Decimal<u64>")]
+        gas_limit: u64,
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "Decimal<u64>")]
+        max_gas: u64,
+    },
 }
 
 /// A known bound detail or its complete future refinement. Malformed known
@@ -556,6 +564,7 @@ impl<'de> Deserialize<'de> for BoundDetail {
                 | "duplicateContract"
                 | "rv32MemoryTooLarge"
                 | "rv32CodeTooLarge"
+                | "gasLimitTooHigh"
         ) {
             serde_json::from_value(raw)
                 .map(Self::Known)

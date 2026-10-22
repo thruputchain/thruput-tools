@@ -159,6 +159,13 @@ pub struct NetworkConfigParams {
     /// when unstated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rv32_memory_bytes: Option<u32>,
+    /// Gas one transaction may budget: the most a root invocation's
+    /// `gasLimit` may state. The protocol fixes 1,000,000,000 as the value
+    /// in force when unstated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::decimal::option")]
+    #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
+    pub max_tx_gas: Option<u64>,
 }
 
 impl NetworkConfigParams {
@@ -219,6 +226,9 @@ impl NetworkConfigParams {
                     max_rv32_memory_bytes,
                 } => {
                     resolved.max_rv32_memory_bytes = Some(*max_rv32_memory_bytes);
+                }
+                ConfigParam::kConfigParamMaxTxGas { max_tx_gas } => {
+                    resolved.max_tx_gas = Some(*max_tx_gas);
                 }
                 // `kConfigParamMaxSHA256BufferBytes` is retired; otherwise the
                 // catch-all exists only because the enum is `#[non_exhaustive]`.

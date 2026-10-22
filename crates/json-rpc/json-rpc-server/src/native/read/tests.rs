@@ -426,7 +426,7 @@ async fn assembly_registers_each_configured_plane_independently() {
             before["result"]["supportedMethods"],
             serde_json::json!(expected)
         );
-        assert_eq!(before["result"]["wireFormat"], "14.0.0");
+        assert_eq!(before["result"]["wireFormat"], "14.1.0");
         assert_eq!(before["result"]["implementation"], "test-build");
         assert!(before["result"].get("releaseVersion").is_none());
         assert!(before["result"].get("bundleManifestDigest").is_none());
@@ -526,7 +526,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
             .request("getVersionInfo", ObjectParams::new())
             .await
             .unwrap();
-        assert_eq!(version["wireFormat"], "14.0.0");
+        assert_eq!(version["wireFormat"], "14.1.0");
         assert_eq!(version["supportedMethods"], serde_json::json!(expected));
         let limits: serde_json::Value = client
             .request("getServerLimits", ObjectParams::new())
@@ -652,7 +652,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
         handle.stop().unwrap();
         handle.stopped().await;
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.0.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.1.0");
 }
 
 #[test]
