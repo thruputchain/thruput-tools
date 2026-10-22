@@ -65,7 +65,7 @@ arbitrary error strings do not belong in metric labels.
 
 Native submission and transaction-lookup handler spans are DEBUG-level diagnostics;
 normal INFO logging avoids formatting a transaction hash for each request.
-Use `RUST_LOG=info,hog_gateway=debug,thruput_json_rpc_server=debug` to enable
+Use `RUST_LOG=info,hog_gateway=debug` to enable
 these spans for bounded local request diagnostics. The OTLP filter exports gateway
 spans only at INFO and above, so these handler spans and their `tx_hash` fields
 are absent from OTLP even when local DEBUG logging is enabled. Backend warnings
