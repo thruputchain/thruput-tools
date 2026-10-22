@@ -95,7 +95,10 @@ pub enum ClientNonceError {
     TooLong,
 }
 
-/// Public parameters for `groundhog_requestAirdrop`.
+/// Recipient and idempotency key for one faucet airdrop attempt.
+///
+/// The native `faucet_requestAirdrop` wire request is
+/// [`crate::requests::AirdropRequest`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AirdropRequest {
@@ -105,7 +108,10 @@ pub struct AirdropRequest {
     pub client_nonce: ClientNonce,
 }
 
-/// Public parameters for local-only `groundhog_fundAccount`.
+/// One local funding request, as retained in funding journals.
+///
+/// The native `dev_fundAccount` wire request is
+/// [`crate::requests::FundAccountRequest`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FundAccountRequest {

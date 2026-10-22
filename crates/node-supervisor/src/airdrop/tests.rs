@@ -250,7 +250,7 @@ async fn admission_bounds_same_key_waiters_and_recovers_after_cancellation() {
     let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..16 {
         let rpc = rpc.clone();
-        tasks.spawn(async move { rpc.request_airdrop(test_request(1, 1)).await });
+        tasks.spawn(async move { request_airdrop(&rpc, test_request(1, 1)).await });
     }
     tokio::time::timeout(Duration::from_secs(5), async {
         // Admission precedes journal registration on a blocking worker.
@@ -261,10 +261,10 @@ async fn admission_bounds_same_key_waiters_and_recovers_after_cancellation() {
     })
     .await
     .unwrap();
-    let error = rpc.request_airdrop(test_request(2, 2)).await.unwrap_err();
+    let error = request_airdrop(&rpc, test_request(2, 2)).await.unwrap_err();
     assert_eq!(
         error.code(),
-        thruput_json_rpc_types::error::codes::OVERLOADED
+        thruput_json_rpc_types::error::native::codes::OVERLOADED
     );
     assert_eq!(rpc.attempts.lock().unwrap().len(), 1);
     assert!(backend.submissions.lock().unwrap().is_empty());
@@ -272,7 +272,7 @@ async fn admission_bounds_same_key_waiters_and_recovers_after_cancellation() {
     while tasks.join_next().await.is_some() {}
     assert_eq!(rpc.admission.available_permits(), 16);
     drop(execution);
-    rpc.request_airdrop(test_request(1, 1)).await.unwrap();
+    request_airdrop(&rpc, test_request(1, 1)).await.unwrap();
     assert_eq!(backend.submissions.lock().unwrap().len(), 1);
 }
 
@@ -300,7 +300,7 @@ async fn deadline_covers_queue_and_submission_and_retains_signed_bytes() {
     ));
     assert_eq!(rpc.concurrency.available_permits(), 1);
     rpc.timeout = Duration::from_secs(1);
-    rpc.request_airdrop(test_request(2, 2)).await.unwrap();
+    request_airdrop(&rpc, test_request(2, 2)).await.unwrap();
     assert_eq!(builder.constructions.load(Ordering::SeqCst), 1);
     assert_eq!(*backend.submissions.lock().unwrap(), vec![vec![9, 8, 7]; 2]);
 }
@@ -316,7 +316,7 @@ async fn execution_receives_the_deadline_started_before_queueing() {
     let execution = rpc.concurrency.acquire().await.unwrap();
     let task = tokio::spawn({
         let rpc = rpc.clone();
-        async move { rpc.request_airdrop(test_request(1, 1)).await }
+        async move { request_airdrop(&rpc, test_request(1, 1)).await }
     });
     tokio::time::timeout(Duration::from_secs(5), async {
         while rpc.admission.available_permits() == 16 {
@@ -1375,6 +1375,20 @@ fn test_rpc_with_trigger(
         },
         block_driver,
     )
+}
+
+async fn request_airdrop(
+    rpc: &LocalAirdropRpc,
+    request: AirdropRequest,
+) -> RpcResult<thruput_json_rpc_types::responses::AirdropAttempt> {
+    thruput_json_rpc_server::native::funding::NativeFundingPlane::request_airdrop(
+        rpc,
+        thruput_json_rpc_types::requests::AirdropRequest {
+            recipient: request.recipient,
+            client_nonce: request.client_nonce,
+        },
+    )
+    .await
 }
 
 fn test_request(recipient: u8, nonce: u8) -> AirdropRequest {
