@@ -4,7 +4,8 @@
 # Profiles here merge with global profiles of the same name, and project
 # aliases override global aliases.
 
-default_profile = "local"
+# Follow the global default selected with `thruput config use <NAME> --global`.
+# To select a network only for this project, use `thruput config use <NAME> --project`.
 
 [profile.local]
 network = "local"
@@ -18,19 +19,20 @@ network = "local"
 # address = "0x0000000000000000000000000000000000000000000000000000000000000000"
 # owner_public_key = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
-# Genesis parameter overrides for local nodes started by `thruput node` and
-# `thruput test --integration`. A `--network-config` flag replaces a value here.
+# Genesis parameter overrides read when the local profile is selected.
+# Use `THRUPUT_PROFILE=local thruput node` or `thruput test --integration --profile local`.
+# A `--network-config` flag replaces a value here.
 # [profile.local.network_config]
 # max_rv32_code_bytes = "256K"
 
-[profile.devnet]
-network = "devnet"
-# Set with `thruput wallet use <NAME> --profile devnet`.
+[profile.futurenet]
+network = "futurenet"
+# Set with `thruput wallet use <NAME> --profile futurenet`.
 # default_wallet = "alice"
 
-[profile.devnet.contracts]
+[profile.futurenet.contracts]
 # {{PROJECT_NAME}} = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
-# [profile.devnet.wallets.alice]
+# [profile.futurenet.wallets.alice]
 # address = "0x0000000000000000000000000000000000000000000000000000000000000000"
 # owner_public_key = "0x0000000000000000000000000000000000000000000000000000000000000000"

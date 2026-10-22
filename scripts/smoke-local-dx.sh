@@ -660,7 +660,7 @@ cd "$WORK"
 log "Scaffolding counter contract"
 "$CLI" new "$PROJECT_NAME" --template counter
 cd "$PROJECT_NAME"
-export THRUPUT_PROFILE="$SMOKE_PROFILE"
+unset THRUPUT_PROFILE
 
 if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
     log "Using local SDK path: $SMOKE_SDK_PATH"
@@ -674,6 +674,7 @@ COUNTER_BUILD_JSON="$(run_json "build counter contract" "$CLI" --json build)"
 COUNTER_SPEC_XDR="$(json_field data.specXdr "$COUNTER_BUILD_JSON")"
 [[ "$COUNTER_SPEC_XDR" != "null" && -r "$COUNTER_SPEC_XDR" ]] \
     || die "counter build did not return a readable specXdr path: $COUNTER_SPEC_XDR"
+export THRUPUT_PROFILE="$SMOKE_PROFILE"
 
 log "Creating stored smoke keys and public bootstrap allocations"
 for name in smoke-sender smoke-recipient smoke-third; do
@@ -751,9 +752,15 @@ for index in 0 1 2 3; do
     [[ "$(json_field bootstrapAccounts.$index.initialStorageTokens "$RUNTIME_JSON")" == "$expected_tokens" ]] \
         || die "runtime manifest account $index did not advertise funding $expected_tokens"
 done
-NODE_PROFILE="$(toml_field thruput.toml default_profile)"
+PROJECT_DEFAULT="$(toml_field thruput.toml default_profile)"
+[[ "$PROJECT_DEFAULT" == "null" ]] \
+    || die "project default_profile was dirtied: $PROJECT_DEFAULT"
+PROFILE_JSON="$("$CLI" --json config get)"
+NODE_PROFILE="$(json_field data.profile "$PROFILE_JSON")"
 [[ "$NODE_PROFILE" == "$SMOKE_PROFILE" ]] \
-    || die "default_profile was $NODE_PROFILE, expected $SMOKE_PROFILE"
+    || die "selected profile was $NODE_PROFILE, expected $SMOKE_PROFILE"
+[[ "$(json_field data.selectionSource.kind "$PROFILE_JSON")" == "environment" ]] \
+    || die "local smoke profile was not selected by THRUPUT_PROFILE"
 PROFILE_RPC_URL="$(toml_profile_field thruput.toml "$NODE_PROFILE" rpc_url)"
 PROFILE_RUNTIME_MANIFEST="$(toml_profile_field thruput.toml "$NODE_PROFILE" runtime_manifest)"
 [[ "$PROFILE_RPC_URL" == "null" ]] \
@@ -1280,5 +1287,32 @@ EXPECTED_POST_RESTORE_VALUE=$(( PERSISTED_VALUE_BEFORE + 1 ))
 [[ "$POST_RESTORE_VALUE" == "$EXPECTED_POST_RESTORE_VALUE" ]] \
     || die "restored chain did not advance: got $POST_RESTORE_VALUE, expected $EXPECTED_POST_RESTORE_VALUE"
 log "restored chain advanced counter value: $PERSISTED_VALUE_AFTER->$POST_RESTORE_VALUE"
+
+log "Checking isolated integration tests with a hosted global default"
+"$CLI" --json config new futurenet --network futurenet --global --use \
+    --rpc-url https://rpc.invalid --faucet-url https://faucet.invalid \
+    --default-key smoke-sender > "$WORK/futurenet-config.json"
+INTEGRATION_ARGS=(--json test --integration)
+if [[ -n "$HOGD_PROTOCOL" ]]; then
+    INTEGRATION_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
+fi
+INTEGRATION_JSON="$(run_json "integration tests with hosted default" \
+    env -u THRUPUT_PROFILE "$CLI" "${INTEGRATION_ARGS[@]}")"
+[[ "$(json_field data.success "$INTEGRATION_JSON")" == "true" ]] \
+    || die "isolated integration tests failed"
+[[ "$(json_field data.profile.network "$INTEGRATION_JSON")" == "local" ]] \
+    || die "integration report retained the hosted network"
+for field in faucetUrl networkHash defaultWallet runtimeArtifactsDir; do
+    [[ "$(json_field "data.profile.$field" "$INTEGRATION_JSON")" == "null" ]] \
+        || die "integration report retained hosted $field"
+done
+[[ "$(json_field data.profile.defaultKey "$INTEGRATION_JSON")" == "integration" ]] \
+    || die "integration report did not identify its fixture key"
+[[ "$(json_field data.profile.wallets "$INTEGRATION_JSON")" == "{}" ]] \
+    || die "integration report retained hosted wallets"
+[[ "$(json_len data.profile.contracts "$INTEGRATION_JSON")" == "1" ]] \
+    || die "integration report included aliases beyond its deployment"
+[[ "$(json_field data.profile.rpcUrl "$INTEGRATION_JSON")" == "$(json_field data.integration.rpcUrl "$INTEGRATION_JSON")" ]] \
+    || die "integration profile endpoint differs from the tested node"
 
 log "Local DX smoke passed"

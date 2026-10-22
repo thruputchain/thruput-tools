@@ -22,11 +22,11 @@ pub struct ProjectProfile {
     pub network: Option<Network>,
     #[serde(default)]
     pub rpc_url: Option<String>,
-    /// Network the profile's endpoint serves, as base58 encoding of exactly 32 bytes.
+    /// Optional signing-network pin, as base58 encoding of exactly 32 bytes.
     ///
     /// Bound into every transaction signature, so a profile carrying the wrong
-    /// one produces transactions the network rejects. One endpoint serves one
-    /// network, so this is configured beside `rpc_url` rather than discovered.
+    /// one produces transactions the network rejects. Without a pin, hosted
+    /// profiles discover the identity from matching RPC and faucet metadata.
     #[serde(default)]
     pub network_hash: Option<String>,
     #[serde(default)]
@@ -48,7 +48,7 @@ pub struct ProjectProfile {
     /// Values are integers or strings in `--network-config` notation
     /// (`"256K"`, `"0x8000"`); a flag for the same parameter replaces the value.
     #[serde(default, with = "network_config_toml")]
-    pub network_config: BTreeMap<thruput_node_supervisor::ConfigParamName, u32>,
+    pub network_config: BTreeMap<thruput_node_supervisor::ConfigParamName, u64>,
 }
 
 // Keys are protocol parameter names, so a typo fails when the profile loads
@@ -67,15 +67,20 @@ mod network_config_toml {
     }
 
     pub(super) fn serialize<S: Serializer>(
-        overrides: &BTreeMap<ConfigParamName, u32>,
+        overrides: &BTreeMap<ConfigParamName, u64>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        serializer.collect_map(overrides.iter().map(|(name, value)| (name.as_str(), value)))
+        // TOML integers stop at i64::MAX; text preserves the full override range.
+        serializer.collect_map(
+            overrides
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.to_string())),
+        )
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<BTreeMap<ConfigParamName, u32>, D::Error> {
+    ) -> Result<BTreeMap<ConfigParamName, u64>, D::Error> {
         BTreeMap::<String, Value>::deserialize(deserializer)?
             .into_iter()
             .map(|(name, value)| {
@@ -94,7 +99,7 @@ mod network_config_toml {
 pub fn profile_network_config(
     start: &Path,
     explicit: Option<&str>,
-) -> Result<Vec<(thruput_node_supervisor::ConfigParamName, u32)>, CliError> {
+) -> Result<Vec<(thruput_node_supervisor::ConfigParamName, u64)>, CliError> {
     match resolve_persisted_profile(start, explicit) {
         Ok((profile, _)) => Ok(profile.values.network_config.into_iter().collect()),
         Err(CliError::NoActiveProfile) => Ok(Vec::new()),
@@ -106,8 +111,21 @@ pub fn profile_network_config(
 #[serde(rename_all = "lowercase")]
 pub enum Network {
     Local,
+    Futurenet,
+    /// Compatibility name for the hosted network. New profiles use Futurenet.
     Devnet,
     Mainnet,
+}
+
+impl Network {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Futurenet => "futurenet",
+            Self::Devnet => "devnet",
+            Self::Mainnet => "mainnet",
+        }
+    }
 }
 
 /// Transaction format used by a saved wallet. Untyped historical bindings are legacy.

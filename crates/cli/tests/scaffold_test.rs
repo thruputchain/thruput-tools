@@ -247,13 +247,13 @@ fn scaffold_counter_creates_expected_files() {
     assert!(thruput.contains("network = \"local\""));
     assert!(thruput.contains("[profile.local.contracts]"));
     assert!(thruput.contains("# [profile.local.wallets.alice]"));
-    assert!(thruput.contains("[profile.devnet]"));
-    assert!(thruput.contains("network = \"devnet\""));
-    assert!(thruput.contains("[profile.devnet.contracts]"));
-    assert!(thruput.contains("# [profile.devnet.wallets.alice]"));
+    assert!(thruput.contains("[profile.futurenet]"));
+    assert!(thruput.contains("network = \"futurenet\""));
+    assert!(thruput.contains("[profile.futurenet.contracts]"));
+    assert!(thruput.contains("# [profile.futurenet.wallets.alice]"));
     assert!(thruput.contains("# owner_public_key ="));
     assert!(thruput.contains("# my-counter ="));
-    assert!(thruput.contains("default_profile = \"local\""));
+    assert!(!thruput.contains("\ndefault_profile ="));
     assert!(!thruput.contains("rpc_url"));
     assert!(!thruput.contains("faucet_url"));
     assert!(!thruput.contains("runtime_manifest"));

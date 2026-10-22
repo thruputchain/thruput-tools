@@ -1488,7 +1488,7 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
 
     let local = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(local.rpc_url.as_deref(), Some("http://127.0.0.1:9999"));
-    for name in ["local", "devnet"] {
+    for name in ["local", "futurenet"] {
         let profile = thruput_cli::config::resolve_profile(tmp.path(), Some(name)).unwrap();
         let address = thruput_signing::strkey::parse_contract_address(&profile.contracts["HOG"])
             .expect("initialized HOG alias must resolve");
@@ -1496,6 +1496,133 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
     }
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains("plugin = \"keep\""));
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn initialize_futurenet_preserves_existing_networks_and_user_defaults() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let path = global_config_path(&tmp);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "# keep\ndefault_profile = 'devnet'\n\n[profile.devnet]\nnetwork = 'devnet'\nrpc_url = 'https://legacy.example'\n\n[profile.futurenet]\nnetwork = 'futurenet'\nrpc_url = 'https://custom.example'\nfaucet_url = 'https://custom-faucet.example'\n\n[profile.futurenet.contracts]\ncounter = '11111111111111111111111111111112'\n";
+    fs::write(&path, original).unwrap();
+
+    thruput_cli::config::initialize_global_profiles().unwrap();
+    let first = fs::read_to_string(&path).unwrap();
+    thruput_cli::config::initialize_global_profiles().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), first);
+    assert!(first.starts_with("# keep\ndefault_profile = 'devnet'"));
+    let legacy = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    assert_eq!(legacy.name, "devnet");
+    assert_eq!(legacy.network, Some(thruput_cli::config::Network::Devnet));
+    assert_eq!(legacy.rpc_url.as_deref(), Some("https://legacy.example"));
+    let future = thruput_cli::config::resolve_profile(tmp.path(), Some("futurenet")).unwrap();
+    assert_eq!(
+        future.network,
+        Some(thruput_cli::config::Network::Futurenet)
+    );
+    assert_eq!(future.rpc_url.as_deref(), Some("https://custom.example"));
+    assert_eq!(
+        future.faucet_url.as_deref(),
+        Some("https://custom-faucet.example")
+    );
+    assert!(future.contracts.contains_key("counter"));
+    assert!(future.network_hash.is_none());
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn initialize_profiles_preserves_non_hosted_use_of_hosted_profile_names() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let path = global_config_path(&tmp);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        "[profile.futurenet]\nnetwork = 'local'\n\n[profile.devnet]\nnetwork = 'mainnet'\n",
+    )
+    .unwrap();
+
+    thruput_cli::config::initialize_global_profiles().unwrap();
+
+    for name in ["futurenet", "devnet"] {
+        let profile = thruput_cli::config::resolve_profile(tmp.path(), Some(name)).unwrap();
+        assert!(profile.rpc_url.is_none());
+        assert!(profile.faucet_url.is_none());
+        assert!(profile.contracts.is_empty());
+    }
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn futurenet_project_overlay_inherits_global_endpoints_and_selection() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    thruput_cli::config::initialize_global_profiles().unwrap();
+    let initial: toml::Value =
+        toml::from_str(&fs::read_to_string(global_config_path(&tmp)).unwrap()).unwrap();
+    assert_eq!(initial["default_profile"].as_str(), Some("local"));
+    assert!(initial["profile"].get("devnet").is_none());
+    thruput_cli::config::use_profile(tmp.path(), "futurenet", true, false).unwrap();
+    let project = tmp.path().join("counter");
+    fs::create_dir(&project).unwrap();
+    thruput_cli::scaffold::generate(&project, "counter", Some("counter")).unwrap();
+
+    let resolved = thruput_cli::config::resolve_profile(&project, None).unwrap();
+    assert_eq!(resolved.name, "futurenet");
+    assert_eq!(
+        resolved.network,
+        Some(thruput_cli::config::Network::Futurenet)
+    );
+    assert_eq!(
+        resolved.rpc_url.as_deref(),
+        Some("https://rpc.thruput.network")
+    );
+    assert_eq!(
+        resolved.faucet_url.as_deref(),
+        Some("https://faucet.thruput.network")
+    );
+    assert!(resolved.network_hash.is_none());
+
+    thruput_cli::config::set_profile_field(
+        tmp.path(),
+        "futurenet",
+        thruput_cli::config::ConfigField::RpcUrl,
+        "https://custom.example",
+        true,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        thruput_cli::config::resolve_profile(&project, None)
+            .unwrap()
+            .rpc_url
+            .as_deref(),
+        Some("https://custom.example")
+    );
+
+    // A later global selection still applies inside the generated project.
+    thruput_cli::config::use_profile(tmp.path(), "local", true, false).unwrap();
+    assert_eq!(
+        thruput_cli::config::resolve_profile(&project, None)
+            .unwrap()
+            .name,
+        "local"
+    );
+    // An explicit project selection takes precedence.
+    thruput_cli::config::use_profile(&project, "futurenet", false, true).unwrap();
+    assert_eq!(
+        thruput_cli::config::resolve_profile(&project, None)
+            .unwrap()
+            .name,
+        "futurenet"
+    );
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -1534,7 +1661,7 @@ fn concurrent_global_writers_preserve_independent_updates() {
         Some("alice")
     );
     assert_eq!(
-        thruput_cli::config::resolve_profile(tmp.path(), Some("devnet"))
+        thruput_cli::config::resolve_profile(tmp.path(), Some("futurenet"))
             .unwrap()
             .rpc_url
             .as_deref(),
@@ -2706,6 +2833,7 @@ fn profile_network_config_merges_layers_and_yields_to_flags() {
 [profile.local.network_config]
 max_rv32_memory_bytes = "16M"
 max_bytestring_len = 4096
+max_tx_gas = 5000000000
 "#,
     )
     .unwrap();
@@ -2720,6 +2848,7 @@ network = "local"
 [profile.local.network_config]
 max_rv32_code_bytes = "256K"
 max_bytestring_len = "32K"
+max_tx_gas = "6000000000"
 
 [profile.devnet]
 network = "devnet"
@@ -2730,7 +2859,10 @@ network = "devnet"
     let merged = thruput_cli::node::with_profile_network_config(
         &project,
         None,
-        vec![(ConfigParamName::MaxRv32CodeBytes, 524_288)],
+        vec![
+            (ConfigParamName::MaxRv32CodeBytes, 524_288),
+            (ConfigParamName::MaxTxGas, 7_000_000_000),
+        ],
     )
     .unwrap();
     assert_eq!(
@@ -2739,6 +2871,7 @@ network = "devnet"
             (ConfigParamName::MaxBytestringLen, 32_768),
             (ConfigParamName::MaxRv32MemoryBytes, 16_777_216),
             (ConfigParamName::MaxRv32CodeBytes, 524_288),
+            (ConfigParamName::MaxTxGas, 7_000_000_000),
         ]
     );
 
@@ -2757,8 +2890,36 @@ network = "devnet"
         true,
     );
     assert_eq!(
-        report.network_config.get("max_rv32_code_bytes"),
-        Some(&262_144)
+        report
+            .network_config
+            .get("max_rv32_code_bytes")
+            .map(|value| value.0),
+        Some(262_144)
+    );
+    assert_eq!(report.network_config["max_tx_gas"].0, 6_000_000_000);
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["networkConfig"]["max_tx_gas"], "6000000000");
+    assert_eq!(json["networkConfig"]["max_rv32_code_bytes"], "262144");
+    assert_eq!(
+        serde_json::from_value::<thruput_cli::config::ConfigGetReport>(json.clone()).unwrap(),
+        report
+    );
+    for invalid in [
+        serde_json::json!(6_000_000_000_u64),
+        serde_json::json!("06000000000"),
+    ] {
+        let mut invalid_json = json.clone();
+        invalid_json["networkConfig"]["max_tx_gas"] = invalid;
+        assert!(
+            serde_json::from_value::<thruput_cli::config::ConfigGetReport>(invalid_json).is_err()
+        );
+    }
+    let schema =
+        serde_json::to_value(schemars::schema_for!(thruput_cli::config::ConfigGetReport)).unwrap();
+    assert_eq!(schema["$defs"]["DecimalU64"]["type"], "string");
+    assert_eq!(
+        schema["properties"]["networkConfig"]["additionalProperties"]["$ref"],
+        "#/$defs/DecimalU64"
     );
     let sources = report.sources.unwrap();
     assert_eq!(
@@ -2784,7 +2945,7 @@ fn profile_network_config_rejects_unknown_names_and_bad_values() {
         "network_config.max_rv32_memory_bytes = true",
         "network_config.max_rv32_memory_bytes = \"lots\"",
         "network_config.max_rv32_memory_bytes = -1",
-        "network_config.max_rv32_memory_bytes = \"8G\"",
+        "network_config.max_tx_gas = \"18446744073709551616\"",
     ] {
         fs::write(
             tmp.path().join("thruput.toml"),
@@ -2798,5 +2959,95 @@ fn profile_network_config_rejects_unknown_names_and_bad_values() {
             "{table}: {error}"
         );
     }
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+fn profile_network_config_roundtrips_full_u64_values_through_toml() {
+    use thruput_cli::config::ProjectProfile;
+    use thruput_node_supervisor::ConfigParamName;
+
+    let profile: ProjectProfile = toml::from_str(
+        r#"[network_config]
+max_tx_gas = "18446744073709551615"
+max_rv32_memory_bytes = 5000000000
+"#,
+    )
+    .unwrap();
+    assert_eq!(profile.network_config[&ConfigParamName::MaxTxGas], u64::MAX);
+    assert_eq!(
+        profile.network_config[&ConfigParamName::MaxRv32MemoryBytes],
+        5_000_000_000
+    );
+    let serialized = toml::to_string(&profile).unwrap();
+    assert_eq!(
+        toml::from_str::<ProjectProfile>(&serialized).unwrap(),
+        profile
+    );
+}
+
+#[test]
+#[serial]
+fn local_network_overrides_require_selecting_the_local_profile() {
+    use thruput_node_supervisor::ConfigParamName;
+
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let config = tmp.path().join("thruput.toml");
+    let profiles = r#"
+[profile.local]
+network = "local"
+
+[profile.local.network_config]
+max_tx_gas = "5000000000"
+
+[profile.futurenet]
+network = "futurenet"
+"#;
+    fs::create_dir_all(tmp.path().join("thruput")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        "default_profile = \"futurenet\"\n",
+    )
+    .unwrap();
+    fs::write(&config, profiles).unwrap();
+    assert!(
+        thruput_cli::node::with_profile_network_config(tmp.path(), None, Vec::new())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        thruput_cli::node::with_profile_network_config(tmp.path(), Some("local"), Vec::new())
+            .unwrap(),
+        vec![(ConfigParamName::MaxTxGas, 5_000_000_000)]
+    );
+
+    unsafe { env::set_var("THRUPUT_PROFILE", "local") };
+    assert_eq!(
+        thruput_cli::node::with_profile_network_config(tmp.path(), None, Vec::new()).unwrap(),
+        vec![(ConfigParamName::MaxTxGas, 5_000_000_000)]
+    );
+    unsafe { env::remove_var("THRUPUT_PROFILE") };
+    assert!(matches!(
+        thruput_cli::node::with_profile_network_config(tmp.path(), Some("missing"), Vec::new()),
+        Err(thruput_cli::CliError::ProfileNotFound(_))
+    ));
+
+    // With no selection, only explicit flags supply node settings.
+    fs::write(global_config_path(&tmp), "").unwrap();
+    assert!(
+        thruput_cli::node::with_profile_network_config(tmp.path(), None, Vec::new())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        thruput_cli::node::with_profile_network_config(
+            tmp.path(),
+            None,
+            vec![(ConfigParamName::MaxTxGas, 6_000_000_000)],
+        )
+        .unwrap(),
+        vec![(ConfigParamName::MaxTxGas, 6_000_000_000)]
+    );
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }

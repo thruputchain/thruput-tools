@@ -21,15 +21,15 @@ fn new_creates_subdirectory_and_scaffolds() {
     assert!(dir.join("thruput.toml").exists());
     assert!(dir.join("src/lib.rs").exists());
     let config = fs::read_to_string(dir.join("thruput.toml")).unwrap();
-    assert!(config.contains("default_profile = \"local\""));
+    assert!(!config.contains("\ndefault_profile ="));
     assert!(config.contains("[profile.local]"));
     assert!(config.contains("network = \"local\""));
     assert!(config.contains("[profile.local.contracts]"));
     assert!(config.contains("# [profile.local.wallets.alice]"));
-    assert!(config.contains("[profile.devnet]"));
-    assert!(config.contains("network = \"devnet\""));
-    assert!(config.contains("[profile.devnet.contracts]"));
-    assert!(config.contains("# [profile.devnet.wallets.alice]"));
+    assert!(config.contains("[profile.futurenet]"));
+    assert!(config.contains("network = \"futurenet\""));
+    assert!(config.contains("[profile.futurenet.contracts]"));
+    assert!(config.contains("# [profile.futurenet.wallets.alice]"));
     assert!(config.contains("# owner_public_key ="));
     assert!(!config.contains("rpc_url"));
     assert!(!config.contains("faucet_url"));
@@ -75,7 +75,7 @@ fn init_configures_profiles_and_succeeds() {
     assert!(global_config.contains("default_profile = \"local\""));
     assert!(global_config.contains("[profile.local]"));
     assert!(global_config.contains("network = \"local\""));
-    assert!(global_config.contains("devnet"));
+    assert!(global_config.contains("futurenet"));
     assert!(global_config.contains("HOG = \"11111111111111111111111111111112\""));
     let local = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(local.network, Some(thruput_cli::config::Network::Local));
@@ -84,19 +84,22 @@ fn init_configures_profiles_and_succeeds() {
         local.contracts.get("HOG").map(String::as_str),
         Some("11111111111111111111111111111112")
     );
-    let devnet = thruput_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
-    assert_eq!(devnet.name, "devnet");
-    assert_eq!(devnet.network, Some(thruput_cli::config::Network::Devnet));
+    let futurenet = thruput_cli::config::resolve_profile(tmp.path(), Some("futurenet")).unwrap();
+    assert_eq!(futurenet.name, "futurenet");
     assert_eq!(
-        devnet.rpc_url.as_deref(),
+        futurenet.network,
+        Some(thruput_cli::config::Network::Futurenet)
+    );
+    assert_eq!(
+        futurenet.rpc_url.as_deref(),
         Some("https://rpc.thruput.network")
     );
     assert_eq!(
-        devnet.faucet_url.as_deref(),
+        futurenet.faucet_url.as_deref(),
         Some("https://faucet.thruput.network")
     );
     assert_eq!(
-        devnet.contracts.get("HOG").map(String::as_str),
+        futurenet.contracts.get("HOG").map(String::as_str),
         Some("11111111111111111111111111111112")
     );
 
@@ -181,6 +184,11 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),
         Some("11111111111111111111111111111112")
+    );
+    let future = thruput_cli::config::resolve_profile(tmp.path(), Some("futurenet")).unwrap();
+    assert_eq!(
+        future.network,
+        Some(thruput_cli::config::Network::Futurenet)
     );
 
     unsafe {

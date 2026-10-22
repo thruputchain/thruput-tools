@@ -59,20 +59,21 @@ pub(crate) fn resolve_faucet_backend(
             }
             Ok(FaucetBackend::LocalManifest)
         }
-        Some(Network::Devnet) => {
+        Some(network @ (Network::Futurenet | Network::Devnet)) => {
+            let network = network.as_str();
             if configured_runtime_manifest_path(profile)?.is_some() {
-                return Err(config_error(
-                    "targets devnet, but `--runtime-manifest` requires a local profile".into(),
-                ));
+                return Err(config_error(format!(
+                    "targets {network}, but `--runtime-manifest` requires a local profile"
+                )));
             }
             if profile.rpc_url.is_none() {
                 return Err(config_error(format!(
-                    "targets devnet, but {feature} requires `rpc_url`"
+                    "targets {network}, but {feature} requires `rpc_url`"
                 )));
             }
             if profile.faucet_url.is_none() {
                 return Err(config_error(format!(
-                    "targets devnet, but {feature} requires `faucet_url`"
+                    "targets {network}, but {feature} requires `faucet_url`"
                 )));
             }
             Ok(FaucetBackend::RemoteFaucet)

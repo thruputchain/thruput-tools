@@ -1308,7 +1308,7 @@ enum ConfigCommand {
     New {
         /// Profile to create
         profile: String,
-        /// Network: local, devnet, or mainnet
+        /// Network: local, futurenet, mainnet, or devnet (compatibility alias)
         #[arg(long)]
         network: String,
         /// Absolute HTTP(S) RPC URL

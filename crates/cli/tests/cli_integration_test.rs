@@ -985,6 +985,10 @@ runtime_manifest = "runtime/manifest.json"
 address = "0x01"
 owner_public_key = "0x02"
 
+[profile.devnet.network_config]
+max_tx_gas = "18446744073709551615"
+max_rv32_code_bytes = 262144
+
 [profile.broken]
 network = "preview"
 "#,
@@ -1015,6 +1019,14 @@ rpc_url = "https://rpc.example"
     assert_eq!(payload["data"]["schemaVersion"], 2);
     assert_eq!(payload["data"]["selectionSource"]["kind"], "explicit");
     assert_eq!(payload["data"]["scope"], "resolved");
+    assert_eq!(
+        payload["data"]["networkConfig"]["max_tx_gas"],
+        "18446744073709551615"
+    );
+    assert_eq!(
+        payload["data"]["networkConfig"]["max_rv32_code_bytes"],
+        "262144"
+    );
     assert_eq!(payload["data"]["rpcUrl"], "https://rpc.example");
     assert_eq!(payload["data"]["sources"]["rpcUrl"]["kind"], "project");
     assert_eq!(
@@ -1121,7 +1133,7 @@ network = "preview"
     assert!(!stdout.contains("Active profile:"));
     assert!(stdout.contains("broken"));
     assert!(stdout.contains("invalid"));
-    assert!(stdout.contains("expected one of `local`, `devnet`, `mainnet`"));
+    assert!(stdout.contains("expected one of `local`, `futurenet`, `devnet`, `mainnet`"));
     assert!(stdout.contains("valid"));
     assert!(stdout.contains("devnet"));
 }
@@ -1291,6 +1303,53 @@ fn config_get_reports_stable_selection_and_parse_errors() {
 }
 
 #[test]
+fn config_new_accepts_futurenet_without_pinning_overlay_endpoints() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        "[profile.futurenet]\nnetwork = 'futurenet'\nrpc_url = 'https://custom.example'\nfaucet_url = 'https://faucet.example'\n",
+    );
+    std::fs::write(tmp.path().join("thruput.toml"), "").unwrap();
+    let output = thruput()
+        .args([
+            "config",
+            "new",
+            "futurenet",
+            "--network",
+            "futurenet",
+            "--project",
+            "--use",
+            "--json",
+        ])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["data"]["createdFields"],
+        serde_json::json!(["network"])
+    );
+    let output = thruput()
+        .args(["config", "get", "--json"])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["data"]["network"], "futurenet");
+    assert_eq!(report["data"]["rpcUrl"], "https://custom.example");
+    assert_eq!(report["data"]["faucetUrl"], "https://faucet.example");
+}
+
+#[test]
 fn config_new_json_creates_complete_profile_then_set_reports_noop() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
@@ -1451,7 +1510,7 @@ fn config_new_rejects_duplicate_and_invalid_profiles() {
     assert_eq!(invalid_error["error"]["details"]["field"], "network");
     assert_eq!(
         invalid_error["error"]["details"]["message"],
-        "must be one of local, devnet, or mainnet"
+        "must be one of local, futurenet, devnet (compatibility alias), or mainnet"
     );
     assert!(
         !std::fs::read_to_string(config_home.join("thruput/config.toml"))
@@ -7370,7 +7429,9 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
 }
 
 #[test]
-fn initialized_devnet_profile_discovers_signing_identity_for_all_transaction_commands() {
+fn initialized_futurenet_profile_discovers_signing_identity_for_all_transaction_commands() {
+    use std::fmt::Write as _;
+
     for command in ["transfer", "call", "deploy"] {
         let tmp = TempDir::new().unwrap();
         let config_home = tmp.path().join("config-home");
@@ -7386,26 +7447,49 @@ fn initialized_devnet_profile_discovers_signing_identity_for_all_transaction_com
             "{}",
             String::from_utf8_lossy(&init.stderr)
         );
+        for args in [
+            vec!["config", "use", "futurenet", "--global"],
+            vec!["new", "my-counter", "--template", "counter"],
+        ] {
+            let output = thruput()
+                .args(args)
+                .current_dir(tmp.path())
+                .env("XDG_CONFIG_HOME", &config_home)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let project = tmp.path().join("my-counter");
         let path = config_home.join("thruput/config.toml");
         let mut config = std::fs::read_to_string(&path)
             .unwrap()
             .parse::<toml_edit::DocumentMut>()
             .unwrap();
-        assert!(config["profile"]["devnet"].get("network_hash").is_none());
+        assert!(config["profile"]["futurenet"].get("network_hash").is_none());
         let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
         let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
-        config["profile"]["devnet"]["rpc_url"] = toml_edit::value(&rpc_url);
-        config["profile"]["devnet"]["faucet_url"] = toml_edit::value(&faucet_url);
+        config["profile"]["futurenet"]["rpc_url"] = toml_edit::value(&rpc_url);
+        config["profile"]["futurenet"]["faucet_url"] = toml_edit::value(&faucet_url);
         std::fs::write(&path, config.to_string()).unwrap();
-        std::fs::write(tmp.path().join("thruput.toml"), format!(
-            "[profile.devnet.wallets.alice]\naddress = \"{}\"\nowner_public_key = \"{owner}\"\n", thruput_encoding::encode(&[0xaa; 32])
-        )).unwrap();
+        let project_path = project.join("thruput.toml");
+        let mut project_config = std::fs::read_to_string(&project_path).unwrap();
+        write!(
+            project_config,
+            "[profile.futurenet.wallets.alice]\naddress = \"{}\"\nowner_public_key = \"{owner}\"\n",
+            thruput_encoding::encode(&[0xaa; 32])
+        )
+        .unwrap();
+        std::fs::write(&project_path, project_config).unwrap();
         let target = thruput_encoding::encode(&[0xbc; 32]);
-        let artifact = write_opaque_rv32_artifact(tmp.path());
+        let artifact = write_opaque_rv32_artifact(&project);
         let mut invocation = thruput();
         invocation
-            .args([command, "--profile", "devnet", "--json", "--dry-run"])
-            .current_dir(tmp.path())
+            .args([command, "--json", "--dry-run"])
+            .current_dir(&project)
             .env("XDG_CONFIG_HOME", &config_home);
         match command {
             "transfer" => {
@@ -7428,6 +7512,10 @@ fn initialized_devnet_profile_discovers_signing_identity_for_all_transaction_com
             String::from_utf8_lossy(&output.stderr)
         );
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["data"]["rpcUrl"], rpc_url);
+        if command == "transfer" {
+            assert_eq!(result["data"]["profile"], "futurenet");
+        }
         let field = if command == "transfer" || command == "call" {
             "signedTransaction"
         } else {

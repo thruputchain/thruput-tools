@@ -182,8 +182,8 @@ pub enum NetworkConfigOverrideError {
 pub fn with_profile_network_config(
     start: &Path,
     explicit_profile: Option<&str>,
-    flags: Vec<(ConfigParamName, u32)>,
-) -> Result<Vec<(ConfigParamName, u32)>, CliError> {
+    flags: Vec<(ConfigParamName, u64)>,
+) -> Result<Vec<(ConfigParamName, u64)>, CliError> {
     let mut overrides = crate::config::profile_network_config(start, explicit_profile)?;
     overrides.retain(|(name, _)| !flags.iter().any(|(flagged, _)| flagged == name));
     overrides.extend(flags);

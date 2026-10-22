@@ -6,13 +6,13 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, Value, value};
 
 use super::atomic::{ConfigFileKind, insert_preserving_decor, transact_document};
 use super::dirs::config_file_path;
-use super::project::ProjectProfile;
+use super::project::{Network, ProjectProfile};
 use super::read::{load_global_field, validate_http_url};
 use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
-const DEVNET_RPC_URL: &str = "https://rpc.thruput.network";
-const DEVNET_FAUCET_URL: &str = "https://faucet.thruput.network";
+const FUTURENET_RPC_URL: &str = "https://rpc.thruput.network";
+const FUTURENET_FAUCET_URL: &str = "https://faucet.thruput.network";
 const HOG_CONTRACT_ADDRESS: &str = "11111111111111111111111111111112";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -199,24 +199,33 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
                 );
             }
         }
-        {
-            let devnet_config = config.profile.get("devnet");
-            let devnet = child_table(profiles, "devnet", "profile entry must be a table")?;
-            let devnet_table = devnet
+        for name in ["futurenet", "devnet"] {
+            // Keep repairing existing legacy profiles without creating one on fresh setup.
+            if name == "devnet" && !config.profile.contains_key(name) {
+                continue;
+            }
+            let hosted_config = config.profile.get(name);
+            if hosted_config.is_some_and(|profile| {
+                matches!(profile.network, Some(Network::Local | Network::Mainnet))
+            }) {
+                continue;
+            }
+            let hosted = child_table(profiles, name, "profile entry must be a table")?;
+            let hosted_table = hosted
                 .as_table_like_mut()
                 .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
-            if devnet_config.is_none_or(|profile| profile.network.is_none()) {
-                insert_preserving_decor(devnet_table, "network", value("devnet"));
+            if hosted_config.is_none_or(|profile| profile.network.is_none()) {
+                insert_preserving_decor(hosted_table, "network", value(name));
             }
-            if devnet_config.is_none_or(|profile| profile.rpc_url.is_none()) {
-                insert_preserving_decor(devnet_table, "rpc_url", value(DEVNET_RPC_URL));
+            if hosted_config.is_none_or(|profile| profile.rpc_url.is_none()) {
+                insert_preserving_decor(hosted_table, "rpc_url", value(FUTURENET_RPC_URL));
             }
-            if devnet_config.is_none_or(|profile| profile.faucet_url.is_none()) {
-                insert_preserving_decor(devnet_table, "faucet_url", value(DEVNET_FAUCET_URL));
+            if hosted_config.is_none_or(|profile| profile.faucet_url.is_none()) {
+                insert_preserving_decor(hosted_table, "faucet_url", value(FUTURENET_FAUCET_URL));
             }
-            if devnet_config.is_none_or(|profile| !profile.contracts.contains_key("HOG")) {
+            if hosted_config.is_none_or(|profile| !profile.contracts.contains_key("HOG")) {
                 insert_preserving_decor(
-                    child_table(devnet, "contracts", "contracts must be a table")?
+                    child_table(hosted, "contracts", "contracts must be a table")?
                         .as_table_like_mut()
                         .ok_or_else(|| CliError::Other("contracts must be a table".into()))?,
                     "HOG",

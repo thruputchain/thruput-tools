@@ -233,7 +233,7 @@ pub struct ConfigGetReport {
     pub wallets: BTreeMap<String, ConfigWalletBinding>,
     /// Genesis parameter overrides for local nodes, keyed by parameter name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub network_config: BTreeMap<String, u32>,
+    pub network_config: BTreeMap<String, thruput_json_rpc_types::decimal::Decimal<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<ProfileSources>,
 }
@@ -523,7 +523,7 @@ impl ConfigGetReport {
                 .collect(),
             network_config: network_config
                 .into_iter()
-                .map(|(name, value)| (name.as_str().to_owned(), value))
+                .map(|(name, value)| (name.as_str().to_owned(), value.into()))
                 .collect(),
             sources: include_sources.then_some(profile.sources),
         }
@@ -903,9 +903,10 @@ impl FromStr for Network {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "local" => Ok(Self::Local),
+            "futurenet" => Ok(Self::Futurenet),
             "devnet" => Ok(Self::Devnet),
             "mainnet" => Ok(Self::Mainnet),
-            _ => Err("must be one of local, devnet, or mainnet"),
+            _ => Err("must be one of local, futurenet, devnet (compatibility alias), or mainnet"),
         }
     }
 }

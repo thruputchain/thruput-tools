@@ -75,7 +75,7 @@ For a runtime built in `hogd`, set
 See the [toolchain reference](crates/cli/README.md#thruput-toolchain)
 for supported hosts, version selection, and local overrides.
 
-For managed runtime installation, wallets, hosted Devnet, container networking,
+For managed runtime installation, wallets, hosted Futurenet, container networking,
 and the full command reference, see the [CLI guide](crates/cli/README.md).
 Use `thruput <command> --help` for the installed version's options.
 `thruput docs` serves the bundled developer documentation locally.
