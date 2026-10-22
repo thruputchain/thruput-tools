@@ -98,6 +98,9 @@ impl Print {
             .unwrap_or(rendered)
             .trim_end()
             .to_owned();
+        if level == "warning" && expected_target_feature_warning(&text) {
+            return Some(rendered.to_owned());
+        }
         let outcome = match level {
             "warning" => Outcome::Warning,
             "error" | "failure-note" => Outcome::Error,
@@ -130,6 +133,17 @@ impl Print {
             );
         }
     }
+}
+
+/// The Groundhog rv32 flag set enables these RISC-V features deliberately, so rustc's
+/// per-crate "unstable feature" warnings about them are noise in the compact report.
+fn expected_target_feature_warning(text: &str) -> bool {
+    const EXPECTED: [&str; 2] = ["relax", "unaligned-scalar-mem"];
+    text.lines()
+        .next()
+        .and_then(|line| line.strip_prefix("unstable feature specified for `-Ctarget-feature`: `"))
+        .and_then(|feature| feature.strip_suffix('`'))
+        .is_some_and(|feature| EXPECTED.contains(&feature))
 }
 
 fn cargo_status_line(line: &str) -> bool {
@@ -177,6 +191,25 @@ mod tests {
         let diagnostics = print.diagnostics.lock().unwrap();
         assert_eq!(diagnostics.len(), 2);
         assert_eq!(diagnostics[0].text, "original wording\n  = note: details");
+    }
+
+    #[test]
+    fn expected_target_feature_warnings_are_not_reported() {
+        let print = Print::new(false, false);
+        for feature in ["relax", "unaligned-scalar-mem", "zbb"] {
+            let rendered = format!(
+                "warning: unstable feature specified for `-Ctarget-feature`: `{feature}`\n  |\n  \
+                 = note: this feature is not stably supported; its behavior can change in the future\n"
+            );
+            let record = serde_json::json!({
+                "package_id": "contract",
+                "message": {"level": "warning", "code": null, "rendered": rendered}
+            });
+            assert_eq!(print.collect_compiler_message(&record), Some(rendered));
+        }
+        let diagnostics = print.diagnostics.lock().unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].text.ends_with("`zbb`\n  |\n  = note: this feature is not stably supported; its behavior can change in the future"));
     }
 
     #[test]
