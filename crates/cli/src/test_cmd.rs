@@ -55,7 +55,7 @@ pub struct IntegrationTestOptions {
     pub hog_devnode_version: Option<String>,
     /// Genesis network parameter overrides for the ephemeral node (mirrors
     /// `thruput node --network-config`). A parameter given twice is rejected.
-    pub network_config_overrides: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
+    pub network_config_overrides: Vec<(thruput_node_supervisor::ConfigParamName, u64)>,
     /// Raw arguments appended to the ephemeral hog-devnode command line.
     pub node_args: Vec<String>,
     /// Forbid managed network acquisition for the ephemeral node.

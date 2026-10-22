@@ -52,25 +52,42 @@ struct PersistedBootstrap {
     bootstrap_faucet: BootstrapManifestAllocation,
     bootstrap_accounts: Vec<BootstrapManifestAllocation>,
     #[serde(default, deserialize_with = "read_overrides")]
-    network_config_overrides: BTreeMap<ConfigParamName, u32>,
+    network_config_overrides: BTreeMap<ConfigParamName, u64>,
+}
+
+/// hog-devnode writes a parameter wider than 32 bits as a decimal string, as
+/// genesis JSON does, and the rest as JSON integers.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OverrideValue {
+    Integer(u64),
+    Decimal(String),
 }
 
 fn read_overrides<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<BTreeMap<ConfigParamName, u32>, D::Error> {
+) -> Result<BTreeMap<ConfigParamName, u64>, D::Error> {
     struct Overrides;
     impl<'de> serde::de::Visitor<'de> for Overrides {
-        type Value = BTreeMap<ConfigParamName, u32>;
+        type Value = BTreeMap<ConfigParamName, u64>;
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("named uint32 network overrides")
+            formatter.write_str("named uint64 network overrides")
         }
         fn visit_map<M: serde::de::MapAccess<'de>>(
             self,
             mut map: M,
         ) -> Result<Self::Value, M::Error> {
             let mut overrides = BTreeMap::new();
-            while let Some((name, value)) = map.next_entry::<String, u32>()? {
+            while let Some((name, value)) = map.next_entry::<String, OverrideValue>()? {
                 let parameter = name.parse().map_err(serde::de::Error::custom)?;
+                let value = match value {
+                    OverrideValue::Integer(value) => value,
+                    OverrideValue::Decimal(text) => text.parse().map_err(|_| {
+                        serde::de::Error::custom(format!(
+                            "network override {parameter} is not a uint64 decimal: {text:?}"
+                        ))
+                    })?,
+                };
                 if overrides.insert(parameter, value).is_some() {
                     return Err(serde::de::Error::custom("duplicate network override"));
                 }
@@ -714,18 +731,46 @@ mod tests {
         );
     }
 
+    fn persisted_with_overrides(text: &str) -> serde_json::Result<PersistedBootstrap> {
+        let faucet = serde_json::to_string(&Base58(thruput_xdr::types::Ed25519PublicKey::from(
+            [0x11; 32],
+        )))
+        .unwrap();
+        serde_json::from_str(&format!(
+            r#"{{"bootstrapFaucet":{{"publicKey":{faucet},"initialStorageTokens":"1"}},"bootstrapAccounts":[],"networkConfigOverrides":{text}}}"#
+        ))
+    }
+
     #[test]
-    fn metadata_overrides_reject_unknown_duplicate_and_out_of_range_values() {
+    fn metadata_overrides_read_integers_and_uint64_decimals() {
+        // hog-devnode writes uint64 parameters as decimal strings and the
+        // rest as JSON integers; which values a parameter admits is its call.
+        let persisted = persisted_with_overrides(
+            r#"{"max_bytestring_len":42,"max_tx_gas":"18446744073709551615"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            persisted.network_config_overrides,
+            [
+                (ConfigParamName::MaxBytestringLen, 42),
+                (ConfigParamName::MaxTxGas, u64::MAX),
+            ]
+            .into()
+        );
+    }
+
+    #[test]
+    fn metadata_overrides_reject_unknown_duplicate_and_malformed_values() {
         for text in [
             r#"{"unknown":1}"#,
             r#"{"max_bytestring_len":1,"max_bytestring_len":2}"#,
-            r#"{"max_bytestring_len":4294967296}"#,
+            r#"{"max_tx_gas":-1}"#,
+            r#"{"max_tx_gas":"18446744073709551616"}"#,
+            r#"{"max_tx_gas":"1e9"}"#,
+            r#"{"max_tx_gas":true}"#,
         ] {
-            let json = format!(
-                r#"{{"bootstrapFaucet":{{"publicKey":"0x{}","initialStorageTokens":"1"}},"bootstrapAccounts":[],"networkConfigOverrides":{text}}}"#,
-                "11".repeat(32)
-            );
-            assert!(serde_json::from_str::<PersistedBootstrap>(&json).is_err());
+            assert!(persisted_with_overrides(text).is_err(), "{text}");
         }
     }
 }
