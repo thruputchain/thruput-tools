@@ -121,6 +121,8 @@ pub enum ConfigParamName {
     MaxRv32CodeBytes,
     /// [`NetworkConfigParams::max_rv32_memory_bytes`].
     MaxRv32MemoryBytes,
+    /// [`NetworkConfigParams::max_tx_gas`].
+    MaxTxGas,
 }
 
 impl ConfigParamName {
@@ -135,6 +137,7 @@ impl ConfigParamName {
         Self::MaxAuthTokenDepth,
         Self::MaxRv32CodeBytes,
         Self::MaxRv32MemoryBytes,
+        Self::MaxTxGas,
     ];
 
     /// The protocol's field name for this parameter.
@@ -149,6 +152,7 @@ impl ConfigParamName {
             Self::MaxAuthTokenDepth => "max_auth_token_depth",
             Self::MaxRv32CodeBytes => "max_rv32_code_bytes",
             Self::MaxRv32MemoryBytes => "max_rv32_memory_bytes",
+            Self::MaxTxGas => "max_tx_gas",
         }
     }
 
@@ -156,17 +160,18 @@ impl ConfigParamName {
     ///
     /// This is the binding between a name and the field it reads, so a
     /// parameter added to one has to be added to the other.
-    pub fn stated_in(self, params: &NetworkConfigParams) -> Option<u32> {
+    pub fn stated_in(self, params: &NetworkConfigParams) -> Option<u64> {
         match self {
-            Self::MaxSha256Buffers => params.max_sha256_buffers,
-            Self::MaxCrossInvokeDepth => params.max_cross_invoke_depth,
-            Self::MaxNewContractsPerTx => params.max_new_contracts_per_tx,
-            Self::MaxBytestringLen => params.max_bytestring_len,
-            Self::MaxContractSizeBytes => params.max_contract_size_bytes,
-            Self::MaxSavepointDepth => params.max_savepoint_depth,
-            Self::MaxAuthTokenDepth => params.max_auth_token_depth,
-            Self::MaxRv32CodeBytes => params.max_rv32_code_bytes,
-            Self::MaxRv32MemoryBytes => params.max_rv32_memory_bytes,
+            Self::MaxSha256Buffers => params.max_sha256_buffers.map(u64::from),
+            Self::MaxCrossInvokeDepth => params.max_cross_invoke_depth.map(u64::from),
+            Self::MaxNewContractsPerTx => params.max_new_contracts_per_tx.map(u64::from),
+            Self::MaxBytestringLen => params.max_bytestring_len.map(u64::from),
+            Self::MaxContractSizeBytes => params.max_contract_size_bytes.map(u64::from),
+            Self::MaxSavepointDepth => params.max_savepoint_depth.map(u64::from),
+            Self::MaxAuthTokenDepth => params.max_auth_token_depth.map(u64::from),
+            Self::MaxRv32CodeBytes => params.max_rv32_code_bytes.map(u64::from),
+            Self::MaxRv32MemoryBytes => params.max_rv32_memory_bytes.map(u64::from),
+            Self::MaxTxGas => params.max_tx_gas,
         }
     }
 
@@ -407,6 +412,9 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
             ConfigParamName::MaxRv32MemoryBytes => ConfigParam::kConfigParamMaxRv32MemoryBytes {
                 max_rv32_memory_bytes: value,
             },
+            ConfigParamName::MaxTxGas => ConfigParam::kConfigParamMaxTxGas {
+                max_tx_gas: u64::from(value),
+            },
         }
     }
 
@@ -418,7 +426,7 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
             )]))
             .unwrap();
 
-            assert_eq!(name.stated_in(&params), Some(value), "{name}");
+            assert_eq!(name.stated_in(&params), Some(u64::from(value)), "{name}");
             for other in ConfigParamName::ALL.iter().copied() {
                 if other != name {
                     assert_eq!(other.stated_in(&params), None, "{name} also stated {other}");

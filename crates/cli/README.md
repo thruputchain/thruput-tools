@@ -116,13 +116,15 @@ thruput node \
   --network-config max_rv32_code_bytes=1M \
   --network-config max_rv32_memory_bytes=16M \
   --network-config max_contract_size_bytes=1M \
-  --network-config max_bytestring_len=32K
+  --network-config max_bytestring_len=32K \
+  --network-config max_tx_gas=5000000000
 ```
 
-Values accept decimal, hexadecimal, and binary K/M/G suffixes (1M = 1,048,576).
-The CLI rejects a name no chain parameter carries and a name given twice, and
-names the ones it knows; hog-devnode rejects a value past the ceilings its
-build was compiled with, so overrides need a `hog-devnode` build carrying the
+Values are unsigned 64-bit amounts in decimal, hexadecimal, or binary K/M/G
+suffixes (1M = 1,048,576). The CLI rejects a name no chain parameter carries
+and a name given twice, and names the ones it knows; hog-devnode rejects a
+value its parameter cannot hold or past the ceilings its build was compiled
+with, so overrides need a `hog-devnode` build carrying the
 matching flag. These settings affect genesis; when using `--data-dir`, supply
 the same overrides on every restart or choose a fresh directory.
 
