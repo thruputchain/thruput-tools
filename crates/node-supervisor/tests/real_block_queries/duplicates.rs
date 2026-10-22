@@ -8,11 +8,12 @@ use sha2::{Digest, Sha256};
 use thruput_json_rpc_types::hex::Topic;
 use thruput_json_rpc_types::{ContractAddress, bootstrap_manifest::BootstrapManifestAllocation};
 use thruput_signing::{
-    NATIVE_HOG_ADDRESS, NATIVE_HOG_TRANSFER_ENTRYPOINT, SignTransactionParams,
+    NATIVE_HOG_TRANSFER_ENTRYPOINT, SignTransactionParams,
     default_wallet::{BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction},
     encode_signed_transaction_xdr, native_hog_transfer_calldata, sign_transaction,
     transaction_hash,
 };
+use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 use tokio::io::AsyncReadExt;
 
 const AMOUNT: u128 = 50_000_000;
@@ -52,7 +53,7 @@ async fn transfer(
     let calldata = native_hog_transfer_calldata(&recipient.0, AMOUNT)?;
     let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
         account: &account,
-        target_address: NATIVE_HOG_ADDRESS,
+        target_address: ADDRESS_NATIVE_TOKEN,
         target_entrypoint: NATIVE_HOG_TRANSFER_ENTRYPOINT,
         target_calldata: &calldata,
         target_gas_limit: GAS,
@@ -338,7 +339,7 @@ async fn event_history(
             "getEvents",
             NamedParams(input::EventQuery {
                 filters: vec![input::EventFilter {
-                    addresses: vec![Base58(NATIVE_HOG_ADDRESS)],
+                    addresses: vec![Base58(ADDRESS_NATIVE_TOKEN)],
                     topics: Some(input::TopicFilter {
                         topic1: Some(vec![thruput_json_rpc_types::hex::Topic(
                             transfer.sender.0.as_ref().try_into()?,
@@ -373,7 +374,7 @@ async fn event_history(
         Topic(transfer.recipient.0.as_ref().try_into()?),
     ];
     require(
-        event.event.address == Base58(NATIVE_HOG_ADDRESS)
+        event.event.address == Base58(ADDRESS_NATIVE_TOKEN)
             && event.event.topics == topics
             && event.event.data.0 == xdrs::cxs::encode(&i128::try_from(AMOUNT)?)?,
         "Transfer event does not match the signed transfer's participants and amount",

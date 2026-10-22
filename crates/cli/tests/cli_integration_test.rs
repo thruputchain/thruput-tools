@@ -7294,7 +7294,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     assert_eq!(data["recipient"], recipient);
     assert_eq!(
         data["tokenAddress"],
-        thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+        thruput_encoding::encode(thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN.as_ref())
     );
     assert_eq!(data["amount"], "10.5");
     assert_eq!(data["rawAmount"], "105000000");
@@ -7332,7 +7332,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     let (target, entrypoint, target_calldata) = decode_wallet_action(&signed_tx);
     assert_eq!(
         target,
-        thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+        thruput_encoding::encode(thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN.as_ref())
     );
     assert_eq!(entrypoint, "0x63285b3523f9dc3f");
     let (calldata_recipient, raw_amount): (thruput_xdr::types::ContractAddress, u128) =
@@ -7423,7 +7423,7 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
     );
     assert_eq!(
         target,
-        thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+        thruput_encoding::encode(thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN.as_ref())
     );
     assert_eq!(entrypoint, "0x63285b3523f9dc3f");
 }
@@ -8418,7 +8418,7 @@ fn assert_transfer_live_common(
     assert_eq!(data["recipient"], thruput_encoding::encode(&[0xab; 32]));
     assert_eq!(
         data["tokenAddress"],
-        thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+        thruput_encoding::encode(thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN.as_ref())
     );
     assert_eq!(data["amount"], "1.5");
     assert_eq!(data["rawAmount"], "15000000");
@@ -15314,7 +15314,7 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
         let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
         assert_eq!(
             target,
-            thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+            thruput_encoding::encode(thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN.as_ref())
         );
         assert_eq!(
             entrypoint,
@@ -15417,7 +15417,7 @@ fn serve_local_funding_transaction_outcome(
     let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
         thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
             account: &account,
-            target_address: thruput_signing::NATIVE_HOG_ADDRESS,
+            target_address: thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
             target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
             target_calldata: &calldata,
             gas_limit: thruput_signing::DEFAULT_TX_GAS_LIMIT * 2,
@@ -15829,7 +15829,7 @@ fn spawn_transfer_rpc(
         let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
         assert_eq!(
             target,
-            thruput_encoding::encode(thruput_signing::NATIVE_HOG_ADDRESS.as_ref())
+            thruput_encoding::encode(thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN.as_ref())
         );
         assert_eq!(entrypoint, "0x63285b3523f9dc3f");
         let (recipient, raw_amount): (thruput_xdr::types::ContractAddress, u128) =

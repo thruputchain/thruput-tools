@@ -65,7 +65,7 @@ pub(super) fn generate_tx_batch(
             let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
                 thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
                     account: &native,
-                    target_address: thruput_signing::NATIVE_HOG_ADDRESS,
+                    target_address: thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
                     target_entrypoint: HOG_BALANCE_ENTRYPOINT,
                     target_calldata: &calldata,
                     gas_limit: 20_000_000,

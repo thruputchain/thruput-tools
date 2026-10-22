@@ -17,8 +17,9 @@ use thruput_json_rpc_types::{
 };
 use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
 use thruput_signing::{
-    NATIVE_HOG_ADDRESS, NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, native_hog_transfer_calldata,
+    NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, native_hog_transfer_calldata,
 };
+use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 
 const AMOUNT: u128 = 50_000_000;
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -144,7 +145,7 @@ async fn exercise(fixture: &Fixture, node: &NodeSupervisorHandle) -> TestResult 
     )?;
     let expected_balance = expected_free_balance(&native).await?;
     let recipient = Base58(PubkeyAccount::from_public_key_bytes([0x63; 32], 0).address());
-    let token = thruput_encoding::encode(NATIVE_HOG_ADDRESS.as_ref());
+    let token = thruput_encoding::encode(ADDRESS_NATIVE_TOKEN.as_ref());
     let selector = format!("0x{}", hex::encode(NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref()));
     let calldata = format!(
         "0x{}",
@@ -311,7 +312,7 @@ async fn check_history(
     let output::DecodedResponse::Known(events) = native
         .get_events(input::EventQuery {
             filters: vec![input::EventFilter {
-                addresses: vec![Base58(NATIVE_HOG_ADDRESS)],
+                addresses: vec![Base58(ADDRESS_NATIVE_TOKEN)],
                 topics: None,
             }],
             start: Some(start),
@@ -326,7 +327,7 @@ async fn check_history(
         .events
         .iter()
         .enumerate()
-        .filter(|(_, event)| event.address == Base58(NATIVE_HOG_ADDRESS))
+        .filter(|(_, event)| event.address == Base58(ADDRESS_NATIVE_TOKEN))
         .collect::<Vec<_>>();
     require(
         events.events.len() == expected.len() && events.next_cursor.is_none(),
@@ -365,7 +366,7 @@ async fn check_history_commands(
             && transactions.refs[0].height == receipt.block_height,
         "CLI native root-history command did not find its submitted transaction",
     )?;
-    let token = thruput_encoding::encode(NATIVE_HOG_ADDRESS.as_ref());
+    let token = thruput_encoding::encode(ADDRESS_NATIVE_TOKEN.as_ref());
     let events = fixture
         .command(&["events", "list", &token, "--limit", "100"])
         .await?;
@@ -376,7 +377,7 @@ async fn check_history_commands(
             && events.events.iter().any(|event| {
                 event.raw.tx_hash == receipt.transaction_hash
                     && event.raw.block_height == receipt.block_height
-                    && event.raw.contract_address == Base58(NATIVE_HOG_ADDRESS)
+                    && event.raw.contract_address == Base58(ADDRESS_NATIVE_TOKEN)
             }),
         "CLI native event command did not find the submitted token transfer",
     )?;

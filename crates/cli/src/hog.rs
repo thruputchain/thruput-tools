@@ -7,7 +7,7 @@ use crate::CliError;
 pub(crate) const DECIMALS: u32 = thruput_signing::NATIVE_HOG_DECIMALS;
 pub(crate) const SCALE: u128 = thruput_signing::NATIVE_HOG_SCALE;
 pub(crate) const fn token_address() -> ContractAddress {
-    thruput_signing::NATIVE_HOG_ADDRESS
+    thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN
 }
 
 pub(crate) fn transfer_entrypoint() -> ContractEntrypointID {
@@ -83,7 +83,10 @@ mod tests {
     fn protocol_constants_remain_stable() {
         assert_eq!(DECIMALS, 7);
         assert_eq!(SCALE, 10_000_000);
-        assert_eq!(token_address(), thruput_signing::NATIVE_HOG_ADDRESS);
+        assert_eq!(
+            token_address(),
+            thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN
+        );
         assert_eq!(
             transfer_entrypoint().as_ref(),
             &[0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f]

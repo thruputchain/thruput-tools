@@ -12,11 +12,12 @@ use thruput_signing::default_wallet::{
     BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction,
 };
 use thruput_signing::{
-    LocalSigner, MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SIGNATURE_LEN, MlDsa65Signer, NATIVE_HOG_ADDRESS,
+    LocalSigner, MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SIGNATURE_LEN, MlDsa65Signer,
     NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, SchemeSigner, SignTransactionParams, Signer,
     encode_signed_transaction_xdr, encode_transaction_xdr, native_hog_transfer_calldata,
     sign_transaction, transaction_hash, verify_mldsa65,
 };
+use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 use thruput_xdr::transaction::SignedTransaction;
 use thruput_xdr::types::{ContractAddress, NetworkHash, PublicKey, SHA256Hash, Signature};
 
@@ -183,7 +184,7 @@ fn default_wallet_transactions_build_sign_and_encode_identically() {
         let target_calldata = hex::decode(&call.calldata).expect("bug: calldata hex");
         if let Some(transfer) = &call.transfer {
             // Native transfers encode their calldata the way `thruput transfer` does.
-            assert_eq!(call.target, hex::encode(NATIVE_HOG_ADDRESS.as_ref()));
+            assert_eq!(call.target, hex::encode(ADDRESS_NATIVE_TOKEN.as_ref()));
             assert_eq!(
                 call.entrypoint,
                 hex::encode(NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref())

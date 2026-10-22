@@ -495,7 +495,7 @@ impl Network {
         })?;
         let (tx_hash, tx_hex) = crate::account::prepare_call(
             faucet,
-            thruput_signing::NATIVE_HOG_ADDRESS,
+            thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
             thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
             &calldata,
             u64::from_le_bytes(nonce),
