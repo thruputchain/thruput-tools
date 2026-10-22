@@ -6,6 +6,7 @@ mod context;
 mod handlers;
 mod health;
 mod heap_profiling;
+mod listener;
 mod metrics;
 mod middleware;
 mod observability;
@@ -301,8 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_config(server_cfg)
         .set_http_middleware(http_mw)
         .set_rpc_middleware(rpc_mw)
-        .build(&ctx.config.listen_address)
-        .await?;
+        .build_from_tcp(listener::bind(&ctx.config.listen_address).await?)?;
 
     let rpc_config = RpcServerConfig::default()
         .with_request_timeout_ms(ctx.config.request_timeout_ms.max(3))

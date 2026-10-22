@@ -120,7 +120,11 @@ pub fn transaction_ref_page(
 /// with the indexer and becomes an error — reporting it as a miss would tell
 /// the caller a transaction is uncommitted on the strength of an answer we
 /// could not read.
-pub fn tx_lookup(service: &str, result: TxInfoResult) -> Result<TxLookup, RpcServerError> {
+pub fn tx_lookup(
+    service: &str,
+    tx_hash: TxHash,
+    result: TxInfoResult,
+) -> Result<TxLookup, RpcServerError> {
     match result {
         TxInfoResult::TxInfoFound { info } => Ok(TxLookup::Found(Box::new(info))),
         TxInfoResult::TxInfoRecentFailure { recent_failure } => {
@@ -130,13 +134,13 @@ pub fn tx_lookup(service: &str, result: TxInfoResult) -> Result<TxLookup, RpcSer
             Ok(TxLookup::NotFound)
         }
         TxInfoResult::Default { outcome } => {
-            tracing::warn!(%outcome, %service, "unexpected TxInfoResult outcome");
+            tracing::warn!(?tx_hash, %outcome, %service, "unexpected TxInfoResult outcome");
             Err(RpcServerError::BackendUnavailable(format!(
                 "{service} returned unexpected outcome: {outcome}"
             )))
         }
         _ => {
-            tracing::warn!(%service, "unknown TxInfoResult variant");
+            tracing::warn!(?tx_hash, %service, "unknown TxInfoResult variant");
             Err(RpcServerError::BackendUnavailable(format!(
                 "{service} returned unknown TxInfoResult variant"
             )))
@@ -188,7 +192,7 @@ pub fn public_event_page(page: EventPage) -> DecodedEventPage {
     let mut dropped = Vec::new();
     for identified in page.events.0 {
         let tx_hash = TxHash(Base58(identified.tx_hash));
-        match parse_emitted_event(identified.emitted_event) {
+        match parse_emitted_event(identified.emitted_event, Some(tx_hash)) {
             Some(event) => events.push(IdentifiedEvent {
                 tx_hash,
                 block_height: identified.block_height,

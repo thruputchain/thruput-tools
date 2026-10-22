@@ -79,7 +79,10 @@ pub fn strip_hex_prefix(text: &str) -> &str {
 
 /// Decode a hex string with an optional `0x` or `0X` prefix.
 pub fn decode_prefixed_hex(text: &str) -> Result<Vec<u8>, hex::FromHexError> {
-    hex::decode(strip_hex_prefix(text))
+    let text = strip_hex_prefix(text);
+    let mut decoded = vec![0; text.len() / 2];
+    hex::decode_to_slice(text, &mut decoded)?;
+    Ok(decoded)
 }
 
 /// Decode a hex string with an optional `0x` or `0X` prefix into exactly
@@ -343,5 +346,45 @@ impl<'de> Deserialize<'de> for Topic {
                     serde::de::Error::custom("topic must be exactly 32 bytes")
                 }
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_prefixed_hex, strip_hex_prefix};
+
+    #[test]
+    fn decoding_matches_reference_for_ascii_pairs() {
+        for first in 0..=127u8 {
+            for second in 0..=127u8 {
+                let bytes = [first, second];
+                let text = std::str::from_utf8(&bytes).unwrap();
+                for prefix in ["", "0x", "0X"] {
+                    let input = format!("{prefix}{text}");
+                    assert_eq!(
+                        decode_prefixed_hex(&input),
+                        hex::decode(strip_hex_prefix(&input))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn decoding_preserves_errors_and_round_trips_across_chunk_lengths() {
+        for text in ["", "0", "g", "0g0", "gg", "01zz", "000x", "é", "😀", "0é0"] {
+            for prefix in ["", "0x", "0X"] {
+                assert_eq!(
+                    decode_prefixed_hex(&format!("{prefix}{text}")),
+                    hex::decode(text)
+                );
+            }
+        }
+        let bytes = (0..=u8::MAX).cycle().take(1025).collect::<Vec<_>>();
+        for len in 0..=bytes.len() {
+            for text in [hex::encode(&bytes[..len]), hex::encode_upper(&bytes[..len])] {
+                assert_eq!(decode_prefixed_hex(&text).unwrap(), bytes[..len]);
+            }
+        }
     }
 }
