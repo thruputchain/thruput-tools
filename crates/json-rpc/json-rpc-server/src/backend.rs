@@ -82,12 +82,6 @@ use thruput_xdr::network_config::NetworkConfig;
 
 use crate::error::RpcServerError;
 
-tokio::task_local! {
-    // Only set while a future is being polled under the corresponding timer.
-    // Task-local scopes do not propagate into spawned tasks.
-    static ENFORCED_DEADLINE: Instant;
-}
-
 /// Absolute timing budget for one public JSON-RPC request.
 #[derive(Debug, Clone, Copy)]
 pub struct RpcRequestContext {
@@ -124,48 +118,6 @@ impl RpcRequestContext {
     pub fn remaining(self) -> Option<Duration> {
         self.deadline
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-    }
-
-    /// Run an operation within this context's absolute deadline.
-    ///
-    /// Nested calls reuse an enclosing timer when it expires no later than
-    /// this context. A shorter deadline installs its own timer. Enforcement
-    /// is scoped to polling `future`, so cancellation restores the enclosing
-    /// scope and spawned tasks still enforce their own deadlines.
-    pub async fn within_deadline<T>(
-        self,
-        future: impl std::future::Future<Output = T>,
-    ) -> Result<T, RpcServerError> {
-        let Some(deadline) = self.deadline else {
-            return Ok(future.await);
-        };
-        let mut future = std::pin::pin!(future);
-        let mut timer = std::pin::pin!(tokio::time::sleep_until(deadline.into()));
-        std::future::poll_fn(|cx| {
-            // Check on every poll: a future may first be polled inside an
-            // enclosing deadline, then resume after that scope has ended.
-            if ENFORCED_DEADLINE
-                .try_with(|enforced| *enforced <= deadline)
-                .unwrap_or(false)
-            {
-                return future.as_mut().poll(cx).map(Ok);
-            }
-            ENFORCED_DEADLINE.sync_scope(deadline, || {
-                let had_budget = tokio::task::coop::has_budget_remaining();
-                if let std::task::Poll::Ready(value) = future.as_mut().poll(cx) {
-                    return std::task::Poll::Ready(Ok(value));
-                }
-                // Match Tokio's timeout behavior when polling the operation
-                // consumes the cooperative budget: still check its deadline.
-                let elapsed = if had_budget && !tokio::task::coop::has_budget_remaining() {
-                    std::pin::pin!(tokio::task::unconstrained(timer.as_mut())).poll(cx)
-                } else {
-                    timer.as_mut().poll(cx)
-                };
-                elapsed.map(|()| Err(RpcServerError::BackendTimeout))
-            })
-        })
-        .await
     }
 
     /// Restrict this context to a shorter operation-specific timeout.
@@ -407,6 +359,3 @@ pub trait ViewPlane: Send + Sync + 'static {
         Err(RpcServerError::NotImplemented("view".into()))
     }
 }
-
-#[cfg(test)]
-mod tests;

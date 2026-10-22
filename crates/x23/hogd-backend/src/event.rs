@@ -10,6 +10,7 @@ use thruput_json_rpc_types::{
     base58::Base58,
     events::EmittedEvent,
     hex::{HexBytes, Topic},
+    transaction::TxHash,
 };
 use thruput_xdr::event::TxEmittedEvent;
 use xdr_common::VecM;
@@ -37,11 +38,12 @@ pub struct ParsedEvents {
 ///
 /// Returns `None` if the event is malformed — `num_topics` above
 /// [`MAX_TOPICS`], or a `serialized_event` too short for the topics it
-/// declares — and logs a warning naming the reason.
-pub fn parse_emitted_event(raw: TxEmittedEvent) -> Option<EmittedEvent> {
+/// declares — and logs a warning naming the reason. `tx_hash` identifies a
+/// committed transaction when available; simulations pass `None`.
+pub fn parse_emitted_event(raw: TxEmittedEvent, tx_hash: Option<TxHash>) -> Option<EmittedEvent> {
     let num_topics = raw.num_topics;
     if num_topics > MAX_TOPICS {
-        tracing::warn!(num_topics, "event has too many topics, skipping");
+        tracing::warn!(?tx_hash, num_topics, "event has too many topics, skipping");
         return None;
     }
 
@@ -49,6 +51,7 @@ pub fn parse_emitted_event(raw: TxEmittedEvent) -> Option<EmittedEvent> {
     let topics_len = num_topics as usize * TOPIC_SIZE;
     if bytes.len() < topics_len {
         tracing::warn!(
+            ?tx_hash,
             num_topics,
             event_len = bytes.len(),
             "serialized_event too short for declared topics, skipping"
@@ -79,13 +82,17 @@ pub fn parse_emitted_event(raw: TxEmittedEvent) -> Option<EmittedEvent> {
 ///
 /// The const bound is the payload's own cap — receipts and view results
 /// declare different ones — so callers pass their wire vector as it comes.
-pub fn parse_emitted_events<const MAX: u32>(raw: VecM<TxEmittedEvent, MAX>) -> ParsedEvents {
+/// `tx_hash` identifies committed transactions; simulations pass `None`.
+pub fn parse_emitted_events<const MAX: u32>(
+    raw: VecM<TxEmittedEvent, MAX>,
+    tx_hash: Option<TxHash>,
+) -> ParsedEvents {
     let mut parsed = ParsedEvents {
         events: Vec::with_capacity(raw.0.len()),
         dropped: 0,
     };
     for event in raw.0 {
-        match parse_emitted_event(event) {
+        match parse_emitted_event(event, tx_hash) {
             Some(event) => parsed.events.push(event),
             None => parsed.dropped += 1,
         }

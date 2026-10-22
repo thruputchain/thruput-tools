@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use thruput_json_rpc_server::{
@@ -31,32 +31,25 @@ impl GatewayBackend {
     }
 
     fn bounded_context(&self, context: RpcRequestContext) -> RpcRequestContext {
+        // The shared RPC server enforces the request deadline. Carry its budget
+        // through queueing and backend operations without another request timer.
         context.capped_from_start(self.ctx.config.request_timeout())
-    }
-
-    async fn with_deadline<T>(
-        &self,
-        context: RpcRequestContext,
-        future: impl Future<Output = Result<T, RpcServerError>>,
-    ) -> Result<T, RpcServerError> {
-        context.within_deadline(future).await?
     }
 }
 
 #[async_trait]
 impl SubmitPlane for GatewayBackend {
-    #[tracing::instrument(level = "debug", skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
+    #[tracing::instrument(skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
     async fn submit_raw_transaction(
         &self,
         context: RpcRequestContext,
         tx: ValidatedTransaction,
     ) -> Result<(), RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            self.ctx.batch_submitter.submit(context, tx.bytes, tx.hash),
-        )
-        .await
+        self.ctx
+            .batch_submitter
+            .submit(context, tx.bytes, tx.hash)
+            .await
     }
 }
 
@@ -65,8 +58,7 @@ impl ChainPlane for GatewayBackend {
     #[tracing::instrument(skip_all)]
     async fn chain_tip(&self, context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(context, handlers::blocks::chain_tip(&self.ctx, context))
-            .await
+        handlers::blocks::chain_tip(&self.ctx, context).await
     }
 
     #[tracing::instrument(skip_all, fields(?height))]
@@ -76,24 +68,15 @@ impl ChainPlane for GatewayBackend {
         height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            handlers::blocks::get_block_by_number(&self.ctx, context, height),
-        )
-        .await
+        handlers::blocks::get_block_by_number(&self.ctx, context, height).await
     }
 
     #[tracing::instrument(skip_all)]
     async fn pending_transaction_count(
         &self,
-        context: RpcRequestContext,
+        _context: RpcRequestContext,
     ) -> Result<u64, RpcServerError> {
-        let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            handlers::blocks::pending_transaction_count(&self.ctx),
-        )
-        .await
+        handlers::blocks::pending_transaction_count(&self.ctx).await
     }
 }
 
@@ -106,11 +89,7 @@ impl ReadPlane for GatewayBackend {
         query: thruput_json_rpc_types::transaction::BlockTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            handlers::transactions::get_transactions_by_block(&self.ctx, context, query),
-        )
-        .await
+        handlers::transactions::get_transactions_by_block(&self.ctx, context, query).await
     }
 
     #[tracing::instrument(skip_all, fields(?tx_hash))]
@@ -120,25 +99,17 @@ impl ReadPlane for GatewayBackend {
         tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            handlers::receipt::get_transaction_receipt(&self.ctx, context, tx_hash),
-        )
-        .await
+        handlers::receipt::get_transaction_receipt(&self.ctx, context, tx_hash).await
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
+    #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,
         context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            handlers::receipt::get_transaction_status(&self.ctx, context, tx_hash),
-        )
-        .await
+        handlers::receipt::get_transaction_status(&self.ctx, context, tx_hash).await
     }
 
     #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
@@ -148,11 +119,7 @@ impl ReadPlane for GatewayBackend {
         query: EventQuery,
     ) -> Result<EventPage, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            handlers::events::get_events(&self.ctx, context, query),
-        )
-        .await
+        handlers::events::get_events(&self.ctx, context, query).await
     }
 
     #[tracing::instrument(skip_all, fields(?query.address, limit = query.limit))]
@@ -162,11 +129,7 @@ impl ReadPlane for GatewayBackend {
         query: AddressTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            handlers::transactions::get_transactions_by_address(&self.ctx, context, query),
-        )
-        .await
+        handlers::transactions::get_transactions_by_address(&self.ctx, context, query).await
     }
 
     #[tracing::instrument(skip_all, fields(?address))]
@@ -177,11 +140,7 @@ impl ReadPlane for GatewayBackend {
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            self.ctx.storage_batcher.read(context, address, key),
-        )
-        .await
+        self.ctx.storage_batcher.read(context, address, key).await
     }
 
     #[tracing::instrument(skip_all, fields(?address))]
@@ -191,13 +150,10 @@ impl ReadPlane for GatewayBackend {
         address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            self.ctx
-                .storage_batcher
-                .read_native_hog_balance(context, address),
-        )
-        .await
+        self.ctx
+            .storage_batcher
+            .read_native_hog_balance(context, address)
+            .await
     }
 
     #[tracing::instrument(skip_all, fields(?address))]
@@ -207,13 +163,10 @@ impl ReadPlane for GatewayBackend {
         address: ContractAddress,
     ) -> Result<AddressAuthDataResponse, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            self.ctx
-                .storage_batcher
-                .read_address_auth_data(context, address),
-        )
-        .await
+        self.ctx
+            .storage_batcher
+            .read_address_auth_data(context, address)
+            .await
     }
 }
 
@@ -238,11 +191,7 @@ impl ViewPlane for GatewayBackend {
         gas_limit: u64,
     ) -> Result<ViewResponse, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            handlers::view::view(&self.ctx, context, request, gas_limit),
-        )
-        .await
+        handlers::view::view(&self.ctx, context, request, gas_limit).await
     }
 }
 

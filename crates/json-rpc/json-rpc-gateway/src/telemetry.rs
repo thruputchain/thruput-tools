@@ -226,9 +226,8 @@ fn subscriber(
     events: tracing_subscriber::fmt::format::FmtSpan,
     provider: Option<&SdkTracerProvider>,
 ) -> Box<dyn tracing::Subscriber + Send + Sync> {
-    // A single global level needs no span-dependent filtering. Preserve the
-    // parsed EnvFilter for target/span directives, but let tracing cache the
-    // static decision for the usual global-level configuration.
+    // A plain level avoids EnvFilter's per-span filter hooks. Keep EnvFilter
+    // when target/span directives require that filtering.
     if let Ok(level) = filter
         .to_string()
         .parse::<tracing_subscriber::filter::LevelFilter>()

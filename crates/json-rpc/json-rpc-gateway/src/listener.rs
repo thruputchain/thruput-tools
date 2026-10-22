@@ -8,7 +8,6 @@ use tokio::net::{TcpSocket, ToSocketAddrs};
 // still caps this request at its configured maximum listen backlog.
 const ACCEPT_BACKLOG: u32 = 4096;
 
-#[tracing::instrument(skip_all)]
 pub(crate) async fn bind(address: impl ToSocketAddrs) -> io::Result<std::net::TcpListener> {
     let mut last_error = None;
     // Preserve TcpListener::bind's hostname resolution and address fallback.
@@ -79,6 +78,15 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_connection_burst_can_queue_before_the_accept_task_runs() {
+        let somaxconn: u32 = std::fs::read_to_string("/proc/sys/net/core/somaxconn")
+            .expect("Linux exposes the maximum listen backlog")
+            .trim()
+            .parse()
+            .expect("somaxconn is an unsigned integer");
+        if somaxconn <= 256 {
+            eprintln!("skipping connection burst: somaxconn={somaxconn} is too small");
+            return;
+        }
         let listener = bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut connections = tokio::task::JoinSet::new();

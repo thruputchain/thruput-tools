@@ -79,38 +79,9 @@ pub fn strip_hex_prefix(text: &str) -> &str {
 
 /// Decode a hex string with an optional `0x` or `0X` prefix.
 pub fn decode_prefixed_hex(text: &str) -> Result<Vec<u8>, hex::FromHexError> {
-    const NIBBLES: [u8; 256] = {
-        let mut values = [u8::MAX; 256];
-        let mut i = 0u8;
-        while i < 10 {
-            values[(b'0' + i) as usize] = i;
-            i += 1;
-        }
-        i = 0;
-        while i < 6 {
-            values[(b'a' + i) as usize] = 10 + i;
-            values[(b'A' + i) as usize] = 10 + i;
-            i += 1;
-        }
-        values
-    };
     let text = strip_hex_prefix(text);
-    if !text.len().is_multiple_of(2) {
-        return Err(hex::FromHexError::OddLength);
-    }
-
-    // Decode directly into one allocation instead of collecting fallible
-    // iterator items. Invalid input uses the reference decoder so its error
-    // character, byte offset and precedence stay exactly the same.
     let mut decoded = vec![0; text.len() / 2];
-    for (pair, byte) in text.as_bytes().chunks_exact(2).zip(&mut decoded) {
-        let high = NIBBLES[usize::from(pair[0])];
-        let low = NIBBLES[usize::from(pair[1])];
-        if high | low == u8::MAX {
-            return hex::decode(text);
-        }
-        *byte = high << 4 | low;
-    }
+    hex::decode_to_slice(text, &mut decoded)?;
     Ok(decoded)
 }
 

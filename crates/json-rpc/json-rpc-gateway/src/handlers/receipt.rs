@@ -81,7 +81,7 @@ impl<T: Send + 'static> Drop for SchedulerLookupGuard<T> {
 /// 2. If not found, return `None`
 /// 3. Parse each `TxEmittedEvent.serialized_event` into topics + data
 /// 4. Build `TransactionReceipt`
-#[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
+#[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_receipt(
     ctx: &GatewayContext,
     context: RpcRequestContext,
@@ -97,7 +97,7 @@ pub async fn get_transaction_receipt(
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
     let result = lookup_transaction_info(ctx, &client, deadline, tx_hash).await?;
 
-    match shared_indexer::tx_lookup(INDEXER, result)? {
+    match shared_indexer::tx_lookup(INDEXER, tx_hash, result)? {
         shared_indexer::TxLookup::Found(info) => Ok(Some(receipt(ctx, tx_hash, *info))),
         // A recent nondeterministic failure is not a committed record;
         // receipts exist only for committed transactions. The diagnostic
@@ -288,7 +288,7 @@ async fn indexed_transaction_status(
     tx_hash: TxHash,
 ) -> Result<Option<TransactionStatus>, RpcServerError> {
     let result = indexed_transaction_info(ctx, deadline, tx_hash).await?;
-    let lookup = shared_indexer::tx_lookup(INDEXER, result)?;
+    let lookup = shared_indexer::tx_lookup(INDEXER, tx_hash, result)?;
     Ok(shared_indexer::committed_status(lookup))
 }
 
@@ -340,7 +340,7 @@ impl shared_status::StatusProbe for GatewayStatusProbe<'_> {
 /// slow indexer can consume the budget before the scheduler lookup is
 /// dispatched. Scheduler outcomes remain available if the indexer is
 /// disconnected.
-#[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
+#[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_status(
     ctx: &GatewayContext,
     context: RpcRequestContext,
@@ -351,7 +351,7 @@ pub async fn get_transaction_status(
 }
 
 /// Strict native receipt projection using the existing indexer transport.
-#[tracing::instrument(skip_all, fields(?tx_hash))]
+#[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
 pub async fn native_transaction_receipt(
     ctx: &GatewayContext,
     context: RpcRequestContext,
@@ -363,7 +363,7 @@ pub async fn native_transaction_receipt(
 }
 
 /// Native status probes share the bounded lookup lane and one absolute deadline.
-#[tracing::instrument(skip_all, fields(?tx_hash))]
+#[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
 pub async fn native_transaction_status(
     ctx: &GatewayContext,
     context: RpcRequestContext,

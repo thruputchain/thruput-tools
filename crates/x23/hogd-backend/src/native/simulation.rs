@@ -112,7 +112,7 @@ fn output(value: InvocationFrameOutput) -> Result<out::InvocationOutput, RpcServ
 fn events<const MAX: u32>(
     value: VecM<TxEmittedEvent, MAX>,
 ) -> Result<Vec<out::EmittedEvent>, RpcServerError> {
-    let parsed = crate::event::parse_emitted_events(value);
+    let parsed = crate::event::parse_emitted_events(value, None);
     if parsed.dropped != 0 {
         return Err(invalid(
             Reason::InvalidEncoding,

@@ -231,19 +231,23 @@ impl TipCache {
             Some(remaining) => Some(tokio::time::timeout(remaining, fetch(probe_context)).await),
             None => None,
         };
+        // Conversion and logging can be slow; neither may hold up cache readers.
+        let reading = match &outcome {
+            Some(Ok(Ok(reading))) => Some(TipState::from_reading(reading)),
+            Some(Ok(Err(error))) => {
+                tracing::warn!(%error, "chain tip unavailable, pre-checks use last reading");
+                None
+            }
+            Some(Err(_)) => {
+                tracing::warn!("chain tip probe timed out, pre-checks use last reading");
+                None
+            }
+            None => None,
+        };
         let state = {
             let mut state = self.lock_state();
-            match &outcome {
-                Some(Ok(Ok(reading))) => {
-                    state.record(TipState::from_reading(reading));
-                }
-                Some(Ok(Err(error))) => {
-                    tracing::warn!(%error, "chain tip unavailable, pre-checks use last reading");
-                }
-                Some(Err(_)) => {
-                    tracing::warn!("chain tip probe timed out, pre-checks use last reading");
-                }
-                None => {}
+            if let Some(reading) = reading {
+                state.record(reading);
             }
             state.in_flight = false;
             state.reading.clone()
@@ -431,7 +435,7 @@ mod tests {
                 cache
                     .reading(
                         Duration::from_mins(1),
-                        Duration::from_secs(5),
+                        Duration::from_mins(5),
                         RpcRequestContext::unbounded(),
                         |_| async {
                             probes.fetch_add(1, Ordering::SeqCst);
@@ -442,12 +446,19 @@ mod tests {
                     .await
             });
         }
-        // A stored permit also works if the probe has not yet reached its
-        // await. All other readers either wait for it or reuse its result.
-        release.notify_one();
-        while let Some(read) = readers.join_next().await {
-            assert_eq!(read.unwrap().state.unwrap().height, 42);
-        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            // All other readers must be waiting before the probe completes,
+            // so this test depends on the notification rather than a warm hit.
+            while cache.inner.probe_done.receiver_count() != 127 {
+                tokio::task::yield_now().await;
+            }
+            release.notify_one();
+            while let Some(read) = readers.join_next().await {
+                assert_eq!(read.unwrap().state.unwrap().height, 42);
+            }
+        })
+        .await
+        .expect("cold readers should wake when the shared probe completes");
         assert_eq!(probes.load(Ordering::SeqCst), 1);
     }
 
@@ -477,7 +488,7 @@ mod tests {
                 Duration::from_secs(10),
                 Duration::from_secs(2),
                 RpcRequestContext::unbounded(),
-                |_| async { panic!("cancelled probe still owns the reuse window") },
+                |_| async { panic!("cancelled probe should still own the reuse window") },
             )
             .await;
         assert!(read.state.is_none());

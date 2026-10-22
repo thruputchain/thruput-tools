@@ -335,7 +335,7 @@ impl BatchSubmitter {
     /// Submit one tx.  Routes to a shard by tx hash; returns when the
     /// fanout completes.  Returns `Overloaded` if the target shard's
     /// ingress is full (client should retry with backoff).
-    #[tracing::instrument(level = "debug", skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
+    #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
     pub async fn submit(
         &self,
         context: RpcRequestContext,
@@ -346,7 +346,7 @@ impl BatchSubmitter {
     }
 
     /// Native attempt through the same queue, with cancellation/dispatch evidence.
-    #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
+    #[tracing::instrument(level = "debug", skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
     pub async fn submit_native(
         &self,
         context: RpcRequestContext,
@@ -370,7 +370,10 @@ impl BatchSubmitter {
         let shard_idx = shard_index_by_routing_key(bytes, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
         let (reply_tx, reply_rx) = oneshot::channel();
-        let context = context.capped_from_start(self.request_timeout);
+        let request_deadline = context
+            .capped_from_start(self.request_timeout)
+            .deadline()
+            .ok_or(RpcServerError::BackendTimeout)?;
         let backend_deadline = context
             .capped_from_start(self.backend_timeout)
             .deadline()
@@ -394,8 +397,9 @@ impl BatchSubmitter {
                 .observe_submitted_transaction(outcome_for_submit_error(&err));
             return Err(err);
         }
-        match context.within_deadline(reply_rx).await {
-            Err(err) => {
+        match tokio::time::timeout_at(request_deadline.into(), reply_rx).await {
+            Err(_) => {
+                let err = RpcServerError::BackendTimeout;
                 self.metrics
                     .observe_submitted_transaction(outcome_for_submit_error(&err));
                 Err(err)

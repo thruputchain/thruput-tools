@@ -5,6 +5,7 @@ use thruput_indexer::TransactionRefPageResult;
 use thruput_indexer::indexer::TxInfoOutcome;
 use thruput_indexer::indexer::TxInfoResult;
 use thruput_json_rpc_server::RpcServerError;
+use thruput_json_rpc_types::{base58::Base58, transaction::TxHash};
 use thruput_xdr::event::{IdentifiedEvent, TxEmittedEvent};
 use xdr_common::{BytesM, VecM};
 
@@ -37,6 +38,7 @@ fn only_the_not_found_outcome_reads_as_a_miss() {
     assert!(matches!(
         tx_lookup(
             "indexer",
+            TxHash(Base58([0x33; 32].into())),
             TxInfoResult::Default {
                 outcome: TxInfoOutcome::TxInfoNotFound.0,
             },
@@ -44,7 +46,12 @@ fn only_the_not_found_outcome_reads_as_a_miss() {
         Ok(TxLookup::NotFound)
     ));
 
-    let error = tx_lookup("indexer", TxInfoResult::Default { outcome: 4242 }).unwrap_err();
+    let error = tx_lookup(
+        "indexer",
+        TxHash(Base58([0x33; 32].into())),
+        TxInfoResult::Default { outcome: 4242 },
+    )
+    .unwrap_err();
     assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
     assert!(error.to_string().contains("4242"), "{error}");
 }
