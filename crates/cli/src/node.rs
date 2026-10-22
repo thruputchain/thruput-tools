@@ -175,6 +175,21 @@ pub enum NetworkConfigOverrideError {
     Amount(#[from] crate::byte_size::ByteSizeError),
 }
 
+/// Combine the selected profile's `network_config` with `--network-config` flags.
+///
+/// A flag replaces the profile value for the same parameter; a parameter
+/// flagged twice is still left for startup to reject.
+pub fn with_profile_network_config(
+    start: &Path,
+    explicit_profile: Option<&str>,
+    flags: Vec<(ConfigParamName, u32)>,
+) -> Result<Vec<(ConfigParamName, u32)>, CliError> {
+    let mut overrides = crate::config::profile_network_config(start, explicit_profile)?;
+    overrides.retain(|(name, _)| !flags.iter().any(|(flagged, _)| flagged == name));
+    overrides.extend(flags);
+    Ok(overrides)
+}
+
 /// Startup options for a local hog-devnode-backed node.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]

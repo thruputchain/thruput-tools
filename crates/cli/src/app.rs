@@ -671,7 +671,8 @@ struct TestArgs {
     #[arg(long, requires = "integration")]
     hog_devnode_version: Option<String>,
     /// Override a genesis network parameter on the integration node (repeatable;
-    /// decimal, hex, or K/M/G values). Mirrors `thruput node --network-config`.
+    /// decimal, hex, or K/M/G values). Mirrors `thruput node --network-config`,
+    /// and replaces the same parameter from the profile's `network_config` table.
     #[arg(long = "network-config", value_name = "NAME=VALUE", requires = "integration",
           value_parser = crate::node::parse_network_config_override)]
     network_config: Vec<(thruput_node_supervisor::ConfigParamName, u64)>,
@@ -1119,6 +1120,7 @@ struct NodeArgs {
     #[arg(long, value_name = "SIZE", value_parser = crate::byte_size::parse_byte_size)]
     ramdb_bytes: Option<u64>,
     /// Override a genesis network parameter (repeatable; decimal, hex, or K/M/G values).
+    /// Replaces the same parameter from the active profile's `network_config` table.
     /// Existing data directories must use the same overrides they were created with.
     #[arg(long = "network-config", value_name = "NAME=VALUE",
           value_parser = crate::node::parse_network_config_override)]
@@ -1157,7 +1159,11 @@ impl NodeArgs {
         options.rpc_max_connections = self.rpc_max_connections;
         options.rpc_batch_concurrency = self.rpc_batch_concurrency;
         options.ramdb_bytes = self.ramdb_bytes;
-        options.network_config_overrides = self.network_config;
+        options.network_config_overrides = crate::node::with_profile_network_config(
+            &invocation_cwd()?,
+            None,
+            self.network_config,
+        )?;
         options.bundle_identity = Some(ctx.bundle_identity.clone());
         crate::node::run_with_options(options, self.verbose, ctx.cmd_name, &ctx.print)
     }

@@ -43,6 +43,63 @@ pub struct ProjectProfile {
     pub contracts: BTreeMap<String, String>,
     #[serde(default)]
     pub wallets: BTreeMap<String, SavedWalletBinding>,
+    /// Genesis parameter overrides for local nodes started under this profile.
+    ///
+    /// Values are integers or strings in `--network-config` notation
+    /// (`"256K"`, `"0x8000"`); a flag for the same parameter replaces the value.
+    #[serde(default, with = "network_config_toml")]
+    pub network_config: BTreeMap<thruput_node_supervisor::ConfigParamName, u32>,
+}
+
+// Keys are protocol parameter names, so a typo fails when the profile loads
+// rather than after hog-devnode starts.
+mod network_config_toml {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as _};
+    use thruput_node_supervisor::ConfigParamName;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Integer(i64),
+        Text(String),
+    }
+
+    pub(super) fn serialize<S: Serializer>(
+        overrides: &BTreeMap<ConfigParamName, u32>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(overrides.iter().map(|(name, value)| (name.as_str(), value)))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<ConfigParamName, u32>, D::Error> {
+        BTreeMap::<String, Value>::deserialize(deserializer)?
+            .into_iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    Value::Integer(value) => value.to_string(),
+                    Value::Text(value) => value,
+                };
+                crate::node::parse_network_config_override(&format!("{name}={value}"))
+                    .map_err(|error| D::Error::custom(format!("network_config.{name}: {error}")))
+            })
+            .collect()
+    }
+}
+
+/// Genesis overrides the selected profile sets, empty when no profile is selected.
+pub fn profile_network_config(
+    start: &Path,
+    explicit: Option<&str>,
+) -> Result<Vec<(thruput_node_supervisor::ConfigParamName, u32)>, CliError> {
+    match resolve_persisted_profile(start, explicit) {
+        Ok((profile, _)) => Ok(profile.values.network_config.into_iter().collect()),
+        Err(CliError::NoActiveProfile) => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -260,7 +317,7 @@ pub fn load_project_profiles(
             .profiles
             .into_iter()
             .filter_map(|(name, state)| match state {
-                PersistedProfileState::Valid(profile) => Some((name, profile)),
+                PersistedProfileState::Valid(profile) => Some((name, *profile)),
                 PersistedProfileState::Invalid { .. } => None,
             })
             .collect()

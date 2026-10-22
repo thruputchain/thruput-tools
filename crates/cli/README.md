@@ -135,6 +135,20 @@ ephemeral node:
 thruput test --integration --network-config max_rv32_memory_bytes=16M
 ```
 
+To apply overrides on every run, set them in a profile's `network_config`
+table, in `thruput.toml` or the global config. `thruput node` and
+`thruput test --integration` both read the active profile's table (select
+another with `THRUPUT_PROFILE`, or `--profile` on `thruput test`). Values are integers or
+strings in the same notation, project entries replace global ones per
+parameter, and a `--network-config` flag for the same parameter replaces the
+profile's value:
+
+```toml
+[profile.local.network_config]
+max_rv32_code_bytes = "256K"
+max_bytestring_len = 32768
+```
+
 To pass any other flags to the ephemeral `hog-devnode`, use repeatable
 `--node-arg`. Each value is split with shell quoting rules, and the result is
 appended after the flags `thruput` sets, so a repeated flag overrides
