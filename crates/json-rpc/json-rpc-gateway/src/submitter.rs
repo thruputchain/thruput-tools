@@ -502,6 +502,7 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
     use std::time::Duration;
+    use tokio::sync::Notify;
 
     #[test]
     fn driver_lifecycle_errors_remain_backend_unavailable() {
@@ -521,12 +522,15 @@ mod tests {
     /// Scripted mock sink.  Each `submit()` call records the batch size
     /// and, if a "gate" oneshot has been pre-queued, awaits it before
     /// returning.  If no gates remain, returns `Ok` immediately.
+    /// `entered` and `finished` are notified as each call starts and returns.
     #[derive(Default)]
     struct MockSink {
         seen: Mutex<Vec<usize>>,
         deadlines: Mutex<Vec<Instant>>,
         pending: Mutex<VecDeque<oneshot::Receiver<Result<(), RpcServerError>>>>,
         outcomes: Mutex<VecDeque<Vec<SchedGatewaySubmitOutcome>>>,
+        entered: Notify,
+        finished: Notify,
     }
 
     impl MockSink {
@@ -563,14 +567,18 @@ mod tests {
             let size = batch.segment_bytes.0.len();
             self.seen.lock().unwrap().push(size);
             self.deadlines.lock().unwrap().push(deadline);
+            self.entered.notify_one();
             let gate = self.pending.lock().unwrap().pop_front();
-            if let Some(rx) = gate {
-                rx.await.unwrap_or_else(|_| {
+            let released = match gate {
+                Some(rx) => rx.await.unwrap_or_else(|_| {
                     Err(RpcServerError::BackendUnavailable(
                         "test gate dropped".into(),
                     ))
-                })?;
-            }
+                }),
+                None => Ok(()),
+            };
+            self.finished.notify_one();
+            released?;
             let outcomes = self
                 .outcomes
                 .lock()
@@ -1122,13 +1130,24 @@ mod tests {
             Duration::from_millis(1),
         );
 
-        let result = submitter
-            .submit(request_context(), vec![0x01], hash_from_u32(0))
-            .await;
-        assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
+        let waiter = tokio::spawn({
+            let submitter = submitter.clone();
+            async move {
+                submitter
+                    .submit(request_context(), vec![0x01], hash_from_u32(0))
+                    .await
+            }
+        });
+        mock.entered.notified().await;
+        assert!(matches!(
+            waiter.await.unwrap(),
+            Err(RpcServerError::BackendTimeout)
+        ));
         gate.send(Ok(()))
             .expect("dispatched batch should wait on the gate");
-        settle().await;
+        mock.finished.notified().await;
+        // Let the processor count the late reply it now holds.
+        tokio::task::yield_now().await;
 
         let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
         let body = metrics.gather(&snapshot).expect("metrics should encode");
@@ -1136,6 +1155,7 @@ mod tests {
             "groundhog_gateway_submitted_transactions_total{outcome=\"backend_timeout\"} 1"
         ));
         assert!(!body.contains("groundhog_gateway_submitted_transactions_total{outcome=\"ok\"}"));
+        assert_eq!(mock.seen(), vec![1]);
     }
 
     #[tokio::test]
