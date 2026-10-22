@@ -2,7 +2,8 @@
 //! transaction.
 //!
 //! hogd's `SystemCallHandler::perform_initial_validation` rejects a
-//! transaction deterministically, before running any of it, when it
+//! transaction deterministically, before running any of it, when its root
+//! invocation budgets more gas than the chain's `max_tx_gas`, when it
 //! attaches more contracts than the chain's network config permits, when
 //! any attached contract's code exceeds the size the config admits, when
 //! the same contract is attached twice, or when an attached RV32 artifact
@@ -17,7 +18,8 @@
 //! protocol defines: the one the config states, or, for the parameters
 //! whose unstated value the protocol itself fixes
 //! (`kDefaultMaxContractSizeBytes`, `kDefaultMaxRv32CodeBytes`,
-//! `kDefaultMaxRv32MemoryBytes`), that constant. Nothing is copied from
+//! `kDefaultMaxRv32MemoryBytes`, and `max_tx_gas`'s 1,000,000,000), that
+//! constant. Nothing is copied from
 //! hogd's own fallbacks. None of this is a trust boundary: the executor
 //! re-checks everything, and a reading that lags a block is harmless
 //! because these parameters change only through explicit config upgrades.
@@ -40,6 +42,10 @@ const DEFAULT_MAX_RV32_CODE_BYTES: u32 = 262_144;
 /// `kDefaultMaxRv32MemoryBytes` from `hog_exec_constants.x`: the guest memory
 /// bound in force for a configuration that does not state one.
 const DEFAULT_MAX_RV32_MEMORY_BYTES: u32 = 65_536;
+/// The `max_tx_gas` in force for a configuration that does not state one, as
+/// the protocol documents it on `kConfigParamMaxTxGas`. The bindings carry no
+/// constant for it, so it is pinned here.
+const DEFAULT_MAX_TX_GAS: u64 = 1_000_000_000;
 const _: () = assert!(DEFAULT_MAX_RV32_CODE_BYTES as usize == DEFAULT_MAX_CODE_BYTES);
 const _: () = assert!(DEFAULT_MAX_RV32_MEMORY_BYTES as usize == DEFAULT_MEMORY_BYTES);
 
@@ -66,6 +72,12 @@ fn max_rv32_code_bytes_in_force(params: &NetworkConfigParams) -> u32 {
     params
         .max_rv32_code_bytes
         .unwrap_or(DEFAULT_MAX_RV32_CODE_BYTES)
+}
+
+/// Gas a transaction's root invocation may budget under `params`; the
+/// protocol's 1,000,000,000 when unstated, so this bound is always known.
+fn max_tx_gas_in_force(params: &NetworkConfigParams) -> u64 {
+    params.max_tx_gas.unwrap_or(DEFAULT_MAX_TX_GAS)
 }
 
 /// Guest data memory bytes an attached RV32 artifact may declare under
@@ -109,6 +121,8 @@ pub enum ConfigParamName {
     MaxRv32CodeBytes,
     /// [`NetworkConfigParams::max_rv32_memory_bytes`].
     MaxRv32MemoryBytes,
+    /// [`NetworkConfigParams::max_tx_gas`].
+    MaxTxGas,
 }
 
 impl ConfigParamName {
@@ -123,6 +137,7 @@ impl ConfigParamName {
         Self::MaxAuthTokenDepth,
         Self::MaxRv32CodeBytes,
         Self::MaxRv32MemoryBytes,
+        Self::MaxTxGas,
     ];
 
     /// The protocol's field name for this parameter.
@@ -137,6 +152,7 @@ impl ConfigParamName {
             Self::MaxAuthTokenDepth => "max_auth_token_depth",
             Self::MaxRv32CodeBytes => "max_rv32_code_bytes",
             Self::MaxRv32MemoryBytes => "max_rv32_memory_bytes",
+            Self::MaxTxGas => "max_tx_gas",
         }
     }
 
@@ -144,17 +160,18 @@ impl ConfigParamName {
     ///
     /// This is the binding between a name and the field it reads, so a
     /// parameter added to one has to be added to the other.
-    pub fn stated_in(self, params: &NetworkConfigParams) -> Option<u32> {
+    pub fn stated_in(self, params: &NetworkConfigParams) -> Option<u64> {
         match self {
-            Self::MaxSha256Buffers => params.max_sha256_buffers,
-            Self::MaxCrossInvokeDepth => params.max_cross_invoke_depth,
-            Self::MaxNewContractsPerTx => params.max_new_contracts_per_tx,
-            Self::MaxBytestringLen => params.max_bytestring_len,
-            Self::MaxContractSizeBytes => params.max_contract_size_bytes,
-            Self::MaxSavepointDepth => params.max_savepoint_depth,
-            Self::MaxAuthTokenDepth => params.max_auth_token_depth,
-            Self::MaxRv32CodeBytes => params.max_rv32_code_bytes,
-            Self::MaxRv32MemoryBytes => params.max_rv32_memory_bytes,
+            Self::MaxSha256Buffers => params.max_sha256_buffers.map(u64::from),
+            Self::MaxCrossInvokeDepth => params.max_cross_invoke_depth.map(u64::from),
+            Self::MaxNewContractsPerTx => params.max_new_contracts_per_tx.map(u64::from),
+            Self::MaxBytestringLen => params.max_bytestring_len.map(u64::from),
+            Self::MaxContractSizeBytes => params.max_contract_size_bytes.map(u64::from),
+            Self::MaxSavepointDepth => params.max_savepoint_depth.map(u64::from),
+            Self::MaxAuthTokenDepth => params.max_auth_token_depth.map(u64::from),
+            Self::MaxRv32CodeBytes => params.max_rv32_code_bytes.map(u64::from),
+            Self::MaxRv32MemoryBytes => params.max_rv32_memory_bytes.map(u64::from),
+            Self::MaxTxGas => params.max_tx_gas,
         }
     }
 
@@ -202,7 +219,9 @@ pub struct UnknownConfigParamName {
 
 /// Check a decoded transaction against the executor's pre-execution bounds.
 ///
-/// The duplicate-attachment rule always applies. The attached-contract
+/// The root invocation's `gas_limit` is checked first, against the
+/// `max_tx_gas` in force (1,000,000,000 when unstated), as hogd checks it
+/// before any attachment. The duplicate-attachment rule always applies. The attached-contract
 /// count is checked only when `params` states a bound for it. Each
 /// attached contract's code is checked against the size in force
 /// (`kDefaultMaxContractSizeBytes` when unstated), and each attached RV32
@@ -214,6 +233,14 @@ pub fn check_transaction(
     tx: &Transaction,
     params: &NetworkConfigParams,
 ) -> Result<(), TxInvalidDetail> {
+    let max_gas = max_tx_gas_in_force(params);
+    if tx.invocation.gas_limit > max_gas {
+        return Err(TxInvalidDetail::GasLimitTooHigh {
+            gas_limit: tx.invocation.gas_limit,
+            max_gas,
+        });
+    }
+
     let contracts = &tx.contracts_to_deploy.0;
     let attached = u32::try_from(contracts.len()).unwrap_or(u32::MAX);
 
@@ -385,6 +412,9 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
             ConfigParamName::MaxRv32MemoryBytes => ConfigParam::kConfigParamMaxRv32MemoryBytes {
                 max_rv32_memory_bytes: value,
             },
+            ConfigParamName::MaxTxGas => ConfigParam::kConfigParamMaxTxGas {
+                max_tx_gas: u64::from(value),
+            },
         }
     }
 
@@ -396,7 +426,7 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
             )]))
             .unwrap();
 
-            assert_eq!(name.stated_in(&params), Some(value), "{name}");
+            assert_eq!(name.stated_in(&params), Some(u64::from(value)), "{name}");
             for other in ConfigParamName::ALL.iter().copied() {
                 if other != name {
                     assert_eq!(other.stated_in(&params), None, "{name} also stated {other}");
@@ -420,6 +450,79 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
         assert!(
             error.to_string().contains("max_rv32_memory_bytes"),
             "{error}"
+        );
+    }
+
+    fn tx_gas_cap(max_tx_gas: u64) -> NetworkConfigParams {
+        NetworkConfigParams {
+            max_tx_gas: Some(max_tx_gas),
+            ..NetworkConfigParams::default()
+        }
+    }
+
+    fn transaction_budgeting(gas_limit: u64) -> Transaction {
+        let mut tx = transaction_with(vec![]);
+        tx.invocation.gas_limit = gas_limit;
+        tx
+    }
+
+    #[test]
+    fn root_gas_limit_is_bounded_by_the_default_cap_when_unstated() {
+        let params = NetworkConfigParams::default();
+        assert_eq!(
+            check_transaction(&transaction_budgeting(1_000_000_000), &params),
+            Ok(())
+        );
+        assert_eq!(
+            check_transaction(&transaction_budgeting(1_000_000_001), &params),
+            Err(TxInvalidDetail::GasLimitTooHigh {
+                gas_limit: 1_000_000_001,
+                max_gas: 1_000_000_000,
+            })
+        );
+        // The SDK's "all remaining gas" sentinel is no root budget.
+        assert_eq!(
+            check_transaction(&transaction_budgeting(u64::MAX), &params),
+            Err(TxInvalidDetail::GasLimitTooHigh {
+                gas_limit: u64::MAX,
+                max_gas: 1_000_000_000,
+            })
+        );
+    }
+
+    #[test]
+    fn root_gas_limit_is_bounded_by_the_stated_cap() {
+        // Lower than the default: the stated cap is the one in force.
+        assert_eq!(
+            check_transaction(&transaction_budgeting(500_001), &tx_gas_cap(500_000)),
+            Err(TxInvalidDetail::GasLimitTooHigh {
+                gas_limit: 500_001,
+                max_gas: 500_000,
+            })
+        );
+        // Higher than the default: a budget past 1B is admitted.
+        assert_eq!(
+            check_transaction(
+                &transaction_budgeting(5_000_000_000),
+                &tx_gas_cap(5_000_000_000)
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn gas_limit_is_checked_before_attachments() {
+        // hogd refuses the budget before it looks at any attachment, so an
+        // over-budget transaction that also attaches too many contracts is
+        // reported for its gas.
+        let mut tx = transaction_with(vec![rv32(8, 1), rv32(8, 2)]);
+        tx.invocation.gas_limit = 1_000_000_001;
+        assert_eq!(
+            check_transaction(&tx, &max_contracts(1)),
+            Err(TxInvalidDetail::GasLimitTooHigh {
+                gas_limit: 1_000_000_001,
+                max_gas: 1_000_000_000,
+            })
         );
     }
 
@@ -491,6 +594,18 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
             ConfigParam::kConfigParamMaxRv32MemoryBytes {
                 max_rv32_memory_bytes: 1_048_576,
             },
+            ConfigParam::kConfigParamMaxAuthTokens {
+                max_auth_tokens: 64,
+            },
+            ConfigParam::kConfigParamMaxCalldataLen {
+                max_calldata_len: 65_536,
+            },
+            ConfigParam::kConfigParamMaxReturnBufferLen {
+                max_return_buffer_len: 1024,
+            },
+            ConfigParam::kConfigParamMaxTxGas {
+                max_tx_gas: 5_000_000_000,
+            },
         ]);
 
         let params = NetworkConfigParams::from_network_config(&config).unwrap();
@@ -507,6 +622,7 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
                 max_auth_token_depth: Some(5),
                 max_rv32_code_bytes: Some(65536),
                 max_rv32_memory_bytes: Some(1_048_576),
+                max_tx_gas: Some(5_000_000_000),
             }
         );
     }

@@ -802,7 +802,7 @@ fn append_contract_artifact_directories(
 
 fn append_network_config_overrides(
     mut spec: ChildProcessSpec,
-    overrides: &BTreeMap<ConfigParamName, u32>,
+    overrides: &BTreeMap<ConfigParamName, u64>,
 ) -> ChildProcessSpec {
     for (name, value) in overrides {
         spec = spec.args([

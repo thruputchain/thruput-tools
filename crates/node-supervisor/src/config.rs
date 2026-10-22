@@ -410,7 +410,7 @@ pub struct HogdDevConfig {
     /// Genesis execution parameter values forwarded to hog-devnode in place
     /// of the ones stock genesis states. The child still rejects a value
     /// outside the ceilings its build was compiled with.
-    pub network_config_overrides: BTreeMap<ConfigParamName, u32>,
+    pub network_config_overrides: BTreeMap<ConfigParamName, u64>,
     /// Raw arguments appended after every flag the supervisor sets, so a
     /// repeated flag here overrides the supervisor's value. Not persisted.
     pub extra_args: Vec<OsString>,
@@ -455,7 +455,7 @@ impl HogdDevConfig {
     #[must_use]
     pub fn with_network_config_overrides(
         mut self,
-        overrides: BTreeMap<ConfigParamName, u32>,
+        overrides: BTreeMap<ConfigParamName, u64>,
     ) -> Self {
         self.network_config_overrides = overrides;
         self

@@ -985,6 +985,10 @@ runtime_manifest = "runtime/manifest.json"
 address = "0x01"
 owner_public_key = "0x02"
 
+[profile.devnet.network_config]
+max_tx_gas = "18446744073709551615"
+max_rv32_code_bytes = 262144
+
 [profile.broken]
 network = "preview"
 "#,
@@ -1015,6 +1019,14 @@ rpc_url = "https://rpc.example"
     assert_eq!(payload["data"]["schemaVersion"], 2);
     assert_eq!(payload["data"]["selectionSource"]["kind"], "explicit");
     assert_eq!(payload["data"]["scope"], "resolved");
+    assert_eq!(
+        payload["data"]["networkConfig"]["max_tx_gas"],
+        "18446744073709551615"
+    );
+    assert_eq!(
+        payload["data"]["networkConfig"]["max_rv32_code_bytes"],
+        "262144"
+    );
     assert_eq!(payload["data"]["rpcUrl"], "https://rpc.example");
     assert_eq!(payload["data"]["sources"]["rpcUrl"]["kind"], "project");
     assert_eq!(

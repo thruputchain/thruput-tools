@@ -55,7 +55,7 @@ pub struct IntegrationTestOptions {
     pub hog_devnode_version: Option<String>,
     /// Genesis network parameter overrides for the ephemeral node (mirrors
     /// `thruput node --network-config`). A parameter given twice is rejected.
-    pub network_config_overrides: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
+    pub network_config_overrides: Vec<(thruput_node_supervisor::ConfigParamName, u64)>,
     /// Raw arguments appended to the ephemeral hog-devnode command line.
     pub node_args: Vec<String>,
     /// Forbid managed network acquisition for the ephemeral node.
@@ -311,7 +311,11 @@ fn run_integration_with_dev_node(
         pid_file: crate::node::LocalNodePidFile::Disabled,
         hogd_protocol,
         hogd_dev_version: integration.hog_devnode_version.clone(),
-        network_config_overrides: integration.network_config_overrides.clone(),
+        network_config_overrides: crate::node::with_profile_network_config(
+            &build.project_root,
+            explicit_profile,
+            integration.network_config_overrides.clone(),
+        )?,
         node_args: integration.node_args.clone(),
         offline: integration.offline,
         ..crate::node::LocalNodeOptions::default()

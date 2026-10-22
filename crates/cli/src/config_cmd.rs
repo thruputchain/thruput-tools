@@ -64,6 +64,9 @@ pub fn get(
             for (name, wallet) in &report.wallets {
                 fields.push((format!("Wallet {name}"), wallet.address.clone()));
             }
+            for (name, value) in &report.network_config {
+                fields.push((format!("Network config {name}"), value.to_string()));
+            }
         }
         if report.contracts.is_empty() {
             fields.push(("Contracts".into(), "None".into()));
@@ -502,6 +505,18 @@ fn plain_get(report: &ConfigGetReport) -> Vec<String> {
                 .map(|(name, wallet)| (name, &wallet.address)),
         ));
     }
+
+    if !report.network_config.is_empty() {
+        let values = report
+            .network_config
+            .iter()
+            .map(|(name, value)| (name.clone(), value.to_string()))
+            .collect::<Vec<_>>();
+        lines.extend([String::new(), "Network config".into()]);
+        lines.extend(plain_name_values(
+            values.iter().map(|(name, value)| (name, value)),
+        ));
+    }
     lines
 }
 
@@ -540,6 +555,13 @@ fn source_rows(report: &ConfigGetReport) -> Vec<[String; 3]> {
             &format!("wallets.{name}"),
             terminal_safe(&wallet.address),
             sources.and_then(|sources| sources.wallets.get(name)),
+        ));
+    }
+    for (name, value) in &report.network_config {
+        rows.push(source_row(
+            &format!("network_config.{name}"),
+            value.to_string(),
+            sources.and_then(|sources| sources.network_config.get(name)),
         ));
     }
     rows

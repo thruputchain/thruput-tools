@@ -479,5 +479,5 @@ fn production_registration_has_no_native_fixture_names() {
             .method_names()
             .all(|name| name != "getNetworkInfo" && name != "getBlockByHeight")
     );
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.0.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.1.0");
 }

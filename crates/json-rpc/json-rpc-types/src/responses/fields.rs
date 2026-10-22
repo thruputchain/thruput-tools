@@ -16,6 +16,13 @@ pub(super) fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     T::deserialize(d).map(Some)
 }
 
+/// `present` for a 64-bit decimal string: a stated value, never `null`.
+pub(super) fn present_decimal_u64<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<Option<u64>, D::Error> {
+    Decimal::<u64>::deserialize(d).map(|v| Some(v.0))
+}
+
 // A custom reader without `default` makes omission an error, even for Option.
 pub(super) fn nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     d: D,

@@ -87,6 +87,7 @@ fn network_config_overrides_are_forwarded_in_both_launch_paths() {
         [
             (ConfigParamName::MaxRv32MemoryBytes, 16_777_216),
             (ConfigParamName::MaxBytestringLen, 32_768),
+            (ConfigParamName::MaxTxGas, 5_000_000_000),
         ]
         .into(),
     );
@@ -112,7 +113,11 @@ fn network_config_overrides_are_forwarded_in_both_launch_paths() {
         // Protocol id order, since that is how `ConfigParamName` sorts.
         assert_eq!(
             forwarded,
-            ["max_bytestring_len=32768", "max_rv32_memory_bytes=16777216"]
+            [
+                "max_bytestring_len=32768",
+                "max_rv32_memory_bytes=16777216",
+                "max_tx_gas=5000000000",
+            ]
         );
     }
 }

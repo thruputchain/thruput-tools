@@ -671,10 +671,11 @@ struct TestArgs {
     #[arg(long, requires = "integration")]
     hog_devnode_version: Option<String>,
     /// Override a genesis network parameter on the integration node (repeatable;
-    /// decimal, hex, or K/M/G values). Mirrors `thruput node --network-config`.
+    /// decimal, hex, or K/M/G values). Mirrors `thruput node --network-config`,
+    /// and replaces the same parameter from the profile's `network_config` table.
     #[arg(long = "network-config", value_name = "NAME=VALUE", requires = "integration",
           value_parser = crate::node::parse_network_config_override)]
-    network_config: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
+    network_config: Vec<(thruput_node_supervisor::ConfigParamName, u64)>,
     /// Pass arguments to the integration hog-devnode (repeatable). Each value
     /// is split with shell quoting rules: `--node-arg "--ramdb-bytes 4294967296"`.
     /// Appended last, so they override flags thruput sets.
@@ -1119,10 +1120,11 @@ struct NodeArgs {
     #[arg(long, value_name = "SIZE", value_parser = crate::byte_size::parse_byte_size)]
     ramdb_bytes: Option<u64>,
     /// Override a genesis network parameter (repeatable; decimal, hex, or K/M/G values).
+    /// Replaces the same parameter from the active profile's `network_config` table.
     /// Existing data directories must use the same overrides they were created with.
     #[arg(long = "network-config", value_name = "NAME=VALUE",
           value_parser = crate::node::parse_network_config_override)]
-    network_config: Vec<(thruput_node_supervisor::ConfigParamName, u32)>,
+    network_config: Vec<(thruput_node_supervisor::ConfigParamName, u64)>,
 }
 
 impl NodeArgs {
@@ -1157,7 +1159,11 @@ impl NodeArgs {
         options.rpc_max_connections = self.rpc_max_connections;
         options.rpc_batch_concurrency = self.rpc_batch_concurrency;
         options.ramdb_bytes = self.ramdb_bytes;
-        options.network_config_overrides = self.network_config;
+        options.network_config_overrides = crate::node::with_profile_network_config(
+            &invocation_cwd()?,
+            None,
+            self.network_config,
+        )?;
         options.bundle_identity = Some(ctx.bundle_identity.clone());
         crate::node::run_with_options(options, self.verbose, ctx.cmd_name, &ctx.print)
     }
@@ -2440,6 +2446,8 @@ mod tests {
             "max_rv32_memory_bytes=16M",
             "--network-config",
             "max_bytestring_len=32K",
+            "--network-config",
+            "max_tx_gas=5000000000",
         ])
         .unwrap();
         match cli.command {
@@ -2448,12 +2456,16 @@ mod tests {
                 [
                     (ConfigParamName::MaxRv32MemoryBytes, 16_777_216),
                     (ConfigParamName::MaxBytestringLen, 32_768),
+                    (ConfigParamName::MaxTxGas, 5_000_000_000),
                 ]
             ),
             _ => panic!("expected node"),
         }
-        // Past u32, and a name no parameter carries.
-        for invalid in ["max_rv32_memory_bytes=4G", "max_rv32_memmory_bytes=16M"] {
+        // Past u64, and a name no parameter carries.
+        for invalid in [
+            "max_tx_gas=18446744073709551616",
+            "max_rv32_memmory_bytes=16M",
+        ] {
             assert!(
                 Cli::try_parse_from(["thruput", "node", "--network-config", invalid]).is_err(),
                 "{invalid}"

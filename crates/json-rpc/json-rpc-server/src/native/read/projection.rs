@@ -34,6 +34,7 @@ fn limits(value: legacy::NetworkConfigParams) -> out::ConfigLimits {
         max_auth_token_depth,
         max_rv32_code_bytes,
         max_rv32_memory_bytes,
+        max_tx_gas,
     } = value;
     out::ConfigLimits {
         max_sha256_buffers,
@@ -45,6 +46,7 @@ fn limits(value: legacy::NetworkConfigParams) -> out::ConfigLimits {
         max_auth_token_depth,
         max_rv32_code_bytes,
         max_rv32_memory_bytes,
+        max_tx_gas,
     }
 }
 

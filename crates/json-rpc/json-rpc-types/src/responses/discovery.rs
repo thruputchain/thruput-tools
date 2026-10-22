@@ -1,8 +1,8 @@
 use super::{
     Deserialize, Deserializer, JsonSchema, ResponseData, Serialize,
     fields::{
-        decimal_u32_schema, height_schema, hex_list_schema, present, read_decimal_u32, read_height,
-        read_hex_list, u32_schema, write_decimal_u32,
+        decimal_u32_schema, height_schema, hex_list_schema, present, present_decimal_u64,
+        read_decimal_u32, read_height, read_hex_list, u32_schema, write_decimal_u32,
     },
 };
 use crate::{
@@ -199,6 +199,14 @@ ConfigLimits {
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     #[schemars(schema_with = "u32_schema")]
     max_rv32_memory_bytes: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::decimal::option::serialize",
+        deserialize_with = "present_decimal_u64"
+    )]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
+    max_tx_gas: Option<u64>,
 }
 }
 

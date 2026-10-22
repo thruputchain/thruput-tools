@@ -259,6 +259,21 @@ pub enum TxInvalidDetail {
         /// Code cap in force at the chain tip.
         max_bytes: u32,
     },
+
+    /// The root invocation budgets more gas than the chain permits per
+    /// transaction.
+    #[error("transaction budgets {gas_limit} gas; chain permits {max_gas}")]
+    #[serde(rename_all = "camelCase")]
+    GasLimitTooHigh {
+        /// `gasLimit` of the root invocation.
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<u64>")]
+        gas_limit: u64,
+        /// Per-transaction gas cap in force at the chain tip.
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<u64>")]
+        max_gas: u64,
+    },
 }
 
 /// Bounded Prometheus outcome label for a JSON-RPC error code.

@@ -147,18 +147,17 @@ pub fn load_bootstrap_allocations(
 /// Parse one `NAME=VALUE` genesis parameter override.
 ///
 /// The name must be one this build knows, so a typo fails here rather than
-/// after hog-devnode has started. The value is a byte size, and whether it is
-/// one hog-devnode's build accepts stays hog-devnode's call.
+/// after hog-devnode has started. The value is any unsigned 64-bit amount in
+/// byte-size notation; whether the parameter admits it, including whether it
+/// fits a 32-bit parameter, stays hog-devnode's call.
 pub fn parse_network_config_override(
     value: &str,
-) -> Result<(ConfigParamName, u32), NetworkConfigOverrideError> {
+) -> Result<(ConfigParamName, u64), NetworkConfigOverrideError> {
     let (name, amount) = value
         .split_once('=')
         .ok_or(NetworkConfigOverrideError::NotAnAssignment)?;
     let name = name.parse::<ConfigParamName>()?;
     let amount = crate::byte_size::parse_byte_size(amount)?;
-    let amount =
-        u32::try_from(amount).map_err(|_| NetworkConfigOverrideError::TooLarge { name, amount })?;
     Ok((name, amount))
 }
 
@@ -171,17 +170,24 @@ pub enum NetworkConfigOverrideError {
     /// The name is not one this build knows.
     #[error(transparent)]
     Name(#[from] thruput_node_supervisor::UnknownConfigParamName),
-    /// The value is not a byte count.
+    /// The value is not an unsigned 64-bit amount.
     #[error(transparent)]
     Amount(#[from] crate::byte_size::ByteSizeError),
-    /// The value is a byte count, but wider than the parameter holds.
-    #[error("{name} must fit an unsigned 32-bit integer")]
-    TooLarge {
-        /// The parameter being overridden.
-        name: ConfigParamName,
-        /// The requested value.
-        amount: u64,
-    },
+}
+
+/// Combine the selected profile's `network_config` with `--network-config` flags.
+///
+/// A flag replaces the profile value for the same parameter; a parameter
+/// flagged twice is still left for startup to reject.
+pub fn with_profile_network_config(
+    start: &Path,
+    explicit_profile: Option<&str>,
+    flags: Vec<(ConfigParamName, u64)>,
+) -> Result<Vec<(ConfigParamName, u64)>, CliError> {
+    let mut overrides = crate::config::profile_network_config(start, explicit_profile)?;
+    overrides.retain(|(name, _)| !flags.iter().any(|(flagged, _)| flagged == name));
+    overrides.extend(flags);
+    Ok(overrides)
 }
 
 /// Startup options for a local hog-devnode-backed node.
@@ -228,7 +234,7 @@ pub struct LocalNodeOptions {
     pub ramdb_bytes: Option<u64>,
     /// Genesis parameter values to use in place of the ones stock genesis
     /// states. Whether hog-devnode's build accepts a value is its own call.
-    pub network_config_overrides: Vec<(ConfigParamName, u32)>,
+    pub network_config_overrides: Vec<(ConfigParamName, u64)>,
     /// Raw arguments appended to the hog-devnode command line, after every
     /// flag the CLI sets.
     pub node_args: Vec<String>,
@@ -1508,8 +1514,18 @@ mod tests {
             parse_network_config_override("max_bytestring_len=0x8000"),
             Ok((ConfigParamName::MaxBytestringLen, 32_768))
         );
+        assert_eq!(
+            parse_network_config_override("max_tx_gas=5000000000"),
+            Ok((ConfigParamName::MaxTxGas, 5_000_000_000))
+        );
+        // Any u64 parses: whether a 32-bit parameter admits it is
+        // hog-devnode's call, not the CLI's.
+        assert_eq!(
+            parse_network_config_override("max_bytestring_len=4G"),
+            Ok((ConfigParamName::MaxBytestringLen, 4_294_967_296))
+        );
         // An unknown name, a missing or malformed value, and a value past
-        // u32 all fail before hog-devnode is started.
+        // u64 all fail before hog-devnode is started.
         for invalid in [
             "",
             "no-value",
@@ -1517,7 +1533,8 @@ mod tests {
             "max_rv32_memmory_bytes=2",
             "max_bytestring_len=",
             "max_bytestring_len=-1",
-            "max_bytestring_len=4G",
+            "max_tx_gas=18446744073709551616",
+            "max_tx_gas=17179869184G",
         ] {
             assert!(parse_network_config_override(invalid).is_err(), "{invalid}");
         }
