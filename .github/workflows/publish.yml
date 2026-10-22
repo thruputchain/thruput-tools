@@ -94,6 +94,16 @@ jobs:
           registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
           publish-delay-seconds: '10'
 
+      - name: publish bare thruput crate
+        uses: thruputchain/actions/cargo-publish@6693fac8133585728ad3a4ca14e3441073b6def8
+        with:
+          cargo-toml-path: crates/thruput/Cargo.toml
+          packages: thruput
+          git-tag: ${{ steps.publish-tag.outputs.tag }}
+          registry-name: thruput
+          registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+          publish-delay-seconds: '10'
+
       - name: push tag
         env:
           ACTOR: ${{ github.actor }}
@@ -154,8 +164,15 @@ jobs:
         with:
           cache: rust
 
-      - name: Build thruput CLI
-        run: cargo build --locked -p thruput-cli
+      - name: Install published CLI
+        shell: bash
+        run: |
+          crate_id=$(cargo pkgid --locked -p thruput-cli)
+          version=${crate_id##*[@#]}
+          cargo install thruput --version "=$version" --registry thruput --locked \
+            --root "$RUNNER_TEMP/published-cli"
+          test "$("$RUNNER_TEMP/published-cli/bin/thruput" --version)" = \
+            "thruput $version (commit ${GITHUB_SHA:0:8})"
 
       - name: Scaffold project (thruput new)
         working-directory: ${{ runner.temp }}
@@ -163,9 +180,9 @@ jobs:
           TEMPLATE: ${{ matrix.template }}
         run: |
           if [ "$TEMPLATE" = minimal ]; then
-            "$GITHUB_WORKSPACE/target/debug/thruput" new my-minimal
+            "$RUNNER_TEMP/published-cli/bin/thruput" new my-minimal
           else
-            "$GITHUB_WORKSPACE/target/debug/thruput" new "my-$TEMPLATE" --template "$TEMPLATE"
+            "$RUNNER_TEMP/published-cli/bin/thruput" new "my-$TEMPLATE" --template "$TEMPLATE"
           fi
 
       - name: Host build and tests (cargo build + cargo test)
