@@ -2905,7 +2905,7 @@ network = "devnet"
         report
     );
     for invalid in [
-        serde_json::json!(6000000000_u64),
+        serde_json::json!(6_000_000_000_u64),
         serde_json::json!("06000000000"),
     ] {
         let mut invalid_json = json.clone();
