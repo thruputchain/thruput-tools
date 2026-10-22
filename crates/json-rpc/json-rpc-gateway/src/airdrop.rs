@@ -10,7 +10,7 @@ use serde::Deserialize;
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::{
     SHA256Hash,
-    airdrop::{AirdropAttemptResponse, AirdropRequest, HostedAirdropRequest},
+    airdrop::{AirdropAttemptResponse, HostedAirdropRequest},
     network_descriptor::{
         NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
     },
@@ -270,7 +270,7 @@ impl HostedAirdrop {
 
     async fn forward(
         &self,
-        request: AirdropRequest,
+        request: thruput_json_rpc_types::requests::AirdropRequest,
     ) -> Result<thruput_json_rpc_types::responses::AirdropAttempt, HostedFailure> {
         let deadline = tokio::time::Instant::now() + self.inner.request_timeout;
         let _permit =
@@ -488,7 +488,7 @@ mod tests {
         routing::{get, post},
     };
     use serde_json::json;
-    use thruput_json_rpc_types::error::native::codes;
+    use thruput_json_rpc_types::{error::native::codes, requests::AirdropRequest};
     use tokio::{
         net::{TcpListener, TcpSocket},
         sync::Notify,
@@ -1385,7 +1385,8 @@ mod tests {
                 "rawAmount": "100000000",
                 "txHash": SHA256Hash::from(thruput_xdr::types::SHA256Hash::from([0x22; 32])),
                 "height": "42",
-                "status": { "result": "reverted", "message": "denied" }
+                "status": { "result": "reverted", "message": "denied" },
+                "returnData": "0x0102"
             }),
             Arc::new(AtomicUsize::new(0)),
         )
@@ -1557,7 +1558,6 @@ mod tests {
 
     #[tokio::test]
     async fn native_faucet_validates_output_before_counting_success() {
-        use thruput_json_rpc_server::native::funding::NativeFundingPlane;
         for (return_data, malformed) in [
             (None, false),
             (Some("0x0102"), false),
@@ -1586,15 +1586,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            let request = airdrop_request();
-            let result = NativeFundingPlane::request_airdrop(
-                &facade,
-                thruput_json_rpc_types::requests::AirdropRequest {
-                    recipient: request.recipient,
-                    client_nonce: request.client_nonce,
-                },
-            )
-            .await;
+            let result = request_airdrop(&facade, airdrop_request()).await;
             if return_data.is_some() && !malformed {
                 let result = serde_json::to_value(result.unwrap()).unwrap();
                 assert_eq!(result["execution"]["returnData"], "0x0102");
@@ -1689,11 +1681,7 @@ mod tests {
         request: AirdropRequest,
     ) -> RpcResult<thruput_json_rpc_types::responses::AirdropAttempt> {
         thruput_json_rpc_server::native::funding::NativeFundingPlane::request_airdrop(
-            facade,
-            thruput_json_rpc_types::requests::AirdropRequest {
-                recipient: request.recipient,
-                client_nonce: request.client_nonce,
-            },
+            facade, request,
         )
         .await
     }
@@ -1770,12 +1758,7 @@ impl thruput_json_rpc_server::native::funding::NativeFundingPlane for HostedAird
         &self,
         request: thruput_json_rpc_types::requests::AirdropRequest,
     ) -> RpcResult<thruput_json_rpc_types::responses::AirdropAttempt> {
-        self.forward(AirdropRequest {
-            recipient: request.recipient,
-            client_nonce: request.client_nonce,
-        })
-        .await
-        .map_err(HostedFailure::native)
+        self.forward(request).await.map_err(HostedFailure::native)
     }
     async fn fund_account(
         &self,
