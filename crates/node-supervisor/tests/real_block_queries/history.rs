@@ -3,7 +3,7 @@
 use super::*;
 use std::{error::Error, path::PathBuf};
 use thruput_json_rpc_types::{ContractAddress, hex::Topic};
-use thruput_signing::NATIVE_HOG_ADDRESS;
+use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 
 pub(super) type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
 const CANDIDATE_BUDGET: usize = 1_000;
@@ -262,7 +262,7 @@ fn identified(receipts: &[output::TransactionReceipt]) -> Vec<output::Identified
     let mut events = Vec::new();
     for receipt in receipts {
         for (sequence, event) in receipt.events.iter().enumerate() {
-            if event.address == Base58(NATIVE_HOG_ADDRESS) {
+            if event.address == Base58(ADDRESS_NATIVE_TOKEN) {
                 events.push(output::IdentifiedEvent {
                     transaction_hash: receipt.transaction_hash,
                     block_height: receipt.block_height.clone(),
@@ -304,7 +304,7 @@ fn event_query(
 ) -> input::EventQuery {
     input::EventQuery {
         filters: vec![input::EventFilter {
-            addresses: vec![Base58(NATIVE_HOG_ADDRESS)],
+            addresses: vec![Base58(ADDRESS_NATIVE_TOKEN)],
             topics: topic.map(|topic| input::TopicFilter {
                 topic2: Some(vec![topic]),
                 ..Default::default()

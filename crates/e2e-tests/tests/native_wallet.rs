@@ -28,10 +28,11 @@ use thruput_json_rpc_types::{
 };
 use thruput_signing::default_wallet::*;
 use thruput_signing::{
-    LocalSigner, NATIVE_HOG_ADDRESS, NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount,
-    SignTransactionParams, derive_deploy_address, native_hog_transfer_calldata,
-    sign_and_encode_transaction_hex, transaction_hash, wallet_contract_hash,
+    LocalSigner, NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, SignTransactionParams,
+    derive_deploy_address, native_hog_transfer_calldata, sign_and_encode_transaction_hex,
+    transaction_hash, wallet_contract_hash,
 };
+use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 use thruput_xdr::{
     contract::{Contract, ContractBlob, ContractEntrypointID},
     transaction::Transaction,
@@ -329,7 +330,7 @@ async fn qualify_native_deployment(atomic: bool) {
         let calldata = native_hog_transfer_calldata(&target, amount).unwrap();
         let transfer = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
             account: &account,
-            target_address: NATIVE_HOG_ADDRESS,
+            target_address: ADDRESS_NATIVE_TOKEN,
             target_entrypoint: NATIVE_HOG_TRANSFER_ENTRYPOINT,
             target_calldata: &calldata,
             target_gas_limit: 500_000,

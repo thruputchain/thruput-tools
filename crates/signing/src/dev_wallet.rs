@@ -4,6 +4,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 use thruput_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
+use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 use thruput_xdr::types::{ContractAddress, Ed25519PublicKey, NetworkHash, SHA256Hash};
 use xdr_common::BytesM;
 
@@ -18,11 +19,6 @@ pub const NATIVE_HOG_DECIMALS: u32 = 7;
 
 /// Number of raw units in one native HOG.
 pub const NATIVE_HOG_SCALE: u128 = 10_000_000;
-
-/// Canonical native-HOG contract address used on every network.
-pub const NATIVE_HOG_ADDRESS: ContractAddress = ContractAddress::new([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-]);
 
 /// Canonical native-HOG ERC-20 `transfer` entrypoint used on every network.
 pub const NATIVE_HOG_TRANSFER_ENTRYPOINT: ContractEntrypointID =
@@ -78,7 +74,7 @@ pub fn build_signed_dev_wallet_hog_transfer(
     let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
         wallet_address: args.wallet_address,
         wallet_entrypoint: args.wallet_entrypoint,
-        target_address: NATIVE_HOG_ADDRESS,
+        target_address: ADDRESS_NATIVE_TOKEN,
         target_entrypoint: NATIVE_HOG_TRANSFER_ENTRYPOINT,
         target_calldata: &transfer_calldata,
         gas_limit: args.gas_limit,

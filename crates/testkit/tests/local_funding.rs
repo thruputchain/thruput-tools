@@ -208,7 +208,7 @@ fn funding_response(request: &FundAccountRequest, faucet: &LocalSigner) -> Fundi
     let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
         thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
             account: &PubkeyAccount::new(faucet.public_key(), 0),
-            target_address: thruput_signing::NATIVE_HOG_ADDRESS,
+            target_address: thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
             target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
             target_calldata: &calldata,
             gas_limit: 20_000_000,

@@ -21,12 +21,12 @@ use thruput_node_supervisor::{
     BlockDriverConfig, HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle,
 };
 use thruput_signing::{
-    LocalSigner, NATIVE_HOG_ADDRESS, NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount,
-    SignTransactionParams,
+    LocalSigner, NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, SignTransactionParams,
     default_wallet::{BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction},
     encode_signed_transaction_xdr, native_hog_transfer_calldata, sign_transaction,
     transaction_hash,
 };
+use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 
 const AMOUNT: u128 = 50_000_000;
 const GAS: u64 = 25_000_000;
@@ -136,7 +136,7 @@ async fn exercise(node: &NodeSupervisorHandle, sender: &LocalSigner) -> TestResu
         receipt
             .events
             .iter()
-            .any(|event| event.address == Base58(NATIVE_HOG_ADDRESS) && event.topics.len() == 3),
+            .any(|event| event.address == Base58(ADDRESS_NATIVE_TOKEN) && event.topics.len() == 3),
         "transfer receipt omitted its token event",
     )?;
     require(receipt.gas_used > 0, "receipt omitted metering")?;
@@ -205,7 +205,7 @@ async fn submit_transfer(
     let tip = known(native.get_chain_tip(input::EmptyRequest {}).await?)?;
     let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
         account: &account,
-        target_address: NATIVE_HOG_ADDRESS,
+        target_address: ADDRESS_NATIVE_TOKEN,
         target_entrypoint: NATIVE_HOG_TRANSFER_ENTRYPOINT,
         target_calldata: &calldata,
         target_gas_limit: GAS,
@@ -314,7 +314,7 @@ async fn check_simulation(
     let result = known(
         native
             .simulate_invocation(input::SimulateInvocationRequest {
-                address: Base58(NATIVE_HOG_ADDRESS),
+                address: Base58(ADDRESS_NATIVE_TOKEN),
                 entrypoint: HexBytes(NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref().to_vec()),
                 calldata: HexBytes(calldata),
                 caller: Some(sender),
@@ -510,7 +510,7 @@ async fn check_event_history(
 ) -> TestResult {
     let mut event_query = input::EventQuery {
         filters: vec![input::EventFilter {
-            addresses: vec![Base58(NATIVE_HOG_ADDRESS)],
+            addresses: vec![Base58(ADDRESS_NATIVE_TOKEN)],
             topics: None,
         }],
         // Bootstrap transactions also emit token events. Start at the first
@@ -596,7 +596,7 @@ fn check_history_event_payloads(
             receipt
                 .events
                 .iter()
-                .filter(|event| event.address == Base58(NATIVE_HOG_ADDRESS))
+                .filter(|event| event.address == Base58(ADDRESS_NATIVE_TOKEN))
                 .count()
         })
         .sum::<usize>();
@@ -616,7 +616,7 @@ fn check_history_event_payloads(
             .events
             .iter()
             .enumerate()
-            .filter(|(_, event)| event.address == Base58(NATIVE_HOG_ADDRESS))
+            .filter(|(_, event)| event.address == Base58(ADDRESS_NATIVE_TOKEN))
             .collect::<Vec<_>>();
         require(
             actual.len() == expected.len(),

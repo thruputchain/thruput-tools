@@ -30,7 +30,7 @@ pub use dev_account::{
     derive_default_dev_account_signer, derive_dev_account_signer,
 };
 pub use dev_wallet::{
-    BuildSignedDevWalletHogTransfer, NATIVE_HOG_ADDRESS, NATIVE_HOG_DECIMALS, NATIVE_HOG_SCALE,
+    BuildSignedDevWalletHogTransfer, NATIVE_HOG_DECIMALS, NATIVE_HOG_SCALE,
     NATIVE_HOG_TRANSFER_ENTRYPOINT, SignedDevWalletHogTransfer,
     build_signed_dev_wallet_hog_transfer, create_wallet_calldata, dev_wallet_contract,
     native_hog_transfer_calldata, wallet_contract_hash,

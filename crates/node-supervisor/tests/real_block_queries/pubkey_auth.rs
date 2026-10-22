@@ -7,12 +7,12 @@ use super::{
 use sha2::{Digest, Sha256};
 use thruput_json_rpc_types::ContractAddress;
 use thruput_signing::{
-    MlDsa65Signer, NATIVE_HOG_ADDRESS, NATIVE_HOG_TRANSFER_ENTRYPOINT, SignTransactionParams,
-    Signer as _,
+    MlDsa65Signer, NATIVE_HOG_TRANSFER_ENTRYPOINT, SignTransactionParams, Signer as _,
     default_wallet::{BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction},
     encode_signed_transaction_xdr, encode_transaction_xdr, native_hog_transfer_calldata,
     sign_transaction, transaction_hash,
 };
+use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 use thruput_xdr::{
     auth_claim::{AuthClaim, AuthClaim_source_address_claim},
     transaction::SignedTransaction,
@@ -302,7 +302,7 @@ async fn exercise(fixture: &mut Fixture) -> Result {
     let calldata = native_hog_transfer_calldata(&recipient.0, AMOUNT)?;
     let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
         account: &account,
-        target_address: NATIVE_HOG_ADDRESS,
+        target_address: ADDRESS_NATIVE_TOKEN,
         target_entrypoint: NATIVE_HOG_TRANSFER_ENTRYPOINT,
         target_calldata: &calldata,
         target_gas_limit: GAS,

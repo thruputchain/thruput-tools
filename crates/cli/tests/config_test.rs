@@ -1492,7 +1492,10 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
         let profile = thruput_cli::config::resolve_profile(tmp.path(), Some(name)).unwrap();
         let address = thruput_signing::strkey::parse_contract_address(&profile.contracts["HOG"])
             .expect("initialized HOG alias must resolve");
-        assert_eq!(address, thruput_signing::NATIVE_HOG_ADDRESS);
+        assert_eq!(
+            address,
+            thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN
+        );
     }
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains("plugin = \"keep\""));
