@@ -12,7 +12,14 @@
 
 use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
 
-use std::{sync::Arc, time::Duration, time::Instant};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+    time::Instant,
+};
 
 use async_trait::async_trait;
 use thruput_hogd_backend::scheduler as shared_scheduler;
@@ -137,7 +144,55 @@ struct Item {
     attempt: Option<SubmissionAttempt>,
     tx_bytes: Vec<u8>,
     reply: oneshot::Sender<Result<(), RpcServerError>>,
+    outcome: OutcomeOnce,
     backend_deadline: Instant,
+}
+
+/// Counts one admitted submission's outcome exactly once.
+///
+/// The queued item and its waiter share it. The processor counts the result
+/// it sends; the waiter counts a deadline or a lost reply. Whichever settles
+/// first wins, so a reply that arrives after the waiter gave up is not counted
+/// again.
+#[derive(Clone, Default)]
+struct OutcomeOnce(Arc<AtomicBool>);
+
+impl OutcomeOnce {
+    fn observe(&self, metrics: &GatewayMetrics, outcome: &'static str) {
+        if !self.0.swap(true, Ordering::AcqRel) {
+            metrics.observe_submitted_transaction(outcome);
+        }
+    }
+
+    fn is_observed(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// Counts `backend_timeout` when an admitted submission's waiter is dropped
+/// after its backend deadline without a reply.
+///
+/// The RPC server races the whole request against its deadline and drops this
+/// waiter when the deadline fires, so the waiter's own timeout arm may never
+/// run.
+struct PendingOutcome<'a> {
+    outcome: OutcomeOnce,
+    metrics: &'a GatewayMetrics,
+    backend_deadline: Instant,
+}
+
+impl PendingOutcome<'_> {
+    fn observe(&self, outcome: &'static str) {
+        self.outcome.observe(self.metrics, outcome);
+    }
+}
+
+impl Drop for PendingOutcome<'_> {
+    fn drop(&mut self) {
+        if !self.outcome.is_observed() && Instant::now() >= self.backend_deadline {
+            self.observe("backend_timeout");
+        }
+    }
 }
 
 /// Per-batch processor: pack, submit, and fan the shared result out
@@ -160,8 +215,7 @@ impl BatchProcessor for SubmitProcessor {
                 continue;
             }
             if item.backend_deadline <= now {
-                self.metrics
-                    .observe_submitted_transaction("backend_timeout");
+                item.outcome.observe(&self.metrics, "backend_timeout");
                 let _ = item.reply.send(Err(RpcServerError::BackendTimeout));
             } else {
                 live.push(item);
@@ -180,8 +234,7 @@ impl BatchProcessor for SubmitProcessor {
             let deadline = cohort[0].backend_deadline;
             if deadline <= now {
                 for item in cohort {
-                    self.metrics
-                        .observe_submitted_transaction("backend_timeout");
+                    item.outcome.observe(&self.metrics, "backend_timeout");
                     let _ = item.reply.send(Err(RpcServerError::BackendTimeout));
                 }
                 continue;
@@ -204,7 +257,7 @@ impl BatchProcessor for SubmitProcessor {
                         if let Some(attempt) = &item.attempt {
                             attempt.packing_failed();
                         }
-                        self.metrics.observe_submitted_transaction(outcome);
+                        item.outcome.observe(&self.metrics, outcome);
                         let _ = item.reply.send(Err(error.clone()));
                     }
                     continue;
@@ -214,7 +267,7 @@ impl BatchProcessor for SubmitProcessor {
                 Err(error) => {
                     let outcome = outcome_for_submit_error(&error);
                     for item in cohort {
-                        self.metrics.observe_submitted_transaction(outcome);
+                        item.outcome.observe(&self.metrics, outcome);
                         let _ = item.reply.send(Err(error.clone()));
                     }
                 }
@@ -226,7 +279,7 @@ impl BatchProcessor for SubmitProcessor {
                     ));
                     let outcome = outcome_for_submit_error(&error);
                     for item in cohort {
-                        self.metrics.observe_submitted_transaction(outcome);
+                        item.outcome.observe(&self.metrics, outcome);
                         let cause = if item.attempt.is_some() {
                             RpcServerError::invalid_data(
                                 BackendDataInvalidReason::InvalidCardinality,
@@ -246,8 +299,8 @@ impl BatchProcessor for SubmitProcessor {
                             }
                             None => shared_scheduler::submit_result(scheduler_outcome),
                         };
-                        self.metrics
-                            .observe_submitted_transaction(outcome_for_submit_result(&result));
+                        item.outcome
+                            .observe(&self.metrics, outcome_for_submit_result(&result));
                         let _ = item.reply.send(result);
                     }
                 }
@@ -384,11 +437,13 @@ impl BatchSubmitter {
                 .observe_submitted_transaction(outcome_for_submit_error(&err));
             return Err(err);
         }
+        let outcome = OutcomeOnce::default();
         if let Err(err) = self.inner.try_send(
             Item {
                 attempt,
                 tx_bytes,
                 reply: reply_tx,
+                outcome: outcome.clone(),
                 backend_deadline,
             },
             shard_idx,
@@ -397,18 +452,21 @@ impl BatchSubmitter {
                 .observe_submitted_transaction(outcome_for_submit_error(&err));
             return Err(err);
         }
+        let pending = PendingOutcome {
+            outcome,
+            metrics: &self.metrics,
+            backend_deadline,
+        };
         match tokio::time::timeout_at(request_deadline.into(), reply_rx).await {
             Err(_) => {
                 let err = RpcServerError::BackendTimeout;
-                self.metrics
-                    .observe_submitted_transaction(outcome_for_submit_error(&err));
+                pending.observe(outcome_for_submit_error(&err));
                 Err(err)
             }
             Ok(Err(_)) => {
                 let err =
                     RpcServerError::BackendUnavailable("batch submitter dropped reply".into());
-                self.metrics
-                    .observe_submitted_transaction(outcome_for_submit_error(&err));
+                pending.observe(outcome_for_submit_error(&err));
                 Err(err)
             }
             Ok(Ok(result)) => result,
@@ -792,12 +850,14 @@ mod tests {
                         attempt: None,
                         tx_bytes: vec![1],
                         reply: old_reply,
+                        outcome: OutcomeOnce::default(),
                         backend_deadline: now + Duration::from_secs(2),
                     },
                     Item {
                         attempt: None,
                         tx_bytes: vec![2],
                         reply: newer_reply,
+                        outcome: OutcomeOnce::default(),
                         backend_deadline: now + Duration::from_secs(5),
                     },
                 ])
@@ -840,12 +900,14 @@ mod tests {
                     attempt: None,
                     tx_bytes: vec![1],
                     reply: old_reply,
+                    outcome: OutcomeOnce::default(),
                     backend_deadline: now + Duration::from_secs(2),
                 },
                 Item {
                     attempt: None,
                     tx_bytes: vec![2],
                     reply: newer_reply,
+                    outcome: OutcomeOnce::default(),
                     backend_deadline: now + Duration::from_secs(5),
                 },
             ])
@@ -1047,6 +1109,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn waiter_deadline_counts_once_when_reply_arrives_late() {
+        let mock = MockSink::arc();
+        let gate = mock.queue_gate();
+        let metrics = GatewayMetrics::for_tests();
+        let submitter = BatchSubmitter::spawn_with_deadlines(
+            &config_for_tests(1, 1, 1000, 100),
+            &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics.clone(),
+            Duration::from_millis(25),
+            Duration::from_millis(20),
+            Duration::from_millis(1),
+        );
+
+        let result = submitter
+            .submit(request_context(), vec![0x01], hash_from_u32(0))
+            .await;
+        assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
+        gate.send(Ok(()))
+            .expect("dispatched batch should wait on the gate");
+        settle().await;
+
+        let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
+        let body = metrics.gather(&snapshot).expect("metrics should encode");
+        assert!(body.contains(
+            "groundhog_gateway_submitted_transactions_total{outcome=\"backend_timeout\"} 1"
+        ));
+        assert!(!body.contains("groundhog_gateway_submitted_transactions_total{outcome=\"ok\"}"));
+    }
+
+    #[tokio::test]
     async fn backend_error_fans_out_to_every_waiter() {
         let mock = MockSink::arc();
         let err_gate = mock.queue_gate();
@@ -1120,6 +1212,7 @@ mod tests {
                 attempt: None,
                 tx_bytes: vec![byte],
                 reply,
+                outcome: OutcomeOnce::default(),
                 backend_deadline: Instant::now() + Duration::from_secs(1),
             });
             replies.push(waiter);
@@ -1172,6 +1265,7 @@ mod tests {
                 attempt: None,
                 tx_bytes: vec![byte],
                 reply,
+                outcome: OutcomeOnce::default(),
                 backend_deadline: Instant::now() + Duration::from_secs(1),
             });
             replies.push(waiter);
@@ -1245,6 +1339,7 @@ mod tests {
                     attempt: None,
                     tx_bytes: bytes,
                     reply: tx,
+                    outcome: OutcomeOnce::default(),
                     backend_deadline: Instant::now() + Duration::from_secs(1),
                 }
             })
@@ -1283,12 +1378,14 @@ mod tests {
                     attempt: Some(cancelled),
                     tx_bytes: vec![1],
                     reply: reply_a,
+                    outcome: OutcomeOnce::default(),
                     backend_deadline: deadline,
                 },
                 Item {
                     attempt: Some(rejected.clone()),
                     tx_bytes: vec![2],
                     reply: reply_b,
+                    outcome: OutcomeOnce::default(),
                     backend_deadline: deadline,
                 },
             ])
@@ -1322,6 +1419,7 @@ mod tests {
                 attempt: Some(attempt.clone()),
                 tx_bytes: vec![byte],
                 reply,
+                outcome: OutcomeOnce::default(),
                 backend_deadline: Instant::now() + Duration::from_secs(1),
             });
             replies.push(receiver);
@@ -1355,6 +1453,7 @@ mod tests {
             attempt: Some(attempt.clone()),
             tx_bytes: vec![1],
             reply,
+            outcome: OutcomeOnce::default(),
             backend_deadline: Instant::now() + Duration::from_secs(5),
         }]));
         std::future::poll_fn(|cx| {
@@ -1386,6 +1485,7 @@ mod tests {
                     attempt: None,
                     tx_bytes: vec![1],
                     reply,
+                    outcome: OutcomeOnce::default(),
                     backend_deadline: Instant::now() + Duration::from_secs(5),
                 },
                 0,
