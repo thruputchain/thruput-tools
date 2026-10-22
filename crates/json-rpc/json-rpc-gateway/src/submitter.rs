@@ -399,7 +399,7 @@ impl BatchSubmitter {
     }
 
     /// Native attempt through the same queue, with cancellation/dispatch evidence.
-    #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
+    #[tracing::instrument(level = "debug", skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
     pub async fn submit_native(
         &self,
         context: RpcRequestContext,
@@ -426,7 +426,7 @@ impl BatchSubmitter {
         let request_deadline = context
             .capped_from_start(self.request_timeout)
             .deadline()
-            .expect("operation timeout should bound submission");
+            .ok_or(RpcServerError::BackendTimeout)?;
         let backend_deadline = context
             .capped_from_start(self.backend_timeout)
             .deadline()

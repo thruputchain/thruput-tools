@@ -63,7 +63,14 @@ On a shared deployment, counter deltas include other clients' traffic.
 Labels must remain bounded; transaction hashes, raw unknown method names, and
 arbitrary error strings do not belong in metric labels.
 
-Use `RUST_LOG=info,hog_gateway=debug` for bounded local request diagnostics.
+Native submission and transaction-lookup handler spans are DEBUG-level diagnostics;
+normal INFO logging avoids formatting a transaction hash for each request.
+Use `RUST_LOG=info,hog_gateway=debug` to enable
+these spans for bounded local request diagnostics. The OTLP filter exports gateway
+spans only at INFO and above, so these handler spans and their `tx_hash` fields
+are absent from OTLP even when local DEBUG logging is enabled. Backend warnings
+carry transaction hashes explicitly. Metrics and the dedicated OTLP request/backend
+spans remain available independently of this setting.
 Tracing adds work and can change measured performance. Keep logging policy
 consistent across performance comparisons, and keep diagnostic captures separate
 from baseline runs. See [benchmarking](bench-scenarios.md).

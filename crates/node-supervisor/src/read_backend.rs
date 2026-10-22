@@ -135,7 +135,7 @@ impl HogdDevReadBackend {
 
     /// Ask the indexer what it knows about one transaction.
     async fn tx_lookup(&self, tx_hash: TxHash) -> Result<shared_indexer::TxLookup, RpcServerError> {
-        shared_indexer::tx_lookup(INDEXER, self.transaction_info(tx_hash).await?)
+        shared_indexer::tx_lookup(INDEXER, tx_hash, self.transaction_info(tx_hash).await?)
     }
 
     /// Raw indexer response for projections that retain native evidence.

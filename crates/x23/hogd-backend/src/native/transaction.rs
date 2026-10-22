@@ -121,7 +121,7 @@ pub fn receipt(
     };
     let decode = || {
         let execution = execution(log.exec_result, log.root_output)?;
-        let parsed = crate::event::parse_emitted_events(log.events);
+        let parsed = crate::event::parse_emitted_events(log.events, Some(tx_hash));
         if parsed.dropped != 0 {
             return Err(invalid(Reason::InvalidEncoding, "malformed receipt event").into());
         }

@@ -33,7 +33,7 @@ pub fn transaction_receipt(
     height: BlockHeight,
     log: TxEventLog,
 ) -> DecodedReceipt {
-    let parsed = parse_emitted_events(log.events);
+    let parsed = parse_emitted_events(log.events, Some(tx_hash));
     let (return_data, abort_data) = root_output_buffers(log.root_output);
     DecodedReceipt {
         receipt: TransactionReceipt {

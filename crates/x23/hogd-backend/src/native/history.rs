@@ -160,13 +160,13 @@ fn next_cursor(cursor: pagination::PaginationCursor) -> Option<HexBytes> {
     (!cursor.0.is_empty()).then_some(HexBytes(cursor.0))
 }
 
-fn event(value: TxEmittedEvent) -> Result<out::EmittedEvent, RpcServerError> {
+fn event(value: TxEmittedEvent, tx_hash: TxHash) -> Result<out::EmittedEvent, RpcServerError> {
     // XDR enforces this bound on decoded bytes; direct Rust callers can still
     // construct an oversized bounded vector.
     if value.serialized_event.0.len() > kMaxEventLength as usize {
         return Err(invalid(Reason::InvalidEncoding, "malformed history event"));
     }
-    let parsed = crate::event::parse_emitted_event(value)
+    let parsed = crate::event::parse_emitted_event(value, Some(tx_hash))
         .ok_or_else(|| invalid(Reason::InvalidEncoding, "malformed history event"))?;
     Ok(out::EmittedEvent {
         address: parsed.contract_address,
@@ -193,7 +193,7 @@ pub fn event_page(value: wire::EventPageResult) -> Result<out::EventPage, RpcSer
         .into_iter()
         .map(|value| {
             let transaction_hash = TxHash(Base58(value.tx_hash));
-            let event = event(value.emitted_event).inspect_err(|_| {
+            let event = event(value.emitted_event, transaction_hash).inspect_err(|_| {
                 tracing::warn!(
                     tx_hash = %transaction_hash.0,
                     block_height = *value.block_height,

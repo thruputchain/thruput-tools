@@ -4,6 +4,8 @@ This procedure is for maintainers with access to the release workflows and
 publishing credentials. Building or contributing to the repository does not
 require publishing a release.
 
+See the [changelog](../CHANGELOG.md) for upgrade notes and breaking API changes.
+
 Run the **Release package** GitHub Actions workflow for a normal release.
 
 - [`publish.yml`](../.github/workflows/publish.yml) publishes the Rust crates to the private
