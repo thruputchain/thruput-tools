@@ -1,4 +1,4 @@
-//! Strict committed block metadata, before legacy adapters discard error causes.
+//! Strict committed block metadata from the indexer.
 
 use super::{BackendDataInvalidReason, RpcServerError, invalid};
 use thruput_indexer::{BlockLookupOutcome, BlockLookupResult};

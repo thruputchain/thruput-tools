@@ -218,36 +218,11 @@ async fn block_metrics_count_rejected_values_and_pages_as_errors() {
         }),
         GatewayMetrics::for_tests(),
     ));
-    let context = || RpcRequestContext::new(Some(std::time::Duration::from_secs(5)));
-    assert!(
-        get_block_by_number(&ctx, context(), 1.into())
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        get_block_by_number(&ctx, context(), 3.into())
-            .await
-            .unwrap()
-            .is_none()
-    );
-    for height in [2, 4, 5] {
-        assert!(matches!(
-            get_block_by_number(&ctx, context(), height.into()).await,
-            Err(RpcServerError::BackendUnavailable(_))
-        ));
-    }
     let health = crate::health::GatewayHealth::new(
         &GatewayConfig::default(),
         thruput_build_info::BuildVersion::new("test", None),
         None,
     );
-    let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
-    for (outcome, count) in [("ok", 2), ("error", 3)] {
-        assert!(metrics.contains(&format!(
-            "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"get_block_by_height\",outcome=\"{outcome}\"}} {count}\n"
-        )), "{metrics}");
-    }
     check_native_blocks(&ctx, &health).await;
     check_native_history(&ctx, &health).await;
     check_native_history_page_metrics(&ctx, &health).await;
@@ -283,7 +258,7 @@ async fn check_native_blocks(ctx: &Arc<GatewayContext>, health: &crate::health::
         Err(RpcServerError::BackendUnavailable(_))
     ));
     let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
-    for (outcome, count) in [("ok", 4), ("error", 6)] {
+    for (outcome, count) in [("ok", 2), ("error", 3)] {
         assert!(metrics.contains(&format!(
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"get_block_by_height\",outcome=\"{outcome}\"}} {count}\n"
         )), "{metrics}");

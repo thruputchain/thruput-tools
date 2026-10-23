@@ -12,7 +12,7 @@ use crate::tx::test_fixtures::{canonical_signed_transaction, signed_tx_bytes_wit
 use crate::{RpcServerError, TipReading, ValidatedTransaction};
 use jsonrpsee::types::ErrorObjectOwned;
 use thruput_json_rpc_types::base58::Base58;
-use thruput_json_rpc_types::block::{BlockInfo, ChainTip};
+use thruput_json_rpc_types::block::ChainTip;
 use thruput_json_rpc_types::error::native::codes;
 use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::transaction::TxHash;
@@ -143,14 +143,6 @@ macro_rules! chain_plane {
                 $context: RpcRequestContext,
             ) -> Result<TipReading, RpcServerError> {
                 $body
-            }
-
-            async fn get_block_by_number(
-                &self,
-                _context: RpcRequestContext,
-                _height: BlockHeight,
-            ) -> Result<Option<BlockInfo>, RpcServerError> {
-                unreachable!("the submit path does not read blocks")
             }
 
             async fn pending_transaction_count(

@@ -56,11 +56,6 @@ impl fmt::Debug for HogdDevReadBackend {
 }
 
 impl HogdDevReadBackend {
-    /// Share the validated indexer connection with the chain adapter.
-    pub(crate) fn indexer_client(&self) -> &IndexerBlockExplorer_IndexerBlockExplorer1_Client {
-        &self.indexer
-    }
-
     pub(crate) fn db_gateway_client(&self) -> Option<&DbGateway_DbGateway1_Client> {
         self.db_gateway.as_ref()
     }

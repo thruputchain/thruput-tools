@@ -6,9 +6,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use thruput_json_rpc_types::{
-    BlockHeight,
     base58::Base58,
-    block::{BlockInfo, ChainTip},
+    block::ChainTip,
     error::native::{BackendDataInvalidReason, ReceiptObservation, codes},
     hex::HexBytes,
 };
@@ -61,13 +60,6 @@ impl ChainPlane for Backend {
                 },
             },
         ))
-    }
-    async fn get_block_by_number(
-        &self,
-        _: RpcRequestContext,
-        _: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError> {
-        panic!("not used")
     }
     async fn pending_transaction_count(&self, _: RpcRequestContext) -> Result<u64, RpcServerError> {
         panic!("not used")

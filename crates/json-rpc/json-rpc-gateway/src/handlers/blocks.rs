@@ -2,7 +2,7 @@
 
 use thruput_json_rpc_server::{RpcRequestContext, RpcServerError, TipReading};
 use thruput_json_rpc_types::BlockHeight;
-use thruput_json_rpc_types::block::BlockInfo;
+use thruput_json_rpc_types::responses::BlockResult;
 
 use super::{INDEXER, backend_deadline, timed_backend_call};
 use crate::config::HealthBackend;
@@ -22,40 +22,14 @@ pub async fn chain_tip(
     ctx.tip_coalescer.tip_reading(context).await
 }
 
-/// Block data at a given height.
-///
-/// Reads the indexer's committed consensus projection.
-#[tracing::instrument(skip_all, fields(?height))]
-pub async fn get_block_by_number(
-    ctx: &GatewayContext,
-    context: RpcRequestContext,
-    height: BlockHeight,
-) -> Result<Option<BlockInfo>, RpcServerError> {
-    read_block(ctx, context, height.clone(), |result| {
-        thruput_hogd_backend::indexer::block_lookup(INDEXER, &height, result)
-    })
-    .await
-}
-
-/// Strict native block metadata over the same indexer connection and metrics.
+/// Strict native block metadata at a given height, read from the indexer's
+/// committed consensus projection.
 #[tracing::instrument(skip_all, fields(?height))]
 pub async fn native_block_by_height(
     ctx: &GatewayContext,
     context: RpcRequestContext,
     height: BlockHeight,
-) -> Result<thruput_json_rpc_types::responses::BlockResult, RpcServerError> {
-    read_block(ctx, context, height.clone(), |result| {
-        thruput_hogd_backend::native::block_lookup(&height, result)
-    })
-    .await
-}
-
-async fn read_block<T>(
-    ctx: &GatewayContext,
-    context: RpcRequestContext,
-    height: BlockHeight,
-    project: impl FnOnce(thruput_indexer::BlockLookupResult) -> Result<T, RpcServerError>,
-) -> Result<T, RpcServerError> {
+) -> Result<BlockResult, RpcServerError> {
     let client = ctx
         .indexer
         .read()
@@ -68,7 +42,12 @@ async fn read_block<T>(
         "get_block_by_height",
         INDEXER,
         backend_deadline(context, ctx.config.backend_request_timeout())?,
-        async { client.get_block_by_height(&height).await.map(project) },
+        async {
+            client
+                .get_block_by_height(&height)
+                .await
+                .map(|result| thruput_hogd_backend::native::block_lookup(&height, result))
+        },
         Result::is_ok,
     )
     .await?

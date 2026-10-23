@@ -419,12 +419,10 @@ async fn start_rpc_server(
         .await?;
         start_rpc_server_with_read(
             listen_address,
-            scheduler_backend
-                .with_indexer(read.indexer_client().clone())
-                .with_db_gateway(
-                    read.db_gateway_client().cloned(),
-                    readiness.network_hash.clone(),
-                ),
+            scheduler_backend.with_db_gateway(
+                read.db_gateway_client().cloned(),
+                readiness.network_hash.clone(),
+            ),
             read,
             view,
             rpc_server_options(
