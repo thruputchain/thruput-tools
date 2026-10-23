@@ -15,11 +15,14 @@ fn event_payload_reuses_the_wire_buffer_for_every_topic_count() {
         let data: Vec<u8> = (0..=255).collect();
         bytes.extend_from_slice(&data);
         let allocation = bytes.as_ptr();
-        let event = parse_emitted_event(TxEmittedEvent {
-            contract_address: [7; 32].into(),
-            num_topics,
-            serialized_event: BytesM(bytes),
-        })
+        let event = parse_emitted_event(
+            TxEmittedEvent {
+                contract_address: [7; 32].into(),
+                num_topics,
+                serialized_event: BytesM(bytes),
+            },
+            None,
+        )
         .unwrap();
         assert_eq!(event.contract_address.0, [7; 32].into());
         assert_eq!(event.data.0, data);
@@ -35,20 +38,26 @@ fn event_payload_reuses_the_wire_buffer_for_every_topic_count() {
 fn malformed_events_are_rejected_and_empty_data_is_preserved() {
     for (num_topics, len) in [(4, 128), (3, 95), (1, 0)] {
         assert!(
-            parse_emitted_event(TxEmittedEvent {
-                contract_address: [0; 32].into(),
-                num_topics,
-                serialized_event: BytesM(vec![0; len]),
-            })
+            parse_emitted_event(
+                TxEmittedEvent {
+                    contract_address: [0; 32].into(),
+                    num_topics,
+                    serialized_event: BytesM(vec![0; len]),
+                },
+                None
+            )
             .is_none()
         );
     }
     for num_topics in 0..=MAX_TOPICS {
-        let event = parse_emitted_event(TxEmittedEvent {
-            contract_address: [0; 32].into(),
-            num_topics,
-            serialized_event: BytesM(vec![0; num_topics as usize * TOPIC_SIZE]),
-        })
+        let event = parse_emitted_event(
+            TxEmittedEvent {
+                contract_address: [0; 32].into(),
+                num_topics,
+                serialized_event: BytesM(vec![0; num_topics as usize * TOPIC_SIZE]),
+            },
+            None,
+        )
         .unwrap();
         assert!(event.data.0.is_empty());
         assert_eq!(event.topics.len(), num_topics as usize);
@@ -68,7 +77,7 @@ fn malformed_events_are_counted_without_dropping_the_good_ones() {
         serialized_event: BytesM(vec![0; TOPIC_SIZE]),
     };
 
-    let parsed = parse_emitted_events(VecM::<_>(vec![good, malformed]));
+    let parsed = parse_emitted_events(VecM::<_>(vec![good, malformed]), None);
 
     assert_eq!(parsed.events.len(), 1);
     assert_eq!(parsed.dropped, 1);

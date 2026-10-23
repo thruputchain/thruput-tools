@@ -77,7 +77,7 @@ pub fn view_batch_response(
                 .0
                 .into_iter()
                 .map(|result| {
-                    let parsed = parse_emitted_events(result.events);
+                    let parsed = parse_emitted_events(result.events, None);
                     if parsed.dropped != 0 {
                         return Err(RpcServerError::BackendUnavailable(format!(
                             "{service} returned malformed batch events"
@@ -207,7 +207,7 @@ pub fn view_outcome(
     match result {
         ViewGatewayResult::ViewGatewayOk { payload } => {
             let output = root_output(service, payload.output)?;
-            let parsed = parse_emitted_events(payload.events);
+            let parsed = parse_emitted_events(payload.events, None);
             Ok(ViewOutcome {
                 response: ViewResponse {
                     output,

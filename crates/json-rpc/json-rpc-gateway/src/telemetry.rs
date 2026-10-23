@@ -226,6 +226,27 @@ fn subscriber(
     events: tracing_subscriber::fmt::format::FmtSpan,
     provider: Option<&SdkTracerProvider>,
 ) -> Box<dyn tracing::Subscriber + Send + Sync> {
+    // A plain level avoids EnvFilter's per-span filter hooks. Keep EnvFilter
+    // when target/span directives require that filtering.
+    if let Ok(level) = filter
+        .to_string()
+        .parse::<tracing_subscriber::filter::LevelFilter>()
+    {
+        subscriber_with_filter(default_service, level, events, provider)
+    } else {
+        subscriber_with_filter(default_service, filter, events, provider)
+    }
+}
+
+fn subscriber_with_filter<F>(
+    default_service: &'static str,
+    filter: F,
+    events: tracing_subscriber::fmt::format::FmtSpan,
+    provider: Option<&SdkTracerProvider>,
+) -> Box<dyn tracing::Subscriber + Send + Sync>
+where
+    F: tracing_subscriber::layer::Filter<tracing_subscriber::Registry> + Send + Sync + 'static,
+{
     let subscriber = tracing_subscriber::registry().with(
         tracing_subscriber::fmt::layer()
             .with_span_events(events)
@@ -391,6 +412,121 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn log_selection() -> Vec<bool> {
+        vec![
+            tracing::enabled!(tracing::Level::ERROR),
+            tracing::enabled!(tracing::Level::WARN),
+            tracing::enabled!(tracing::Level::INFO),
+            tracing::enabled!(tracing::Level::DEBUG),
+            tracing::enabled!(tracing::Level::TRACE),
+            !tracing::error_span!("error_scope").is_disabled(),
+            !tracing::warn_span!("warn_scope").is_disabled(),
+            !tracing::info_span!("info_scope").is_disabled(),
+            !tracing::debug_span!("debug_scope").is_disabled(),
+            !tracing::trace_span!("trace_scope").is_disabled(),
+            tracing::enabled!(target: "special", tracing::Level::DEBUG),
+            !tracing::info_span!(target: "groundhog_otel", "otel_only").is_disabled(),
+        ]
+    }
+
+    #[test]
+    fn static_filter_preserves_log_selection() {
+        if let Ok(directive) = std::env::var("GROUNDHOG_TEST_LOG_FILTER") {
+            let filter = EnvFilter::new(directive);
+            let events = tracing_subscriber::fmt::format::FmtSpan::NONE;
+            let subscriber = if std::env::var_os("GROUNDHOG_TEST_LOG_REFERENCE").is_some() {
+                subscriber_with_filter("test", filter, events, None)
+            } else {
+                subscriber("test", filter, events, None)
+            };
+            let selection = tracing::subscriber::with_default(subscriber, log_selection);
+            println!(
+                "LOG_SELECTION={}",
+                serde_json::to_string(&selection).unwrap()
+            );
+            return;
+        }
+        // Callsite interest is shared across concurrently executing tests.
+        // Isolate each subscriber so another test cannot enable its callsites.
+        for directive in [
+            "off",
+            "error",
+            "warn",
+            "info",
+            "debug",
+            "trace",
+            "info,special=debug",
+        ] {
+            let selections: Vec<Vec<bool>> = [true, false]
+                .into_iter()
+                .map(|reference| {
+                    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                    command
+                        .args([
+                            "--exact",
+                            "telemetry::tests::static_filter_preserves_log_selection",
+                            "--nocapture",
+                        ])
+                        .env("GROUNDHOG_TEST_LOG_FILTER", directive)
+                        .env_remove("GROUNDHOG_TEST_LOG_REFERENCE");
+                    if reference {
+                        command.env("GROUNDHOG_TEST_LOG_REFERENCE", "1");
+                    }
+                    let output = command.output().unwrap();
+                    assert!(output.status.success(), "{output:?}");
+                    let stdout = String::from_utf8(output.stdout).unwrap();
+                    let selected = stdout
+                        .lines()
+                        .find_map(|line| line.strip_prefix("LOG_SELECTION="))
+                        .unwrap();
+                    serde_json::from_str(selected).unwrap()
+                })
+                .collect();
+            assert_eq!(selections[0], selections[1], "filter {directive}");
+            assert!(!selections[1][11], "OTLP-only spans must stay out of logs");
+        }
+    }
+
+    #[test]
+    fn span_field_filter_keeps_dynamic_scope() {
+        if std::env::var_os("GROUNDHOG_TEST_DYNAMIC_LOG_FILTER").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "telemetry::tests::span_field_filter_keeps_dynamic_scope",
+                    "--nocapture",
+                ])
+                .env("GROUNDHOG_TEST_DYNAMIC_LOG_FILTER", "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let logs = String::from_utf8(output.stdout).unwrap();
+            assert!(logs.contains("dynamic_inside"), "{logs}");
+            for suppressed in ["dynamic_before", "dynamic_after", "dynamic_debug"] {
+                assert!(!logs.contains(suppressed), "{logs}");
+            }
+            return;
+        }
+        tracing::subscriber::with_default(
+            subscriber(
+                "test",
+                EnvFilter::new("off,[selected{enabled=true}]=info"),
+                tracing_subscriber::fmt::format::FmtSpan::NONE,
+                None,
+            ),
+            || {
+                tracing::info!("dynamic_before");
+                let selected = tracing::info_span!("selected", enabled = true);
+                {
+                    let _entered = selected.enter();
+                    tracing::info!("dynamic_inside");
+                    tracing::debug!("dynamic_debug");
+                }
+                tracing::info!("dynamic_after");
+            },
+        );
+    }
 
     #[tokio::test]
     async fn collector_endpoint_builds_provider() {
