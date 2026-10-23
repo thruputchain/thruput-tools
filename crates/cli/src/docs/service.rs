@@ -257,7 +257,17 @@ fn client() -> Result<reqwest::blocking::Client, CliError> {
         .map_err(|error| service_error(error.to_string()))
 }
 
-fn running(state: &State) -> Result<bool, CliError> {
+/// What a health probe learned about the recorded instance.
+enum Health {
+    Running,
+    /// Nothing listens, or another process answers on the recorded port.
+    Gone,
+    /// A connection opened but no complete answer arrived, as when the server
+    /// drops connections while it exits.
+    Unanswered,
+}
+
+fn health(state: &State) -> Result<Health, CliError> {
     match client()?
         .get(format!("{}{HEALTH}", state.report.url))
         .bearer_auth(&state.control.token)
@@ -273,13 +283,37 @@ fn running(state: &State) -> Result<bool, CliError> {
                         hex::encode(Sha256::digest(state.control.token.as_bytes())).as_str(),
                     ) =>
         {
-            Ok(true)
+            Ok(Health::Running)
         }
-        Ok(_) => Ok(false), // Another process may have reused the port; never signal its PID.
-        Err(error) if error.is_connect() => Ok(false),
-        Err(_) => Err(service_error(
+        Ok(_) => Ok(Health::Gone), // Another process may have reused the port; never signal its PID.
+        Err(error) if error.is_connect() => Ok(Health::Gone),
+        Err(_) => Ok(Health::Unanswered),
+    }
+}
+
+fn running(state: &State) -> Result<bool, CliError> {
+    match health(state)? {
+        Health::Running => Ok(true),
+        Health::Gone => Ok(false),
+        Health::Unanswered => Err(service_error(
             "server did not answer; inspect its log and retry",
         )),
+    }
+}
+
+/// Wait for an instance that accepted a stop request to go away. An exiting
+/// server can accept a probe and then drop it, so an unanswered probe means
+/// it is still stopping, not that the stop failed.
+fn await_stop(state: &State, timeout: Duration) -> Result<(), CliError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Health::Gone = health(state)? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(service_error("server has not stopped; inspect its log"));
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -323,13 +357,7 @@ fn manage(action: Action, dir: Option<&Path>, port: u16) -> Result<ServiceReport
                 if response.status() != StatusCode::ACCEPTED {
                     return Err(service_error("server rejected stop request"));
                 }
-                let deadline = Instant::now() + Duration::from_secs(5);
-                while running(&state)? {
-                    if Instant::now() >= deadline {
-                        return Err(service_error("server has not stopped; inspect its log"));
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
+                await_stop(&state, Duration::from_secs(5))?;
                 remove_state(&state_path)?;
             }
             Ok(empty())
@@ -511,4 +539,55 @@ pub fn managed(print: &Print) -> Result<(), CliError> {
         Some(startup.control),
         &shutdown,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::docs_json::Snapshot;
+    use std::net::TcpListener;
+
+    fn state_at(url: String) -> State {
+        State {
+            schema_version: 1,
+            control: Control {
+                token: "0".repeat(64),
+            },
+            report: DocsReport {
+                schema_version: 1,
+                url,
+                path: PathBuf::new(),
+                snapshot: Snapshot {
+                    schema_version: 1,
+                    source_revision: String::new(),
+                    source_dirty: false,
+                    agent_guide_cli_version: String::new(),
+                },
+                cli_version: String::new(),
+                guide_matches_cli: true,
+                markdown_index: None,
+            },
+            requested_port: 0,
+            executable: PathBuf::new(),
+            log_path: PathBuf::new(),
+        }
+    }
+
+    // An exiting server accepts a probe, drops it unanswered, then stops
+    // listening. The stop must wait that out instead of failing.
+    #[test]
+    fn stop_waits_out_a_probe_dropped_during_shutdown() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let state = state_at(format!("http://{}/", listener.local_addr().unwrap()));
+        let server = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            let mut request = BufReader::new(socket);
+            let mut line = String::new();
+            while request.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
+                line.clear();
+            }
+        });
+        await_stop(&state, Duration::from_secs(5)).unwrap();
+        server.join().unwrap();
+    }
 }
