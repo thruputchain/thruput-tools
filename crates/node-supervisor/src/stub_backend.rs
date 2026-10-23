@@ -14,16 +14,14 @@ use thruput_json_rpc_server::native::{
     read::{NativeBlockPlane, NativeHistoryPlane, NativeStatePlane, StateKey},
     transaction::{NativeReadError, NativeTransactionReadPlane},
 };
-use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
+use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
 use thruput_json_rpc_types::{
     ContractAddress,
-    address_auth::AddressAuthDataResponse,
-    events::{EventPage, EventQuery},
-    receipt::TransactionReceipt,
-    state::StorageItemRead,
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{TransactionStatus, TxHash},
 };
 use thruput_json_rpc_types::{requests as input, responses as out};
+
+use crate::airdrop::FundingStatusPlane;
 
 /// Backend that returns `NotImplemented` for unwired planes.
 #[derive(Debug, Clone, Copy, Default)]
@@ -36,64 +34,13 @@ impl StubBackend {
 }
 
 #[async_trait]
-impl ReadPlane for StubBackend {
-    async fn transaction_receipt(
-        &self,
-        _context: RpcRequestContext,
-        _tx_hash: TxHash,
-    ) -> Result<Option<TransactionReceipt>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("transactionReceipt".into()))
-    }
-
-    async fn transaction_status(
+impl FundingStatusPlane for StubBackend {
+    async fn funding_status(
         &self,
         _context: RpcRequestContext,
         _tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
         Err(RpcServerError::NotImplemented("transactionStatus".into()))
-    }
-
-    async fn contract_events(
-        &self,
-        _context: RpcRequestContext,
-        _query: EventQuery,
-    ) -> Result<EventPage, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getEvents".into()))
-    }
-
-    async fn transactions_by_address(
-        &self,
-        _context: RpcRequestContext,
-        _query: AddressTransactionQuery,
-    ) -> Result<TransactionRefPage, RpcServerError> {
-        Err(RpcServerError::NotImplemented(
-            "getTransactionsByAddress".into(),
-        ))
-    }
-
-    async fn get_storage_at(
-        &self,
-        _context: RpcRequestContext,
-        _address: ContractAddress,
-        _key: [u8; 32],
-    ) -> Result<StorageItemRead, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getStorageAt".into()))
-    }
-
-    async fn read_native_hog_balance(
-        &self,
-        _context: RpcRequestContext,
-        _address: ContractAddress,
-    ) -> Result<StorageItemRead, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getBalance".into()))
-    }
-
-    async fn read_address_auth_data(
-        &self,
-        _context: RpcRequestContext,
-        _address: ContractAddress,
-    ) -> Result<AddressAuthDataResponse, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getAddressAuthData".into()))
     }
 }
 

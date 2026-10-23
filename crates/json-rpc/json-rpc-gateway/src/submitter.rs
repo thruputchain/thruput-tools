@@ -1,4 +1,4 @@
-//! Adaptive batching submitter for `sendRawTransaction`.
+//! Adaptive batching submitter for `sendTransaction`.
 //!
 //! Drives the shared adaptive-batching machinery in `adaptive_batch.rs`
 //! with a tx-submission–specific processor: move N client tx-byte blobs
@@ -385,19 +385,6 @@ impl BatchSubmitter {
         self.inner.abort();
     }
 
-    /// Submit one tx.  Routes to a shard by tx hash; returns when the
-    /// fanout completes.  Returns `Overloaded` if the target shard's
-    /// ingress is full (client should retry with backoff).
-    #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
-    pub async fn submit(
-        &self,
-        context: RpcRequestContext,
-        tx_bytes: Vec<u8>,
-        hash: TxHash,
-    ) -> Result<(), RpcServerError> {
-        self.submit_inner(context, tx_bytes, hash, None).await
-    }
-
     /// Native attempt through the same queue, with cancellation/dispatch evidence.
     #[tracing::instrument(level = "debug", skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
     pub async fn submit_native(
@@ -503,6 +490,19 @@ mod tests {
     };
     use std::time::Duration;
     use tokio::sync::Notify;
+
+    impl BatchSubmitter {
+        /// Submit through the native path with a new, undispatched attempt.
+        async fn submit_fresh(
+            &self,
+            context: RpcRequestContext,
+            tx_bytes: Vec<u8>,
+            hash: TxHash,
+        ) -> Result<(), RpcServerError> {
+            self.submit_native(context, tx_bytes, hash, SubmissionAttempt::default())
+                .await
+        }
+    }
 
     #[test]
     fn driver_lifecycle_errors_remain_backend_unavailable() {
@@ -661,7 +661,7 @@ mod tests {
         );
 
         submitter
-            .submit(request_context(), vec![0xaa; 8], hash_from_u32(0))
+            .submit_fresh(request_context(), vec![0xaa; 8], hash_from_u32(0))
             .await
             .unwrap();
 
@@ -686,7 +686,7 @@ mod tests {
             .expect("backend deadline should fit");
 
         submitter
-            .submit(context, vec![0xaa; 8], hash_from_u32(0))
+            .submit_fresh(context, vec![0xaa; 8], hash_from_u32(0))
             .await
             .expect("submission should complete");
 
@@ -704,7 +704,7 @@ mod tests {
         );
 
         let result = submitter
-            .submit(
+            .submit_fresh(
                 RpcRequestContext::new(Some(Duration::ZERO)),
                 vec![0xaa],
                 hash_from_u32(0),
@@ -735,7 +735,7 @@ mod tests {
         let first = tokio::spawn({
             let s = submitter.clone();
             async move {
-                s.submit(request_context(), vec![0x01], hash_from_u32(0))
+                s.submit_fresh(request_context(), vec![0x01], hash_from_u32(0))
                     .await
             }
         });
@@ -747,7 +747,7 @@ mod tests {
         for i in 1..=5u32 {
             let s = submitter.clone();
             waiters.push(tokio::spawn(async move {
-                s.submit(
+                s.submit_fresh(
                     request_context(),
                     vec![u8::try_from(i).unwrap()],
                     hash_from_u32(i),
@@ -786,7 +786,7 @@ mod tests {
             let submitter = submitter.clone();
             async move {
                 submitter
-                    .submit(request_context(), vec![0], hash_from_u32(0))
+                    .submit_fresh(request_context(), vec![0], hash_from_u32(0))
                     .await
             }
         });
@@ -796,7 +796,7 @@ mod tests {
             let submitter = submitter.clone();
             async move {
                 submitter
-                    .submit(
+                    .submit_fresh(
                         RpcRequestContext::new(Some(Duration::from_secs(2))),
                         vec![1],
                         hash_from_u32(1),
@@ -808,7 +808,7 @@ mod tests {
             let submitter = submitter.clone();
             async move {
                 submitter
-                    .submit(
+                    .submit_fresh(
                         RpcRequestContext::new(Some(Duration::from_secs(5))),
                         vec![2],
                         hash_from_u32(2),
@@ -950,7 +950,7 @@ mod tests {
         let w1 = {
             let s = submitter.clone();
             tokio::spawn(async move {
-                s.submit(request_context(), vec![0x01], hash_from_u32(1))
+                s.submit_fresh(request_context(), vec![0x01], hash_from_u32(1))
                     .await
             })
         };
@@ -958,7 +958,7 @@ mod tests {
         let w2 = {
             let s = submitter.clone();
             tokio::spawn(async move {
-                s.submit(request_context(), vec![0x02], hash_from_u32(2))
+                s.submit_fresh(request_context(), vec![0x02], hash_from_u32(2))
                     .await
             })
         };
@@ -969,7 +969,7 @@ mod tests {
         let w3 = {
             let s = submitter.clone();
             tokio::spawn(async move {
-                s.submit(request_context(), vec![0x03], hash_from_u32(3))
+                s.submit_fresh(request_context(), vec![0x03], hash_from_u32(3))
                     .await
             })
         };
@@ -1004,7 +1004,7 @@ mod tests {
         let first = {
             let s = submitter.clone();
             tokio::spawn(async move {
-                s.submit(request_context(), vec![0x01], hash_from_u32(0))
+                s.submit_fresh(request_context(), vec![0x01], hash_from_u32(0))
                     .await
             })
         };
@@ -1014,7 +1014,7 @@ mod tests {
         for i in 1..=10u32 {
             let s = submitter.clone();
             waiters.push(tokio::spawn(async move {
-                s.submit(
+                s.submit_fresh(
                     request_context(),
                     vec![u8::try_from(i).unwrap()],
                     hash_from_u32(i),
@@ -1048,7 +1048,7 @@ mod tests {
         let w1 = {
             let s = submitter.clone();
             tokio::spawn(async move {
-                s.submit(request_context(), vec![0x01], hash_from_u32(0))
+                s.submit_fresh(request_context(), vec![0x01], hash_from_u32(0))
                     .await
             })
         };
@@ -1061,7 +1061,7 @@ mod tests {
         let w2 = {
             let s = submitter.clone();
             tokio::spawn(async move {
-                s.submit(request_context(), vec![0x02], hash_from_u32(1))
+                s.submit_fresh(request_context(), vec![0x02], hash_from_u32(1))
                     .await
             })
         };
@@ -1070,7 +1070,7 @@ mod tests {
         // Third item: channel is now full (item 2 occupies the only slot).
         // try_send → Full → Overloaded.
         let err = submitter
-            .submit(request_context(), vec![0x99], hash_from_u32(99))
+            .submit_fresh(request_context(), vec![0x99], hash_from_u32(99))
             .await
             .expect_err("should be overloaded");
         assert!(
@@ -1099,7 +1099,7 @@ mod tests {
         let waiter = tokio::spawn({
             let s = submitter.clone();
             async move {
-                s.submit(request_context(), vec![0x01], hash_from_u32(0))
+                s.submit_fresh(request_context(), vec![0x01], hash_from_u32(0))
                     .await
             }
         });
@@ -1134,7 +1134,7 @@ mod tests {
             let submitter = submitter.clone();
             async move {
                 submitter
-                    .submit(request_context(), vec![0x01], hash_from_u32(0))
+                    .submit_fresh(request_context(), vec![0x01], hash_from_u32(0))
                     .await
             }
         });
@@ -1181,7 +1181,7 @@ mod tests {
         for i in 0..4u32 {
             let s = submitter.clone();
             waiters.push(tokio::spawn(async move {
-                s.submit(
+                s.submit_fresh(
                     request_context(),
                     vec![u8::try_from(i).unwrap()],
                     hash_from_u32(i),
@@ -1330,13 +1330,13 @@ mod tests {
             let submitter = submitter.clone();
             tokio::spawn(async move {
                 submitter
-                    .submit(request_context(), vec![1], hash_from_u32(1))
+                    .submit_fresh(request_context(), vec![1], hash_from_u32(1))
                     .await
             })
         };
         settle().await;
         let second = submitter
-            .submit(request_context(), vec![2], hash_from_u32(2))
+            .submit_fresh(request_context(), vec![2], hash_from_u32(2))
             .await;
 
         assert!(matches!(

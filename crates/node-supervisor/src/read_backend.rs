@@ -1,9 +1,8 @@
-//! hogd-dev indexer-backed read plane adapter.
+//! hogd-dev indexer-backed read adapters.
 //!
-//! [`HogdDevReadBackend`] implements [`ReadPlane`] against hogd-dev's indexer
-//! x23 endpoint. `transaction_receipt` and `contract_events` are pure indexer
-//! calls; `transaction_status` runs the indexer-and-scheduler probe the gateway
-//! runs, from `thruput_hogd_backend::status`, so both answer alike.
+//! [`HogdDevReadBackend`] serves native receipts, status and history from
+//! hogd-dev's indexer x23 endpoint, with scheduler lookups for status. It also
+//! answers local funding status through `thruput_hogd_backend::status`.
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
 //!
@@ -18,24 +17,19 @@ use thruput_hogd_backend::{
     db_gateway as shared_db_gateway, indexer as shared_indexer, intro, receipt as shared_receipt,
     scheduler as shared_scheduler, status as shared_status,
 };
-use thruput_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, indexer::TxInfo};
-use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
+use thruput_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
+use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
+
 use thruput_json_rpc_types::protocol_token::protocol_from_text;
 use thruput_json_rpc_types::{
     ContractAddress,
-    address_auth::AddressAuthDataResponse,
-    events::{EventPage, EventQuery},
-    receipt::TransactionReceipt,
-    state::StorageItemRead,
-    transaction::{
-        AddressTransactionQuery as RpcAddressTransactionQuery, TransactionRefPage,
-        TransactionStatus, TxHash,
-    },
+    transaction::{TransactionStatus, TxHash},
 };
 use thruput_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client;
 use thruput_x23_transport::{connect, connect_with_config, hogd_large_message_config};
 use thruput_xdr::types::{AddressAndKey, StorageKey};
 
+use crate::airdrop::FundingStatusPlane;
 use crate::{
     NodeSupervisorError,
     request_deadline::within_request_deadline,
@@ -46,9 +40,8 @@ const HOGD_DEV_POOL_SIZE: usize = 2;
 
 /// Indexer-backed read plane for hogd-dev.
 ///
-/// Implements the `ReadPlane` trait: receipts and events come from the indexer;
-/// scheduler outcome lookup for `transaction_status` borrows the shared scheduler
-/// client from the chain/submit backend.
+/// Receipts and history come from the indexer; status lookups borrow the
+/// shared scheduler client from the chain/submit backend.
 #[derive(Clone)]
 pub(crate) struct HogdDevReadBackend {
     indexer: IndexerBlockExplorer_IndexerBlockExplorer1_Client,
@@ -210,250 +203,28 @@ impl HogdDevStorageReadBackend {
 }
 
 #[async_trait]
-impl ReadPlane for HogdDevStorageReadBackend {
-    async fn transaction_receipt(
-        &self,
-        _context: RpcRequestContext,
-        _tx_hash: TxHash,
-    ) -> Result<Option<TransactionReceipt>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("transactionReceipt".into()))
-    }
-
-    async fn transaction_status(
+impl FundingStatusPlane for HogdDevStorageReadBackend {
+    async fn funding_status(
         &self,
         _context: RpcRequestContext,
         _tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
         Err(RpcServerError::NotImplemented("transactionStatus".into()))
     }
-
-    async fn contract_events(
-        &self,
-        _context: RpcRequestContext,
-        _query: EventQuery,
-    ) -> Result<EventPage, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getEvents".into()))
-    }
-
-    async fn transactions_by_address(
-        &self,
-        _context: RpcRequestContext,
-        _query: RpcAddressTransactionQuery,
-    ) -> Result<TransactionRefPage, RpcServerError> {
-        Err(RpcServerError::NotImplemented(
-            "getTransactionsByAddress".into(),
-        ))
-    }
-
-    /// Latest-state storage read.
-    ///
-    /// Returns the hogd-dev `DbGateway1` snapshot block height whether the
-    /// item is present or absent, matching the public gateway contract.
-    #[tracing::instrument(skip_all, fields(?address, ?key))]
-    async fn get_storage_at(
-        &self,
-        context: RpcRequestContext,
-        address: ContractAddress,
-        key: [u8; 32],
-    ) -> Result<StorageItemRead, RpcServerError> {
-        within_request_deadline(
-            context,
-            get_storage_at_from_db_gateway(&self.db_gateway, address, key),
-        )
-        .await
-    }
-
-    async fn read_native_hog_balance(
-        &self,
-        context: RpcRequestContext,
-        address: ContractAddress,
-    ) -> Result<StorageItemRead, RpcServerError> {
-        within_request_deadline(
-            context,
-            get_native_hog_balance_from_db_gateway(&self.db_gateway, address),
-        )
-        .await
-    }
-
-    async fn read_address_auth_data(
-        &self,
-        context: RpcRequestContext,
-        address: ContractAddress,
-    ) -> Result<AddressAuthDataResponse, RpcServerError> {
-        within_request_deadline(
-            context,
-            get_address_auth_data_from_db_gateway(&self.db_gateway, address),
-        )
-        .await
-    }
 }
 
 #[async_trait]
-impl ReadPlane for HogdDevReadBackend {
-    #[tracing::instrument(skip_all, fields(?query.height))]
-    async fn transactions_by_block(
-        &self,
-        context: RpcRequestContext,
-        query: thruput_json_rpc_types::transaction::BlockTransactionQuery,
-    ) -> Result<TransactionRefPage, RpcServerError> {
-        within_request_deadline(context, async {
-            let wire_query: thruput_indexer::BlockTransactionQuery = query.into();
-            let result = self
-                .indexer
-                .get_transactions_by_block(&wire_query)
-                .await
-                .map_err(|source| {
-                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
-                })?;
-            Ok(shared_indexer::transaction_ref_page(INDEXER, result)?.into())
-        })
-        .await
-    }
-
-    /// Return a committed transaction receipt from the indexer, or `None` if
-    /// the transaction is not (yet) committed.
+impl FundingStatusPlane for HogdDevReadBackend {
+    /// Status by the probe order in
+    /// `thruput_hogd_backend::status::transaction_status`. The whole probe
+    /// runs under the caller's request deadline.
     #[tracing::instrument(skip_all, fields(?tx_hash))]
-    async fn transaction_receipt(
-        &self,
-        context: RpcRequestContext,
-        tx_hash: TxHash,
-    ) -> Result<Option<TransactionReceipt>, RpcServerError> {
-        within_request_deadline(context, async {
-            match self.tx_lookup(tx_hash).await? {
-                shared_indexer::TxLookup::Found(info) => Ok(Some(receipt(tx_hash, *info))),
-                // A recent nondeterministic failure is not a committed record;
-                // receipts exist only for committed transactions. The diagnostic
-                // surfaces through `transaction_status`.
-                shared_indexer::TxLookup::RecentFailure(_) | shared_indexer::TxLookup::NotFound => {
-                    Ok(None)
-                }
-            }
-        })
-        .await
-    }
-
-    /// Status by the probe order shared with the gateway; see
-    /// `thruput_hogd_backend::status::transaction_status`. The whole
-    /// probe runs under the caller's request deadline.
-    #[tracing::instrument(skip_all, fields(?tx_hash))]
-    async fn transaction_status(
+    async fn funding_status(
         &self,
         context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
         within_request_deadline(context, shared_status::transaction_status(self, tx_hash)).await
-    }
-
-    /// Return one page of contract events matching `query`.
-    ///
-    /// Forwards the paginated query to the indexer. Malformed events (bad
-    /// `num_topics` or truncated payload) are dropped with a warning; the
-    /// pagination cursor is not affected.
-    #[tracing::instrument(skip_all, fields(limit = query.limit))]
-    async fn contract_events(
-        &self,
-        context: RpcRequestContext,
-        query: EventQuery,
-    ) -> Result<EventPage, RpcServerError> {
-        within_request_deadline(context, async {
-            let wire_query: thruput_indexer::indexer::EventQuery = query.into();
-            let result = self
-                .indexer
-                .get_events(&wire_query)
-                .await
-                .map_err(|source| {
-                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
-                })?;
-            let page = shared_indexer::event_page(INDEXER, result)?;
-            let decoded = shared_indexer::public_event_page(page);
-            for dropped in &decoded.dropped {
-                tracing::warn!(
-                    tx_hash = ?dropped.tx_hash,
-                    block_height = ?dropped.block_height,
-                    sequence_number = dropped.sequence_number,
-                    "dropped malformed event from hogd-dev indexer",
-                );
-            }
-            Ok(decoded.page)
-        })
-        .await
-    }
-
-    /// Return one page of transaction refs from the history of the
-    /// query's address, forwarded to the indexer.
-    #[tracing::instrument(skip_all, fields(limit = query.limit))]
-    async fn transactions_by_address(
-        &self,
-        context: RpcRequestContext,
-        query: RpcAddressTransactionQuery,
-    ) -> Result<TransactionRefPage, RpcServerError> {
-        within_request_deadline(context, async {
-            let wire_query: thruput_indexer::indexer::AddressTransactionQuery = query.into();
-            let result = self
-                .indexer
-                .get_transactions_by_address(&wire_query)
-                .await
-                .map_err(|source| {
-                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
-                })?;
-            let page = shared_indexer::transaction_ref_page(INDEXER, result)?;
-            Ok(page.into())
-        })
-        .await
-    }
-
-    /// Latest-state storage read.
-    ///
-    /// Returns the hogd-dev `DbGateway1` snapshot block height whether the
-    /// item is present or absent, matching the public gateway contract.
-    #[tracing::instrument(skip_all, fields(?address, ?key))]
-    async fn get_storage_at(
-        &self,
-        context: RpcRequestContext,
-        address: ContractAddress,
-        key: [u8; 32],
-    ) -> Result<StorageItemRead, RpcServerError> {
-        let db_gateway = self
-            .db_gateway
-            .as_ref()
-            .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
-        within_request_deadline(
-            context,
-            get_storage_at_from_db_gateway(db_gateway, address, key),
-        )
-        .await
-    }
-
-    async fn read_native_hog_balance(
-        &self,
-        context: RpcRequestContext,
-        address: ContractAddress,
-    ) -> Result<StorageItemRead, RpcServerError> {
-        let db_gateway = self
-            .db_gateway
-            .as_ref()
-            .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
-        within_request_deadline(
-            context,
-            get_native_hog_balance_from_db_gateway(db_gateway, address),
-        )
-        .await
-    }
-
-    async fn read_address_auth_data(
-        &self,
-        context: RpcRequestContext,
-        address: ContractAddress,
-    ) -> Result<AddressAuthDataResponse, RpcServerError> {
-        let db_gateway = self
-            .db_gateway
-            .as_ref()
-            .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
-        within_request_deadline(
-            context,
-            get_address_auth_data_from_db_gateway(db_gateway, address),
-        )
-        .await
     }
 }
 
@@ -493,44 +264,6 @@ async fn connect_db_gateway(
     Ok(client)
 }
 
-async fn get_storage_at_from_db_gateway(
-    db_gateway: &DbGateway_DbGateway1_Client,
-    address: ContractAddress,
-    key: [u8; 32],
-) -> Result<StorageItemRead, RpcServerError> {
-    get_item_from_db_gateway(
-        db_gateway,
-        address,
-        shared_db_gateway::contract_data_key(key),
-    )
-    .await
-}
-
-async fn get_native_hog_balance_from_db_gateway(
-    db_gateway: &DbGateway_DbGateway1_Client,
-    address: ContractAddress,
-) -> Result<StorageItemRead, RpcServerError> {
-    get_item_from_db_gateway(db_gateway, address, StorageKey::FreeNativeTokenBalance).await
-}
-
-async fn get_address_auth_data_from_db_gateway(
-    db_gateway: &DbGateway_DbGateway1_Client,
-    address: ContractAddress,
-) -> Result<AddressAuthDataResponse, RpcServerError> {
-    let payload = get_payload_from_db_gateway(db_gateway, address, StorageKey::AuthData).await?;
-    let (block_height, item) = shared_db_gateway::single_item(DB_GATEWAY, payload)?;
-    shared_db_gateway::address_auth_data_read(DB_GATEWAY, address, block_height, item)
-}
-
-async fn get_item_from_db_gateway(
-    db_gateway: &DbGateway_DbGateway1_Client,
-    address: ContractAddress,
-    key: StorageKey,
-) -> Result<StorageItemRead, RpcServerError> {
-    let payload = get_payload_from_db_gateway(db_gateway, address, key).await?;
-    shared_db_gateway::single_item_read(DB_GATEWAY, payload)
-}
-
 async fn get_payload_from_db_gateway(
     db_gateway: &DbGateway_DbGateway1_Client,
     address: ContractAddress,
@@ -550,19 +283,6 @@ async fn get_payload_from_db_gateway(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Build a public receipt from the indexer's committed record.
-fn receipt(tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
-    let decoded = shared_receipt::transaction_receipt(tx_hash, info.height, info.events);
-    if decoded.dropped_events > 0 {
-        tracing::warn!(
-            dropped = decoded.dropped_events,
-            ?tx_hash,
-            "dropped malformed events from hogd-dev indexer receipt",
-        );
-    }
-    decoded.receipt
-}
 
 // ---------------------------------------------------------------------------
 // Tests

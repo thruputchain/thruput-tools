@@ -44,12 +44,9 @@ const COALESCED_WAITER_BUCKETS: [f64; 10] = RPC_BATCH_SIZE_BUCKETS;
 
 pub(crate) const REASON_CLOSED: &str = "closed";
 pub(crate) const REASON_INGRESS_FULL: &str = "ingress_full";
-pub(crate) const REASON_PARSE_FAILED: &str = "parse_failed";
 
 #[cfg(test)]
 pub(crate) const INTERNAL_BATCH_REJECTION_REASONS: [&str; 2] = [REASON_CLOSED, REASON_INGRESS_FULL];
-#[cfg(test)]
-pub(crate) const MALFORMED_EVENT_DROP_REASONS: [&str; 1] = [REASON_PARSE_FAILED];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackendRequestOutcome {
@@ -152,7 +149,6 @@ struct MetricsInner {
     coalesced_waiters: HistogramVec,
     submitted_transactions_total: IntCounterVec,
     view_timeouts_total: prometheus::IntCounter,
-    malformed_events_dropped_total: IntCounterVec,
 }
 
 impl GatewayMetrics {
@@ -331,13 +327,6 @@ impl GatewayMetrics {
             "groundhog_gateway_view_timeouts_total",
             "Total gateway view RPCs that timed out waiting for ViewGateway.",
         ))?;
-        let malformed_events_dropped_total = IntCounterVec::new(
-            Opts::new(
-                "groundhog_gateway_malformed_events_dropped_total",
-                "Total malformed events dropped by bounded reason label.",
-            ),
-            &["reason"],
-        )?;
 
         registry.register(Box::new(health_status.clone()))?;
         registry.register(Box::new(backend_up.clone()))?;
@@ -362,7 +351,6 @@ impl GatewayMetrics {
         registry.register(Box::new(coalesced_waiters.clone()))?;
         registry.register(Box::new(submitted_transactions_total.clone()))?;
         registry.register(Box::new(view_timeouts_total.clone()))?;
-        registry.register(Box::new(malformed_events_dropped_total.clone()))?;
 
         build_info
             .with_label_values(&[
@@ -400,7 +388,6 @@ impl GatewayMetrics {
                 coalesced_waiters,
                 submitted_transactions_total,
                 view_timeouts_total,
-                malformed_events_dropped_total,
             }),
         })
     }
@@ -557,17 +544,6 @@ impl GatewayMetrics {
 
     pub(crate) fn observe_view_timeout(&self) {
         self.inner.view_timeouts_total.inc();
-    }
-
-    /// Count `dropped` malformed events, which may be zero.
-    pub(crate) fn observe_malformed_events_dropped(&self, reason: &'static str, dropped: usize) {
-        if dropped == 0 {
-            return;
-        }
-        self.inner
-            .malformed_events_dropped_total
-            .with_label_values(&[reason])
-            .inc_by(dropped as u64);
     }
 
     /// Render Prometheus text exposition after refreshing snapshot-backed gauges.
@@ -900,8 +876,6 @@ mod tests {
             Duration::from_millis(25),
         );
         metrics.observe_view_timeout();
-        metrics.observe_malformed_events_dropped(REASON_PARSE_FAILED, 3);
-        metrics.observe_malformed_events_dropped(REASON_PARSE_FAILED, 0);
         let guard = metrics.internal_batch_in_flight_guard("storage_batcher");
 
         let body = metrics.gather(&snapshot).expect("metrics should encode");
@@ -929,9 +903,6 @@ mod tests {
             "groundhog_gateway_airdrop_request_duration_seconds_count{backend=\"hosted\",result=\"ok\"} 1"
         ));
         assert!(body.contains("groundhog_gateway_view_timeouts_total 1"));
-        assert!(body.contains(
-            "groundhog_gateway_malformed_events_dropped_total{reason=\"parse_failed\"} 3"
-        ));
 
         for bucket in [1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0] {
             assert!(
@@ -960,6 +931,5 @@ mod tests {
             INTERNAL_BATCH_REJECTION_REASONS,
             [REASON_CLOSED, REASON_INGRESS_FULL]
         );
-        assert_eq!(MALFORMED_EVENT_DROP_REASONS, [REASON_PARSE_FAILED]);
     }
 }

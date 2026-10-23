@@ -9,7 +9,7 @@ use thruput_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
     TransactionPageResult, TransactionQuery, TransactionRefPageResult, TxInfoResult,
 };
-use thruput_json_rpc_types::{ConsensusValue, events::PaginationCursor};
+use thruput_json_rpc_types::ConsensusValue;
 use thruput_x23_transport::try_connect;
 use thruput_xdr::{
     PROTOCOL_VERSION,
@@ -142,6 +142,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
         &self,
         query: BlockTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
+        use thruput_indexer::IndexerQueryOutcome as Outcome;
         if query.limit >= 10 {
             let mut page = history_page(query.limit);
             if query.limit == 11 {
@@ -150,38 +151,11 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
             }
             return Ok(TransactionRefPageResult::IndexerQueryOk { page });
         }
-        let height = *query.height;
-        if height == 7 || height == 8 {
-            use thruput_indexer::IndexerQueryOutcome as Outcome;
-            return Ok(TransactionRefPageResult::Default {
-                outcome: if height == 7 {
-                    Outcome::IndexerQueryInvalidCursor.0
-                } else {
-                    Outcome::IndexerQueryHistoryUnavailable.0
-                },
-            });
-        }
-        if height == 5 {
-            return Ok(TransactionRefPageResult::Default {
-                outcome: thruput_indexer::IndexerQueryOutcome::IndexerQueryNotReady.0,
-            });
-        }
-        if height == 6 {
-            return Err(ProgramError::msg("indexer read failed"));
-        }
-        Ok(TransactionRefPageResult::IndexerQueryOk {
-            page: thruput_indexer::TransactionRefPage {
-                refs: VecM(if height == 3 {
-                    vec![]
-                } else {
-                    vec![thruput_indexer::TransactionRef {
-                        tx_hash: SHA256Hash::from([7; 32]),
-                        height: 1.into(),
-                    }]
-                }),
-                cursor: BytesM::default(),
-                latest_block: 4.into(),
-                oldest_block: if height == 4 { 0.into() } else { 1.into() },
+        Ok(TransactionRefPageResult::Default {
+            outcome: match *query.height {
+                7 => Outcome::IndexerQueryInvalidCursor.0,
+                8 => Outcome::IndexerQueryHistoryUnavailable.0,
+                height => unreachable!("no test pages block {height}"),
             },
         })
     }
@@ -263,24 +237,6 @@ async fn block_metrics_count_rejected_values_and_pages_as_errors() {
             Err(RpcServerError::BackendUnavailable(_))
         ));
     }
-    for height in 1..=6 {
-        let result = crate::handlers::transactions::get_transactions_by_block(
-            &ctx,
-            context(),
-            thruput_json_rpc_types::transaction::BlockTransactionQuery {
-                height: height.into(),
-                order: thruput_json_rpc_types::events::IterationOrder::Ascending,
-                cursor: PaginationCursor::default(),
-                limit: 1,
-            },
-        )
-        .await;
-        if height == 1 || height == 3 {
-            assert!(result.is_ok(), "{result:?}");
-        } else {
-            assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
-        }
-    }
     let health = crate::health::GatewayHealth::new(
         &GatewayConfig::default(),
         thruput_build_info::BuildVersion::new("test", None),
@@ -290,11 +246,6 @@ async fn block_metrics_count_rejected_values_and_pages_as_errors() {
     for (outcome, count) in [("ok", 2), ("error", 3)] {
         assert!(metrics.contains(&format!(
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"get_block_by_height\",outcome=\"{outcome}\"}} {count}\n"
-        )), "{metrics}");
-    }
-    for (outcome, count) in [("ok", 2), ("error", 4)] {
-        assert!(metrics.contains(&format!(
-            "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"get_transactions_by_block\",outcome=\"{outcome}\"}} {count}\n"
         )), "{metrics}");
     }
     check_native_blocks(&ctx, &health).await;
@@ -420,7 +371,7 @@ async fn check_native_history(ctx: &Arc<GatewayContext>, health: &crate::health:
         ("get_events", "error", 3),
         ("get_events", "timeout", 1),
         ("get_transactions_by_address", "error", 2),
-        ("get_transactions_by_block", "error", 6),
+        ("get_transactions_by_block", "error", 2),
     ] {
         assert!(metrics.contains(&format!(
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"{operation}\",outcome=\"{outcome}\"}} {count}\n"
@@ -492,14 +443,14 @@ async fn check_native_history_page_metrics(
         }
     }
     let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
-    // Include the legacy/typed-outcome calls made earlier using this context.
+    // Include the typed-outcome calls made earlier using this context.
     for (operation, outcome, count) in [
         ("get_events", "ok", 1),
         ("get_events", "error", 7),
         ("get_transactions_by_address", "ok", 1),
         ("get_transactions_by_address", "error", 6),
-        ("get_transactions_by_block", "ok", 3),
-        ("get_transactions_by_block", "error", 10),
+        ("get_transactions_by_block", "ok", 1),
+        ("get_transactions_by_block", "error", 6),
     ] {
         assert!(metrics.contains(&format!(
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"{operation}\",outcome=\"{outcome}\"}} {count}\n"

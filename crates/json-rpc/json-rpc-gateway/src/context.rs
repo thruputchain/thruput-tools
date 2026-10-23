@@ -198,14 +198,14 @@ pub struct GatewayContext {
     /// Used for: `get_transaction_info`, `get_events` (paginated).
     pub indexer: Arc<RwLock<Option<IndexerClient>>>,
 
-    /// Adaptive batching submitter for `sendRawTransaction`. Accumulates
+    /// Adaptive batching submitter for `sendTransaction`. Accumulates
     /// incoming client submissions and packs them into
     /// `schedgateway_submit_tx_batch` RPCs to amortize
     /// per-call overhead at high load.
     pub batch_submitter: BatchSubmitter,
 
-    /// Adaptive batching reader for `DbGateway1` reads (`getStorageAt`,
-    /// `getBalance`, and `getAddressAuthData`). Accumulates concurrent
+    /// Adaptive batching reader for `DbGateway1` reads (`getStorage`,
+    /// `getBalance`, and `getRegisteredAuth`). Accumulates concurrent
     /// (`address`, `key`) reads and packs them into one
     /// `dbgateway_get_items` RPC per fired batch.
     pub storage_batcher: StorageReadBatcher,

@@ -178,8 +178,8 @@ impl FromStr for HealthBackend {
 /// (zero added latency); at high load new arrivals pile up while a
 /// batch is in flight and drain together when it completes.
 ///
-/// Used for both `sendRawTransaction` (packing tx blobs into
-/// `schedgateway_submit_tx_batch`) and `getStorageAt`
+/// Used for both `sendTransaction` (packing tx blobs into
+/// `schedgateway_submit_tx_batch`) and state reads
 /// (packing item reads into `dbgateway_get_items`); see
 /// `GatewayConfig::batch` and `GatewayConfig::storage` for the per-RPC
 /// tuning slots.
@@ -370,11 +370,11 @@ pub struct GatewayConfig {
     /// methods; longer cursors are rejected as `InvalidParam`.
     pub max_cursor_bytes: usize,
 
-    /// Adaptive batching for `sendRawTransaction`.
+    /// Adaptive batching for `sendTransaction`.
     pub batch: AdaptiveBatchConfig,
 
-    /// Adaptive batching for `DbGateway1` reads (`getStorageAt`,
-    /// `getBalance`, and `getAddressAuthData`).
+    /// Adaptive batching for `DbGateway1` reads (`getStorage`,
+    /// `getBalance`, and `getRegisteredAuth`).
     pub storage: AdaptiveBatchConfig,
 
     /// Request coalescing for `chainTip`.

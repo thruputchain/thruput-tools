@@ -1,34 +1,24 @@
-//! `groundhog_getTransactionReceipt` and `groundhog_getTransactionStatus`
-//! handlers.
+//! Native `getTransactionReceipt` and `getTransactionStatus` lookups.
 
 use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
 use std::time::Instant;
 use thruput_hogd_backend::native::transaction as native_transaction;
-use thruput_hogd_backend::{
-    indexer as shared_indexer, receipt as shared_receipt, scheduler as shared_scheduler,
-    status as shared_status,
-};
-use thruput_indexer::{
-    IndexerBlockExplorer_IndexerBlockExplorer1_Client,
-    indexer::{TxInfo, TxInfoResult},
-};
+use thruput_hogd_backend::receipt as shared_receipt;
+use thruput_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, indexer::TxInfoResult};
 use thruput_json_rpc_server::{RpcRequestContext, native::transaction::NativeReadError};
 use thruput_json_rpc_types::responses as native_out;
-use thruput_json_rpc_types::{
-    receipt::TransactionReceipt,
-    transaction::{TransactionStatus, TxHash},
-};
+use thruput_json_rpc_types::transaction::TxHash;
 use thruput_scheduler::SchedulerTransactionOutcomeBatch;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 
 use crate::config::HealthBackend;
 use crate::context::{GatewayContext, clear_scheduler_if_current};
-use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
+use crate::metrics::BackendRequestOutcome;
 use thruput_json_rpc_server::RpcServerError;
 
-use super::{INDEXER, SCHEDULER, backend_deadline, timed_backend_call};
+use super::{INDEXER, backend_deadline, timed_backend_call};
 
 struct SchedulerLookupGuard<T: Send + 'static> {
     worker: Option<JoinHandle<T>>,
@@ -72,46 +62,6 @@ impl<T: Send + 'static> Drop for SchedulerLookupGuard<T> {
             worker.abort();
         }
     }
-}
-
-/// Full receipt for a committed transaction.
-///
-/// Flow:
-/// 1. Query hogd indexer `get_transaction_info(tx_hash)`
-/// 2. If not found, return `None`
-/// 3. Parse each `TxEmittedEvent.serialized_event` into topics + data
-/// 4. Build `TransactionReceipt`
-#[tracing::instrument(skip_all, fields(?tx_hash))]
-pub async fn get_transaction_receipt(
-    ctx: &GatewayContext,
-    context: RpcRequestContext,
-    tx_hash: TxHash,
-) -> Result<Option<TransactionReceipt>, RpcServerError> {
-    let client = ctx
-        .indexer
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
-
-    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
-    let result = lookup_transaction_info(ctx, &client, deadline, tx_hash).await?;
-
-    match shared_indexer::tx_lookup(INDEXER, tx_hash, result)? {
-        shared_indexer::TxLookup::Found(info) => Ok(Some(receipt(ctx, tx_hash, *info))),
-        // A recent nondeterministic failure is not a committed record;
-        // receipts exist only for committed transactions. The diagnostic
-        // surfaces through `getTransactionStatus`.
-        shared_indexer::TxLookup::RecentFailure(_) | shared_indexer::TxLookup::NotFound => Ok(None),
-    }
-}
-
-/// Build a public receipt from the indexer's committed record.
-fn receipt(ctx: &GatewayContext, tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
-    let decoded = shared_receipt::transaction_receipt(tx_hash, info.height, info.events);
-    ctx.metrics
-        .observe_malformed_events_dropped(REASON_PARSE_FAILED, decoded.dropped_events);
-    decoded.receipt
 }
 
 async fn acquire_lookup_permits(
@@ -252,15 +202,6 @@ async fn scheduler_transaction_outcomes(
     }
 }
 
-async fn scheduler_transaction_status(
-    ctx: &GatewayContext,
-    deadline: Instant,
-    tx_hash: TxHash,
-) -> Result<Option<TransactionStatus>, RpcServerError> {
-    let results = scheduler_transaction_outcomes(ctx, deadline, tx_hash).await?;
-    shared_scheduler::transaction_outcome(SCHEDULER, &results)
-}
-
 async fn indexed_transaction_info(
     ctx: &GatewayContext,
     deadline: Instant,
@@ -282,16 +223,6 @@ async fn indexed_transaction_info(
     lookup_transaction_info(ctx, client, deadline, tx_hash).await
 }
 
-async fn indexed_transaction_status(
-    ctx: &GatewayContext,
-    deadline: Instant,
-    tx_hash: TxHash,
-) -> Result<Option<TransactionStatus>, RpcServerError> {
-    let result = indexed_transaction_info(ctx, deadline, tx_hash).await?;
-    let lookup = shared_indexer::tx_lookup(INDEXER, tx_hash, result)?;
-    Ok(shared_indexer::committed_status(lookup))
-}
-
 /// Ask the indexer for its record of `tx_hash`, metered as one request.
 async fn lookup_transaction_info(
     ctx: &GatewayContext,
@@ -310,44 +241,6 @@ async fn lookup_transaction_info(
         |_| true,
     )
     .await
-}
-
-/// The gateway's two status lookups: the admission-bounded, metered
-/// scheduler lane and the indexer, both against one request deadline.
-struct GatewayStatusProbe<'a> {
-    ctx: &'a GatewayContext,
-    deadline: Instant,
-}
-
-impl shared_status::StatusProbe for GatewayStatusProbe<'_> {
-    async fn scheduler_status(
-        &self,
-        tx_hash: TxHash,
-    ) -> Result<Option<TransactionStatus>, RpcServerError> {
-        scheduler_transaction_status(self.ctx, self.deadline, tx_hash).await
-    }
-
-    async fn indexed_status(
-        &self,
-        tx_hash: TxHash,
-    ) -> Result<Option<TransactionStatus>, RpcServerError> {
-        indexed_transaction_status(self.ctx, self.deadline, tx_hash).await
-    }
-}
-
-/// Status by the probe order shared with the node supervisor
-/// (`thruput_hogd_backend::status`). All stages share one deadline, so a
-/// slow indexer can consume the budget before the scheduler lookup is
-/// dispatched. Scheduler outcomes remain available if the indexer is
-/// disconnected.
-#[tracing::instrument(skip_all, fields(?tx_hash))]
-pub async fn get_transaction_status(
-    ctx: &GatewayContext,
-    context: RpcRequestContext,
-    tx_hash: TxHash,
-) -> Result<TransactionStatus, RpcServerError> {
-    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
-    shared_status::transaction_status(&GatewayStatusProbe { ctx, deadline }, tx_hash).await
 }
 
 /// Strict native receipt projection using the existing indexer transport.
@@ -1038,7 +931,7 @@ mod tests {
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
         let mut callers = Vec::new();
         for _ in 0..SCHEDULER_LOOKUP_MAX_OUTSTANDING {
-            let mut caller = Box::pin(scheduler_transaction_status(
+            let mut caller = Box::pin(scheduler_transaction_outcomes(
                 &ctx,
                 Instant::now() + std::time::Duration::from_secs(4),
                 test_hash(),
@@ -1050,7 +943,7 @@ mod tests {
         assert_lookup_gauges(&gathered_metrics(&ctx).await, 64, 4);
         assert_eq!(ctx.scheduler_lookup_admission.available_permits(), 0);
         assert!(matches!(
-            watchdog(scheduler_transaction_status(
+            watchdog(scheduler_transaction_outcomes(
                 &ctx,
                 Instant::now() + std::time::Duration::from_secs(4),
                 test_hash()
@@ -1077,7 +970,7 @@ mod tests {
         assert_eq!(gate.calls.load(Ordering::SeqCst), 4);
         gate.release.add_permits(4);
         for caller in callers {
-            assert!(watchdog(caller).await.unwrap().is_none());
+            assert!(missed(&watchdog(caller).await.unwrap()));
         }
         assert_eq!(
             ctx.scheduler_lookup_admission.available_permits(),
@@ -1109,7 +1002,7 @@ mod tests {
             .unwrap();
         let context = RpcRequestContext::new(Some(std::time::Duration::from_millis(20)));
         let deadline = context.deadline().unwrap();
-        let mut lookup = Box::pin(scheduler_transaction_status(&ctx, deadline, test_hash()));
+        let mut lookup = Box::pin(scheduler_transaction_outcomes(&ctx, deadline, test_hash()));
         poll_pending(lookup.as_mut());
         assert_eq!(
             ctx.scheduler_lookup_admission.available_permits(),
@@ -1134,7 +1027,7 @@ mod tests {
         assert!(ctx.scheduler.read().await.is_some());
         // An expired request must not dispatch even when execution is immediately available.
         assert!(matches!(
-            watchdog(scheduler_transaction_status(&ctx, deadline, test_hash())).await,
+            watchdog(scheduler_transaction_outcomes(&ctx, deadline, test_hash())).await,
             Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
@@ -1162,7 +1055,7 @@ mod tests {
 
         tokio::time::pause();
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut lookup = Box::pin(scheduler_transaction_status(&ctx, deadline, test_hash()));
+        let mut lookup = Box::pin(scheduler_transaction_outcomes(&ctx, deadline, test_hash()));
         poll_pending(lookup.as_mut());
         assert_eq!(
             ctx.scheduler_lookup_admission.available_permits(),
@@ -1210,16 +1103,15 @@ mod tests {
 
         // The backend may finish the canceled call later; the replacement lane remains usable.
         gate.release.add_permits(2);
-        assert!(
-            watchdog(scheduler_transaction_status(
+        assert!(missed(
+            &watchdog(scheduler_transaction_outcomes(
                 &ctx,
                 (tokio::time::Instant::now() + Duration::from_secs(4)).into_std(),
                 test_hash()
             ))
             .await
             .unwrap()
-            .is_none()
-        );
+        ));
         assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
         assert_eq!(
             ctx.scheduler_lookup_admission.available_permits(),
@@ -1239,7 +1131,7 @@ mod tests {
             .clone()
             .try_acquire_many_owned(4)
             .unwrap();
-        let mut lookup = Box::pin(scheduler_transaction_status(
+        let mut lookup = Box::pin(scheduler_transaction_outcomes(
             &ctx,
             Instant::now() + std::time::Duration::from_secs(4),
             test_hash(),
@@ -1257,7 +1149,7 @@ mod tests {
         let generation = replacement.generation();
         *ctx.scheduler.write().await = Some(replacement);
         drop(slots);
-        assert!(watchdog(lookup).await.unwrap().is_none());
+        assert!(missed(&watchdog(lookup).await.unwrap()));
         assert_eq!(
             ctx.scheduler.read().await.as_ref().unwrap().generation(),
             generation
@@ -1448,7 +1340,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let (indexer_addr, _indexer) = start_fake_indexer(committed_result(), calls.clone()).await;
         let ctx = test_context(None, indexer_addr).await;
-        let receipt = watchdog(get_transaction_receipt(
+        let receipt = watchdog(native_transaction_receipt(
             &ctx,
             RpcRequestContext::unbounded(),
             test_hash(),
@@ -1456,9 +1348,25 @@ mod tests {
         .await
         .unwrap()
         .expect("committed transaction should have a receipt");
-        assert_eq!(receipt.height, 42.into());
+        assert_eq!(receipt.block_height, 42.into());
         assert_eq!(receipt.gas_used, COMMITTED_GAS_CONSUMED);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Whether a scheduler lookup answered that it holds no record.
+    fn missed(results: &SchedulerTransactionOutcomeBatch) -> bool {
+        native_transaction::scheduler_status(results)
+            .unwrap()
+            .is_none()
+    }
+
+    async fn native_status(
+        ctx: &GatewayContext,
+        context: RpcRequestContext,
+    ) -> Result<native_out::TransactionStatus, RpcServerError> {
+        native_transaction_status(ctx, context, test_hash())
+            .await
+            .map_err(|error| error.error)
     }
 
     #[tokio::test]
@@ -1469,14 +1377,12 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let (indexer_addr, _indexer) = start_fake_indexer(committed_result(), calls.clone()).await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-        let status = watchdog(get_transaction_status(
-            &ctx,
-            RpcRequestContext::unbounded(),
-            test_hash(),
-        ))
-        .await
-        .unwrap();
-        assert!(matches!(status, TransactionStatus::Committed { height } if height == 42.into()));
+        let status = watchdog(native_status(&ctx, RpcRequestContext::unbounded()))
+            .await
+            .unwrap();
+        assert!(
+            matches!(status, native_out::TransactionStatus::Committed { block_height } if *block_height == 42)
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
     }
@@ -1502,19 +1408,15 @@ mod tests {
                 start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
             let (indexer_addr, _indexer) = start_not_found_indexer().await;
             let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-            let status = watchdog(get_transaction_status(
-                &ctx,
-                RpcRequestContext::unbounded(),
-                test_hash(),
-            ))
-            .await
-            .unwrap();
+            let status = watchdog(native_status(&ctx, RpcRequestContext::unbounded()))
+                .await
+                .unwrap();
             let value = serde_json::to_value(status).unwrap();
             assert_eq!(value["status"], tag);
             if tag == "committed" {
                 assert_eq!(
                     value,
-                    serde_json::json!({"status": "committed", "height": "42"})
+                    serde_json::json!({"status": "committed", "blockHeight": "42"})
                 );
             } else {
                 assert_eq!(
@@ -1546,23 +1448,19 @@ mod tests {
             if disconnected {
                 *ctx.indexer.write().await = None;
             }
-            let status = watchdog(get_transaction_status(
-                &ctx,
-                RpcRequestContext::unbounded(),
-                test_hash(),
-            ))
-            .await
-            .unwrap();
+            let status = watchdog(native_status(&ctx, RpcRequestContext::unbounded()))
+                .await
+                .unwrap();
             assert_eq!(
                 serde_json::to_value(status).unwrap(),
-                serde_json::json!({"status": "committed", "height": "0"})
+                serde_json::json!({"status": "committed", "blockHeight": "0"})
             );
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn scheduler_pending_overrides_indexer_diagnostic() {
+    async fn scheduler_pending_keeps_the_indexer_diagnostic() {
         let (scheduler_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::Pending).await;
         let (indexer_addr, _indexer) = start_fake_indexer(
             TxInfoResult::TxInfoRecentFailure {
@@ -1573,14 +1471,12 @@ mod tests {
         .await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
         assert!(matches!(
-            watchdog(get_transaction_status(
-                &ctx,
-                RpcRequestContext::unbounded(),
-                test_hash()
-            ))
-            .await
-            .unwrap(),
-            TransactionStatus::Pending
+            watchdog(native_status(&ctx, RpcRequestContext::unbounded()))
+                .await
+                .unwrap(),
+            native_out::TransactionStatus::Pending {
+                recent_failure: Some(_)
+            }
         ));
     }
 
@@ -1594,26 +1490,18 @@ mod tests {
                 start_scripted_indexer(vec![result], calls.clone()).await;
             let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
             assert!(matches!(
-                watchdog(get_transaction_status(
-                    &ctx,
-                    RpcRequestContext::unbounded(),
-                    test_hash()
-                ))
-                .await
-                .unwrap(),
-                TransactionStatus::Pending
+                watchdog(native_status(&ctx, RpcRequestContext::unbounded()))
+                    .await
+                    .unwrap(),
+                native_out::TransactionStatus::Pending { .. }
             ));
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             *ctx.indexer.write().await = None;
             assert!(matches!(
-                watchdog(get_transaction_status(
-                    &ctx,
-                    RpcRequestContext::unbounded(),
-                    test_hash()
-                ))
-                .await
-                .unwrap(),
-                TransactionStatus::Pending
+                watchdog(native_status(&ctx, RpcRequestContext::unbounded()))
+                    .await
+                    .unwrap(),
+                native_out::TransactionStatus::Pending { .. }
             ));
         }
     }
@@ -1633,16 +1521,11 @@ mod tests {
             let (indexer_addr, _indexer) =
                 start_scripted_indexer(vec![result], calls.clone()).await;
             let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-            let result = watchdog(get_transaction_status(
-                &ctx,
-                RpcRequestContext::unbounded(),
-                test_hash(),
-            ))
-            .await;
+            let result = watchdog(native_status(&ctx, RpcRequestContext::unbounded())).await;
             if has_diagnostic {
                 assert!(matches!(
                     result.unwrap(),
-                    TransactionStatus::RecentFailure { .. }
+                    native_out::TransactionStatus::RecentFailure { .. }
                 ));
             } else {
                 assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
@@ -1662,7 +1545,7 @@ mod tests {
         let _locked = ctx.indexer.write().await;
         let context = RpcRequestContext::new(Some(std::time::Duration::from_millis(20)));
         assert!(matches!(
-            watchdog(get_transaction_status(&ctx, context, test_hash())).await,
+            watchdog(native_status(&ctx, context)).await,
             Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1678,7 +1561,7 @@ mod tests {
         let (indexer_addr, _indexer) = start_fake_indexer(indexer_miss(), calls.clone()).await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
         let context = RpcRequestContext::new(Some(std::time::Duration::from_millis(100)));
-        let result = watchdog(get_transaction_status(&ctx, context, test_hash())).await;
+        let result = watchdog(native_status(&ctx, context)).await;
         assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
@@ -1707,11 +1590,10 @@ mod tests {
                 .acquire_many_owned(SCHEDULER_LOOKUP_MAX_OUTSTANDING.try_into().unwrap())
                 .await
                 .unwrap();
-            let status =
-                get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()).await;
+            let status = native_status(&ctx, RpcRequestContext::unbounded()).await;
             if committed {
                 assert!(
-                    matches!(status.unwrap(), TransactionStatus::Committed { height } if *height == 42)
+                    matches!(status.unwrap(), native_out::TransactionStatus::Committed { block_height } if *block_height == 42)
                 );
             } else {
                 assert!(matches!(status, Err(RpcServerError::Overloaded(_))));
@@ -1729,7 +1611,7 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(None, indexer_addr).await;
 
-        let err = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+        let err = native_status(&ctx, RpcRequestContext::unbounded())
             .await
             .expect_err("bug: unconsulted mempool must not produce a definite status");
 
@@ -1747,7 +1629,7 @@ mod tests {
         let ctx = test_context(None, indexer_addr).await;
         let write_lock = ctx.scheduler.write().await;
         let deadline = Instant::now() + std::time::Duration::from_millis(20);
-        let mut lookup = Box::pin(scheduler_transaction_status(&ctx, deadline, test_hash()));
+        let mut lookup = Box::pin(scheduler_transaction_outcomes(&ctx, deadline, test_hash()));
         poll_pending(lookup.as_mut());
         assert_lookup_gauges(&gathered_metrics(&ctx).await, 0, 1);
         assert!(matches!(
@@ -1774,7 +1656,7 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
 
-        let err = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+        let err = native_status(&ctx, RpcRequestContext::unbounded())
             .await
             .expect_err("bug: failed mempool lookup must not produce a definite status");
 
@@ -1792,11 +1674,20 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
 
-        let err = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+        let err = native_status(&ctx, RpcRequestContext::unbounded())
             .await
             .expect_err("bug: a lookup with no per-tx answer must not produce a definite status");
 
-        assert!(matches!(err, RpcServerError::BackendUnavailable(_)));
+        assert!(
+            matches!(
+                err,
+                RpcServerError::BackendDataInvalid {
+                    reason: thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidCardinality,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]
@@ -1805,11 +1696,20 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
 
-        let err = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+        let err = native_status(&ctx, RpcRequestContext::unbounded())
             .await
             .expect_err("bug: extra per-tx answers must not produce a definite status");
 
-        assert!(matches!(err, RpcServerError::BackendUnavailable(_)));
+        assert!(
+            matches!(
+                err,
+                RpcServerError::BackendDataInvalid {
+                    reason: thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidCardinality,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]
@@ -1819,11 +1719,11 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
 
-        let status = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+        let status = native_status(&ctx, RpcRequestContext::unbounded())
             .await
             .expect("bug: consulted-and-missed lookups should produce a status");
 
-        assert!(matches!(status, TransactionStatus::Unknown));
+        assert!(matches!(status, native_out::TransactionStatus::Unknown {}));
     }
 
     #[tokio::test]
@@ -1842,7 +1742,7 @@ mod tests {
             );
         }
 
-        let error = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+        let error = native_status(&ctx, RpcRequestContext::unbounded())
             .await
             .expect_err("saturated lookup admission should not claim an unknown status");
 
@@ -1853,10 +1753,10 @@ mod tests {
         );
 
         drop(permits);
-        let status = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+        let status = native_status(&ctx, RpcRequestContext::unbounded())
             .await
             .expect("lookup should recover when admission capacity is released");
-        assert!(matches!(status, TransactionStatus::Unknown));
+        assert!(matches!(status, native_out::TransactionStatus::Unknown {}));
     }
 
     #[tokio::test]
@@ -1876,9 +1776,7 @@ mod tests {
 
         let lookup = tokio::spawn({
             let ctx = ctx.clone();
-            async move {
-                get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()).await
-            }
+            async move { native_status(&ctx, RpcRequestContext::unbounded()).await }
         });
         started.notified().await;
 
@@ -1955,9 +1853,7 @@ mod tests {
         for _ in 0..SCHEDULER_LOOKUP_CONCURRENCY {
             let lookup = tokio::spawn({
                 let ctx = ctx.clone();
-                async move {
-                    get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()).await
-                }
+                async move { native_status(&ctx, RpcRequestContext::unbounded()).await }
             });
             started.notified().await;
             lookup.abort();
@@ -2005,11 +1901,11 @@ mod tests {
             .expect("normal scheduler lane should remain available");
         let status = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()),
+            native_status(&ctx, RpcRequestContext::unbounded()),
         )
         .await
         .expect("lookup capacity should recover after cancellation")
         .expect("replacement lookup connections should remain usable");
-        assert!(matches!(status, TransactionStatus::Unknown));
+        assert!(matches!(status, native_out::TransactionStatus::Unknown {}));
     }
 }

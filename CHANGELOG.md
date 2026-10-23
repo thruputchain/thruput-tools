@@ -32,14 +32,28 @@ surface, which no binary served:
 - `thruput-json-rpc-api` drops the `GroundhogApi` trait and its generated
   `GroundhogApiClient`, `GroundhogApiServer` and `GroundhogApiOpenRpc` items.
   Use `thruput_json_rpc_client::NativeClient` and `native::NativeApi`.
-- `thruput-json-rpc-server` drops `ViewPlane`, `BuildInfo`,
-  `tx::validate_raw_transaction` and `GroundhogRpcServer::unified`.
+- `thruput-json-rpc-server` drops `ViewPlane`, `SubmitPlane`, `ReadPlane`,
+  `BuildInfo`, `tx::validate_raw_transaction` and
+  `GroundhogRpcServer::unified`.
   `GroundhogRpcServer` now takes submit, chain and read planes only:
   `GroundhogRpcServer::new(submit, chain, read, config)`. Build servers with
   `native::service::NativeService`, implement simulation with
-  `native::read::NativeSimulationPlane`, and validate decoded transactions
-  with `tx::validate_raw_transaction_bytes`.
-- `thruput-hogd-backend` drops the legacy view decoders `view::view_outcome`,
-  `view::view_batch_response`, `view::root_output` and `view::ViewOutcome`.
-  Decode simulation results with `native::simulation` and
-  `native::simulations`.
+  `native::read::NativeSimulationPlane` and the other `native::read` and
+  `native::transaction` planes, and validate decoded transactions with
+  `tx::validate_raw_transaction_bytes`.
+- `thruput-hogd-backend` drops the legacy decoders those traits used:
+  `view::{view_outcome, view_batch_response, root_output, ViewOutcome}`,
+  `db_gateway::{single_item, single_item_read, storage_item_read,
+  address_auth_data_read}`, `indexer::{event_page, query_error,
+  transaction_ref_page, public_event_page, DecodedEventPage, DroppedEvent}`
+  and `receipt::{transaction_receipt, DecodedReceipt, exec_status,
+  root_output_buffers}`. The `native` module decodes the same backend results,
+  for example `native::simulation`, `native::simulations` and
+  `native::history::event_page`.
+
+### Gateway metrics
+
+`hog-gateway` no longer exports
+`groundhog_gateway_malformed_events_dropped_total`. Only the removed legacy
+event and receipt decoding recorded it; native decoding rejects a result with
+malformed events instead. Remove dashboards or alerts that read it.
