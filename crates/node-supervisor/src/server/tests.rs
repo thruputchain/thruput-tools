@@ -1890,7 +1890,7 @@ async fn contract_events_first_page_returns_two_events() {
 
 #[tokio::test]
 #[serial]
-async fn get_storage_at_existing_key_returns_item_from_hogd_dev_gateway() {
+async fn get_storage_existing_key_returns_item_from_hogd_dev_gateway() {
     // Arrange
     let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
     let hogd = HogdDevConfig::default()
@@ -1917,7 +1917,7 @@ async fn get_storage_at_existing_key_returns_item_from_hogd_dev_gateway() {
             NamedParams(serde_json::json!({"address": address, "key": CANNED_STORAGE_KEY_HEX})),
         )
         .await
-        .expect("bug: getStorageAt should succeed");
+        .expect("bug: getStorage should succeed");
 
     // Assert
     assert_eq!(read["stateBlockHeight"], CANNED_STORAGE_HEIGHT.to_string());
@@ -1929,7 +1929,7 @@ async fn get_storage_at_existing_key_returns_item_from_hogd_dev_gateway() {
 
 #[tokio::test]
 #[serial]
-async fn get_storage_at_works_when_gateway_is_advertised_without_indexer() {
+async fn get_storage_works_when_gateway_is_advertised_without_indexer() {
     // Arrange
     let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-gateway");
     let hogd = HogdDevConfig::default()
@@ -1956,7 +1956,7 @@ async fn get_storage_at_works_when_gateway_is_advertised_without_indexer() {
             NamedParams(serde_json::json!({"address": address, "key": CANNED_STORAGE_KEY_HEX})),
         )
         .await
-        .expect("bug: getStorageAt should succeed with DbGateway only");
+        .expect("bug: getStorage should succeed with DbGateway only");
 
     // Assert
     assert_eq!(read["stateBlockHeight"], CANNED_STORAGE_HEIGHT.to_string());
@@ -1980,7 +1980,7 @@ async fn get_storage_at_works_when_gateway_is_advertised_without_indexer() {
 
 #[tokio::test]
 #[serial]
-async fn get_storage_at_missing_key_returns_null_item_with_snapshot_height() {
+async fn get_storage_missing_key_returns_null_item_with_snapshot_height() {
     // Arrange
     let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
     let hogd = HogdDevConfig::default()
@@ -2009,7 +2009,7 @@ async fn get_storage_at_missing_key_returns_null_item_with_snapshot_height() {
             ),
         )
         .await
-        .expect("bug: getStorageAt miss should succeed");
+        .expect("bug: getStorage miss should succeed");
 
     // Assert
     assert_eq!(read["stateBlockHeight"], CANNED_STORAGE_HEIGHT.to_string());

@@ -58,7 +58,7 @@ network capacity.
 | --- | --- |
 | Method definitions and wire version | [json-rpc-api](../crates/json-rpc/json-rpc-api/src/lib.rs) |
 | Payloads and errors | [json-rpc-types](../crates/json-rpc/json-rpc-types/src/lib.rs) |
-| Shared public server | [json-rpc-server](../crates/json-rpc/json-rpc-server/src/server.rs) |
+| Shared public server | [json-rpc-server](../crates/json-rpc/json-rpc-server/src/native/service.rs) |
 | Backend response mapping | [hogd-backend](../crates/x23/hogd-backend/src/lib.rs) |
 | Production service wiring | [gateway](../crates/json-rpc/json-rpc-gateway/src/main.rs) |
 | Local runtime lifecycle | [node-supervisor](../crates/node-supervisor/src/lib.rs) |

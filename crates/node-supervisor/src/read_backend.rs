@@ -109,7 +109,7 @@ impl HogdDevReadBackend {
             Some(connect_db_gateway(endpoint, protocol_version, expected_protocol).await?)
         } else {
             tracing::warn!(
-                "hogd-dev did not advertise a DbGateway endpoint; getStorageAt is unavailable"
+                "hogd-dev did not advertise a DbGateway endpoint; DB-backed state reads are unavailable"
             );
             None
         };

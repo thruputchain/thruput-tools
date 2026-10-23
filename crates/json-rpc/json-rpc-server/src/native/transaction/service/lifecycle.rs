@@ -1,4 +1,4 @@
-use super::GroundhogRpcServer;
+use super::NativeTransactionService;
 use crate::native::transaction::{
     NativeSubmitPlane, NativeTransactionReadPlane, SubmissionAttempt, read_error, submit_error,
     within_native_read_deadline,
@@ -11,7 +11,7 @@ use jsonrpsee::core::RpcResult;
 use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
 use thruput_json_rpc_types::{requests as input, responses as out, transaction::TxHash};
 
-impl<S, C: ChainPlane, R> GroundhogRpcServer<S, C, R> {
+impl<S, C: ChainPlane, R> NativeTransactionService<S, C, R> {
     pub(super) async fn prepare_transaction(
         &self,
         context: RpcRequestContext,
@@ -60,10 +60,10 @@ impl<S, C: ChainPlane, R> GroundhogRpcServer<S, C, R> {
     }
 }
 
-impl<S: NativeSubmitPlane, C: ChainPlane, R> GroundhogRpcServer<S, C, R> {
+impl<S: NativeSubmitPlane, C: ChainPlane, R> NativeTransactionService<S, C, R> {
     /// Native single-attempt submission behind `NativeService`'s `sendTransaction`.
     #[tracing::instrument(skip_all)]
-    pub async fn native_send_transaction(
+    pub async fn send_transaction(
         &self,
         request: input::SendTransactionRequest,
     ) -> RpcResult<out::SendTransactionResult> {
@@ -105,10 +105,10 @@ impl<S: NativeSubmitPlane, C: ChainPlane, R> GroundhogRpcServer<S, C, R> {
     }
 }
 
-impl<S, C, R: NativeTransactionReadPlane> GroundhogRpcServer<S, C, R> {
+impl<S, C, R: NativeTransactionReadPlane> NativeTransactionService<S, C, R> {
     /// Native committed receipt lookup, preserving independently validated observation.
     #[tracing::instrument(skip_all)]
-    pub async fn native_transaction_receipt(
+    pub async fn get_transaction_receipt(
         &self,
         request: input::TransactionQuery,
     ) -> RpcResult<out::ReceiptResult> {
@@ -135,7 +135,7 @@ impl<S, C, R: NativeTransactionReadPlane> GroundhogRpcServer<S, C, R> {
     }
     /// Native retained status lookup. A negative observation does not prove nonexecution.
     #[tracing::instrument(skip_all)]
-    pub async fn native_transaction_status(
+    pub async fn get_transaction_status(
         &self,
         request: input::TransactionQuery,
     ) -> RpcResult<out::TransactionStatus> {

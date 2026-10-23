@@ -12,9 +12,9 @@ use super::{
         NativeBlockPlane, NativeHistoryPlane, NativeReadCapabilities, NativeReadService,
         NativeSimulationPlane, NativeStatePlane,
     },
-    transaction::{NativeSubmitPlane, NativeTransactionReadPlane},
+    transaction::{NativeSubmitPlane, NativeTransactionReadPlane, NativeTransactionService},
 };
-use crate::{BuildVersion, ChainPlane, GroundhogRpcServer, RpcServerConfig};
+use crate::{BuildVersion, ChainPlane, RpcServerConfig};
 
 /// Configured backend planes. Transient health does not change registration.
 /// Funding and local scheduler methods are attached before module finalization.
@@ -91,7 +91,7 @@ impl NativeCapabilities {
 #[derive(Debug)]
 pub struct NativeService<S, C, R, V, F = ()> {
     reads: NativeReadService<C, R, V>,
-    transactions: GroundhogRpcServer<S, C, R>,
+    transactions: NativeTransactionService<S, C, R>,
     capabilities: NativeCapabilities,
     funding: F,
 }
@@ -123,7 +123,7 @@ impl<S, C: ChainPlane + Clone, R: Clone, V> NativeService<S, C, R, V> {
             build,
             NativeReadCapabilities::new(capabilities.db, capabilities.simulation),
         );
-        let transactions = GroundhogRpcServer::new(submit, chain, read, config);
+        let transactions = NativeTransactionService::new(submit, chain, read, config);
         Self {
             reads,
             transactions,
@@ -242,13 +242,13 @@ macro_rules! dispatch {
         $s.reads.simulate_invocations($r).await
     };
     (send_transaction, $s:expr, $r:expr) => {
-        $s.transactions.native_send_transaction($r).await
+        $s.transactions.send_transaction($r).await
     };
     (get_transaction_status, $s:expr, $r:expr) => {
-        $s.transactions.native_transaction_status($r).await
+        $s.transactions.get_transaction_status($r).await
     };
     (get_transaction_receipt, $s:expr, $r:expr) => {
-        $s.transactions.native_transaction_receipt($r).await
+        $s.transactions.get_transaction_receipt($r).await
     };
     (request_airdrop, $s:expr, $r:expr) => {
         $s.funding.request_airdrop($r).await

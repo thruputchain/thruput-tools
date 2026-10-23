@@ -7,21 +7,17 @@
 
 pub mod backend;
 pub mod batch;
-mod block_queries;
 pub mod config;
 pub mod error;
 pub mod params;
-pub mod server;
 mod tip_cache;
 pub mod tx;
 
 pub use thruput_build_info::{BuildVersion, build_version};
 
 pub use backend::{ChainPlane, RpcRequestContext, TipReading, ValidatedTransaction};
-pub use block_queries::validate_page as validate_block_transaction_page;
 pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig, ViewBatchConfig};
 pub use error::RpcServerError;
-pub use server::GroundhogRpcServer;
 
 /// Native JSON-RPC transport.
 pub mod native;

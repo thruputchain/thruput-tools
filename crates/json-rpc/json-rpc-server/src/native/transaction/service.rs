@@ -1,4 +1,7 @@
-mod transaction;
+//! Native transaction lifecycle and the db-tip cache behind its submission
+//! pre-checks.
+
+mod lifecycle;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,32 +19,32 @@ use crate::{ChainPlane, RpcRequestContext, RpcServerConfig};
 /// started by [`Self::new`] keeps it current, so a submit reads what that
 /// task published; a bound re-check still fetches for itself.
 #[derive(Debug)]
-pub struct GroundhogRpcServer<S, C, R> {
+pub struct NativeTransactionService<S, C, R> {
     submit: S,
     chain: Arc<C>,
     read: R,
     config: RpcServerConfig,
     tip_cache: TipCache,
-    /// Aborts the background refresh when the server is dropped, which
+    /// Aborts the background refresh when the service is dropped, which
     /// for a served one is when jsonrpsee drops the module holding it.
     _tip_refresh: Option<AbortOnDrop>,
 }
 
-impl<S, C, R> GroundhogRpcServer<S, C, R> {
+impl<S, C, R> NativeTransactionService<S, C, R> {
     fn request_context(&self) -> RpcRequestContext {
         RpcRequestContext::new(self.config.request_timeout_ms.map(Duration::from_millis))
     }
 }
 
-impl<S, C, R> GroundhogRpcServer<S, C, R>
+impl<S, C, R> NativeTransactionService<S, C, R>
 where
     C: ChainPlane,
 {
-    /// Create a server wrapper around independent backend planes.
+    /// Create the service over independent backend planes.
     ///
     /// When called inside a Tokio runtime this also starts the background
     /// task that refreshes the cached db-tip reading every
-    /// `tip_refresh_interval_ms`; it stops when the server is dropped. An
+    /// `tip_refresh_interval_ms`; it stops when the service is dropped. An
     /// interval of zero starts no task and makes every pre-check fetch its
     /// own reading.
     pub fn new(submit: S, chain: C, read: R, config: RpcServerConfig) -> Self {

@@ -19,10 +19,10 @@ use thruput_json_rpc_types::transaction::TxHash;
 use thruput_json_rpc_types::{BlockHeight, requests};
 use xdr_common::VecM;
 
-type Server<S, C> = GroundhogRpcServer<S, C, ()>;
+type Server<S, C> = NativeTransactionService<S, C, ()>;
 
 fn server<S, C: ChainPlane>(submit: S, chain: C, config: RpcServerConfig) -> Server<S, C> {
-    GroundhogRpcServer::new(submit, chain, (), config)
+    NativeTransactionService::new(submit, chain, (), config)
 }
 
 async fn submit<S: NativeSubmitPlane, C: ChainPlane>(
@@ -30,7 +30,7 @@ async fn submit<S: NativeSubmitPlane, C: ChainPlane>(
     tx: Vec<u8>,
 ) -> Result<TxHash, ErrorObjectOwned> {
     server
-        .native_send_transaction(requests::SendTransactionRequest {
+        .send_transaction(requests::SendTransactionRequest {
             signed_transaction: HexBytes(tx),
         })
         .await
