@@ -1,8 +1,8 @@
 //! Stub backend planes that answer `NotImplemented`.
 //!
 //! The supervisor serves submit, chain, and read methods through real
-//! hogd-dev adapters. This stub stands in only for the read and view
-//! planes when their backing services are not connected, so those methods
+//! hogd-dev adapters. This stub stands in only for the read plane when
+//! its backing services are not connected, so those methods
 //! fail with a stable wire error instead of a transport error.
 //!
 //! Wire-error strings carry only the JSON-RPC method name, so the public
@@ -14,7 +14,7 @@ use thruput_json_rpc_server::native::{
     read::{NativeBlockPlane, NativeHistoryPlane, NativeStatePlane, StateKey},
     transaction::{NativeReadError, NativeTransactionReadPlane},
 };
-use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError, ViewPlane};
+use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
 use thruput_json_rpc_types::{
     ContractAddress,
     address_auth::AddressAuthDataResponse,
@@ -96,9 +96,6 @@ impl ReadPlane for StubBackend {
         Err(RpcServerError::NotImplemented("getAddressAuthData".into()))
     }
 }
-
-#[async_trait]
-impl ViewPlane for StubBackend {}
 
 #[async_trait]
 impl NativeBlockPlane for StubBackend {

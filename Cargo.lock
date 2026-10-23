@@ -4493,7 +4493,6 @@ dependencies = [
 name = "thruput-json-rpc-client"
 version = "0.34.0"
 dependencies = [
- "async-trait",
  "jsonrpsee",
  "jsonschema",
  "schemars",
@@ -4508,7 +4507,6 @@ dependencies = [
  "thruput-xdr",
  "tokio",
  "tracing",
- "xdr-common",
 ]
 
 [[package]]

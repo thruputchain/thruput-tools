@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
-use thruput_json_rpc_server::{
-    ChainPlane, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
-};
+use thruput_json_rpc_server::native::read::NativeSimulationPlane;
 use thruput_json_rpc_types::ContractAddress;
 use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::protocol_token::protocol_text;
@@ -21,37 +19,6 @@ use tokio::net::TcpListener;
 use xdr_common::{BytesM, VecM};
 
 use super::*;
-
-#[derive(Clone)]
-struct UnusedPlane;
-
-#[async_trait]
-impl SubmitPlane for UnusedPlane {
-    async fn submit_raw_transaction(
-        &self,
-        _: RpcRequestContext,
-        _: ValidatedTransaction,
-    ) -> Result<(), RpcServerError> {
-        panic!("views must not submit transactions")
-    }
-}
-
-#[async_trait]
-impl ChainPlane for UnusedPlane {
-    async fn chain_tip(&self, _: RpcRequestContext) -> Result<TipReading, RpcServerError> {
-        Err(RpcServerError::NotImplemented("chainTip".into()))
-    }
-    async fn get_block_by_number(
-        &self,
-        _: RpcRequestContext,
-        _: thruput_json_rpc_types::BlockHeight,
-    ) -> Result<Option<thruput_json_rpc_types::block::BlockInfo>, RpcServerError> {
-        panic!("views must not fetch blocks")
-    }
-    async fn pending_transaction_count(&self, _: RpcRequestContext) -> Result<u64, RpcServerError> {
-        panic!("views must not read the mempool")
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FakeViewGatewayMode {
@@ -165,14 +132,13 @@ async fn start_fake_view_gateway(
     (addr, handle)
 }
 
-fn request(caller: Option<ContractAddress>) -> ViewRequest {
-    ViewRequest {
-        auth_claim: None,
-        min_height: None,
-        contract: ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])),
+fn invocation() -> thruput_json_rpc_types::requests::Invocation {
+    thruput_json_rpc_types::requests::Invocation {
+        address: ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])),
         entrypoint: HexBytes(vec![8; 8]),
         calldata: HexBytes(vec![1, 2, 3]),
-        caller,
+        caller: None,
+        assumed_auth: None,
         gas_limit: None,
     }
 }
@@ -189,111 +155,17 @@ async fn batch_pending_io_respects_the_public_deadline() {
     .await
     .unwrap();
     let result = backend
-        .view_batch(
+        .simulate_batch(
             RpcRequestContext::new(Some(Duration::from_millis(10))),
-            thruput_json_rpc_types::view::ViewBatchRequest {
-                calls: vec![thruput_json_rpc_types::view::ViewCall {
-                    auth_claim: None,
-                    contract: ContractAddress::from(thruput_xdr::types::ContractAddress::from(
-                        [7; 32],
-                    )),
-                    entrypoint: HexBytes(vec![8; 8]),
-                    calldata: HexBytes(vec![1, 2, 3]),
-                    caller: None,
-                    gas_limit: None,
-                }],
-                min_height: None,
+            thruput_json_rpc_types::requests::SimulateInvocationsRequest {
+                invocations: vec![invocation()],
+                min_state_block_height: None,
             },
             10_000_000,
             thruput_json_rpc_server::ViewBatchConfig::default(),
         )
         .await;
     assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
-}
-
-#[tokio::test]
-async fn public_views_preserve_order_gas_height_and_freshness_errors() {
-    use crate::stub_backend::StubBackend;
-    use thruput_json_rpc_api::GroundhogApiServer;
-    use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-    use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
-    use thruput_xdr::types::SHA256Hash;
-
-    let (addr, fake) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
-    let backend = HogdDevViewBackend::connect_optional(
-        Some(addr),
-        &protocol_text(&PROTOCOL_VERSION),
-        None,
-        Duration::from_mins(1),
-    )
-    .await
-    .unwrap();
-    let module = GroundhogRpcServer::new(
-        UnusedPlane,
-        UnusedPlane,
-        StubBackend,
-        backend,
-        NetworkInfo::new(NetworkHash::from(SHA256Hash::from([0; 32]))),
-        RpcServerConfig::default()
-            .with_view_timeout_ms(60_000)
-            .with_view_batch(thruput_json_rpc_server::ViewBatchConfig {
-                max_gas: 1_000,
-                max_response_bytes: 256,
-                ..Default::default()
-            }),
-        BuildInfo::new("test", None),
-    )
-    .into_rpc();
-    for min_height in ["42", "43"] {
-        let calls: Vec<_> = [("0x01", "123"), ("0x02", "456")].into_iter().map(|(calldata, gas)| serde_json::json!({
-            "contract": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])), "entrypoint": "0x0808080808080808", "calldata": calldata, "gasLimit": gas,
-            "authClaim": {"kind":"sourceAddress", "allowedKeys":5, "requiredWeight": if calldata == "0x01" { 3 } else { 4 }},
-        })).collect();
-        let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"groundhog_viewBatch", "params":[{"calls":calls,"minHeight":min_height}]}).to_string();
-        let (response, _) = module.raw_json_request(&request, 1).await.unwrap();
-        let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
-        if min_height == "42" {
-            assert_eq!(
-                response["result"],
-                serde_json::json!({"height":"42", "results":[
-                    {"output":{"result":"return","returnData":"0x01"},"gasUsed":"123","events":[]},
-                    {"output":{"result":"return","returnData":"0x02"},"gasUsed":"456","events":[]}
-                ]})
-            );
-        } else {
-            assert_eq!(response["error"]["code"], -32011);
-            assert_eq!(
-                response["error"]["data"],
-                serde_json::json!({"requested":"43","observed":"42"})
-            );
-        }
-    }
-    for floor in [None, Some("0"), Some("41"), Some("42"), Some("43")] {
-        let mut call = serde_json::to_value(request(None)).unwrap();
-        call["gasLimit"] = serde_json::json!("2000");
-        if let Some(floor) = floor {
-            call["minHeight"] = serde_json::json!(floor);
-        }
-        let request = serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"groundhog_view", "params":[call]}).to_string();
-        let (response, _) = module.raw_json_request(&request, 1).await.unwrap();
-        let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
-        if floor == Some("43") {
-            assert_eq!(response["error"]["code"], -32011);
-            assert_eq!(
-                response["error"]["data"],
-                serde_json::json!({"requested":"43","observed":"42"})
-            );
-        } else {
-            assert_eq!(
-                response["result"],
-                serde_json::json!({
-                    "height":"42", "gasUsed":"2000", "events":[],
-                    "output":{"result":"return", "returnData":"0x010203"},
-                })
-            );
-        }
-    }
-    fake.abort();
 }
 
 #[tokio::test]
@@ -406,7 +278,19 @@ async fn view_gateway_rpc_timeout_maps_to_backend_timeout() {
     .expect("fake ViewGateway should connect");
 
     let result = backend
-        .view(RpcRequestContext::unbounded(), request(None), 123)
+        .simulate(
+            RpcRequestContext::unbounded(),
+            thruput_json_rpc_types::requests::SimulateInvocationRequest {
+                address: ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])),
+                entrypoint: HexBytes(vec![8; 8]),
+                calldata: HexBytes(vec![1, 2, 3]),
+                caller: None,
+                assumed_auth: None,
+                gas_limit: None,
+                min_state_block_height: None,
+            },
+            123,
+        )
         .await;
 
     assert!(
@@ -416,34 +300,7 @@ async fn view_gateway_rpc_timeout_maps_to_backend_timeout() {
 }
 
 #[tokio::test]
-async fn request_deadline_caps_view_gateway_timeout() {
-    let (addr, _server) = start_fake_view_gateway(FakeViewGatewayMode::ViewSlow).await;
-    let backend = HogdDevViewBackend::connect_optional(
-        Some(addr),
-        &protocol_text(&PROTOCOL_VERSION),
-        None,
-        Duration::from_secs(30),
-    )
-    .await
-    .expect("fake ViewGateway should connect");
-
-    let result = backend
-        .view(
-            RpcRequestContext::new(Some(Duration::from_millis(10))),
-            request(None),
-            123,
-        )
-        .await;
-
-    assert!(
-        matches!(result, Err(RpcServerError::BackendTimeout)),
-        "request deadline should cap ViewGateway timeout, got {result:?}"
-    );
-}
-
-#[tokio::test]
 async fn native_local_simulation_preserves_snapshot_and_deadline() {
-    use thruput_json_rpc_server::native::read::NativeSimulationPlane;
     use thruput_json_rpc_types::{requests, responses};
     for mode in [FakeViewGatewayMode::Batch, FakeViewGatewayMode::ViewSlow] {
         let (addr, task) = start_fake_view_gateway(mode).await;
@@ -485,7 +342,7 @@ async fn native_local_simulation_preserves_snapshot_and_deadline() {
 
 #[tokio::test]
 async fn native_local_batch_preserves_order_and_freshness_evidence() {
-    use thruput_json_rpc_server::{ViewBatchConfig, native::read::NativeSimulationPlane};
+    use thruput_json_rpc_server::ViewBatchConfig;
     use thruput_json_rpc_types::{requests as input, responses};
     let (addr, task) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
     let backend = HogdDevViewBackend::connect_optional(
@@ -512,7 +369,7 @@ async fn native_local_batch_preserves_order_and_freshness_evidence() {
                         allowed_keys: 5,
                         required_weight: weight,
                     }),
-                    gas_limit: Some(123),
+                    gas_limit: Some(100 * u64::from(weight)),
                 })
                 .collect(),
         };
@@ -532,7 +389,7 @@ async fn native_local_batch_preserves_order_and_freshness_evidence() {
             assert_eq!(result.results.len(), 2);
             assert_eq!(*result.state_block_height, 42);
             for (index, item) in result.results.iter().enumerate() {
-                assert_eq!(item.gas_used, 123);
+                assert_eq!(item.gas_used, 300 + 100 * u64::try_from(index).unwrap());
                 assert!(
                     matches!(&item.output,responses::InvocationOutput::Return { return_data } if return_data.0 == vec![u8::try_from(index).unwrap() + 3])
                 );

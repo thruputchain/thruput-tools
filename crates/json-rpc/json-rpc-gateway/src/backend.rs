@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use thruput_json_rpc_server::{
     ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading,
-    ValidatedTransaction, ViewPlane,
+    ValidatedTransaction,
 };
 use thruput_json_rpc_types::{
     BlockHeight, ContractAddress,
@@ -13,7 +13,6 @@ use thruput_json_rpc_types::{
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
-    view::{ViewRequest, ViewResponse},
 };
 
 use crate::{context::GatewayContext, handlers};
@@ -167,31 +166,6 @@ impl ReadPlane for GatewayBackend {
             .storage_batcher
             .read_address_auth_data(context, address)
             .await
-    }
-}
-
-#[async_trait]
-impl ViewPlane for GatewayBackend {
-    #[tracing::instrument(skip_all)]
-    async fn view_batch(
-        &self,
-        context: RpcRequestContext,
-        request: thruput_json_rpc_types::view::ViewBatchRequest,
-        gas_limit: u64,
-        limits: thruput_json_rpc_server::ViewBatchConfig,
-    ) -> Result<thruput_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
-        handlers::view::view_batch(&self.ctx, context, request, gas_limit, limits).await
-    }
-
-    #[tracing::instrument(skip_all)]
-    async fn view(
-        &self,
-        context: RpcRequestContext,
-        request: ViewRequest,
-        gas_limit: u64,
-    ) -> Result<ViewResponse, RpcServerError> {
-        let context = self.bounded_context(context);
-        handlers::view::view(&self.ctx, context, request, gas_limit).await
     }
 }
 

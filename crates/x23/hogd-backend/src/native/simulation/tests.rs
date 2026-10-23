@@ -96,15 +96,12 @@ fn native_query_preserves_address_caller_auth_and_budget() {
     assert_ne!(query.auth_claim, crate::view::public_view_auth_claim());
 }
 #[test]
-fn malformed_events_fail_atomically_while_wire13_keeps_its_behavior() {
+fn malformed_events_fail_atomically() {
     invalid_reason(simulation(single(42, true), None), Reason::InvalidEncoding);
     invalid_reason(
         simulations(&query(), batch(42, 1, true)),
         Reason::InvalidEncoding,
     );
-    let legacy = crate::view::view_outcome("view", single(42, true)).unwrap();
-    assert_eq!(legacy.dropped_events, 1);
-    assert_eq!(legacy.response.events.len(), 1);
     let result = simulation(single(42, false), Some(42.into())).unwrap();
     assert_eq!(result.events.len(), 2);
     assert_eq!(result.gas_used, 50);
@@ -191,6 +188,28 @@ fn unknown_outcomes_are_invalid_data_and_execution_failures_are_results() {
             out::InvocationOutput::Return { .. }
         ));
     }
+}
+
+#[test]
+fn single_service_failures_are_backend_unavailable_and_refusals_are_params() {
+    for result in [
+        ViewGatewayResult::ViewGatewayAbandoned,
+        ViewGatewayResult::ViewGatewayInternalError,
+    ] {
+        assert!(matches!(
+            simulation(result, None),
+            Err(RpcServerError::BackendUnavailable(_))
+        ));
+    }
+    assert!(matches!(
+        simulation(
+            ViewGatewayResult::ViewGatewayInvalidInput {
+                error_code: thruput_xdr::syscall_error::SyscallErrorCode(7),
+            },
+            None
+        ),
+        Err(RpcServerError::InvalidParam(_))
+    ));
 }
 
 #[test]

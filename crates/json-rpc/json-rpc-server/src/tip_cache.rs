@@ -1,12 +1,10 @@
-//! Shared db-tip reading: what the `sendRawTransaction` pre-checks and
-//! `chainConfig` read instead of fetching a tip each time, and the
-//! background task that keeps it current.
+//! Shared db-tip reading: what the `sendTransaction` pre-checks read instead
+//! of fetching a tip each time, and the background task that keeps it current.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::time::Instant;
 
-use thruput_json_rpc_types::network_config::ExecutionConfig;
 use thruput_tx_validation::NetworkConfigParams;
 
 use crate::backend::{ChainPlane, RpcRequestContext, TipReading};
@@ -18,13 +16,8 @@ use crate::error::RpcServerError;
 pub(crate) struct TipState {
     pub(crate) height: i64,
     /// `None` when the tip's network config is a version this build cannot
-    /// interpret: chain-configured pre-checks are then skipped and
-    /// `chainConfig` reports the config as unreadable rather than empty.
+    /// interpret: chain-configured pre-checks are then skipped.
     pub(crate) params: Option<NetworkConfigParams>,
-    /// Effective limits and storage prices read with this tip, `None` when
-    /// the backend did not supply them. Shared, so storing a reading and
-    /// serving `chainConfig` from it never copy the storage schedule.
-    pub(crate) execution: Option<Arc<ExecutionConfig>>,
 }
 
 impl TipState {
@@ -39,7 +32,6 @@ impl TipState {
         Self {
             height: *reading.tip.height,
             params,
-            execution: reading.execution.clone(),
         }
     }
 }
@@ -52,10 +44,7 @@ impl TipState {
 /// keep the higher tip, both safe because the tip only grows and the
 /// config changes only at upgrade blocks. The exception is a cold cache,
 /// where callers do wait on the in-flight probe rather than answer empty.
-///
-/// Those allowances suit an advisory pre-check. A caller that must not act
-/// on a lapsed reading asks [`Self::fresh`] and reads the tip itself when
-/// it answers `None`.
+/// Those allowances suit an advisory pre-check.
 #[derive(Debug, Clone)]
 pub(crate) struct TipCache {
     inner: Arc<TipCacheInner>,
@@ -90,11 +79,6 @@ struct TipCacheState {
     /// rate limiter: it decides who probes, not how old the reading is.
     last_attempt: Option<Instant>,
     reading: Option<TipState>,
-    /// When `reading` was obtained. Distinct from `last_attempt` because a
-    /// failed probe moves the attempt forward while the reading it failed
-    /// to replace keeps ageing; a caller asking whether the reading is
-    /// fresh has to see that age, not the attempt.
-    reading_at: Option<Instant>,
     /// A probe claimed the current window and has not reported back. Stays
     /// set if that probe's request is cancelled mid-flight; cold-cache
     /// waiters therefore give up after the probe timeout rather than trust
@@ -103,18 +87,15 @@ struct TipCacheState {
 }
 
 impl TipCacheState {
-    /// Keep `reading` unless a newer one is already stored; says whether it
-    /// was kept.
-    fn record(&mut self, reading: TipState) -> bool {
-        let newer = self
+    /// Keep `reading` unless a newer one is already stored.
+    fn record(&mut self, reading: TipState) {
+        if self
             .reading
             .as_ref()
-            .is_none_or(|current| reading.height >= current.height);
-        if newer {
+            .is_none_or(|current| reading.height >= current.height)
+        {
             self.reading = Some(reading);
-            self.reading_at = Some(Instant::now());
         }
-        newer
     }
 }
 
@@ -137,32 +118,6 @@ impl TipCache {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Record a reading obtained by any path, restarting the reuse window
-    /// when it is the newest.
-    pub(crate) fn store(&self, reading: TipState) {
-        let mut state = self.lock_state();
-        if state.record(reading) {
-            state.last_attempt = Some(Instant::now());
-        }
-    }
-
-    /// Reading from within `window`, without going to the backend.
-    ///
-    /// `None` when nothing is stored or the stored reading has lapsed, so a
-    /// caller that must not answer from a lapsed reading can read the tip
-    /// itself and let a failure surface. Unlike [`Self::reading`] this
-    /// never falls back to an older reading, and it ages the reading itself
-    /// rather than the last attempt, so a backend that has been failing for
-    /// an hour cannot present an hour-old price as current.
-    pub(crate) fn fresh(&self, window: Duration) -> Option<TipState> {
-        let state = self.lock_state();
-        let at = state.reading_at?;
-        if Instant::now().duration_since(at) >= window {
-            return None;
-        }
-        state.reading.clone()
     }
 
     /// Current reading, refreshing it through `fetch` once `window` has
@@ -335,88 +290,58 @@ mod tests {
         )
     }
 
+    async fn probe(
+        cache: &TipCache,
+        window: Duration,
+        result: Result<TipReading, RpcServerError>,
+    ) -> TipRead {
+        cache
+            .reading(
+                window,
+                Duration::from_secs(1),
+                RpcRequestContext::unbounded(),
+                |_| async { result },
+            )
+            .await
+    }
+
     #[tokio::test]
     async fn an_overlapping_fetch_that_lands_late_does_not_lower_the_tip() {
         let cache = TipCache::default();
-        cache.store(TipState::from_reading(&tip_reading(10)));
+        probe(&cache, Duration::ZERO, Ok(tip_reading(10))).await;
 
-        let read = cache
-            .reading(
-                Duration::ZERO,
-                Duration::from_secs(1),
-                RpcRequestContext::unbounded(),
-                |_| async { Ok(tip_reading(9)) },
-            )
-            .await;
+        let read = probe(&cache, Duration::ZERO, Ok(tip_reading(9))).await;
 
         assert!(read.probed);
         assert_eq!(read.state.map(|tip| tip.height), Some(10));
-        cache.store(TipState::from_reading(&tip_reading(9)));
-        assert_eq!(
-            cache.fresh(Duration::from_mins(1)).map(|t| t.height),
-            Some(10)
-        );
-    }
-
-    #[test]
-    fn fresh_declines_a_reading_that_has_lapsed() {
-        let cache = TipCache::default();
-        cache.store(TipState::from_reading(&tip_reading(4)));
-
-        assert!(
-            cache.fresh(Duration::from_mins(1)).is_some(),
-            "a reading inside the window is served without a probe"
-        );
-        assert!(
-            cache.fresh(Duration::ZERO).is_none(),
-            "a lapsed reading is withheld so the caller reads the tip itself"
-        );
     }
 
     /// A backend that has been failing for a while keeps having probes
-    /// claimed against it. Those attempts must not present the reading they
-    /// failed to replace as current.
+    /// claimed against it; the advisory path still answers from the last
+    /// reading it obtained.
     #[tokio::test(start_paused = true)]
-    async fn a_failing_probe_does_not_make_a_stale_reading_look_fresh() {
+    async fn a_failing_probe_keeps_the_last_reading() {
         let cache = TipCache::default();
-        cache.store(TipState::from_reading(&tip_reading(7)));
+        probe(&cache, Duration::ZERO, Ok(tip_reading(7))).await;
 
         for _ in 0..4 {
             tokio::time::advance(Duration::from_secs(10)).await;
-            cache
-                .reading(
-                    Duration::ZERO,
-                    Duration::from_secs(1),
-                    RpcRequestContext::unbounded(),
-                    |_| async { Err(RpcServerError::BackendUnavailable("down".into())) },
-                )
-                .await;
+            let read = probe(
+                &cache,
+                Duration::ZERO,
+                Err(RpcServerError::BackendUnavailable("down".into())),
+            )
+            .await;
+            assert!(read.probed);
+            assert_eq!(read.state.map(|tip| tip.height), Some(7));
         }
 
-        assert_eq!(
-            cache
-                .reading(
-                    Duration::from_mins(1),
-                    Duration::from_secs(1),
-                    RpcRequestContext::unbounded(),
-                    |_| async { Ok(tip_reading(8)) },
-                )
-                .await
-                .state
-                .map(|tip| tip.height),
-            Some(7),
-            "the advisory path still falls back to the last reading"
-        );
+        let read = probe(&cache, Duration::from_mins(1), Ok(tip_reading(8))).await;
         assert!(
-            cache.fresh(Duration::from_secs(30)).is_none(),
-            "but the reading is 40s old, and a recent failed attempt is not a recent reading"
+            !read.probed,
+            "a recent failed attempt still owns the window"
         );
-    }
-
-    #[test]
-    fn fresh_is_none_until_a_reading_lands() {
-        let cache = TipCache::default();
-        assert!(cache.fresh(Duration::from_mins(1)).is_none());
+        assert_eq!(read.state.map(|tip| tip.height), Some(7));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

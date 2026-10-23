@@ -25,4 +25,4 @@ serde_json = { workspace = true }
 thruput-json-rpc-types = { workspace = true }
 thruput-open-rpc = { workspace = true }
 thruput-open-rpc-macros = { workspace = true }
-jsonrpsee = { workspace = true, features = ["server", "client-core", "macros"] }
+jsonrpsee = { workspace = true, features = ["server", "client-core"] }

@@ -1,6 +1,6 @@
 //! Proc macro for generating `OpenRPC` specs from jsonrpsee traits.
 //!
-//! Place `#[open_rpc(namespace = "groundhog", tag = "Core API")]` above
+//! Place `#[open_rpc(namespace = "demo", tag = "Demo")]` above
 //! the jsonrpsee `#[rpc(...)]` attribute on a trait.  The macro emits a
 //! companion struct `{TraitName}OpenRpc` with a
 //! `pub fn module_doc(builder: &mut <resolved-open-rpc-crate>::ModuleBuilder<'_>)`
@@ -24,7 +24,7 @@ use syn::{
 ///
 /// # Arguments
 ///
-/// - `namespace` (optional; omit for bare names) -- the method prefix, e.g. `"groundhog"`.
+/// - `namespace` (optional; omit for bare names) -- the method prefix, e.g. `"demo"`.
 /// - `tag` (optional) -- grouping label applied to every method.
 /// - `params = "object"` -- describe the fields of a single request DTO directly,
 ///   with `paramStructure` and `x-params-schema`. Emits only the companion, not
@@ -37,16 +37,16 @@ use syn::{
 /// # Example
 ///
 /// ```ignore
-/// #[open_rpc(namespace = "groundhog", tag = "Core API")]
-/// #[rpc(client, server, namespace = "groundhog")]
-/// pub trait GroundhogApi {
-///     /// Submit a signed transaction.
-///     #[method(name = "sendRawTransaction")]
-///     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash>;
+/// #[open_rpc(namespace = "demo", tag = "Demo")]
+/// #[rpc(client, server, namespace = "demo")]
+/// pub trait DemoApi {
+///     /// Echo the input.
+///     #[method(name = "echo")]
+///     async fn echo(&self, value: String) -> RpcResult<String>;
 /// }
 /// ```
 ///
-/// This generates `pub struct GroundhogApiOpenRpc;` with a
+/// This generates `pub struct DemoApiOpenRpc;` with a
 /// `module_doc(...)` method.
 ///
 /// Object documentation must not also generate wrapped jsonrpsee transport:

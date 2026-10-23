@@ -1,4 +1,4 @@
-//! Build `ViewGateway` queries and decode their results.
+//! Build `ViewGateway` queries for native simulation.
 //!
 //! A view is a sandboxed root invocation: hogd's viewing mode is what keeps
 //! writes from committing, so the query carries no special flags and the
@@ -6,21 +6,15 @@
 //! which lets a wallet preview show what a real submit would emit.
 
 use thruput_json_rpc_server::RpcServerError;
-use thruput_json_rpc_types::{
-    hex::HexBytes,
-    view::{RootInvocationOutput, ViewRequest, ViewResponse},
-};
-use thruput_view::ViewGatewayResult;
+use thruput_json_rpc_types::view::ViewRequest;
 use thruput_xdr::{
     auth_claim::{AuthClaim, AuthClaim_source_address_claim},
     contract::ContractEntrypointID,
     invoke_flag::InvokeFlag,
-    transaction::{Invocation, InvocationFrameOutput},
+    transaction::Invocation,
     view::TransactionViewQuery,
 };
 use xdr_common::{BytesM, VecM};
-
-use crate::event::parse_emitted_events;
 
 /// Build a batch with the remaining caller budget, rounded down to milliseconds.
 pub fn view_batch_query(
@@ -51,94 +45,8 @@ pub fn view_batch_query(
     })
 }
 
-/// Decode one complete batch. Malformed, incomplete, or stale results fail the group.
-pub fn view_batch_response(
-    service: &str,
-    query: &thruput_view::ViewGatewayBatchQuery,
-    result: thruput_view::ViewGatewayBatchResult,
-) -> Result<thruput_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
-    use thruput_json_rpc_types::view::{ViewBatchResponse, ViewCallResult, ViewHeightUnavailable};
-    use thruput_view::{ViewGatewayBatchOutcome as Outcome, ViewGatewayBatchResult};
-    match result {
-        ViewGatewayBatchResult::ViewGatewayBatchOk { payload } => {
-            if payload.results.0.len() != query.calls.0.len()
-                || *payload.height < 0
-                || query
-                    .min_height
-                    .as_ref()
-                    .is_some_and(|min| &payload.height < min)
-            {
-                return Err(RpcServerError::BackendUnavailable(format!(
-                    "{service} returned an incomplete or stale batch"
-                )));
-            }
-            let results = payload
-                .results
-                .0
-                .into_iter()
-                .map(|result| {
-                    let parsed = parse_emitted_events(result.events, None);
-                    if parsed.dropped != 0 {
-                        return Err(RpcServerError::BackendUnavailable(format!(
-                            "{service} returned malformed batch events"
-                        )));
-                    }
-                    Ok(ViewCallResult {
-                        gas_used: result.gas_consumed,
-                        output: root_output(service, result.output)?,
-                        events: parsed.events,
-                    })
-                })
-                .collect::<Result<_, _>>()?;
-            Ok(ViewBatchResponse {
-                height: payload.height,
-                results,
-            })
-        }
-        ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable { height_unavailable } => Err(
-            RpcServerError::ViewHeightUnavailable(ViewHeightUnavailable {
-                requested: height_unavailable.requested,
-                observed: height_unavailable.observed,
-            }),
-        ),
-        ViewGatewayBatchResult::Default { outcome }
-            if outcome == Outcome::ViewGatewayBatchDeadlineExceeded.0 =>
-        {
-            Err(RpcServerError::BackendTimeout)
-        }
-        ViewGatewayBatchResult::Default { outcome }
-            if outcome == Outcome::ViewGatewayBatchInvalidRequest.0 =>
-        {
-            Err(RpcServerError::InvalidParam(
-                "viewBatch exceeds backend request limits".into(),
-            ))
-        }
-        ViewGatewayBatchResult::Default { outcome }
-            if outcome == Outcome::ViewGatewayBatchResponseTooLarge.0 =>
-        {
-            Err(RpcServerError::InvalidParam(
-                "viewBatch response exceeds the endpoint limit; request fewer calls or events"
-                    .into(),
-            ))
-        }
-        other => Err(RpcServerError::BackendUnavailable(format!(
-            "{service} batch failed: {:?}",
-            other.outcome()
-        ))),
-    }
-}
-
-/// A decoded view answer and the events it dropped as malformed.
-#[derive(Debug)]
-pub struct ViewOutcome {
-    /// The public response for the caller.
-    pub response: ViewResponse,
-    /// How many emitted events were dropped as malformed.
-    pub dropped_events: usize,
-}
-
 /// Translate a public view request into hogd's query shape.
-/// The shared RPC server checks minimum height against the execution response.
+/// [`crate::native::simulation`] checks minimum height against the response.
 pub fn view_query(
     request: ViewRequest,
     gas_limit: u64,
@@ -178,83 +86,11 @@ pub fn public_view_auth_claim() -> AuthClaim {
     }
 }
 
-/// Map a root invocation frame's output onto the public view output.
-pub fn root_output(
-    service: &str,
-    output: InvocationFrameOutput,
-) -> Result<RootInvocationOutput, RpcServerError> {
-    match output {
-        InvocationFrameOutput::Return { return_buffer } => Ok(RootInvocationOutput::Return {
-            return_data: HexBytes(return_buffer.0),
-        }),
-        InvocationFrameOutput::Abort { abort_buffer } => Ok(RootInvocationOutput::Abort {
-            abort_data: HexBytes(abort_buffer.0),
-        }),
-        InvocationFrameOutput::Fault => Ok(RootInvocationOutput::Fault),
-        // The generated XDR enum is non-exhaustive across protocol updates.
-        _ => Err(RpcServerError::BackendUnavailable(format!(
-            "{service} returned an unsupported output variant; regenerate the ViewGateway \
-             client for this protocol"
-        ))),
-    }
-}
-
-/// Decode a `viewgateway_view` result into the public response.
-pub fn view_outcome(
-    service: &str,
-    result: ViewGatewayResult,
-) -> Result<ViewOutcome, RpcServerError> {
-    match result {
-        ViewGatewayResult::ViewGatewayOk { payload } => {
-            let output = root_output(service, payload.output)?;
-            let parsed = parse_emitted_events(payload.events, None);
-            Ok(ViewOutcome {
-                response: ViewResponse {
-                    output,
-                    events: parsed.events,
-                    height: payload.height,
-                    gas_used: payload.gas_consumed,
-                },
-                dropped_events: parsed.dropped,
-            })
-        }
-        // Rejected before any frame ran: deterministic for this request
-        // against this state, so it is the caller's to fix, not a retry.
-        ViewGatewayResult::ViewGatewayInvalidInput { error_code } => Err(
-            RpcServerError::InvalidParam(format!("{service} rejected the view: {error_code}")),
-        ),
-        ViewGatewayResult::ViewGatewayAbandoned => Err(RpcServerError::BackendUnavailable(
-            format!("{service} abandoned the view after retrying; retry later"),
-        )),
-        ViewGatewayResult::ViewGatewayInternalError => Err(RpcServerError::BackendUnavailable(
-            format!("{service} reported an internal error"),
-        )),
-        ViewGatewayResult::Default { outcome } => {
-            tracing::warn!(outcome, %service, "unexpected ViewGatewayResult outcome");
-            Err(RpcServerError::BackendUnavailable(format!(
-                "{service} returned unexpected outcome: {outcome}"
-            )))
-        }
-        // `Default` handles unknown wire discriminants. This arm is still kept
-        // for source-level forward compatibility because the generated enum is
-        // non-exhaustive and a future protocol crate may add a named variant.
-        other => {
-            tracing::warn!(result = ?other, %service, "unknown ViewGatewayResult variant");
-            Err(RpcServerError::BackendUnavailable(format!(
-                "{service} returned an unsupported result variant; regenerate the ViewGateway \
-                 client for this protocol"
-            )))
-        }
-    }
-}
-
 #[cfg(test)]
 mod batch_tests {
     use super::*;
     use std::time::Duration;
-    use thruput_json_rpc_types::view::ViewBatchRequest;
-    use thruput_view::{ViewGatewayBatchPayload, ViewGatewayBatchResult};
-    use thruput_xdr::view::TransactionViewResult;
+    use thruput_json_rpc_types::{hex::HexBytes, view::ViewBatchRequest};
 
     fn query() -> thruput_view::ViewGatewayBatchQuery {
         view_batch_query(
@@ -276,26 +112,8 @@ mod batch_tests {
         .unwrap()
     }
 
-    fn result(height: i64, outputs: Vec<InvocationFrameOutput>) -> ViewGatewayBatchResult {
-        ViewGatewayBatchResult::ViewGatewayBatchOk {
-            payload: ViewGatewayBatchPayload {
-                height: height.into(),
-                results: VecM(
-                    outputs
-                        .into_iter()
-                        .map(|output| TransactionViewResult {
-                            gas_consumed: 12,
-                            output,
-                            events: VecM(vec![]),
-                        })
-                        .collect(),
-                ),
-            },
-        }
-    }
-
     #[test]
-    fn batch_preserves_caller_budget_and_fault_as_a_result() {
+    fn batch_query_preserves_caller_budget_gas_and_parent() {
         let query = query();
         assert_eq!(query.budget_millis, 999);
         assert_eq!(query.max_response_bytes, 1_048_576);
@@ -304,32 +122,6 @@ mod batch_tests {
             query.calls.0[0].parent_address.as_ref().unwrap().as_ref(),
             &[8; 32]
         );
-        let response = view_batch_response(
-            "test",
-            &query,
-            result(42, vec![InvocationFrameOutput::Fault]),
-        )
-        .unwrap();
-        assert_eq!(*response.height, 42);
-        assert_eq!(response.results[0].gas_used, 12);
-        assert!(matches!(
-            response.results[0].output,
-            RootInvocationOutput::Fault
-        ));
-    }
-
-    #[test]
-    fn batch_rejects_partial_extra_and_stale_results() {
-        for result in [
-            result(42, vec![]),
-            result(41, vec![InvocationFrameOutput::Fault]),
-            result(42, vec![InvocationFrameOutput::Fault; 2]),
-        ] {
-            assert!(matches!(
-                view_batch_response("test", &query(), result),
-                Err(RpcServerError::BackendUnavailable(_))
-            ));
-        }
     }
 
     #[test]
@@ -347,23 +139,6 @@ mod batch_tests {
         assert_eq!(query.max_response_bytes, 321);
         assert!(matches!(
             view_batch_query(request, 123, Duration::ZERO, limits),
-            Err(RpcServerError::BackendTimeout)
-        ));
-    }
-
-    #[test]
-    fn batch_failure_maps_height_details_and_deadline() {
-        let result = ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
-            height_unavailable: thruput_view::ViewGatewayHeightUnavailable {
-                requested: 42.into(),
-                observed: 41.into(),
-            },
-        };
-        let error = view_batch_response("test", &query(), result).unwrap_err();
-        assert!(matches!(error, RpcServerError::ViewHeightUnavailable(_)));
-        let result = ViewGatewayBatchResult::Default { outcome: 4 };
-        assert!(matches!(
-            view_batch_response("test", &query(), result),
             Err(RpcServerError::BackendTimeout)
         ));
     }
