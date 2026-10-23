@@ -37,6 +37,7 @@ use crate::{
 };
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
+const LOCAL_AIRDROP_RETRY_AFTER_SECONDS: u64 = 1;
 
 /// Admits one locally signed funding transaction to the local scheduler.
 #[async_trait]
@@ -57,7 +58,6 @@ pub(crate) trait FundingStatusPlane: Send + Sync + 'static {
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError>;
 }
-const LOCAL_AIRDROP_RETRY_AFTER_SECONDS: u64 = 1;
 
 #[derive(Clone)]
 pub(crate) struct LocalAirdropContext {

@@ -8,21 +8,16 @@
 //! Block lookup has no failure arm; adapters also preserve its system RPC errors.
 
 use thruput_indexer::{
-    BlockLookupOutcome, BlockLookupResult, EventPage, EventPageResult, IndexerQueryOutcome,
-    TransactionRefPage, TransactionRefPageResult,
+    BlockLookupOutcome, BlockLookupResult,
     indexer::{TxInfo, TxInfoOutcome, TxInfoResult},
 };
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::{
     BlockHeight,
-    base58::Base58,
     block::BlockInfo,
-    events::{EventPage as PublicEventPage, IdentifiedEvent},
     transaction::{TransactionStatus, TxHash},
 };
 use thruput_trace::TxFailureDiagnostic;
-
-use crate::event::parse_emitted_event;
 
 /// Decode only a recognized block miss as absence. Canonical projection
 /// hashes the complete consensus value and rejects unsupported extensions.
@@ -75,44 +70,6 @@ pub enum TxLookup {
     NotFound,
 }
 
-/// Map an indexer query outcome code onto a backend error.
-pub fn query_error(service: &str, outcome: i32) -> RpcServerError {
-    let message = if outcome == IndexerQueryOutcome::IndexerQueryNotReady.0 {
-        format!("{service} query backend is not ready")
-    } else if outcome == IndexerQueryOutcome::IndexerQueryInternalFailure.0 {
-        format!("{service} query backend failed internally")
-    } else {
-        format!("{service} query returned unexpected outcome: {outcome}")
-    };
-    RpcServerError::BackendUnavailable(message)
-}
-
-/// Unwrap an event page, turning a query failure into a backend error.
-pub fn event_page(service: &str, result: EventPageResult) -> Result<EventPage, RpcServerError> {
-    match result {
-        EventPageResult::IndexerQueryOk { page } => Ok(page),
-        EventPageResult::Default { outcome } => Err(query_error(service, outcome)),
-        _ => Err(RpcServerError::BackendUnavailable(format!(
-            "{service} returned an unknown event-page result"
-        ))),
-    }
-}
-
-/// Unwrap a transaction-ref page, turning a query failure into a backend
-/// error.
-pub fn transaction_ref_page(
-    service: &str,
-    result: TransactionRefPageResult,
-) -> Result<TransactionRefPage, RpcServerError> {
-    match result {
-        TransactionRefPageResult::IndexerQueryOk { page } => Ok(page),
-        TransactionRefPageResult::Default { outcome } => Err(query_error(service, outcome)),
-        _ => Err(RpcServerError::BackendUnavailable(format!(
-            "{service} returned an unknown transaction-page result"
-        ))),
-    }
-}
-
 /// Decode a transaction lookup.
 ///
 /// Only `TxInfoNotFound` counts as a miss. Any other bare outcome, and any
@@ -159,60 +116,5 @@ pub fn committed_status(lookup: TxLookup) -> Option<TransactionStatus> {
         }),
         TxLookup::RecentFailure(recent_failure) => Some(TransactionStatus::from(&recent_failure)),
         TxLookup::NotFound => None,
-    }
-}
-
-/// Where a malformed event sat in a page, for the caller's diagnostics.
-#[derive(Debug, Clone)]
-pub struct DroppedEvent {
-    /// Transaction that emitted the event.
-    pub tx_hash: TxHash,
-    /// Block the event was emitted in.
-    pub block_height: BlockHeight,
-    /// Position within the transaction's event log.
-    pub sequence_number: u32,
-}
-
-/// A public event page with the malformed events it dropped.
-#[derive(Debug)]
-pub struct DecodedEventPage {
-    /// The page to return to the client.
-    pub page: PublicEventPage,
-    /// Events dropped as malformed, in wire order.
-    pub dropped: Vec<DroppedEvent>,
-}
-
-/// Convert an indexer page into its public shape.
-///
-/// Malformed events are dropped rather than failing the page. The
-/// pagination metadata still reflects the indexer's view, so a cursor walk
-/// continues past the gap.
-pub fn public_event_page(page: EventPage) -> DecodedEventPage {
-    let mut events = Vec::with_capacity(page.events.0.len());
-    let mut dropped = Vec::new();
-    for identified in page.events.0 {
-        let tx_hash = TxHash(Base58(identified.tx_hash));
-        match parse_emitted_event(identified.emitted_event, Some(tx_hash)) {
-            Some(event) => events.push(IdentifiedEvent {
-                tx_hash,
-                block_height: identified.block_height,
-                sequence_number: identified.sequence_number,
-                event,
-            }),
-            None => dropped.push(DroppedEvent {
-                tx_hash,
-                block_height: identified.block_height,
-                sequence_number: identified.sequence_number,
-            }),
-        }
-    }
-    DecodedEventPage {
-        page: PublicEventPage {
-            events,
-            cursor: page.cursor.into(),
-            latest_block: page.latest_block,
-            oldest_block: page.oldest_block,
-        },
-        dropped,
     }
 }
