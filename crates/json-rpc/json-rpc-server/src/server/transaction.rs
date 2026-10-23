@@ -60,7 +60,7 @@ impl<S, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
 }
 
 impl<S: NativeSubmitPlane, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
-    /// Native single-attempt submission. Not registered by production binaries.
+    /// Native single-attempt submission behind `NativeService`'s `sendTransaction`.
     #[tracing::instrument(skip_all)]
     pub async fn native_send_transaction(
         &self,
