@@ -323,8 +323,8 @@ impl From<&thruput_trace::TxFailureDiagnostic> for TransactionStatus {
     }
 }
 
-/// `getTransactionsByAddress` request: the transaction history of
-/// `address`, walked in `order` from `anchor`.
+/// Address-history query: the transaction history of `address`, walked in
+/// `order` from `anchor`.
 ///
 /// A transaction is part of an address's history when its root
 /// invocation targets that address; transactions that merely touch the
@@ -340,43 +340,9 @@ pub struct AddressTransactionQuery {
     /// but the cursor supplies continuation state. Keep the same address.
     /// A cursor continues one historical walk, not blocks added after it began.
     pub cursor: PaginationCursor,
-    /// Values above the server's per-page cap (default 200) are
-    /// rejected as invalid params; `0` means server default (50).
+    /// Page size, bounded by the server's per-page cap.
     pub limit: u32,
 }
-
-/// Transactions in one committed block, sorted by unsigned transaction-hash
-/// bytes, not execution order. Height is a canonical decimal string.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BlockTransactionQuery {
-    #[serde(with = "crate::decimal")]
-    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
-    pub height: BlockHeight,
-    pub order: IterationOrder,
-    /// `0x` starts a walk. Preserve returned bytes and the same height.
-    /// A continuation cursor supplies its original order. Invalid or stale
-    /// cursors return an empty terminal page; oversized cursors are rejected.
-    pub cursor: PaginationCursor,
-    /// Positive page size, at most 200 and subject to the endpoint cap.
-    /// Zero is invalid. Send 50 for a normal page.
-    #[schemars(range(min = 1, max = 200))]
-    pub limit: u32,
-}
-
-impl From<BlockTransactionQuery> for thruput_indexer::indexer::BlockTransactionQuery {
-    fn from(value: BlockTransactionQuery) -> Self {
-        Self {
-            height: value.height,
-            order: value.order.into(),
-            cursor: value.cursor.into(),
-            limit: value.limit,
-        }
-    }
-}
-
-#[cfg(test)]
-mod block_query_tests;
 
 /// Lightweight reference to a transaction: its hash plus the block it
 /// executed in.  Hydrate the full body via `getTransactionReceipt`.
@@ -389,8 +355,7 @@ pub struct TransactionRef {
     pub height: BlockHeight,
 }
 
-/// Transaction references from an address-history or exact-block query.
-/// Block queries use hash order; address queries use their history order.
+/// Transaction references from an address-history query, in history order.
 ///
 /// Opaque cursors continue one historical walk; an empty cursor ends it.
 /// For restart rules, see the
@@ -417,38 +382,4 @@ pub struct TransactionRefPage {
     #[serde(with = "crate::decimal")]
     #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub oldest_block: BlockHeight,
-}
-
-impl From<AddressTransactionQuery> for thruput_indexer::indexer::AddressTransactionQuery {
-    fn from(value: AddressTransactionQuery) -> Self {
-        Self {
-            address: value.address.0,
-            order: value.order.into(),
-            anchor: value.anchor.into(),
-            cursor: value.cursor.into(),
-            limit: value.limit,
-        }
-    }
-}
-
-impl From<thruput_indexer::indexer::TransactionRef> for TransactionRef {
-    fn from(value: thruput_indexer::indexer::TransactionRef) -> Self {
-        Self {
-            tx_hash: TxHash(crate::base58::Base58(thruput_xdr::types::SHA256Hash::from(
-                value.tx_hash.into_inner(),
-            ))),
-            height: value.height,
-        }
-    }
-}
-
-impl From<thruput_indexer::indexer::TransactionRefPage> for TransactionRefPage {
-    fn from(value: thruput_indexer::indexer::TransactionRefPage) -> Self {
-        Self {
-            refs: value.refs.0.into_iter().map(Into::into).collect(),
-            cursor: value.cursor.into(),
-            latest_block: value.latest_block,
-            oldest_block: value.oldest_block,
-        }
-    }
 }

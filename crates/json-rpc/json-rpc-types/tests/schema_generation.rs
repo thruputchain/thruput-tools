@@ -2,10 +2,6 @@ use schemars::schema_for;
 
 use thruput_json_rpc_types::block::{BlockInfo, ChainTip};
 use thruput_json_rpc_types::bootstrap_manifest::BootstrapManifest;
-use thruput_json_rpc_types::dev::{
-    FrameOutputInfo, InvocationInfo, StorageDeltaInfo, SyscallInfo, SyscallStatusInfo, TraceInfo,
-    TransactionDetail,
-};
 use thruput_json_rpc_types::events::{
     EmittedEvent, EventFilter, EventPage, EventQuery, EventTopicFilter, IdentifiedEvent,
 };
@@ -46,15 +42,6 @@ fn schema_generation_succeeds() {
     // State types
     let _ = schema_for!(StorageItemInfo);
     let _ = schema_for!(StorageItemRead);
-
-    // Dev types
-    let _ = schema_for!(TransactionDetail);
-    let _ = schema_for!(StorageDeltaInfo);
-    let _ = schema_for!(TraceInfo);
-    let _ = schema_for!(InvocationInfo);
-    let _ = schema_for!(SyscallInfo);
-    let _ = schema_for!(SyscallStatusInfo);
-    let _ = schema_for!(FrameOutputInfo);
 
     // Manifest types
     let _ = schema_for!(BootstrapManifest);
