@@ -39,10 +39,13 @@ pub fn validate_raw_transaction(
     tx_hex: &str,
     params: &NetworkConfigParams,
 ) -> Result<ValidatedTransaction, RpcServerError> {
-    let tx_bytes = thruput_json_rpc_types::hex::decode_prefixed_hex(tx_hex)
-        .map_err(|e| RpcServerError::TxInvalid(format!("invalid hex: {e}")))?;
+    validate_raw_transaction_bytes(decode_transaction_hex(tx_hex)?, params)
+}
 
-    validate_raw_transaction_bytes(tx_bytes, params)
+/// Decode a hex transaction parameter, rejecting malformed hex as `TxInvalid`.
+pub(crate) fn decode_transaction_hex(tx_hex: &str) -> Result<Vec<u8>, RpcServerError> {
+    thruput_json_rpc_types::hex::decode_prefixed_hex(tx_hex)
+        .map_err(|e| RpcServerError::TxInvalid(format!("invalid hex: {e}")))
 }
 
 /// Validate and hash raw signed transaction XDR bytes.

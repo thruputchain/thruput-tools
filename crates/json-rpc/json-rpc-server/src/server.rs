@@ -264,8 +264,9 @@ where
         let context = self.request_context();
         self.within_request_deadline(context, async {
             let mut hash = None;
+            let tx_bytes = crate::tx::decode_transaction_hex(&tx_hex)?;
             let tx = self
-                .prepare_transaction(context, &tx_hex, &mut hash)
+                .prepare_transaction(context, tx_bytes, &mut hash)
                 .await?;
             let tx_hash = tx.hash;
             self.submit.submit_raw_transaction(context, tx).await?;

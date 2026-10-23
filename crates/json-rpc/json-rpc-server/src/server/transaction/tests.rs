@@ -35,6 +35,7 @@ struct Backend {
     mode: Mode,
     calls: Arc<AtomicUsize>,
     attempt: Arc<Mutex<Option<SubmissionAttempt>>>,
+    submitted: Arc<Mutex<Option<Vec<u8>>>>,
     corrupt_receipt: bool,
     precheck: Precheck,
     observation: Option<ReceiptObservation>,
@@ -78,10 +79,11 @@ impl NativeSubmitPlane for Backend {
     async fn native_submit(
         &self,
         _: RpcRequestContext,
-        _: ValidatedTransaction,
+        tx: ValidatedTransaction,
         attempt: SubmissionAttempt,
     ) -> Result<(), RpcServerError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        *self.submitted.lock().unwrap() = Some(tx.bytes);
         *self.attempt.lock().unwrap() = Some(attempt.clone());
         if matches!(self.mode, Mode::Accept | Mode::Dispatched) {
             assert!(attempt.begin_dispatch());
@@ -202,6 +204,10 @@ async fn accepted_submission_returns_the_canonical_body_hash() {
     assert_eq!(result.transaction_hash, hash());
     assert!(matches!(result.admission, out::Admission::Accepted));
     assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        backend.submitted.lock().unwrap().as_deref(),
+        Some(request().signed_transaction.0.as_slice())
+    );
 }
 #[tokio::test]
 async fn timeout_before_dispatch_closes_the_gate_but_dispatched_timeout_is_unknown() {
