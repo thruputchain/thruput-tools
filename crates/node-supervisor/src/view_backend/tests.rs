@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
-use thruput_json_rpc_server::ViewPlane;
+use thruput_json_rpc_server::native::read::NativeSimulationPlane;
 use thruput_json_rpc_types::ContractAddress;
 use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::protocol_token::protocol_text;
@@ -132,14 +132,13 @@ async fn start_fake_view_gateway(
     (addr, handle)
 }
 
-fn request(caller: Option<ContractAddress>) -> ViewRequest {
-    ViewRequest {
-        auth_claim: None,
-        min_height: None,
-        contract: ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])),
+fn invocation() -> thruput_json_rpc_types::requests::Invocation {
+    thruput_json_rpc_types::requests::Invocation {
+        address: ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])),
         entrypoint: HexBytes(vec![8; 8]),
         calldata: HexBytes(vec![1, 2, 3]),
-        caller,
+        caller: None,
+        assumed_auth: None,
         gas_limit: None,
     }
 }
@@ -156,20 +155,11 @@ async fn batch_pending_io_respects_the_public_deadline() {
     .await
     .unwrap();
     let result = backend
-        .view_batch(
+        .simulate_batch(
             RpcRequestContext::new(Some(Duration::from_millis(10))),
-            thruput_json_rpc_types::view::ViewBatchRequest {
-                calls: vec![thruput_json_rpc_types::view::ViewCall {
-                    auth_claim: None,
-                    contract: ContractAddress::from(thruput_xdr::types::ContractAddress::from(
-                        [7; 32],
-                    )),
-                    entrypoint: HexBytes(vec![8; 8]),
-                    calldata: HexBytes(vec![1, 2, 3]),
-                    caller: None,
-                    gas_limit: None,
-                }],
-                min_height: None,
+            thruput_json_rpc_types::requests::SimulateInvocationsRequest {
+                invocations: vec![invocation()],
+                min_state_block_height: None,
             },
             10_000_000,
             thruput_json_rpc_server::ViewBatchConfig::default(),
@@ -288,7 +278,19 @@ async fn view_gateway_rpc_timeout_maps_to_backend_timeout() {
     .expect("fake ViewGateway should connect");
 
     let result = backend
-        .view(RpcRequestContext::unbounded(), request(None), 123)
+        .simulate(
+            RpcRequestContext::unbounded(),
+            thruput_json_rpc_types::requests::SimulateInvocationRequest {
+                address: ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])),
+                entrypoint: HexBytes(vec![8; 8]),
+                calldata: HexBytes(vec![1, 2, 3]),
+                caller: None,
+                assumed_auth: None,
+                gas_limit: None,
+                min_state_block_height: None,
+            },
+            123,
+        )
         .await;
 
     assert!(
@@ -298,34 +300,7 @@ async fn view_gateway_rpc_timeout_maps_to_backend_timeout() {
 }
 
 #[tokio::test]
-async fn request_deadline_caps_view_gateway_timeout() {
-    let (addr, _server) = start_fake_view_gateway(FakeViewGatewayMode::ViewSlow).await;
-    let backend = HogdDevViewBackend::connect_optional(
-        Some(addr),
-        &protocol_text(&PROTOCOL_VERSION),
-        None,
-        Duration::from_secs(30),
-    )
-    .await
-    .expect("fake ViewGateway should connect");
-
-    let result = backend
-        .view(
-            RpcRequestContext::new(Some(Duration::from_millis(10))),
-            request(None),
-            123,
-        )
-        .await;
-
-    assert!(
-        matches!(result, Err(RpcServerError::BackendTimeout)),
-        "request deadline should cap ViewGateway timeout, got {result:?}"
-    );
-}
-
-#[tokio::test]
 async fn native_local_simulation_preserves_snapshot_and_deadline() {
-    use thruput_json_rpc_server::native::read::NativeSimulationPlane;
     use thruput_json_rpc_types::{requests, responses};
     for mode in [FakeViewGatewayMode::Batch, FakeViewGatewayMode::ViewSlow] {
         let (addr, task) = start_fake_view_gateway(mode).await;
@@ -367,7 +342,7 @@ async fn native_local_simulation_preserves_snapshot_and_deadline() {
 
 #[tokio::test]
 async fn native_local_batch_preserves_order_and_freshness_evidence() {
-    use thruput_json_rpc_server::{ViewBatchConfig, native::read::NativeSimulationPlane};
+    use thruput_json_rpc_server::ViewBatchConfig;
     use thruput_json_rpc_types::{requests as input, responses};
     let (addr, task) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
     let backend = HogdDevViewBackend::connect_optional(

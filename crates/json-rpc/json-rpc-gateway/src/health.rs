@@ -1538,13 +1538,16 @@ mod tests {
         TransactionQuery, TransactionRefPageResult, TxInfoOutcome, TxInfoResult,
     };
     use thruput_json_rpc_server::RpcServerError;
-    use thruput_json_rpc_server::{ChainPlane, ReadPlane, RpcRequestContext, ViewPlane};
+    use thruput_json_rpc_server::{
+        ChainPlane, ReadPlane, RpcRequestContext, native::read::NativeSimulationPlane,
+    };
     use thruput_json_rpc_types::{
         ContractAddress as RpcContractAddress,
         base58::Base58,
         hex::HexBytes,
+        requests::SimulateInvocationRequest,
+        responses::InvocationOutput,
         transaction::{TransactionStatus, TxHash},
-        view::{RootInvocationOutput, ViewRequest},
     };
     use thruput_scheduler::{
         ConsensusValue, DbTip, ParallelSignedTransactionBatch, PendingTxCount, ProposalTxsHash,
@@ -2614,15 +2617,15 @@ mod tests {
         RpcContractAddress::from(ContractAddress::from([0x66; 32]))
     }
 
-    fn lifecycle_view_request() -> ViewRequest {
-        ViewRequest {
-            auth_claim: None,
-            min_height: None,
-            contract: lifecycle_contract_address(),
+    fn lifecycle_simulation_request() -> SimulateInvocationRequest {
+        SimulateInvocationRequest {
+            address: lifecycle_contract_address(),
             entrypoint: HexBytes(vec![0x77; 8]),
             calldata: HexBytes(vec![0x88]),
             caller: None,
+            assumed_auth: None,
             gas_limit: None,
+            min_state_block_height: None,
         }
     }
 
@@ -2650,18 +2653,18 @@ mod tests {
         assert_eq!(*storage.block_height, 42);
         assert!(storage.item.is_none());
 
-        let view = backend
-            .view(
+        let simulation = backend
+            .simulate(
                 RpcRequestContext::unbounded(),
-                lifecycle_view_request(),
+                lifecycle_simulation_request(),
                 1_000,
             )
             .await
-            .expect("view should be available");
-        assert_eq!(*view.height, 42);
+            .expect("simulation should be available");
+        assert_eq!(*simulation.state_block_height, 42);
         assert!(matches!(
-            view.output,
-            RootInvocationOutput::Return { return_data } if return_data.0 == vec![1, 2, 3]
+            simulation.output,
+            InvocationOutput::Return { return_data } if return_data.0 == vec![1, 2, 3]
         ));
     }
 
@@ -2693,14 +2696,14 @@ mod tests {
         );
         assert!(
             backend
-                .view(
+                .simulate(
                     RpcRequestContext::unbounded(),
-                    lifecycle_view_request(),
+                    lifecycle_simulation_request(),
                     1_000,
                 )
                 .await
                 .is_err(),
-            "view should fail closed"
+            "simulation should fail closed"
         );
     }
 
@@ -3810,15 +3813,15 @@ mod tests {
             .await
             .expect("db gateway should recover during scheduler quarantine");
         assert_eq!(*storage.block_height, 42);
-        let view = backend
-            .view(
+        let simulation = backend
+            .simulate(
                 RpcRequestContext::unbounded(),
-                lifecycle_view_request(),
+                lifecycle_simulation_request(),
                 1_000,
             )
             .await
             .expect("view gateway should recover during scheduler quarantine");
-        assert_eq!(*view.height, 42);
+        assert_eq!(*simulation.state_block_height, 42);
         assert!(
             backend
                 .chain_tip(RpcRequestContext::unbounded())

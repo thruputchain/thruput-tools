@@ -29,7 +29,6 @@
 //! - `ReadPlane::get_storage_at`              → `DbGateway1` contract-data reads
 //! - `ReadPlane::read_native_hog_balance`     → `DbGateway1` free native-token balance reads
 //! - `ReadPlane::read_address_auth_data`      → `DbGateway1` address auth-data reads
-//! - `ViewPlane::view`                        → view executor service (TBD)
 //!
 //! `GroundhogRpcServer::new` accepts per-plane adapter types, so a future
 //! composition (e.g. the hogd-dev supervisor wiring distinct x23 clients)
@@ -75,7 +74,6 @@ use thruput_json_rpc_types::{
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
-    view::{ViewRequest, ViewResponse},
 };
 
 use thruput_xdr::network_config::NetworkConfig;
@@ -317,44 +315,4 @@ pub trait ReadPlane: Send + Sync + 'static {
         context: RpcRequestContext,
         address: ContractAddress,
     ) -> Result<AddressAuthDataResponse, RpcServerError>;
-}
-
-/// Backend plane for sandboxed contract simulation.
-#[async_trait]
-pub trait ViewPlane: Send + Sync + 'static {
-    /// Execute independent calls on one retained committed snapshot.
-    async fn view_batch(
-        &self,
-        _context: RpcRequestContext,
-        _request: thruput_json_rpc_types::view::ViewBatchRequest,
-        _gas_limit: u64,
-        _limits: crate::ViewBatchConfig,
-    ) -> Result<thruput_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
-        Err(RpcServerError::NotImplemented("viewBatch".into()))
-    }
-
-    /// Execute a sandboxed contract simulation.
-    ///
-    /// `RootInvocationOutput::Abort` and `RootInvocationOutput::Fault`
-    /// are successful RPC responses, not `RpcServerError`s. Errors
-    /// here are reserved for transport, backend availability, and
-    /// request-level failures.
-    ///
-    /// `gas_limit` is the validated budget to put on the root view
-    /// invocation: the request's `gasLimit`, or the server's `view_gas_limit`
-    /// when the request names none. No gas is charged.
-    /// The shared server checks `min_height` against the returned execution
-    /// snapshot height. Adapters must not replace it with a later chain-tip sample.
-    ///
-    /// Backends should override this once they have a stable hogd view
-    /// execution service. The default keeps the public method available
-    /// while capability rollout catches up.
-    async fn view(
-        &self,
-        _context: RpcRequestContext,
-        _request: ViewRequest,
-        _gas_limit: u64,
-    ) -> Result<ViewResponse, RpcServerError> {
-        Err(RpcServerError::NotImplemented("view".into()))
-    }
 }
