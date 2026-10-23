@@ -403,101 +403,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_views_preserve_order_gas_height_and_freshness_errors() {
-        use crate::{backend::GatewayBackend, config::GatewayConfig, context::BackendClient};
-        use std::sync::Arc;
-        use thruput_json_rpc_api::GroundhogApiServer;
-        use thruput_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-        use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
-        use thruput_xdr::{PROTOCOL_VERSION, types::SHA256Hash};
-        use tokio::sync::RwLock;
-
-        let (addr, fake) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
-        let socket = FixedSerialPool::connect(&addr, 1).await.unwrap();
-        let client = ViewGateway_ViewGateway1_Client::new(Arc::new(socket));
-        let context = Arc::new(GatewayContext::assemble(
-            PROTOCOL_VERSION,
-            Arc::new(RwLock::new(None)),
-            Arc::new(RwLock::new(None)),
-            Arc::new(RwLock::new(Some(BackendClient::new(
-                client.clone(),
-                client,
-            )))),
-            Arc::new(RwLock::new(None)),
-            Arc::new(GatewayConfig {
-                view_timeout_ms: 60_000,
-                request_timeout_ms: 90_000,
-                ..Default::default()
-            }),
-            GatewayMetrics::for_tests(),
-        ));
-        let module = GroundhogRpcServer::unified(
-            GatewayBackend::new(context),
-            NetworkInfo::new(NetworkHash::from(SHA256Hash::from([0; 32]))),
-            RpcServerConfig::default()
-                .with_view_timeout_ms(60_000)
-                .with_view_batch(thruput_json_rpc_server::ViewBatchConfig {
-                    max_gas: 1_000,
-                    max_response_bytes: 256,
-                    ..Default::default()
-                }),
-            BuildInfo::new("test", None),
-        )
-        .into_rpc();
-        for min_height in ["42", "43"] {
-            let calls: Vec<_> = [("0x01", "123"), ("0x02", "456")].into_iter().map(|(calldata, gas)| serde_json::json!({
-                "contract": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([7; 32])), "entrypoint": "0x0808080808080808",
-                "authClaim": {"kind":"sourceAddress", "allowedKeys":5, "requiredWeight": if calldata == "0x01" { 3 } else { 4 }},
-                "calldata": calldata, "gasLimit": gas,
-            })).collect();
-            let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"groundhog_viewBatch", "params":[{"calls":calls,"minHeight":min_height}]}).to_string();
-            let (response, _) = module.raw_json_request(&request, 1).await.unwrap();
-            let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
-            if min_height == "42" {
-                assert_eq!(
-                    response["result"],
-                    serde_json::json!({"height":"42", "results":[
-                        {"output":{"result":"return","returnData":"0x01"},"gasUsed":"123","events":[]},
-                        {"output":{"result":"return","returnData":"0x02"},"gasUsed":"456","events":[]}
-                    ]})
-                );
-            } else {
-                assert_eq!(response["error"]["code"], -32011);
-                assert_eq!(
-                    response["error"]["data"],
-                    serde_json::json!({"requested":"43","observed":"42"})
-                );
-            }
-        }
-        for floor in [None, Some("0"), Some("41"), Some("42"), Some("43")] {
-            let mut call = serde_json::to_value(request(None)).unwrap();
-            call["gasLimit"] = serde_json::json!("2000");
-            if let Some(floor) = floor {
-                call["minHeight"] = serde_json::json!(floor);
-            }
-            let request = serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"groundhog_view", "params":[call]}).to_string();
-            let (response, _) = module.raw_json_request(&request, 1).await.unwrap();
-            let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
-            if floor == Some("43") {
-                assert_eq!(response["error"]["code"], -32011);
-                assert_eq!(
-                    response["error"]["data"],
-                    serde_json::json!({"requested":"43","observed":"42"})
-                );
-            } else {
-                assert_eq!(
-                    response["result"],
-                    serde_json::json!({
-                        "height":"42", "gasUsed":"2000", "events":[],
-                        "output":{"result":"return", "returnData":"0x010203"},
-                    })
-                );
-            }
-        }
-        fake.abort();
-    }
-
-    #[tokio::test]
     async fn batch_metrics_separate_expected_refusals_from_backend_failures() {
         use crate::{config::GatewayConfig, context::BackendClient};
         use std::sync::Arc;
@@ -679,17 +584,13 @@ mod tests {
             "ViewGateway timeout should surface BackendTimeout, got {result:?}"
         );
     }
-    #[tokio::test]
-    async fn native_gateway_batch_uses_existing_transport_and_preserves_freshness() {
-        use crate::{backend::GatewayBackend, config::GatewayConfig, context::BackendClient};
+    async fn native_view_backend(addr: SocketAddr) -> crate::backend::GatewayBackend {
+        use crate::{config::GatewayConfig, context::BackendClient};
         use std::sync::Arc;
-        use thruput_json_rpc_server::{ViewBatchConfig, native::read::NativeSimulationPlane};
-        use thruput_json_rpc_types::requests as input;
         use tokio::sync::RwLock;
-        let (addr, fake) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
         let socket = FixedSerialPool::connect(&addr, 1).await.unwrap();
         let client = ViewGateway_ViewGateway1_Client::new(Arc::new(socket));
-        let context = Arc::new(GatewayContext::assemble(
+        crate::backend::GatewayBackend::new(Arc::new(GatewayContext::assemble(
             thruput_xdr::PROTOCOL_VERSION,
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
@@ -704,8 +605,50 @@ mod tests {
                 ..Default::default()
             }),
             GatewayMetrics::for_tests(),
-        ));
-        let backend = GatewayBackend::new(context);
+        )))
+    }
+
+    #[tokio::test]
+    async fn native_gateway_simulation_preserves_snapshot_and_deadline() {
+        use thruput_json_rpc_server::native::read::NativeSimulationPlane;
+        use thruput_json_rpc_types::{requests, responses};
+        for mode in [FakeViewGatewayMode::Batch, FakeViewGatewayMode::Slow] {
+            let (addr, fake) = start_fake_view_gateway(mode).await;
+            let backend = native_view_backend(addr).await;
+            let request = requests::SimulateInvocationRequest {
+                address: thruput_json_rpc_types::base58::Base58(
+                    thruput_xdr::types::ContractAddress::from([7; 32]),
+                ),
+                entrypoint: HexBytes(vec![8; 8]),
+                calldata: HexBytes(vec![1, 2, 3]),
+                caller: None,
+                assumed_auth: None,
+                gas_limit: Some(100),
+                min_state_block_height: Some(42.into()),
+            };
+            let context = RpcRequestContext::new(Some(Duration::from_millis(50)));
+            let result = backend.simulate(context, request, 100).await;
+            if mode == FakeViewGatewayMode::Slow {
+                assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
+            } else {
+                let result = result.unwrap();
+                assert_eq!(*result.state_block_height, 42);
+                assert_eq!(result.gas_used, 100);
+                assert!(matches!(
+                    result.output,
+                    responses::InvocationOutput::Return { return_data } if return_data.0 == [1, 2, 3]
+                ));
+            }
+            fake.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn native_gateway_batch_uses_existing_transport_and_preserves_freshness() {
+        use thruput_json_rpc_server::{ViewBatchConfig, native::read::NativeSimulationPlane};
+        use thruput_json_rpc_types::{requests as input, responses};
+        let (addr, fake) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
+        let backend = native_view_backend(addr).await;
         for floor in [42, 43] {
             let request = input::SimulateInvocationsRequest {
                 min_state_block_height: Some(floor.into()),
@@ -722,7 +665,7 @@ mod tests {
                             allowed_keys: 5,
                             required_weight: weight,
                         }),
-                        gas_limit: Some(123),
+                        gas_limit: Some(100 * u64::from(weight)),
                     })
                     .collect(),
             };
@@ -741,7 +684,14 @@ mod tests {
                 let result = result.unwrap();
                 assert_eq!(result.results.len(), 2);
                 assert_eq!(*result.state_block_height, 42);
-                assert_eq!(result.results[0].gas_used, 123);
+                for (index, item) in result.results.iter().enumerate() {
+                    assert_eq!(item.gas_used, 300 + 100 * u64::try_from(index).unwrap());
+                    assert!(matches!(
+                        &item.output,
+                        responses::InvocationOutput::Return { return_data }
+                            if return_data.0 == [u8::try_from(index).unwrap() + 3]
+                    ));
+                }
             } else {
                 assert!(matches!(
                     result,

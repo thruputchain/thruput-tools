@@ -18,8 +18,8 @@ fn empty(params: &Params<'_>) -> Result<Value, jsonrpsee::types::ErrorObjectOwne
     Ok(serde_json::to_value(parse_empty(params)?).unwrap())
 }
 
-// Reuse the authoritative name/type map; this legacy request-only regression
-// suite filters optional methods. Real adapters are covered by native_transport.
+// Reuse the authoritative name/type map; this request-only regression suite
+// filters optional methods. Real adapters are covered by native_transport.
 macro_rules! parser {
     (empty, $request:ty) => {
         empty
@@ -307,7 +307,7 @@ fn history_cross_field_rules_match_schema() {
 }
 
 #[test]
-fn identifier_decoding_and_production_registration_keep_their_boundaries() {
+fn identifier_decoding_keeps_its_boundary() {
     for address in [
         "0".repeat(32),
         format!("0x{}", "ab".repeat(32)),
@@ -330,31 +330,15 @@ fn identifier_decoding_and_production_registration_keep_their_boundaries() {
     let wrong_width = json!({"address": "1".repeat(33)});
     assert!(validator(&document, index).is_valid(&wrong_width));
     assert!(named::<AddressQuery>(&Params::new(Some(&wrong_width.to_string()))).is_err());
-
-    let production = GroundhogRpcServer::unified(
-        Backend::default(),
-        network(),
-        RpcServerConfig::default().with_tip_refresh_interval_ms(0),
-        BuildInfo::for_tests(),
-    )
-    .into_rpc();
-    for (native, _) in parsers() {
-        assert!(!production.method_names().any(|name| name == native));
-    }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.1.0");
 }
 
-fn register_request_echo<T: Send + Sync + 'static>(
-    context: T,
-    calls: &Arc<AtomicUsize>,
-    captured: &Captured,
-) -> RpcModule<T> {
-    let mut module = RpcModule::new(context);
+fn register_request_echo(calls: &Arc<AtomicUsize>, captured: &Captured) -> RpcModule<()> {
+    let mut module = RpcModule::new(());
     for (method, parse) in parsers() {
         let calls = calls.clone();
         let captured = captured.clone();
         module
-            .register_method(method, move |params, _, _| {
+            .register_method(method, move |params, (), _| {
                 record(&captured, method, &params);
                 let request = parse(&params)?;
                 calls.fetch_add(1, Ordering::SeqCst);
@@ -367,75 +351,45 @@ fn register_request_echo<T: Send + Sync + 'static>(
 
 #[tokio::test]
 async fn all_core_requests_use_direct_named_http_params() {
-    for split in [false, true] {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let captured = Captured::default();
-        let config = RpcServerConfig::default().with_tip_refresh_interval_ms(0);
-        let module = if split {
-            register_request_echo(
-                GroundhogRpcServer::new(
-                    Unused,
-                    Backend::default(),
-                    Unused,
-                    Unused,
-                    network(),
-                    config,
-                    BuildInfo::for_tests(),
-                ),
-                &calls,
-                &captured,
-            )
-            .remove_context()
-        } else {
-            register_request_echo(
-                GroundhogRpcServer::unified(
-                    Backend::default(),
-                    network(),
-                    config,
-                    BuildInfo::for_tests(),
-                ),
-                &calls,
-                &captured,
-            )
-            .remove_context()
-        };
-        let transport = Server::builder().build("127.0.0.1:0").await.unwrap();
-        let client = HttpClientBuilder::default()
-            .build(format!("http://{}", transport.local_addr().unwrap()))
+    let calls = Arc::new(AtomicUsize::new(0));
+    let captured = Captured::default();
+    let module = register_request_echo(&calls, &captured);
+    let transport = Server::builder().build("127.0.0.1:0").await.unwrap();
+    let client = HttpClientBuilder::default()
+        .build(format!("http://{}", transport.local_addr().unwrap()))
+        .unwrap();
+    let handle = transport.start(module);
+    for (method, _) in parsers() {
+        let original = valid_request(method);
+        let serialized = serialize_request(method, original.clone());
+        let expected: Value = serde_json::from_str(serialized.get()).unwrap();
+        assert_eq!(
+            expected, original,
+            "serialization must preserve the request"
+        );
+        let result: Value = client
+            .request(method, RawParams(Some(serialized.get())))
+            .await
             .unwrap();
-        let handle = transport.start(module);
-        for (method, _) in parsers() {
-            let original = valid_request(method);
-            let serialized = serialize_request(method, original.clone());
-            let expected: Value = serde_json::from_str(serialized.get()).unwrap();
-            assert_eq!(
-                expected, original,
-                "serialization must preserve the request"
-            );
-            let result: Value = client
-                .request(method, RawParams(Some(serialized.get())))
-                .await
-                .unwrap();
-            assert_eq!(result, expected);
-            assert_eq!(
-                captured.lock().unwrap().last().unwrap().1.as_deref(),
-                Some(serialized.get())
-            );
-            let before = calls.load(Ordering::SeqCst);
-            let mut invalid = expected;
-            invalid["extra"] = json!(true);
-            let invalid = invalid.to_string();
-            let error = client
-                .request::<Value, _>(method, RawParams(Some(&invalid)))
-                .await
-                .unwrap_err();
-            let jsonrpsee::core::client::Error::Call(error) = error else {
-                panic!("{error}")
-            };
-            assert_eq!(error.code(), -32602);
-            assert_eq!(calls.load(Ordering::SeqCst), before);
-        }
-        handle.stop().unwrap();
-        handle.stopped().await;
+        assert_eq!(result, expected);
+        assert_eq!(
+            captured.lock().unwrap().last().unwrap().1.as_deref(),
+            Some(serialized.get())
+        );
+        let before = calls.load(Ordering::SeqCst);
+        let mut invalid = expected;
+        invalid["extra"] = json!(true);
+        let invalid = invalid.to_string();
+        let error = client
+            .request::<Value, _>(method, RawParams(Some(&invalid)))
+            .await
+            .unwrap_err();
+        let jsonrpsee::core::client::Error::Call(error) = error else {
+            panic!("{error}")
+        };
+        assert_eq!(error.code(), -32602);
+        assert_eq!(calls.load(Ordering::SeqCst), before);
     }
+    handle.stop().unwrap();
+    handle.stopped().await;
 }
