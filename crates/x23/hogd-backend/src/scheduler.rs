@@ -142,7 +142,7 @@ pub fn tip_answer(service: &str, result: ExpectedDBTip) -> Result<TipAnswer, Rpc
     }
 }
 
-/// Preserve per-attempt refusal evidence before the legacy cause mapping loses it.
+/// Map a native submission outcome, recording authoritative refusal on the attempt.
 /// Unknown outcomes do not establish either admission or rejection.
 pub fn native_submit_result(
     outcome: SchedGatewaySubmitOutcome,
