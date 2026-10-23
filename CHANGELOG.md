@@ -34,9 +34,7 @@ surface, which no binary served:
   Use `thruput_json_rpc_client::NativeClient` and `native::NativeApi`.
 - `thruput-json-rpc-server` drops `ViewPlane`, `SubmitPlane`, `ReadPlane`,
   `BuildInfo`, `tx::validate_raw_transaction` and
-  `GroundhogRpcServer::unified`.
-  `GroundhogRpcServer` now takes submit, chain and read planes only:
-  `GroundhogRpcServer::new(submit, chain, read, config)`. Build servers with
+  `GroundhogRpcServer::unified`. Build servers with
   `native::service::NativeService`, implement simulation with
   `native::read::NativeSimulationPlane` and the other `native::read` and
   `native::transaction` planes, and validate decoded transactions with
@@ -50,6 +48,44 @@ surface, which no binary served:
   root_output_buffers}`. The `native` module decodes the same backend results,
   for example `native::simulation`, `native::simulations` and
   `native::history::event_page`.
+
+The remaining legacy-only items are gone too:
+
+- `thruput-json-rpc-server`:
+  - `GroundhogRpcServer<S, C, R, V>` is now
+    `native::transaction::NativeTransactionService<S, C, R>`, and the public
+    `server` module is gone. It serves only the transaction lifecycle:
+    `new(submit, chain, read, config)` replaces the seven-argument
+    constructor, `with_bundle_identity` is gone, and the methods are
+    `send_transaction`, `get_transaction_status` and
+    `get_transaction_receipt`. Most callers should build
+    `native::service::NativeService` and call its `with_bundle_identity`
+    instead.
+  - `ChainPlane::get_block_by_number` is gone. Delete it from `ChainPlane`
+    implementations and serve blocks with `native::read::NativeBlockPlane`.
+  - The root `validate_block_transaction_page` re-export is gone. Validate
+    native block pages with `native::read::validate_block_transaction_page`.
+  - `ViewBatchConfig::server_limits` is gone. `getServerLimits` reports the
+    batch policy as `responses::SimulationBatchLimits`.
+- `thruput-hogd-backend` drops `indexer::block_lookup`. Use
+  `native::block_lookup`.
+- `thruput-json-rpc-types`:
+  - Drops the `address_auth`, `server_limits` and `dev` modules,
+    `view::{ViewBatchResponse, ViewCallResult}` and
+    `transaction::BlockTransactionQuery`. The native `responses` module has
+    the wire shapes, for example `responses::ServerLimits`.
+  - Drops the `From` conversions between its `transaction` and `events`
+    types and `thruput_indexer`, except `events::IterationOrder`.
+  - `airdrop::FundAccountResponse` no longer implements `Serialize`,
+    `Deserialize` or `JsonSchema`. The `dev_fundAccount` result type is
+    `responses::FundingSubmission`.
+- `thruput-open-rpc-macros`: `#[open_rpc]` takes no arguments and documents
+  only object parameters. Remove `params = "object"`. The positional mode
+  and the `namespace` and `tag` options are gone. Every method needs one
+  request DTO, and the trait must not also carry jsonrpsee `#[rpc]`.
+- `thruput-open-rpc` drops `param_descriptor` and `Tag`. `MethodDoc` has no
+  `tags` field, and `MethodDoc::named_params` is now required. Build its
+  `params` and `named_params` with `named_params`.
 
 ### Gateway metrics
 
