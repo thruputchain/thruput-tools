@@ -74,19 +74,19 @@ jobs:
           scripts/smoke-managed-toolchain.sh
 
       - name: dry run
-        uses: thruputchain/actions/cargo-publish-dry-run@e2453db03db2b6eaa289e558bf3d7ed62d0f916b
+        uses: thruputchain/actions/cargo-publish-dry-run@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
         with:
           registry-name: thruput
           packages: ${{ env.PUBLISH_PACKAGES }}
 
       - name: tag commit with version
         id: publish-tag
-        uses: thruputchain/actions/cargo-version-tag@e2453db03db2b6eaa289e558bf3d7ed62d0f916b
+        uses: thruputchain/actions/cargo-version-tag@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
         with:
           packages: ${{ env.PUBLISH_PACKAGES }}
 
       - name: publish
-        uses: thruputchain/actions/cargo-publish@e2453db03db2b6eaa289e558bf3d7ed62d0f916b
+        uses: thruputchain/actions/cargo-publish@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
         with:
           packages: ${{ env.PUBLISH_PACKAGES }}
           git-tag: ${{ steps.publish-tag.outputs.tag }}
@@ -95,7 +95,7 @@ jobs:
           publish-delay-seconds: '10'
 
       - name: publish bare thruput crate
-        uses: thruputchain/actions/cargo-publish@e2453db03db2b6eaa289e558bf3d7ed62d0f916b
+        uses: thruputchain/actions/cargo-publish@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
         with:
           cargo-toml-path: crates/thruput/Cargo.toml
           packages: thruput
