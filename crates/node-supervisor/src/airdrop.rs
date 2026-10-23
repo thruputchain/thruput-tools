@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use thruput_json_rpc_server::{
-    ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane,
+    ChainPlane, RpcRequestContext, RpcServerError, ValidatedTransaction,
     native::transaction::NativeTransactionReadPlane, tx::validate_raw_transaction_bytes,
 };
 use thruput_json_rpc_types::{
@@ -37,6 +37,26 @@ use crate::{
 };
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
+
+/// Admits one locally signed funding transaction to the local scheduler.
+#[async_trait]
+pub(crate) trait FundingSubmitPlane: Send + Sync + 'static {
+    async fn submit_funding(
+        &self,
+        context: RpcRequestContext,
+        tx: ValidatedTransaction,
+    ) -> Result<(), RpcServerError>;
+}
+
+/// Status the local faucet uses to reconcile a retained funding attempt.
+#[async_trait]
+pub(crate) trait FundingStatusPlane: Send + Sync + 'static {
+    async fn funding_status(
+        &self,
+        context: RpcRequestContext,
+        tx_hash: TxHash,
+    ) -> Result<TransactionStatus, RpcServerError>;
+}
 const LOCAL_AIRDROP_RETRY_AFTER_SECONDS: u64 = 1;
 
 #[derive(Clone)]
@@ -108,8 +128,8 @@ impl LocalAirdropRpc {
         block_driver: BlockDriverTrigger,
     ) -> Self
     where
-        S: SubmitPlane + ChainPlane,
-        R: ReadPlane + NativeTransactionReadPlane,
+        S: FundingSubmitPlane + ChainPlane,
+        R: FundingStatusPlane + NativeTransactionReadPlane,
     {
         let faucet = Base58(
             PubkeyAccount::from_public_key_bytes(context.signer.verifying_key_bytes(), 0).address(),
@@ -956,8 +976,8 @@ struct PlaneAirdropBackend<S, R> {
 #[async_trait]
 impl<S, R> AirdropBackend for PlaneAirdropBackend<S, R>
 where
-    S: SubmitPlane + ChainPlane,
-    R: ReadPlane + NativeTransactionReadPlane,
+    S: FundingSubmitPlane + ChainPlane,
+    R: FundingStatusPlane + NativeTransactionReadPlane,
 {
     async fn chain_tip(
         &self,
@@ -986,11 +1006,7 @@ where
                 "retained local airdrop transaction hash does not match its signed bytes".into(),
             ));
         }
-        within_request_deadline(
-            context,
-            self.submit_chain.submit_raw_transaction(context, tx),
-        )
-        .await
+        within_request_deadline(context, self.submit_chain.submit_funding(context, tx)).await
     }
 
     async fn receipt(
@@ -1006,7 +1022,7 @@ where
         context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
-        within_request_deadline(context, self.read.transaction_status(context, tx_hash)).await
+        within_request_deadline(context, self.read.funding_status(context, tx_hash)).await
     }
 }
 

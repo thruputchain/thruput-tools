@@ -13,7 +13,7 @@ use thruput_db_gateway::DbGateway_DbGateway1_Client;
 use thruput_hogd_backend::{db_gateway as shared_db_gateway, intro};
 use thruput_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
 use thruput_json_rpc_server::{
-    ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading, ValidatedTransaction,
+    ChainPlane, RpcRequestContext, RpcServerError, TipReading, ValidatedTransaction,
 };
 use thruput_json_rpc_types::{
     BlockHeight, NetworkHashText, block::BlockInfo, protocol_token::protocol_from_text,
@@ -212,9 +212,9 @@ fn validate_scheduler_network_hash(
 }
 
 #[async_trait]
-impl SubmitPlane for HogdDevSchedulerBackend {
+impl crate::airdrop::FundingSubmitPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
-    async fn submit_raw_transaction(
+    async fn submit_funding(
         &self,
         context: RpcRequestContext,
         tx: ValidatedTransaction,

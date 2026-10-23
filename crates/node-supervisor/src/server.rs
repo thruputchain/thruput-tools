@@ -562,7 +562,7 @@ async fn start_rpc_server_with_read<R, V>(
     options: RpcServerOptions,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
-    R: thruput_json_rpc_server::ReadPlane
+    R: crate::airdrop::FundingStatusPlane
         + NativeStatePlane
         + NativeTransactionReadPlane
         + NativeBlockPlane

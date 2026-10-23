@@ -18,12 +18,13 @@ use thruput_indexer::{
     TransactionPage as IdxTransactionPage, TransactionPageResult, TransactionQuery,
     TransactionRefPage, TransactionRefPageResult, TxInfo, TxInfoResult,
 };
-use thruput_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
+use thruput_json_rpc_server::native::read::{NativeStatePlane, StateKey};
+use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
+use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
+
 use thruput_json_rpc_types::protocol_token::protocol_text;
 use thruput_json_rpc_types::{
-    address_auth::{AuthPublicKey, AuthSigner},
     base58::Base58,
-    events::{EventFilterList, EventQuery},
     transaction::{TransactionStatus, TxHash},
 };
 use thruput_scheduler::{
@@ -56,6 +57,7 @@ use tokio::net::TcpListener;
 use xdr_common::{BytesM, VecM};
 
 use super::{HogdDevReadBackend, shared_db_gateway};
+use crate::airdrop::FundingStatusPlane;
 
 // These constants mirror the fake_hogd_dev fixture. Defined here so the
 // unit tests in this file have no dependency on the example binary's types.
@@ -800,32 +802,12 @@ fn canned_failure_diagnostic() -> thruput_trace::TxFailureDiagnostic {
     }
 }
 
-fn empty_event_query() -> EventQuery {
-    EventQuery {
-        filters: EventFilterList(VecM(vec![])),
-        order: thruput_json_rpc_types::events::IterationOrder::Ascending,
-        anchor: thruput_json_rpc_types::events::BlockAnchor::AtBeginning,
-        cursor: thruput_json_rpc_types::events::PaginationCursor(vec![]),
-        limit: 10,
-    }
-}
-
-fn event_query_with_cursor(cursor: &[u8]) -> EventQuery {
-    EventQuery {
-        filters: EventFilterList(VecM(vec![])),
-        order: thruput_json_rpc_types::events::IterationOrder::Ascending,
-        anchor: thruput_json_rpc_types::events::BlockAnchor::AtBeginning,
-        cursor: thruput_json_rpc_types::events::PaginationCursor(cursor.to_vec()),
-        limit: 10,
-    }
-}
-
 // -----------------------------------------------------------------------
-// transaction_receipt tests
+// native_receipt tests
 // -----------------------------------------------------------------------
 
 #[tokio::test]
-async fn transaction_receipt_known_hash_returns_some_with_correct_height() {
+async fn native_receipt_known_hash_returns_some_with_correct_height() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -834,14 +816,14 @@ async fn transaction_receipt_known_hash_returns_some_with_correct_height() {
 
     // Act
     let result = backend
-        .transaction_receipt(RpcRequestContext::unbounded(), tx_hash)
+        .native_receipt(RpcRequestContext::unbounded(), tx_hash)
         .await
         .expect("bug: receipt lookup should succeed");
 
     // Assert
     let receipt = result.expect("bug: receipt should be Some for known tx hash");
     assert_eq!(
-        *receipt.height, CANNED_HEIGHT_A,
+        *receipt.block_height, CANNED_HEIGHT_A,
         "receipt height should match CANNED_HEIGHT_A"
     );
     assert_eq!(
@@ -851,7 +833,7 @@ async fn transaction_receipt_known_hash_returns_some_with_correct_height() {
 }
 
 #[tokio::test]
-async fn transaction_receipt_unknown_hash_returns_none() {
+async fn native_receipt_unknown_hash_returns_none() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -860,7 +842,7 @@ async fn transaction_receipt_unknown_hash_returns_none() {
 
     // Act
     let result = backend
-        .transaction_receipt(RpcRequestContext::unbounded(), tx_hash)
+        .native_receipt(RpcRequestContext::unbounded(), tx_hash)
         .await
         .expect("bug: receipt lookup should succeed");
 
@@ -872,7 +854,7 @@ async fn transaction_receipt_unknown_hash_returns_none() {
 }
 
 #[tokio::test]
-async fn transaction_receipt_indexer_rpc_fail_surfaces_backend_unavailable() {
+async fn native_receipt_indexer_rpc_fail_surfaces_backend_unavailable() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::RpcFail).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -881,44 +863,41 @@ async fn transaction_receipt_indexer_rpc_fail_surfaces_backend_unavailable() {
 
     // Act
     let result = backend
-        .transaction_receipt(RpcRequestContext::unbounded(), tx_hash)
-        .await;
+        .native_receipt(RpcRequestContext::unbounded(), tx_hash)
+        .await
+        .map_err(|error| error.error);
 
     // Assert
     assert!(
-        matches!(
-            result,
-            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
-                _
-            ))
-        ),
+        matches!(result, Err(RpcServerError::BackendUnavailable(_))),
         "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
     );
 }
 
 #[tokio::test]
-async fn transaction_receipt_respects_request_deadline() {
+async fn native_receipt_respects_request_deadline() {
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Slow).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
     let backend = make_read_backend(idx_addr, sched_addr).await;
     let tx_hash = canned_tx_hash(CANNED_TX_HASH_A);
 
     let result = backend
-        .transaction_receipt(
+        .native_receipt(
             RpcRequestContext::new(Some(Duration::from_millis(10))),
             tx_hash,
         )
-        .await;
+        .await
+        .map_err(|error| error.error);
 
     assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
 }
 
 // -----------------------------------------------------------------------
-// get_storage_at tests
+// native_storage and native_registered_auth tests
 // -----------------------------------------------------------------------
 
 #[tokio::test]
-async fn get_storage_at_without_gateway_surfaces_backend_unavailable() {
+async fn native_storage_without_gateway_surfaces_backend_unavailable() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -926,10 +905,10 @@ async fn get_storage_at_without_gateway_surfaces_backend_unavailable() {
 
     // Act
     let result = backend
-        .get_storage_at(
+        .native_storage(
             RpcRequestContext::unbounded(),
             canned_storage_address(),
-            CANNED_STORAGE_KEY,
+            StateKey::ContractData(CANNED_STORAGE_KEY),
         )
         .await;
 
@@ -941,7 +920,7 @@ async fn get_storage_at_without_gateway_surfaces_backend_unavailable() {
 }
 
 #[tokio::test]
-async fn get_storage_at_found_returns_item_with_snapshot_height() {
+async fn native_storage_found_returns_item_with_snapshot_height() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -951,10 +930,10 @@ async fn get_storage_at_found_returns_item_with_snapshot_height() {
 
     // Act
     let read = backend
-        .get_storage_at(
+        .native_storage(
             RpcRequestContext::unbounded(),
             canned_storage_address(),
-            CANNED_STORAGE_KEY,
+            StateKey::ContractData(CANNED_STORAGE_KEY),
         )
         .await
         .expect("bug: storage read should succeed");
@@ -971,7 +950,7 @@ async fn get_storage_at_found_returns_item_with_snapshot_height() {
         [VecM(vec![expected])],
         "DbGateway should receive exactly the requested key"
     );
-    assert_eq!(*read.block_height, CANNED_STORAGE_HEIGHT);
+    assert_eq!(*read.state_block_height, CANNED_STORAGE_HEIGHT);
     let item = read.item.expect("bug: canned key should return an item");
     let item_json = serde_json::to_value(item).expect("bug: storage item should serialize");
     assert_eq!(item_json["kind"], "bytestring");
@@ -982,7 +961,7 @@ async fn get_storage_at_found_returns_item_with_snapshot_height() {
 }
 
 #[tokio::test]
-async fn get_storage_at_not_found_returns_none_with_snapshot_height() {
+async fn native_storage_not_found_returns_none_with_snapshot_height() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -991,16 +970,16 @@ async fn get_storage_at_not_found_returns_none_with_snapshot_height() {
 
     // Act
     let read = backend
-        .get_storage_at(
+        .native_storage(
             RpcRequestContext::unbounded(),
             canned_storage_address(),
-            CANNED_STORAGE_KEY,
+            StateKey::ContractData(CANNED_STORAGE_KEY),
         )
         .await
         .expect("bug: storage miss should still succeed");
 
     // Assert
-    assert_eq!(*read.block_height, CANNED_STORAGE_HEIGHT);
+    assert_eq!(*read.state_block_height, CANNED_STORAGE_HEIGHT);
     assert!(
         read.item.is_none(),
         "kRPCNotFound should map to an absent storage item"
@@ -1008,7 +987,7 @@ async fn get_storage_at_not_found_returns_none_with_snapshot_height() {
 }
 
 #[tokio::test]
-async fn get_storage_at_gateway_rpc_fail_surfaces_backend_unavailable() {
+async fn native_storage_gateway_rpc_fail_surfaces_backend_unavailable() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -1017,10 +996,10 @@ async fn get_storage_at_gateway_rpc_fail_surfaces_backend_unavailable() {
 
     // Act
     let result = backend
-        .get_storage_at(
+        .native_storage(
             RpcRequestContext::unbounded(),
             canned_storage_address(),
-            CANNED_STORAGE_KEY,
+            StateKey::ContractData(CANNED_STORAGE_KEY),
         )
         .await;
 
@@ -1032,7 +1011,7 @@ async fn get_storage_at_gateway_rpc_fail_surfaces_backend_unavailable() {
 }
 
 #[tokio::test]
-async fn get_storage_at_outer_default_surfaces_backend_unavailable() {
+async fn native_storage_outer_default_surfaces_backend_unavailable() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -1041,10 +1020,10 @@ async fn get_storage_at_outer_default_surfaces_backend_unavailable() {
 
     // Act
     let result = backend
-        .get_storage_at(
+        .native_storage(
             RpcRequestContext::unbounded(),
             canned_storage_address(),
-            CANNED_STORAGE_KEY,
+            StateKey::ContractData(CANNED_STORAGE_KEY),
         )
         .await;
 
@@ -1052,59 +1031,6 @@ async fn get_storage_at_outer_default_surfaces_backend_unavailable() {
     assert!(
         matches!(result, Err(RpcServerError::BackendUnavailable(_))),
         "outer Default should be BackendUnavailable, got {result:?}"
-    );
-}
-
-#[tokio::test]
-async fn get_storage_at_empty_payload_surfaces_backend_unavailable() {
-    // Arrange
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-    let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::EmptyPayload).await;
-    let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
-
-    // Act
-    let result = backend
-        .get_storage_at(
-            RpcRequestContext::unbounded(),
-            canned_storage_address(),
-            CANNED_STORAGE_KEY,
-        )
-        .await;
-
-    // Assert
-    let error = jsonrpsee::types::ErrorObjectOwned::from(result.unwrap_err());
-    assert_eq!(
-        error.code(),
-        thruput_json_rpc_types::error::codes::BACKEND_UNAVAILABLE
-    );
-    assert!(
-        error.data().is_none(),
-        "wire 13 keeps its unstructured failure"
-    );
-}
-
-#[tokio::test]
-async fn get_storage_at_item_default_error_surfaces_backend_unavailable() {
-    // Arrange
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-    let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::ItemDefaultError).await;
-    let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
-
-    // Act
-    let result = backend
-        .get_storage_at(
-            RpcRequestContext::unbounded(),
-            canned_storage_address(),
-            CANNED_STORAGE_KEY,
-        )
-        .await;
-
-    // Assert
-    assert!(
-        matches!(result, Err(RpcServerError::BackendUnavailable(_))),
-        "per-item non-not-found Default should be BackendUnavailable, got {result:?}"
     );
 }
 
@@ -1125,7 +1051,7 @@ fn canned_auth_data() -> AddressAuthData {
 }
 
 #[tokio::test]
-async fn read_address_auth_data_projects_registered_signers_at_snapshot_height() {
+async fn native_registered_auth_projects_registered_signers_at_snapshot_height() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -1134,29 +1060,35 @@ async fn read_address_auth_data_projects_registered_signers_at_snapshot_height()
 
     // Act
     let read = backend
-        .read_address_auth_data(RpcRequestContext::unbounded(), canned_storage_address())
+        .native_registered_auth(RpcRequestContext::unbounded(), canned_storage_address())
         .await
         .expect("bug: auth data read should succeed");
 
     // Assert
     assert_eq!(read.address, canned_storage_address());
-    assert_eq!(*read.height, CANNED_STORAGE_HEIGHT);
-    let auth_data = read.auth_data.expect("bug: canned address has auth data");
+    assert_eq!(*read.state_block_height, CANNED_STORAGE_HEIGHT);
+    let auth_data = read
+        .configuration
+        .expect("bug: canned address has auth data");
     assert_eq!(auth_data.required_weight, 2);
-    assert_eq!(
-        auth_data.signers,
-        vec![AuthSigner {
-            key_id: 1,
-            public_key: AuthPublicKey::Ed25519 {
-                key: Base58(Ed25519PublicKey::from([0x5a; 32])),
-            },
-            max_weight: 2,
-        }]
+    let [signer] = auth_data.signers.as_slice() else {
+        panic!("expected one signer, got {:?}", auth_data.signers)
+    };
+    assert_eq!(signer.key_id, 1);
+    assert_eq!(signer.max_weight, 2);
+    assert!(
+        matches!(
+            &signer.public_key,
+            thruput_json_rpc_types::responses::PublicKey::Ed25519 { key }
+                if *key == Base58(Ed25519PublicKey::from([0x5a; 32]))
+        ),
+        "{:?}",
+        signer.public_key
     );
 }
 
 #[tokio::test]
-async fn read_address_auth_data_not_found_is_unconfigured_at_snapshot_height() {
+async fn native_registered_auth_not_found_is_unconfigured_at_snapshot_height() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -1165,17 +1097,17 @@ async fn read_address_auth_data_not_found_is_unconfigured_at_snapshot_height() {
 
     // Act
     let read = backend
-        .read_address_auth_data(RpcRequestContext::unbounded(), canned_storage_address())
+        .native_registered_auth(RpcRequestContext::unbounded(), canned_storage_address())
         .await
         .expect("bug: an address without auth data is a successful read");
 
     // Assert
-    assert_eq!(*read.height, CANNED_STORAGE_HEIGHT);
-    assert!(read.auth_data.is_none());
+    assert_eq!(*read.state_block_height, CANNED_STORAGE_HEIGHT);
+    assert!(read.configuration.is_none());
 }
 
 #[tokio::test]
-async fn read_address_auth_data_without_gateway_surfaces_backend_unavailable() {
+async fn native_registered_auth_without_gateway_surfaces_backend_unavailable() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -1183,7 +1115,7 @@ async fn read_address_auth_data_without_gateway_surfaces_backend_unavailable() {
 
     // Act
     let result = backend
-        .read_address_auth_data(RpcRequestContext::unbounded(), canned_storage_address())
+        .native_registered_auth(RpcRequestContext::unbounded(), canned_storage_address())
         .await;
 
     // Assert
@@ -1194,11 +1126,11 @@ async fn read_address_auth_data_without_gateway_surfaces_backend_unavailable() {
 }
 
 // -----------------------------------------------------------------------
-// transaction_status tests
+// funding_status tests
 // -----------------------------------------------------------------------
 
 #[tokio::test]
-async fn transaction_status_pending_in_scheduler_returns_pending() {
+async fn funding_status_pending_in_scheduler_returns_pending() {
     // Arrange: scheduler says all queried hashes are pending.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::AllPending).await;
@@ -1208,7 +1140,7 @@ async fn transaction_status_pending_in_scheduler_returns_pending() {
 
     // Act
     let status = backend
-        .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+        .funding_status(RpcRequestContext::unbounded(), tx_hash)
         .await
         .expect("bug: status check should succeed");
 
@@ -1220,7 +1152,7 @@ async fn transaction_status_pending_in_scheduler_returns_pending() {
 }
 
 #[tokio::test]
-async fn transaction_status_committed_not_pending_returns_committed() {
+async fn funding_status_committed_not_pending_returns_committed() {
     // Arrange: scheduler says not pending; indexer has the tx committed.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -1229,7 +1161,7 @@ async fn transaction_status_committed_not_pending_returns_committed() {
 
     // Act
     let status = backend
-        .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+        .funding_status(RpcRequestContext::unbounded(), tx_hash)
         .await
         .expect("bug: status check should succeed");
 
@@ -1241,7 +1173,7 @@ async fn transaction_status_committed_not_pending_returns_committed() {
 }
 
 #[tokio::test]
-async fn transaction_status_scheduler_retained_outcomes() {
+async fn funding_status_scheduler_retained_outcomes() {
     use thruput_scheduler::{
         SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
         SchedulerTransactionStatus as Status,
@@ -1261,7 +1193,7 @@ async fn transaction_status_scheduler_retained_outcomes() {
         let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
         let backend = make_read_backend(idx_addr, sched_addr).await;
         let status = backend
-            .transaction_status(RpcRequestContext::unbounded(), canned_tx_hash([0x99; 32]))
+            .funding_status(RpcRequestContext::unbounded(), canned_tx_hash([0x99; 32]))
             .await
             .unwrap();
         let value = serde_json::to_value(status).unwrap();
@@ -1281,7 +1213,7 @@ async fn transaction_status_scheduler_retained_outcomes() {
 }
 
 #[tokio::test]
-async fn transaction_status_in_neither_returns_unknown() {
+async fn funding_status_in_neither_returns_unknown() {
     // Arrange: scheduler says not pending; indexer doesn't have it.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -1290,7 +1222,7 @@ async fn transaction_status_in_neither_returns_unknown() {
 
     // Act
     let status = backend
-        .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+        .funding_status(RpcRequestContext::unbounded(), tx_hash)
         .await
         .expect("bug: status check should succeed");
 
@@ -1302,7 +1234,7 @@ async fn transaction_status_in_neither_returns_unknown() {
 }
 
 #[tokio::test]
-async fn transaction_status_recent_failure_returns_diagnostic() {
+async fn funding_status_recent_failure_returns_diagnostic() {
     // Arrange: scheduler says not pending; indexer holds a recent
     // nondeterministic-failure diagnostic for the hash.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
@@ -1313,7 +1245,7 @@ async fn transaction_status_recent_failure_returns_diagnostic() {
 
     // Act
     let status = backend
-        .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+        .funding_status(RpcRequestContext::unbounded(), tx_hash)
         .await
         .expect("bug: status check should succeed");
 
@@ -1341,7 +1273,7 @@ async fn transaction_status_recent_failure_returns_diagnostic() {
 }
 
 #[tokio::test]
-async fn transaction_receipt_recent_failure_returns_none() {
+async fn native_receipt_recent_failure_returns_none() {
     // Arrange: the indexer reports a recent nondeterministic failure,
     // which is not a committed record and must not become an error.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
@@ -1351,7 +1283,7 @@ async fn transaction_receipt_recent_failure_returns_none() {
 
     // Act
     let receipt = backend
-        .transaction_receipt(RpcRequestContext::unbounded(), tx_hash)
+        .native_receipt(RpcRequestContext::unbounded(), tx_hash)
         .await
         .expect("bug: receipt lookup should succeed");
 
@@ -1360,7 +1292,7 @@ async fn transaction_receipt_recent_failure_returns_none() {
 }
 
 #[tokio::test]
-async fn transaction_status_scheduler_rpc_fail_still_returns_committed_from_indexer() {
+async fn funding_status_scheduler_rpc_fail_still_returns_committed_from_indexer() {
     // Arrange: scheduler RPC fails (degraded mode); indexer has the tx.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
@@ -1369,7 +1301,7 @@ async fn transaction_status_scheduler_rpc_fail_still_returns_committed_from_inde
 
     // Act
     let status = backend
-        .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+        .funding_status(RpcRequestContext::unbounded(), tx_hash)
         .await
         .expect("bug: status check should succeed even with scheduler failure");
 
@@ -1381,7 +1313,7 @@ async fn transaction_status_scheduler_rpc_fail_still_returns_committed_from_inde
 }
 
 #[tokio::test]
-async fn transaction_status_scheduler_rpc_fail_and_indexer_miss_surfaces_backend_unavailable() {
+async fn funding_status_scheduler_rpc_fail_and_indexer_miss_surfaces_backend_unavailable() {
     // Arrange: scheduler RPC fails, and the indexer has no record. The
     // transaction may still be pending in the unreachable mempool, so a
     // definite `Unknown` would be a false "not anywhere" claim.
@@ -1392,7 +1324,7 @@ async fn transaction_status_scheduler_rpc_fail_and_indexer_miss_surfaces_backend
 
     // Act
     let result = backend
-        .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+        .funding_status(RpcRequestContext::unbounded(), tx_hash)
         .await;
 
     // Assert
@@ -1408,7 +1340,7 @@ async fn transaction_status_scheduler_rpc_fail_and_indexer_miss_surfaces_backend
 }
 
 #[tokio::test]
-async fn transaction_status_empty_lookup_batch_and_indexer_miss_surfaces_backend_unavailable() {
+async fn funding_status_empty_lookup_batch_and_indexer_miss_surfaces_backend_unavailable() {
     // Arrange: the scheduler lookup succeeds but returns no slot for the
     // queried hash, so there is no per-transaction mempool answer.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
@@ -1418,7 +1350,7 @@ async fn transaction_status_empty_lookup_batch_and_indexer_miss_surfaces_backend
 
     // Act
     let result = backend
-        .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+        .funding_status(RpcRequestContext::unbounded(), tx_hash)
         .await;
 
     // Assert
@@ -1434,14 +1366,14 @@ async fn transaction_status_empty_lookup_batch_and_indexer_miss_surfaces_backend
 }
 
 #[tokio::test]
-async fn transaction_status_extra_lookup_slot_and_indexer_miss_surfaces_backend_unavailable() {
+async fn funding_status_extra_lookup_slot_and_indexer_miss_surfaces_backend_unavailable() {
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::ExtraSlot).await;
     let backend = make_read_backend(idx_addr, sched_addr).await;
     let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
 
     let result = backend
-        .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+        .funding_status(RpcRequestContext::unbounded(), tx_hash)
         .await;
 
     assert!(
@@ -1451,7 +1383,7 @@ async fn transaction_status_extra_lookup_slot_and_indexer_miss_surfaces_backend_
 }
 
 #[tokio::test]
-async fn transaction_status_slow_indexer_exhausts_deadline_before_mempool_is_asked() {
+async fn funding_status_slow_indexer_exhausts_deadline_before_mempool_is_asked() {
     // Arrange: the indexer is asked first and never answers within the
     // request deadline; the scheduler would report the tx pending.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Slow).await;
@@ -1462,7 +1394,7 @@ async fn transaction_status_slow_indexer_exhausts_deadline_before_mempool_is_ask
 
     // Act
     let result = backend
-        .transaction_status(
+        .funding_status(
             RpcRequestContext::new(Some(Duration::from_millis(10))),
             tx_hash,
         )
@@ -1478,7 +1410,7 @@ async fn transaction_status_slow_indexer_exhausts_deadline_before_mempool_is_ask
 }
 
 #[tokio::test]
-async fn transaction_status_indexer_rpc_fail_surfaces_backend_unavailable() {
+async fn funding_status_indexer_rpc_fail_surfaces_backend_unavailable() {
     // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::RpcFail).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
@@ -1487,7 +1419,7 @@ async fn transaction_status_indexer_rpc_fail_surfaces_backend_unavailable() {
 
     // Act
     let result = backend
-        .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+        .funding_status(RpcRequestContext::unbounded(), tx_hash)
         .await;
 
     // Assert
@@ -1503,133 +1435,48 @@ async fn transaction_status_indexer_rpc_fail_surfaces_backend_unavailable() {
 }
 
 // -----------------------------------------------------------------------
-// contract_events tests
+// native_events tests
 // -----------------------------------------------------------------------
 
 #[tokio::test]
-async fn contract_events_first_page_returns_two_events_and_cursor() {
-    // Arrange
+async fn native_events_follow_the_indexer_cursor_and_surface_rpc_failures() {
+    use thruput_json_rpc_server::native::read::NativeHistoryPlane;
+    use thruput_json_rpc_types::{hex::HexBytes, requests as input};
+    let query = |cursor: Option<HexBytes>| input::EventQuery {
+        filters: vec![],
+        start: None,
+        cursor,
+        limit: Some(2),
+    };
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
     let backend = make_read_backend(idx_addr, sched_addr).await;
 
-    // Act
-    let page = backend
-        .contract_events(RpcRequestContext::unbounded(), empty_event_query())
+    let first = backend
+        .native_events(RpcRequestContext::unbounded(), query(None))
         .await
-        .expect("bug: first page should succeed");
-
-    // Assert
-    assert_eq!(page.events.len(), 2, "first page should have 2 events");
+        .expect("bug: first event page should decode");
+    assert_eq!(first.events.len(), 2);
     assert_eq!(
-        page.cursor.0.as_slice(),
-        CANNED_EVENT_CURSOR,
-        "first page cursor should match CANNED_EVENT_CURSOR"
+        first.next_cursor.as_ref().map(|cursor| cursor.0.as_slice()),
+        Some(CANNED_EVENT_CURSOR)
     );
-    assert_eq!(
-        *page.latest_block, CANNED_HEIGHT_B,
-        "latest_block should be CANNED_HEIGHT_B"
-    );
-}
-
-#[tokio::test]
-async fn contract_events_second_page_returns_one_event_and_empty_cursor() {
-    // Arrange
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-
-    // Act
-    let page = backend
-        .contract_events(
-            RpcRequestContext::unbounded(),
-            event_query_with_cursor(CANNED_EVENT_CURSOR),
-        )
+    assert_eq!(*first.latest_indexed_block_height, CANNED_HEIGHT_B);
+    let second = backend
+        .native_events(RpcRequestContext::unbounded(), query(first.next_cursor))
         .await
-        .expect("bug: second page should succeed");
+        .expect("bug: second event page should decode");
+    assert_eq!(second.events.len(), 1);
+    assert!(second.next_cursor.is_none());
 
-    // Assert
-    assert_eq!(page.events.len(), 1, "second page should have 1 event");
-    assert!(
-        page.cursor.0.is_empty(),
-        "second page cursor should be empty (stream exhausted)"
-    );
-}
-
-#[tokio::test]
-async fn contract_events_multi_page_walk_collects_all_three_events() {
-    // Arrange
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-
-    // Act
-    let page1 = backend
-        .contract_events(RpcRequestContext::unbounded(), empty_event_query())
-        .await
-        .expect("bug: page 1 should succeed");
-    let page2 = backend
-        .contract_events(
-            RpcRequestContext::unbounded(),
-            event_query_with_cursor(page1.cursor.0.as_slice()),
-        )
-        .await
-        .expect("bug: page 2 should succeed");
-
-    // Assert
-    let total = page1.events.len() + page2.events.len();
-    assert_eq!(total, 3, "multi-page walk should yield 3 events total");
-}
-
-#[tokio::test]
-async fn contract_events_unknown_cursor_surfaces_backend_unavailable() {
-    // Arrange
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let unknown_cursor = b"unknown-cursor";
-
-    // Act: the fake indexer returns a ProgramError for unknown cursors,
-    // which the client propagates as an RpcError → BackendUnavailable.
-    let result = backend
-        .contract_events(
-            RpcRequestContext::unbounded(),
-            event_query_with_cursor(unknown_cursor),
-        )
-        .await;
-
-    // Assert
-    assert!(
-        matches!(
-            result,
-            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
-                _
-            ))
-        ),
-        "unknown cursor should surface BackendUnavailable, got {result:?}"
-    );
-}
-
-#[tokio::test]
-async fn contract_events_indexer_rpc_fail_surfaces_backend_unavailable() {
-    // Arrange
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::RpcFail).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
     let backend = make_read_backend(idx_addr, sched_addr).await;
-
-    // Act
     let result = backend
-        .contract_events(RpcRequestContext::unbounded(), empty_event_query())
+        .native_events(RpcRequestContext::unbounded(), query(None))
         .await;
-
-    // Assert
     assert!(
-        matches!(
-            result,
-            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
-                _
-            ))
-        ),
+        matches!(result, Err(RpcServerError::BackendUnavailable(_))),
         "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
     );
 }
@@ -1682,7 +1529,6 @@ async fn connect_to_dead_indexer_port_fails_startup_probe() {
 
 #[tokio::test]
 async fn native_storage_and_auth_use_the_local_db_connection() {
-    use thruput_json_rpc_server::native::read::{NativeStatePlane, StateKey};
     use thruput_json_rpc_types::{error::native::BackendDataInvalidReason, responses};
     for mode in [
         FakeDbGatewayMode::Found,
@@ -1726,7 +1572,10 @@ async fn native_storage_and_auth_use_the_local_db_connection() {
                             ..
                         })
                     )),
-                    FakeDbGatewayMode::ItemDefaultError => assert!(result.is_err()),
+                    FakeDbGatewayMode::ItemDefaultError => assert!(
+                        matches!(result, Err(RpcServerError::BackendUnavailable(_))),
+                        "{result:?}"
+                    ),
                     _ => unreachable!(),
                 }
             }
@@ -1737,7 +1586,6 @@ async fn native_storage_and_auth_use_the_local_db_connection() {
 
 #[tokio::test]
 async fn native_receipt_and_commitment_use_local_indexer() {
-    use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
     use thruput_json_rpc_types::responses as out;
     let (idx_addr, _indexer) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
@@ -1762,7 +1610,6 @@ async fn native_receipt_and_commitment_use_local_indexer() {
 
 #[tokio::test]
 async fn native_status_requires_both_misses_and_valid_scheduler_cardinality() {
-    use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
     use thruput_json_rpc_types::{error::native::BackendDataInvalidReason, responses as out};
     let (idx_addr, _indexer) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
@@ -1799,7 +1646,6 @@ async fn native_status_requires_both_misses_and_valid_scheduler_cardinality() {
 
 #[tokio::test]
 async fn native_local_status_does_not_hide_indexer_failure_with_terminal_scheduler_state() {
-    use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
     use thruput_scheduler::{
         SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
         SchedulerTransactionStatus as Status,
@@ -1826,7 +1672,6 @@ async fn native_local_status_does_not_hide_indexer_failure_with_terminal_schedul
 
 #[tokio::test]
 async fn native_local_receipt_deadline_has_no_commitment_observation() {
-    use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
     let (idx_addr, _indexer) = start_fake_indexer(FakeIndexerMode::Slow).await;
     let (sched_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
     let backend = make_read_backend(idx_addr, sched_addr).await;
