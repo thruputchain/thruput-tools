@@ -31,7 +31,7 @@ fn roundtrip<T: DeserializeOwned + Serialize>(raw: Value) -> Value {
 
 macro_rules! core_results {
     ($($method:ident ($wire:literal): $request:ty => $response:ty),+ $(,)?) => {
-        #[open_rpc(params = "object")]
+        #[open_rpc]
         trait CoreResultFixture {
             $(#[method(name = $wire)]
             async fn $method(&self, request: $request) -> jsonrpsee::core::RpcResult<$response>;)+

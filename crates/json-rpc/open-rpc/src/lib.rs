@@ -2,7 +2,7 @@
 //!
 //! Provides types and helpers that the `thruput-open-rpc-macros` proc
 //! macro expands into. Application code aggregates methods from
-//! annotated jsonrpsee traits into a [`Project`], then serializes to
+//! annotated API traits into a [`Project`], then serializes to
 //! the `OpenRPC` 1.2.6 JSON format.
 
 use schemars::generate::SchemaSettings;
@@ -18,36 +18,26 @@ use serde::Serialize;
 pub struct ContentDescriptor {
     /// Parameter / result name.
     pub name: String,
-    /// Whether the parameter is required (`true` for all positional params).
+    /// Whether the parameter is required.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub required: bool,
     /// JSON Schema for the value.
     pub schema: serde_json::Value,
 }
 
-/// Grouping label attached to methods.
-#[derive(Debug, Clone, Serialize)]
-pub struct Tag {
-    /// Display name of the tag.
-    pub name: String,
-}
-
 /// One RPC method in the `OpenRPC` document.
 #[derive(Debug, Clone, Serialize)]
 pub struct MethodDoc {
-    /// Fully qualified method name (e.g. `faucet_requestAirdrop`).
+    /// Wire method name (e.g. `faucet_requestAirdrop`).
     pub name: String,
     /// One-line description extracted from doc comments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    /// Tags for grouping in documentation UIs.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<Tag>,
-    /// Ordered list of parameter descriptors.
+    /// Field descriptors of the request object, from [`named_params`].
     pub params: Vec<ContentDescriptor>,
-    /// Whole-object parameter contract, when this method takes named params.
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub named_params: Option<NamedParamsDoc>,
+    /// Whole-object parameter contract, from [`named_params`].
+    #[serde(flatten)]
+    pub named_params: NamedParamsDoc,
     /// Return-value descriptor.
     pub result: ContentDescriptor,
 }
@@ -194,20 +184,6 @@ impl Project {
 // Builder helpers (called by generated code)
 // ---------------------------------------------------------------------------
 
-/// Build a [`ContentDescriptor`] for a method parameter whose type
-/// implements [`JsonSchema`].
-pub fn param_descriptor<T: JsonSchema>(
-    generator: &mut SchemaGenerator,
-    name: &str,
-) -> ContentDescriptor {
-    let schema = generator.subschema_for::<T>();
-    ContentDescriptor {
-        name: name.to_owned(),
-        required: true,
-        schema: schema_to_value(&schema),
-    }
-}
-
 /// Build a [`ContentDescriptor`] for a method return value whose type
 /// implements [`JsonSchema`].
 pub fn result_descriptor<T: JsonSchema>(
@@ -304,25 +280,47 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
+    #[derive(JsonSchema)]
+    struct EmptyRequest {}
+
+    /// Add a method with request object `Request` returning `Response`.
+    fn add_method<Request: JsonSchema, Response: JsonSchema>(
+        module: &mut ModuleBuilder<'_>,
+        name: &str,
+        summary: Option<&str>,
+        result_name: &str,
+    ) {
+        let (params, named_params) = named_params::<Request>(module.generator());
+        let result = result_descriptor::<Response>(module.generator(), result_name);
+        module.add_method(MethodDoc {
+            name: name.to_owned(),
+            summary: summary.map(str::to_owned),
+            params,
+            named_params,
+            result,
+        });
+    }
+
     #[test]
     fn project_serializes_to_openrpc_126() {
+        #[allow(dead_code)]
+        #[derive(JsonSchema)]
+        struct EchoRequest {
+            input: String,
+        }
+
         let mut project = Project::new(ProjectInfo {
             title: "Test API".to_owned(),
             version: "0.1.0".to_owned(),
         });
         project.module(|module| {
-            let params = vec![param_descriptor::<String>(module.generator(), "input")];
-            let result = result_descriptor::<u64>(module.generator(), "output");
-            module.add_method(MethodDoc {
-                named_params: None,
-                name: "test_echo".to_owned(),
-                summary: Some("Echo a string back.".to_owned()),
-                tags: vec![Tag {
-                    name: "Demo".to_owned(),
-                }],
-                params,
-                result,
-            });
+            add_method::<EchoRequest, u64>(
+                module,
+                "test_echo",
+                Some("Echo a string back."),
+                "output",
+            );
         });
 
         let json = project.to_json();
@@ -337,7 +335,9 @@ mod tests {
         assert_eq!(methods.len(), 1);
         assert_eq!(methods[0]["name"], "test_echo");
         assert_eq!(methods[0]["summary"], "Echo a string back.");
-        assert_eq!(methods[0]["tags"][0]["name"], "Demo");
+        assert!(methods[0].get("tags").is_none());
+        assert_eq!(methods[0]["paramStructure"], "by-name");
+        assert_eq!(methods[0]["x-params-schema"]["type"], "object");
         assert_eq!(methods[0]["params"][0]["name"], "input");
         assert!(
             methods[0]["params"][0]["required"]
@@ -372,28 +372,8 @@ mod tests {
             title: "Multi".to_owned(),
             version: "1.0.0".to_owned(),
         });
-        project.module(|module| {
-            let result = result_descriptor::<bool>(module.generator(), "ok");
-            module.add_method(MethodDoc {
-                named_params: None,
-                name: "a".to_owned(),
-                summary: None,
-                tags: vec![],
-                params: vec![],
-                result,
-            });
-        });
-        project.module(|module| {
-            let result = result_descriptor::<bool>(module.generator(), "ok");
-            module.add_method(MethodDoc {
-                named_params: None,
-                name: "b".to_owned(),
-                summary: None,
-                tags: vec![],
-                params: vec![],
-                result,
-            });
-        });
+        project.module(|module| add_method::<EmptyRequest, bool>(module, "a", None, "ok"));
+        project.module(|module| add_method::<EmptyRequest, bool>(module, "b", None, "ok"));
 
         let json = project.to_json();
         let methods = json["methods"]
@@ -405,41 +385,22 @@ mod tests {
     }
 
     #[test]
-    fn param_descriptor_is_required() {
-        let mut generator = openrpc_schema_generator();
-        let desc = param_descriptor::<u64>(&mut generator, "count");
-        assert!(desc.required);
-    }
-
-    #[test]
     fn shared_named_types_use_refs_and_one_component_entry() {
+        #[allow(dead_code)]
+        #[derive(JsonSchema)]
+        struct SharedRequest {
+            input: SharedType,
+        }
+
         let mut project = Project::new(ProjectInfo {
             title: "Shared".to_owned(),
             version: "1.0.0".to_owned(),
         });
         project.module(|module| {
-            let params = vec![param_descriptor::<SharedType>(module.generator(), "input")];
-            let result = result_descriptor::<SharedType>(module.generator(), "output");
-            module.add_method(MethodDoc {
-                named_params: None,
-                name: "a".to_owned(),
-                summary: None,
-                tags: vec![],
-                params,
-                result,
-            });
+            add_method::<EmptyRequest, SharedType>(module, "a", None, "output");
         });
         project.module(|module| {
-            let params = vec![param_descriptor::<SharedType>(module.generator(), "input")];
-            let result = result_descriptor::<bool>(module.generator(), "ok");
-            module.add_method(MethodDoc {
-                named_params: None,
-                name: "b".to_owned(),
-                summary: None,
-                tags: vec![],
-                params,
-                result,
-            });
+            add_method::<SharedRequest, bool>(module, "b", None, "ok");
         });
 
         let json = project.to_json();
@@ -453,15 +414,15 @@ mod tests {
             .as_array()
             .expect("methods should be an array");
         assert_eq!(
-            methods[0]["params"][0]["schema"]["$ref"],
-            "#/components/schemas/SharedType"
-        );
-        assert_eq!(
             methods[0]["result"]["schema"]["$ref"],
             "#/components/schemas/SharedType"
         );
         assert_eq!(
             methods[1]["params"][0]["schema"]["$ref"],
+            "#/components/schemas/SharedType"
+        );
+        assert_eq!(
+            methods[1]["x-params-schema"]["properties"]["input"]["$ref"],
             "#/components/schemas/SharedType"
         );
     }
@@ -473,15 +434,7 @@ mod tests {
             version: "1.0.0".to_owned(),
         });
         project.module(|module| {
-            let result = result_descriptor::<u64>(module.generator(), "count");
-            module.add_method(MethodDoc {
-                named_params: None,
-                name: "count".to_owned(),
-                summary: None,
-                tags: vec![],
-                params: vec![],
-                result,
-            });
+            add_method::<EmptyRequest, u64>(module, "count", None, "count");
         });
 
         let json = project.to_json();
@@ -496,24 +449,8 @@ mod tests {
             version: "1.0.0".to_owned(),
         });
         project.module(|module| {
-            let first_result = result_descriptor::<first::Foo>(module.generator(), "first");
-            module.add_method(MethodDoc {
-                named_params: None,
-                name: "first".to_owned(),
-                summary: None,
-                tags: vec![],
-                params: vec![],
-                result: first_result,
-            });
-            let second_result = result_descriptor::<second::Foo>(module.generator(), "second");
-            module.add_method(MethodDoc {
-                named_params: None,
-                name: "second".to_owned(),
-                summary: None,
-                tags: vec![],
-                params: vec![],
-                result: second_result,
-            });
+            add_method::<EmptyRequest, first::Foo>(module, "first", None, "first");
+            add_method::<EmptyRequest, second::Foo>(module, "second", None, "second");
         });
 
         let schemas = project.to_json()["components"]["schemas"]

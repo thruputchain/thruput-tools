@@ -76,7 +76,7 @@ macro_rules! declare_api {
             )*
         }
 
-        #[thruput_open_rpc_macros::open_rpc(params = "object")]
+        #[thruput_open_rpc_macros::open_rpc]
         pub trait NativeApi {
             $(
                 $(#[$doc])*
