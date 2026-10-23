@@ -1,6 +1,9 @@
+# Config for `cargo cooldown`
+# Keep in sync with .cargo/cooldown.toml and .cargo/cooldown-allowlist.toml
+
 [cooldown]
 incompatible-publish-age = "deny"
-lockfile-baseline = "floor"
+lockfile-baseline = "ignore"
 
 [registry]
 global-min-publish-age = "15 days"
@@ -20,3 +23,42 @@ version = "0.103.16"
 [[allow.exact]]
 crate = "webpki-root-certs"
 version = "1.0.10"
+
+# Security fix for ctutils 0.4.3 and earlier (fixed in 0.4.4).
+[[allow.exact]]
+crate = "ctutils"
+version = "0.4.5"
+
+# Grandfathered versions ... (can remove after 2026 Nov 9)
+
+[[allow.exact]]
+crate = "jsonschema"
+version = "0.59.0"
+
+[[allow.exact]]
+crate = "jsonschema-regex"
+version = "0.59.0"
+
+[[allow.exact]]
+crate = "jsonschema-value"
+version = "0.59.0"
+
+[[allow.exact]]
+crate = "referencing"
+version = "0.59.0"
+
+[[allow.exact]]
+crate = "opentelemetry"
+version = "0.33.1"
+
+[[allow.exact]]
+crate = "opentelemetry-otlp"
+version = "0.33.1"
+
+[[allow.exact]]
+crate = "opentelemetry-proto"
+version = "0.33.1"
+
+[[allow.exact]]
+crate = "opentelemetry_sdk"
+version = "0.33.1"

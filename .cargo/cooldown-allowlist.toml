@@ -1,0 +1,53 @@
+# Keep in sync with the [[allow.exact]] entries in ../cooldown.toml.
+
+[[allow.exact]]
+crate = "rustls"
+version = "0.23.46"
+
+# Security fixes for RUSTSEC-2026-0382 and RUSTSEC-2026-0383.
+[[allow.exact]]
+crate = "rustls-webpki"
+version = "0.103.16"
+
+[[allow.exact]]
+crate = "webpki-root-certs"
+version = "1.0.10"
+
+# Security fix for ctutils 0.4.3 and earlier (fixed in 0.4.4).
+[[allow.exact]]
+crate = "ctutils"
+version = "0.4.5"
+
+# Grandfathered versions ... (can remove after 2026 Nov 9)
+
+[[allow.exact]]
+crate = "jsonschema"
+version = "0.59.0"
+
+[[allow.exact]]
+crate = "jsonschema-regex"
+version = "0.59.0"
+
+[[allow.exact]]
+crate = "jsonschema-value"
+version = "0.59.0"
+
+[[allow.exact]]
+crate = "referencing"
+version = "0.59.0"
+
+[[allow.exact]]
+crate = "opentelemetry"
+version = "0.33.1"
+
+[[allow.exact]]
+crate = "opentelemetry-otlp"
+version = "0.33.1"
+
+[[allow.exact]]
+crate = "opentelemetry-proto"
+version = "0.33.1"
+
+[[allow.exact]]
+crate = "opentelemetry_sdk"
+version = "0.33.1"
