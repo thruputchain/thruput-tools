@@ -34,8 +34,8 @@ use thruput_json_rpc_types::protocol_token::protocol_text;
 use thruput_scheduler::{
     BlockID, ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, ExpectedDBTip,
     ParallelBatch, ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
-    ParallelTransactionHashBatch, PendingTxCount, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
-    SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
+    ParallelSignedTransactionHashBatch, PendingTxCount, Proposal, ProposalTxs, ProposalTxsHash,
+    RPCError, SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
     SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerProposalResult, SchedulerProposedBlock,
     SchedulerTransactionOutcomeBatch, SchedulerValidationResult,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
@@ -49,7 +49,9 @@ use thruput_xdr::header::{ProposalContext, ProposalHeader};
 use thruput_xdr::network::ProtocolCommit;
 use thruput_xdr::network_config::NetworkConfig;
 use thruput_xdr::storage_item::WireStorageItem;
-use thruput_xdr::transaction::{OptSignedTransactionBatch, TransactionHash, TransactionHashBatch};
+use thruput_xdr::transaction::{
+    OptSignedTransactionBatch, SignedTransactionHashBatch, TransactionHash, TransactionHashBatch,
+};
 use thruput_xdr::types::{
     BlockHeight, ConfigHash, ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash, Protocol,
     SHA256Hash, StorageKey, StorageShortHash, TimePoint, TxsHash,
@@ -1000,7 +1002,7 @@ fn fake_proposal_header_with_network_hash(
 fn fake_proposal_txs() -> ProposalTxs {
     ProposalTxs {
         ext: ExtensionPoint::_0,
-        hash: ParallelTransactionHashBatch::new(ParallelBatch {
+        signed_hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
             segment_tokens: VecM(vec![1, 2]),
             segment_bytes: VecM(vec![4, 8]),
             xdr: BytesM(vec![0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3]),
@@ -1083,7 +1085,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         }
         let mut transactions = fake_proposal_txs();
         if self.mode == FakeSchedulerMode::AutomineMalformedProposal {
-            transactions.hash.segment_tokens.0.pop();
+            transactions.signed_hash.segment_tokens.0.pop();
         }
         let header = fake_proposal_header_with_network_hash(
             next_height,
@@ -1231,7 +1233,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
     async fn schedcoord_lookup_transactions(
         &self,
-        hashes: TransactionHashBatch,
+        hashes: SignedTransactionHashBatch,
     ) -> Result<OptSignedTransactionBatch, ProgramError> {
         // One slot per queried hash: nothing is ever pending in the fake,
         // but each hash still gets an explicit per-transaction answer.

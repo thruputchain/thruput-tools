@@ -41,14 +41,14 @@ fn batch_hash(batch: &ParallelBatch) -> Result<[u8; 32]> {
 
 fn proposal_hash(txs: &ProposalTxs) -> Result<ProposalTxsHash> {
     let mut base = txs.clone();
-    let batches: [&mut ParallelBatch; 2] = [&mut base.hash, &mut base.nondeterministic_data];
+    let batches: [&mut ParallelBatch; 2] = [&mut base.signed_hash, &mut base.nondeterministic_data];
     for batch in batches {
         batch.segment_tokens.0.clear();
         batch.segment_bytes.0.clear();
         batch.xdr.0.clear();
     }
     let mut result = hash(&base)?;
-    let batches: [&ParallelBatch; 2] = [&txs.hash, &txs.nondeterministic_data];
+    let batches: [&ParallelBatch; 2] = [&txs.signed_hash, &txs.nondeterministic_data];
     for batch in batches {
         for (dst, src) in result.iter_mut().zip(batch_hash(batch)?) {
             *dst ^= src;

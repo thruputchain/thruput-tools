@@ -10,7 +10,7 @@
 # `workspace.package.version`.
 [package]
 name = "thruput"
-version = "0.35.1"
+version = "0.36.0"
 edition = "2024"
 rust-version = "1.96"
 authors = ["Stellar Development Foundation"]
@@ -28,7 +28,7 @@ name = "thruput"
 path = "src/main.rs"
 
 [dependencies]
-thruput-cli = { path = "../cli", version = "=0.35.1", registry = "thruput" }
+thruput-cli = { path = "../cli", version = "=0.36.0", registry = "thruput" }
 
 # Profiles come from the root package being built, so this crate does not get
 # the workspace's. Keep it identical to the workspace `[profile.release]`.

@@ -935,7 +935,10 @@ async fn malformed_scheduler_proposal_returns_typed_error_without_panicking_driv
         .expect_err("bug: malformed scheduler proposal should fail");
     assert!(matches!(
         error,
-        BlockProductionError::MalformedSchedulerProposal { batch: "hash", .. }
+        BlockProductionError::MalformedSchedulerProposal {
+            batch: "signed_hash",
+            ..
+        }
     ));
     let stopped = producer
         .produce_block()
