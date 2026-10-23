@@ -18,3 +18,10 @@ The event helpers take `Option<TxHash>`: pass `Some(tx_hash)` for a known
 transaction, or `None` for simulations without a transaction hash.
 `tx_lookup` takes the requested `TxHash` as its second argument. The hash type
 is `thruput_json_rpc_types::transaction::TxHash`.
+
+The published `thruput-json-rpc-api` crate no longer defines the legacy
+`AirdropApi` and `LocalFundingApi` jsonrpsee traits or their generated
+`*Client`, `*Server` and `*OpenRpc` items. No binary registered them after the
+wire 14 native API. Call `faucet_requestAirdrop` and `dev_fundAccount` through
+`thruput_json_rpc_client::NativeClient`, and implement servers with
+`thruput_json_rpc_server::native::funding::NativeFundingPlane`.
