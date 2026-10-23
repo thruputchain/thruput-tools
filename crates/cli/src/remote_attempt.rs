@@ -41,6 +41,15 @@ pub(crate) fn lock_attempt(
     command: &str,
     scope: &str,
 ) -> Result<File, CliError> {
+    lock_attempt_within(attempt_path, command, scope, LOCK_RETRY_WINDOW)
+}
+
+fn lock_attempt_within(
+    attempt_path: &Path,
+    command: &str,
+    scope: &str,
+    retry_window: Duration,
+) -> Result<File, CliError> {
     let parent = attempt_path
         .parent()
         .ok_or_else(|| CliError::Other(format!("{command} attempt path has no parent")))?;
@@ -56,7 +65,7 @@ pub(crate) fn lock_attempt(
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let file = options.open(&lock_path)?;
-    let deadline = Instant::now() + LOCK_RETRY_WINDOW;
+    let deadline = Instant::now() + retry_window;
     loop {
         let Err(error) = file.try_lock_exclusive() else {
             return Ok(file);
@@ -154,15 +163,22 @@ mod tests {
 
             let (mut forked, forked_writer) = io::pipe().unwrap();
             let (release_reader, release) = io::pipe().unwrap();
-            let (forked_fd, release_fd) = (forked_writer.as_raw_fd(), release_reader.as_raw_fd());
+            let (forked_fd, release_fd, release_writer_fd) = (
+                forked_writer.as_raw_fd(),
+                release_reader.as_raw_fd(),
+                release.as_raw_fd(),
+            );
             let spawner = thread::spawn(move || {
                 let mut command = std::process::Command::new("true");
-                // SAFETY: the hook only calls write(2) and read(2), which are
-                // async-signal-safe, on descriptors this thread keeps open.
+                // SAFETY: the hook only calls write(2), close(2), and read(2),
+                // which are async-signal-safe, on descriptors this thread keeps
+                // open. Closing the inherited writer lets the child exec and
+                // exit if this test process dies before releasing it.
                 unsafe {
                     command.pre_exec(move || {
                         let mut byte = 0u8;
                         libc::write(forked_fd, (&raw const byte).cast(), 1);
+                        libc::close(release_writer_fd);
                         libc::read(release_fd, (&raw mut byte).cast(), 1);
                         Ok(())
                     });
@@ -187,7 +203,8 @@ mod tests {
 
     // A child spawned by another thread keeps the released lock's descriptor
     // until it execs, so the next command must wait out that window rather
-    // than report another command.
+    // than report another command. The child's exec time on a loaded machine
+    // is unbounded, so the retry window here only guards against a hang.
     #[test]
     fn lock_handoff_waits_out_a_concurrent_spawn() {
         let dir = tempfile::tempdir().unwrap();
@@ -195,8 +212,13 @@ mod tests {
         let first = lock_attempt(&attempt, "airdrop", "recipient").unwrap();
         let child = PausedChild::spawn();
         drop(first);
+        let probe = File::open(attempt.with_extension("lock")).unwrap();
+        assert!(
+            probe.try_lock_exclusive().is_err(),
+            "the child holds the lock"
+        );
         let released = child.release_after(Duration::from_millis(50));
-        lock_attempt(&attempt, "airdrop", "recipient").unwrap();
+        lock_attempt_within(&attempt, "airdrop", "recipient", Duration::from_secs(30)).unwrap();
         released.join().unwrap();
     }
 

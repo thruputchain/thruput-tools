@@ -407,6 +407,14 @@ const CHAIN_LOCK_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from
 
 #[cfg(unix)]
 fn acquire_chain_lock(dir: &Path) -> Result<File, NodeSupervisorError> {
+    acquire_chain_lock_within(dir, CHAIN_LOCK_RETRY_WINDOW)
+}
+
+#[cfg(unix)]
+fn acquire_chain_lock_within(
+    dir: &Path,
+    retry_window: std::time::Duration,
+) -> Result<File, NodeSupervisorError> {
     use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
     use std::{thread, time::Instant};
     let path = dir.join(".hog-devnode.lock");
@@ -426,7 +434,7 @@ fn acquire_chain_lock(dir: &Path) -> Result<File, NodeSupervisorError> {
     {
         return Err(state_error(&path, "chain lock must be a regular file"));
     }
-    let deadline = Instant::now() + CHAIN_LOCK_RETRY_WINDOW;
+    let deadline = Instant::now() + retry_window;
     // SAFETY: file owns a valid descriptor; flock retains no pointers.
     while unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         let contended = io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock;
@@ -561,15 +569,22 @@ mod tests {
 
             let (mut forked, forked_writer) = io::pipe().unwrap();
             let (release_reader, release) = io::pipe().unwrap();
-            let (forked_fd, release_fd) = (forked_writer.as_raw_fd(), release_reader.as_raw_fd());
+            let (forked_fd, release_fd, release_writer_fd) = (
+                forked_writer.as_raw_fd(),
+                release_reader.as_raw_fd(),
+                release.as_raw_fd(),
+            );
             let spawner = std::thread::spawn(move || {
                 let mut command = std::process::Command::new("true");
-                // SAFETY: the hook only calls write(2) and read(2), which are
-                // async-signal-safe, on descriptors this thread keeps open.
+                // SAFETY: the hook only calls write(2), close(2), and read(2),
+                // which are async-signal-safe, on descriptors this thread keeps
+                // open. Closing the inherited writer lets the child exec and
+                // exit if this test process dies before releasing it.
                 unsafe {
                     command.pre_exec(move || {
                         let mut byte = 0u8;
                         libc::write(forked_fd, (&raw const byte).cast(), 1);
+                        libc::close(release_writer_fd);
                         libc::read(release_fd, (&raw mut byte).cast(), 1);
                         Ok(())
                     });
@@ -594,16 +609,22 @@ mod tests {
 
     // A child spawned by another thread keeps the released lock's descriptor
     // until it execs, so the next owner must wait out that window rather than
-    // report another process.
+    // report another process. The child's exec time on a loaded machine is
+    // unbounded, so the retry window here only guards against a hang.
     #[test]
     fn chain_lock_handoff_waits_out_a_concurrent_spawn() {
+        use std::os::fd::AsRawFd;
         let dir = tempfile::tempdir().unwrap();
         let config = config(dir.path());
         let first = LocalChainState::prepare(&config).unwrap();
         let child = PausedChild::spawn();
         drop(first);
+        let probe = File::open(dir.path().join(".hog-devnode.lock")).unwrap();
+        // SAFETY: probe owns a valid descriptor; flock retains no pointers.
+        let locked = unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        assert_ne!(locked, 0, "the child holds the chain lock");
         let released = child.release_after(std::time::Duration::from_millis(50));
-        LocalChainState::prepare(&config).unwrap();
+        acquire_chain_lock_within(dir.path(), std::time::Duration::from_secs(30)).unwrap();
         released.join().unwrap();
     }
 
