@@ -1,4 +1,4 @@
-/// Default gas budget for backend `groundhog_view` execution.
+/// Default gas budget for a simulated invocation.
 pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 10_000_000;
 
 /// Operator policy for one shared-snapshot request, not consensus parameters.
@@ -69,13 +69,12 @@ pub struct RpcServerConfig {
     /// methods; longer cursors are rejected as `InvalidParam`.
     pub max_cursor_bytes: usize,
 
-    /// Maximum `groundhog_view` calldata byte length; larger
+    /// Maximum simulated-invocation calldata byte length; larger
     /// requests are rejected as `InvalidParam` before backend dispatch.
     pub max_view_calldata_bytes: usize,
 
-    /// Gas budget assigned to backend `groundhog_view` execution when the
-    /// request names no `gasLimit`, and the ceiling a requested `gasLimit`
-    /// may not exceed.
+    /// Gas budget assigned to a simulated invocation when the request names
+    /// no `gasLimit`, and the ceiling a requested `gasLimit` may not exceed.
     ///
     /// The shared server validates JSON request shape; concrete backends
     /// pass this cap into the hogd view invocation once view execution is
@@ -84,13 +83,13 @@ pub struct RpcServerConfig {
     pub view_gas_limit: u64,
 
     /// Upper bound on a single chain-tip probe issued on behalf of the
-    /// `sendRawTransaction` pre-checks, whether by a submit or by the
+    /// `sendTransaction` pre-checks, whether by a submit or by the
     /// background refresh. The pre-checks are advisory, so a slow or
     /// stalled backend must not delay submission past this bound.
     pub tip_probe_timeout_ms: u64,
 
     /// How often the background task refreshes the chain-tip reading the
-    /// `sendRawTransaction` pre-checks read. A reading stays usable for
+    /// `sendTransaction` pre-checks read. A reading stays usable for
     /// this plus `tip_probe_timeout_ms`, so a refresh always lands first
     /// and a submit never fetches on its own latency path. Zero disables
     /// both the task and reuse. Staleness is safe: the tip only grows, and

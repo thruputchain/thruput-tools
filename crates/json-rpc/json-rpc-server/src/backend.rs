@@ -182,14 +182,13 @@ pub trait SubmitPlane: Send + Sync + 'static {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct TipReading {
-    /// Chain state that advances with each commit; what `chainTip` returns.
+    /// Chain state that advances with each commit; what `getChainTip` returns.
     pub tip: ChainTip,
     /// Network config the tip carries.
     pub network_config: NetworkConfig,
     /// Effective limits and storage prices read with this committed tip.
     ///
-    /// Shared from the moment the backend builds it, so caching the reading
-    /// and answering `chainConfig` from it both cost a refcount.
+    /// `getChainConfig` projects its execution limits and prices from this.
     pub execution: Option<Arc<thruput_json_rpc_types::network_config::ExecutionConfig>>,
 }
 

@@ -35,7 +35,7 @@ pub struct Tag {
 /// One RPC method in the `OpenRPC` document.
 #[derive(Debug, Clone, Serialize)]
 pub struct MethodDoc {
-    /// Fully qualified method name (e.g. `groundhog_chainTip`).
+    /// Fully qualified method name (e.g. `faucet_requestAirdrop`).
     pub name: String,
     /// One-line description extracted from doc comments.
     #[serde(skip_serializing_if = "Option::is_none")]

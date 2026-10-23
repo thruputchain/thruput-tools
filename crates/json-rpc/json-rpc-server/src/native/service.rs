@@ -3,7 +3,7 @@
 use jsonrpsee::{core::RegisterMethodError, types::ErrorObjectOwned};
 use thruput_bundle_identity::BundleIdentity;
 use thruput_json_rpc_api::native::{METHOD_NAMES, NativeApi};
-use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
+use thruput_json_rpc_types::NetworkHash;
 
 use super::{
     FinalizedNativeModule, NativeModule,
@@ -14,7 +14,7 @@ use super::{
     },
     transaction::{NativeSubmitPlane, NativeTransactionReadPlane},
 };
-use crate::{BuildInfo, BuildVersion, ChainPlane, GroundhogRpcServer, RpcServerConfig};
+use crate::{BuildVersion, ChainPlane, GroundhogRpcServer, RpcServerConfig};
 
 /// Configured backend planes. Transient health does not change registration.
 /// Funding and local scheduler methods are attached before module finalization.
@@ -91,7 +91,7 @@ impl NativeCapabilities {
 #[derive(Debug)]
 pub struct NativeService<S, C, R, V, F = ()> {
     reads: NativeReadService<C, R, V>,
-    transactions: GroundhogRpcServer<S, C, R, ()>,
+    transactions: GroundhogRpcServer<S, C, R>,
     capabilities: NativeCapabilities,
     funding: F,
 }
@@ -123,15 +123,7 @@ impl<S, C: ChainPlane + Clone, R: Clone, V> NativeService<S, C, R, V> {
             build,
             NativeReadCapabilities::new(capabilities.db, capabilities.simulation),
         );
-        let transactions = GroundhogRpcServer::new(
-            submit,
-            chain,
-            read,
-            (),
-            NetworkInfo::new(network_hash),
-            config,
-            BuildInfo::from_build_version(build, None),
-        );
+        let transactions = GroundhogRpcServer::new(submit, chain, read, config);
         Self {
             reads,
             transactions,
@@ -165,7 +157,6 @@ impl<S, C, R, V, F> NativeService<S, C, R, V, F> {
     #[must_use]
     pub fn with_bundle_identity(mut self, identity: &BundleIdentity) -> Self {
         self.reads = self.reads.with_bundle_identity(identity);
-        self.transactions = self.transactions.with_bundle_identity(identity);
         self
     }
 }

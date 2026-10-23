@@ -1,5 +1,5 @@
 use super::*;
-use crate::{BuildInfo, RpcServerConfig, TipReading, native::transaction::NativeReadError};
+use crate::{RpcServerConfig, TipReading, native::transaction::NativeReadError};
 use async_trait::async_trait;
 use std::sync::{
     Arc, Mutex,
@@ -11,7 +11,6 @@ use thruput_json_rpc_types::{
     block::{BlockInfo, ChainTip},
     error::native::{BackendDataInvalidReason, ReceiptObservation, codes},
     hex::HexBytes,
-    network_info::NetworkInfo,
 };
 use thruput_xdr::network_config::{NetworkConfig, NetworkConfigV0};
 use xdr_common::VecM;
@@ -134,19 +133,16 @@ impl NativeTransactionReadPlane for Backend {
         })
     }
 }
-fn server(backend: Backend) -> GroundhogRpcServer<Backend, Backend, Backend, ()> {
+fn server(backend: Backend) -> GroundhogRpcServer<Backend, Backend, Backend> {
     GroundhogRpcServer::new(
         backend.clone(),
         backend.clone(),
         backend,
-        (),
-        NetworkInfo::new(Base58([7; 32].into())),
         RpcServerConfig {
             request_timeout_ms: Some(25),
             tip_refresh_interval_ms: 0,
             ..RpcServerConfig::default()
         },
-        BuildInfo::new("test", None),
     )
 }
 fn request() -> input::SendTransactionRequest {

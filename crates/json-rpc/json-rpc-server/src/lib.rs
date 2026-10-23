@@ -1,8 +1,8 @@
 //! Reusable server-side JSON-RPC presentation layer.
 //!
 //! This crate owns common request validation, public error mapping, and the
-//! `GroundhogApiServer` implementation. Concrete binaries provide backend
-//! adapters for the production gateway and hogd-dev node supervisor
+//! [`native::service::NativeService`] implementation. Concrete binaries provide
+//! backend adapters for the production gateway and hogd-dev node supervisor
 //! compositions.
 
 pub mod backend;
@@ -24,7 +24,7 @@ pub use backend::{
 pub use block_queries::validate_page as validate_block_transaction_page;
 pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig, ViewBatchConfig};
 pub use error::RpcServerError;
-pub use server::{BuildInfo, GroundhogRpcServer};
+pub use server::GroundhogRpcServer;
 
 /// Native JSON-RPC transport.
 pub mod native;

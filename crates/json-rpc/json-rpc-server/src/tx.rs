@@ -29,25 +29,6 @@ const _: fn(thruput_xdr::transaction::SignedTransaction) = |signed| {
     let _: PubkeyClaimKeyField = pubkey_claim_key;
 };
 
-/// Decode, validate, and hash a raw signed transaction parameter.
-///
-/// `params` is the chain config reading for [`check_transaction`]; pass
-/// `NetworkConfigParams::default()` when no reading is available, which
-/// skips the checks that need a stated bound and applies the protocol's
-/// own value for the rest.
-pub fn validate_raw_transaction(
-    tx_hex: &str,
-    params: &NetworkConfigParams,
-) -> Result<ValidatedTransaction, RpcServerError> {
-    validate_raw_transaction_bytes(decode_transaction_hex(tx_hex)?, params)
-}
-
-/// Decode a hex transaction parameter, rejecting malformed hex as `TxInvalid`.
-pub(crate) fn decode_transaction_hex(tx_hex: &str) -> Result<Vec<u8>, RpcServerError> {
-    thruput_json_rpc_types::hex::decode_prefixed_hex(tx_hex)
-        .map_err(|e| RpcServerError::TxInvalid(format!("invalid hex: {e}")))
-}
-
 /// Validate and hash raw signed transaction XDR bytes.
 ///
 /// The returned hash is SHA-256 over the inner `Transaction` only — the
@@ -186,6 +167,10 @@ mod tests {
     use super::*;
     use thruput_xdr::contract::kDefaultMaxContractSizeBytes;
 
+    fn canonical_bytes() -> Vec<u8> {
+        hex::decode(CANONICAL_HASH_VECTOR_SIGNED_TX_XDR).expect("bug: fixture should be valid hex")
+    }
+
     fn rv32(size: usize, fill: u8) -> Contract {
         Contract::kRv32 {
             rv32_contract: ContractBlob {
@@ -252,16 +237,8 @@ mod tests {
     }
 
     #[test]
-    fn invalid_hex_is_rejected() {
-        let err = validate_raw_transaction("not-valid-hex", &NetworkConfigParams::default())
-            .expect_err("bug: invalid hex should be rejected");
-
-        assert!(matches!(err, RpcServerError::TxInvalid(_)));
-    }
-
-    #[test]
     fn invalid_xdr_is_rejected() {
-        let err = validate_raw_transaction("0x00", &NetworkConfigParams::default())
+        let err = validate_raw_transaction_bytes(vec![0], &NetworkConfigParams::default())
             .expect_err("bug: invalid XDR should fail");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
@@ -269,55 +246,37 @@ mod tests {
 
     #[test]
     fn exposes_block_expiry_height_from_decoded_transaction() {
-        let tx = validate_raw_transaction(
-            CANONICAL_HASH_VECTOR_SIGNED_TX_XDR,
-            &NetworkConfigParams::default(),
-        )
-        .expect("bug: canonical hash vector should validate as XDR");
+        let tx = validate_raw_transaction_bytes(canonical_bytes(), &NetworkConfigParams::default())
+            .expect("bug: canonical hash vector should validate as XDR");
 
         assert_eq!(*tx.block_expiry_height, 1_000_000);
     }
 
     #[test]
     fn computes_canonical_hash_from_inner_transaction() {
-        let tx = validate_raw_transaction(
-            CANONICAL_HASH_VECTOR_SIGNED_TX_XDR,
-            &NetworkConfigParams::default(),
-        )
-        .expect("bug: canonical hash vector should validate as XDR");
-
-        assert_eq!(hex::encode(tx.hash.0.0.as_ref()), CANONICAL_HASH);
-    }
-
-    #[test]
-    fn uppercase_0x_prefix_is_accepted() {
-        let tx = validate_raw_transaction(
-            &format!("0X{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"),
-            &NetworkConfigParams::default(),
-        )
-        .expect("bug: uppercase 0X prefix should be accepted");
+        let tx = validate_raw_transaction_bytes(canonical_bytes(), &NetworkConfigParams::default())
+            .expect("bug: canonical hash vector should validate as XDR");
 
         assert_eq!(hex::encode(tx.hash.0.0.as_ref()), CANONICAL_HASH);
     }
 
     #[test]
     fn trailing_bytes_after_signed_transaction_are_rejected() {
-        let err = validate_raw_transaction(
-            &format!("{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}00"),
-            &NetworkConfigParams::default(),
-        )
-        .expect_err("bug: trailing bytes should be rejected");
+        let mut bytes = canonical_bytes();
+        bytes.push(0);
+        let err = validate_raw_transaction_bytes(bytes, &NetworkConfigParams::default())
+            .expect_err("bug: trailing bytes should be rejected");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
     }
 
     #[test]
     fn truncated_envelope_is_rejected() {
-        // Drop 8 hex chars, i.e. 4 bytes off the trailing claim key, so the
-        // transaction prefix and signatures still decode but the key runs short.
-        let truncated =
-            &CANONICAL_HASH_VECTOR_SIGNED_TX_XDR[..CANONICAL_HASH_VECTOR_SIGNED_TX_XDR.len() - 8];
-        let err = validate_raw_transaction(truncated, &NetworkConfigParams::default())
+        // Drop 4 bytes off the trailing claim key, so the transaction prefix
+        // and signatures still decode but the key runs short.
+        let mut truncated = canonical_bytes();
+        truncated.truncate(truncated.len() - 4);
+        let err = validate_raw_transaction_bytes(truncated, &NetworkConfigParams::default())
             .expect_err("bug: a truncated envelope should be rejected");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
@@ -438,9 +397,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_hex_input_is_rejected() {
-        let err = validate_raw_transaction("", &NetworkConfigParams::default())
-            .expect_err("bug: empty hex input should fail XDR decode");
+    fn empty_input_is_rejected() {
+        let err = validate_raw_transaction_bytes(vec![], &NetworkConfigParams::default())
+            .expect_err("bug: empty input should fail XDR decode");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
     }

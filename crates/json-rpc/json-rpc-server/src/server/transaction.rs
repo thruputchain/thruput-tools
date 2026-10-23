@@ -11,7 +11,7 @@ use jsonrpsee::core::RpcResult;
 use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
 use thruput_json_rpc_types::{requests as input, responses as out, transaction::TxHash};
 
-impl<S, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
+impl<S, C: ChainPlane, R> GroundhogRpcServer<S, C, R> {
     pub(super) async fn prepare_transaction(
         &self,
         context: RpcRequestContext,
@@ -60,7 +60,7 @@ impl<S, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
     }
 }
 
-impl<S: NativeSubmitPlane, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
+impl<S: NativeSubmitPlane, C: ChainPlane, R> GroundhogRpcServer<S, C, R> {
     /// Native single-attempt submission behind `NativeService`'s `sendTransaction`.
     #[tracing::instrument(skip_all)]
     pub async fn native_send_transaction(
@@ -105,7 +105,7 @@ impl<S: NativeSubmitPlane, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
     }
 }
 
-impl<S, C, R: NativeTransactionReadPlane, V> GroundhogRpcServer<S, C, R, V> {
+impl<S, C, R: NativeTransactionReadPlane> GroundhogRpcServer<S, C, R> {
     /// Native committed receipt lookup, preserving independently validated observation.
     #[tracing::instrument(skip_all)]
     pub async fn native_transaction_receipt(

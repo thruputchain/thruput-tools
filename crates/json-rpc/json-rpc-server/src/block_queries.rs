@@ -1,46 +1,11 @@
 //! Shared request and response checks for exact-height block reads.
 
 use thruput_json_rpc_types::{
-    BlockHeight,
     events::IterationOrder,
     transaction::{BlockTransactionQuery, TransactionRefPage},
 };
 
-use crate::{RpcServerConfig, RpcServerError};
-
-pub(crate) fn validate_height(height: &BlockHeight) -> Result<(), RpcServerError> {
-    if **height < 0 {
-        return Err(RpcServerError::InvalidParam(
-            "height must be nonnegative".into(),
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_query(
-    query: &BlockTransactionQuery,
-    config: &RpcServerConfig,
-) -> Result<(), RpcServerError> {
-    validate_height(&query.height)?;
-    let cap = config.transaction_page_cap();
-    if query.limit == 0 {
-        return Err(RpcServerError::InvalidParam(
-            "limit must be greater than zero".into(),
-        ));
-    }
-    if query.limit > cap {
-        return Err(RpcServerError::InvalidParam(format!(
-            "limit exceeds maximum {cap}"
-        )));
-    }
-    if query.cursor.0.len() > config.max_cursor_bytes {
-        return Err(RpcServerError::InvalidParam(format!(
-            "cursor length exceeds maximum {}",
-            config.max_cursor_bytes
-        )));
-    }
-    Ok(())
-}
+use crate::RpcServerError;
 
 /// Reject inconsistent block pages before they are served or counted as backend successes.
 pub fn validate_page(
@@ -90,6 +55,7 @@ pub fn validate_page(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RpcServerConfig;
     use thruput_json_rpc_types::{
         base58::Base58,
         events::PaginationCursor,
@@ -118,34 +84,6 @@ mod tests {
             oldest_block: 1.into(),
             latest_block: 10.into(),
         }
-    }
-
-    #[test]
-    fn positive_limits_and_bounds_are_enforced_before_dispatch() {
-        let config = RpcServerConfig::default().with_max_transactions_per_page(10);
-        let mut q = query();
-        q.limit = 0;
-        assert!(validate_query(&q, &config).is_err());
-        q.limit = 10;
-        validate_query(&q, &config).unwrap();
-        q.limit = 11;
-        assert!(validate_query(&q, &config).is_err());
-        q.limit = 1;
-        q.height = (-1).into();
-        assert!(validate_query(&q, &config).is_err());
-        q.height = i64::MAX.into();
-        validate_query(&q, &config).unwrap();
-        q.cursor.0.resize(257, 0);
-        assert!(validate_query(&q, &config).is_err());
-        q.cursor.0.clear();
-        q.limit = 201;
-        assert!(
-            validate_query(
-                &q,
-                &RpcServerConfig::default().with_max_transactions_per_page(500)
-            )
-            .is_err()
-        );
     }
 
     #[test]
