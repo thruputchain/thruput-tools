@@ -215,7 +215,7 @@ pub struct GatewayContext {
     pub tip_coalescer: TipCoalescer,
 
     /// x23 RPC client to hogd `ViewGateway`.
-    /// Used for: `groundhog_view`.
+    /// Used for: `simulateInvocation`, `simulateInvocations`.
     pub view_gateway: Arc<RwLock<Option<ViewGatewayClient>>>,
 
     /// x23 RPC client to hogd `DbGateway`.

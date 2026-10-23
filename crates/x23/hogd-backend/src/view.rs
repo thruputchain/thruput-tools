@@ -46,7 +46,7 @@ pub fn view_batch_query(
 }
 
 /// Translate a public view request into hogd's query shape.
-/// The shared RPC server checks minimum height against the execution response.
+/// [`crate::native::simulation`] checks minimum height against the response.
 pub fn view_query(
     request: ViewRequest,
     gas_limit: u64,

@@ -76,10 +76,9 @@ pub struct RpcServerConfig {
     /// Gas budget assigned to a simulated invocation when the request names
     /// no `gasLimit`, and the ceiling a requested `gasLimit` may not exceed.
     ///
-    /// The shared server validates JSON request shape; concrete backends
-    /// pass this cap into the hogd view invocation once view execution is
-    /// wired. Keep the default bounded so a view-capable backend cannot
-    /// accidentally expose an unbounded root invocation.
+    /// The shared server validates request shape; concrete backends pass
+    /// this cap into the hogd view invocation. Keep the default bounded so a
+    /// simulation backend cannot expose an unbounded root invocation.
     pub view_gas_limit: u64,
 
     /// Upper bound on a single chain-tip probe issued on behalf of the
