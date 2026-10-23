@@ -1539,15 +1539,19 @@ mod tests {
     };
     use thruput_json_rpc_server::RpcServerError;
     use thruput_json_rpc_server::{
-        ChainPlane, ReadPlane, RpcRequestContext, native::read::NativeSimulationPlane,
+        ChainPlane, RpcRequestContext,
+        native::{
+            read::{NativeSimulationPlane, NativeStatePlane, StateKey},
+            transaction::NativeTransactionReadPlane,
+        },
     };
     use thruput_json_rpc_types::{
         ContractAddress as RpcContractAddress,
         base58::Base58,
         hex::HexBytes,
         requests::SimulateInvocationRequest,
-        responses::InvocationOutput,
-        transaction::{TransactionStatus, TxHash},
+        responses::{InvocationOutput, TransactionStatus as NativeTransactionStatus},
+        transaction::TxHash,
     };
     use thruput_scheduler::{
         ConsensusValue, DbTip, ParallelSignedTransactionBatch, PendingTxCount, ProposalTxsHash,
@@ -2637,20 +2641,20 @@ mod tests {
         assert_eq!(*tip.tip.height, 1);
 
         let status = backend
-            .transaction_status(RpcRequestContext::unbounded(), lifecycle_tx_hash())
+            .native_status(RpcRequestContext::unbounded(), lifecycle_tx_hash())
             .await
             .expect("transaction status should be available");
-        assert!(matches!(status, TransactionStatus::Unknown));
+        assert!(matches!(status, NativeTransactionStatus::Unknown {}));
 
         let storage = backend
-            .get_storage_at(
+            .native_storage(
                 RpcRequestContext::unbounded(),
                 lifecycle_contract_address(),
-                [0x99; 32],
+                StateKey::ContractData([0x99; 32]),
             )
             .await
             .expect("storage read should be available");
-        assert_eq!(*storage.block_height, 42);
+        assert_eq!(*storage.state_block_height, 42);
         assert!(storage.item.is_none());
 
         let simulation = backend
@@ -2678,17 +2682,17 @@ mod tests {
         );
         assert!(
             backend
-                .transaction_status(RpcRequestContext::unbounded(), lifecycle_tx_hash())
+                .native_status(RpcRequestContext::unbounded(), lifecycle_tx_hash())
                 .await
                 .is_err(),
             "transaction status should fail closed"
         );
         assert!(
             backend
-                .get_storage_at(
+                .native_storage(
                     RpcRequestContext::unbounded(),
                     lifecycle_contract_address(),
-                    [0x99; 32],
+                    StateKey::ContractData([0x99; 32]),
                 )
                 .await
                 .is_err(),
@@ -3800,19 +3804,19 @@ mod tests {
         assert_eq!(http_status(observability.local_addr, "/health").await, 503);
 
         let receipt = backend
-            .transaction_receipt(RpcRequestContext::unbounded(), lifecycle_tx_hash())
+            .native_receipt(RpcRequestContext::unbounded(), lifecycle_tx_hash())
             .await
             .expect("indexer-backed receipt lookup should recover during scheduler quarantine");
         assert!(receipt.is_none());
         let storage = backend
-            .get_storage_at(
+            .native_storage(
                 RpcRequestContext::unbounded(),
                 lifecycle_contract_address(),
-                [0x99; 32],
+                StateKey::ContractData([0x99; 32]),
             )
             .await
             .expect("db gateway should recover during scheduler quarantine");
-        assert_eq!(*storage.block_height, 42);
+        assert_eq!(*storage.state_block_height, 42);
         let simulation = backend
             .simulate(
                 RpcRequestContext::unbounded(),

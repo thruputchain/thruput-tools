@@ -1,5 +1,5 @@
 //! Adaptive batching reader for `DbGateway` latest-state reads:
-//! `getStorageAt`, `getBalance`, and `getAddressAuthData`.
+//! `getStorage`, `getBalance`, and `getRegisteredAuth`.
 //!
 //! Drives the shared adaptive-batching machinery in `adaptive_batch.rs`
 //! with a storage-read–specific processor: pack concurrent
@@ -20,9 +20,7 @@ use thruput_db_gateway::AddressAndKeyBatch;
 use thruput_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
 use thruput_hogd_backend::db_gateway as shared_db_gateway;
 use thruput_json_rpc_server::RpcRequestContext;
-use thruput_json_rpc_types::{
-    BlockHeight, ContractAddress, address_auth::AddressAuthDataResponse, state::StorageItemRead,
-};
+use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 use thruput_xdr::types::{AddressAndKey, StorageKey};
 use tokio::sync::{RwLock, oneshot};
 use tracing::Instrument;
@@ -271,64 +269,6 @@ impl StorageReadBatcher {
         self.inner.abort();
     }
 
-    /// Read one (`address`, `key`).  Routes to a shard by the storage
-    /// key prefix (same key reads land on the same shard, so they
-    /// share batch windows); returns when the fanout completes.
-    /// Returns `Overloaded` if the target shard's ingress is full.
-    #[tracing::instrument(skip_all, fields(?address, shard_idx))]
-    pub async fn read(
-        &self,
-        context: RpcRequestContext,
-        address: ContractAddress,
-        key: [u8; 32],
-    ) -> Result<StorageItemRead, RpcServerError> {
-        let answer = self
-            .read_key(
-                context,
-                address,
-                shared_db_gateway::contract_data_key(key),
-                &key,
-            )
-            .await?;
-        shared_db_gateway::storage_item_read(DB_GATEWAY, answer.block_height, answer.item)
-    }
-
-    /// Read an address's native HOG balance row.
-    #[tracing::instrument(skip_all, fields(?address, shard_idx))]
-    pub async fn read_native_hog_balance(
-        &self,
-        context: RpcRequestContext,
-        address: ContractAddress,
-    ) -> Result<StorageItemRead, RpcServerError> {
-        let answer = self
-            .read_key(
-                context,
-                address,
-                StorageKey::FreeNativeTokenBalance,
-                address.0.as_ref(),
-            )
-            .await?;
-        shared_db_gateway::storage_item_read(DB_GATEWAY, answer.block_height, answer.item)
-    }
-
-    /// Read an address's authorization configuration row.
-    #[tracing::instrument(skip_all, fields(?address, shard_idx))]
-    pub async fn read_address_auth_data(
-        &self,
-        context: RpcRequestContext,
-        address: ContractAddress,
-    ) -> Result<AddressAuthDataResponse, RpcServerError> {
-        let answer = self
-            .read_key(context, address, StorageKey::AuthData, address.0.as_ref())
-            .await?;
-        shared_db_gateway::address_auth_data_read(
-            DB_GATEWAY,
-            address,
-            answer.block_height,
-            answer.item,
-        )
-    }
-
     /// Native reads retain and validate the original batch cardinality.
     pub(crate) async fn native_storage(
         &self,
@@ -414,13 +354,14 @@ impl StorageReadBatcher {
 
 #[cfg(test)]
 mod tests {
-    use thruput_json_rpc_types::state::StorageItemInfo;
     use thruput_scheduler::RPCError;
 
     use super::*;
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::time::Duration;
+    use thruput_json_rpc_server::native::read::StateKey;
+    use thruput_json_rpc_types::responses;
 
     use thruput_json_rpc_types::base58::Base58;
     use thruput_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
@@ -486,6 +427,27 @@ mod tests {
                     ))
                 }),
             }
+        }
+    }
+
+    impl StorageReadBatcher {
+        async fn read_contract_data(
+            &self,
+            context: RpcRequestContext,
+            address: ContractAddress,
+            key: [u8; 32],
+        ) -> Result<responses::StorageResult, RpcServerError> {
+            self.native_storage(context, address, StateKey::ContractData(key))
+                .await
+        }
+
+        async fn read_balance(
+            &self,
+            context: RpcRequestContext,
+            address: ContractAddress,
+        ) -> Result<responses::StorageResult, RpcServerError> {
+            self.native_storage(context, address, StateKey::FreeNativeTokenBalance)
+                .await
         }
     }
 
@@ -559,7 +521,7 @@ mod tests {
         let read = tokio::spawn({
             let b = batcher.clone();
             async move {
-                b.read(request_context(), address_zero(), key_from_u32(0))
+                b.read_contract_data(request_context(), address_zero(), key_from_u32(0))
                     .await
             }
         });
@@ -571,9 +533,9 @@ mod tests {
         let result = read.await.unwrap().unwrap();
 
         assert_eq!(mock.seen(), vec![1], "exactly one batch of size 1");
-        assert_eq!(*result.block_height, 7);
+        assert_eq!(*result.state_block_height, 7);
         match result.item {
-            Some(StorageItemInfo::Bytestring { bytes }) => {
+            Some(responses::StorageItem::Bytestring { bytes }) => {
                 assert_eq!(bytes.0.as_slice(), b"hi");
             }
             other => panic!("expected Bytestring, got {other:?}"),
@@ -594,7 +556,11 @@ mod tests {
 
         let read = tokio::spawn({
             let batcher = batcher.clone();
-            async move { batcher.read(context, address_zero(), key_from_u32(0)).await }
+            async move {
+                batcher
+                    .read_contract_data(context, address_zero(), key_from_u32(0))
+                    .await
+            }
         });
         settle().await;
         gate.send(Ok(payload_at_height(7, vec![not_found_item()])))
@@ -616,7 +582,7 @@ mod tests {
         );
 
         let result = batcher
-            .read(
+            .read_contract_data(
                 RpcRequestContext::new(Some(Duration::ZERO)),
                 address_zero(),
                 key_from_u32(0),
@@ -640,13 +606,13 @@ mod tests {
         let address = address_zero();
         let read = tokio::spawn({
             let b = batcher.clone();
-            async move { b.read_native_hog_balance(request_context(), address).await }
+            async move { b.read_balance(request_context(), address).await }
         });
         settle().await;
         let _ = gate.send(Ok(payload_at_height(9, vec![not_found_item()])));
         let result = read.await.unwrap().unwrap();
 
-        assert_eq!(*result.block_height, 9);
+        assert_eq!(*result.state_block_height, 9);
         assert!(result.item.is_none());
         let recorded = mock.batches();
         assert_eq!(recorded.len(), 1);
@@ -668,15 +634,15 @@ mod tests {
         let address = address_zero();
         let read = tokio::spawn({
             let b = batcher.clone();
-            async move { b.read_address_auth_data(request_context(), address).await }
+            async move { b.native_registered_auth(request_context(), address).await }
         });
         settle().await;
         let _ = gate.send(Ok(payload_at_height(11, vec![not_found_item()])));
         let result = read.await.unwrap().unwrap();
 
         assert_eq!(result.address, address);
-        assert_eq!(*result.height, 11);
-        assert!(result.auth_data.is_none());
+        assert_eq!(*result.state_block_height, 11);
+        assert!(result.configuration.is_none());
         let recorded = mock.batches();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].0.len(), 1);
@@ -697,11 +663,11 @@ mod tests {
         let address = address_zero();
         let balance = tokio::spawn({
             let b = batcher.clone();
-            async move { b.read_native_hog_balance(request_context(), address).await }
+            async move { b.read_balance(request_context(), address).await }
         });
         let auth = tokio::spawn({
             let b = batcher.clone();
-            async move { b.read_address_auth_data(request_context(), address).await }
+            async move { b.native_registered_auth(request_context(), address).await }
         });
         settle().await;
 
@@ -737,15 +703,15 @@ mod tests {
         )));
 
         let balance = balance.await.unwrap().unwrap();
-        assert_eq!(*balance.block_height, 13);
+        assert_eq!(*balance.state_block_height, 13);
         assert!(matches!(
             balance.item,
-            Some(StorageItemInfo::NonnegativeInt { ref value }) if value == "500"
+            Some(responses::StorageItem::NonnegativeInt { value: 500 })
         ));
 
         let auth = auth.await.unwrap().unwrap();
-        assert_eq!(*auth.height, 13);
-        let auth_data = auth.auth_data.expect("auth data is registered");
+        assert_eq!(*auth.state_block_height, 13);
+        let auth_data = auth.configuration.expect("auth data is registered");
         assert_eq!(auth_data.required_weight, 3);
         assert_eq!(auth_data.signers.len(), 1);
         assert_eq!(auth_data.signers[0].key_id, 2);
@@ -774,21 +740,21 @@ mod tests {
         let r0 = tokio::spawn({
             let b = batcher.clone();
             async move {
-                b.read(request_context(), address_zero(), key_from_u32(0))
+                b.read_contract_data(request_context(), address_zero(), key_from_u32(0))
                     .await
             }
         });
         let r1 = tokio::spawn({
             let b = batcher.clone();
             async move {
-                b.read(request_context(), address_zero(), key_from_u32(1))
+                b.read_contract_data(request_context(), address_zero(), key_from_u32(1))
                     .await
             }
         });
         let r2 = tokio::spawn({
             let b = batcher.clone();
             async move {
-                b.read(request_context(), address_zero(), key_from_u32(2))
+                b.read_contract_data(request_context(), address_zero(), key_from_u32(2))
                     .await
             }
         });
@@ -805,16 +771,16 @@ mod tests {
 
         let res0 = r0.await.unwrap().unwrap();
         match res0.item {
-            Some(StorageItemInfo::Bytestring { bytes }) => {
+            Some(responses::StorageItem::Bytestring { bytes }) => {
                 assert_eq!(bytes.0.as_slice(), b"present");
             }
             other => panic!("r0 expected Bytestring, got {other:?}"),
         }
-        assert_eq!(*res0.block_height, 42);
+        assert_eq!(*res0.state_block_height, 42);
 
         let res1 = r1.await.unwrap().expect("r1 should be Ok(None)");
         assert!(res1.item.is_none(), "r1 expected None, got {:?}", res1.item);
-        assert_eq!(*res1.block_height, 42);
+        assert_eq!(*res1.state_block_height, 42);
 
         let err2 = r2
             .await
@@ -847,7 +813,7 @@ mod tests {
             let batcher = batcher.clone();
             async move {
                 batcher
-                    .read(request_context(), address_zero(), key_from_u32(0))
+                    .read_contract_data(request_context(), address_zero(), key_from_u32(0))
                     .await
             }
         });
@@ -857,7 +823,7 @@ mod tests {
             let batcher = batcher.clone();
             async move {
                 batcher
-                    .read(
+                    .read_contract_data(
                         RpcRequestContext::new(Some(Duration::from_secs(2))),
                         address_zero(),
                         key_from_u32(1),
@@ -869,7 +835,7 @@ mod tests {
             let batcher = batcher.clone();
             async move {
                 batcher
-                    .read(
+                    .read_contract_data(
                         RpcRequestContext::new(Some(Duration::from_secs(5))),
                         address_zero(),
                         key_from_u32(2),
@@ -916,7 +882,7 @@ mod tests {
         for i in 0..4u32 {
             let b = batcher.clone();
             waiters.push(tokio::spawn(async move {
-                b.read(request_context(), address_zero(), key_from_u32(i))
+                b.read_contract_data(request_context(), address_zero(), key_from_u32(i))
                     .await
             }));
         }
