@@ -1,5 +1,5 @@
 //! Shared JSON-RPC contracts. Production endpoints use [`native::NativeApi`].
-//! The older traits remain for internal adapters during consumer migration.
+//! The older `GroundhogApi` trait is not served by production binaries.
 
 pub use thruput_json_rpc_types as types;
 pub mod params;
@@ -11,7 +11,6 @@ use thruput_open_rpc_macros::open_rpc;
 use thruput_json_rpc_types::{
     BlockHeight, ContractAddress,
     address_auth::AddressAuthDataResponse,
-    airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
     decimal::Decimal,
@@ -35,32 +34,6 @@ use thruput_json_rpc_types::{
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
 pub const WIRE_FORMAT_VERSION: &str = "14.1.0";
-
-/// Optional faucet-backed API registered only when a server supports airdrops.
-#[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
-#[rpc(client, server, namespace = "groundhog")]
-pub trait AirdropApi {
-    /// Request an idempotent native HOG airdrop.
-    ///
-    /// Servers register this method only when an airdrop backend is configured;
-    /// other deployments return standard JSON-RPC `Method not found`.
-    #[method(name = "requestAirdrop")]
-    async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse>;
-}
-
-/// Funding API registered only by a supervised local node with submit/read planes.
-#[open_rpc(namespace = "groundhog", tag = "Local Funding API")]
-#[rpc(client, server, namespace = "groundhog")]
-pub trait LocalFundingApi {
-    /// Submit an explicit native HOG transfer using a retained caller nonce.
-    ///
-    /// Acceptance does not imply execution success. Observe the returned hash
-    /// through the ordinary status/receipt APIs. Retry an uncertain response
-    /// with exactly the same request; retain its chain identity and amount.
-    /// Hosted servers return standard JSON-RPC `Method not found`.
-    #[method(name = "fundAccount")]
-    async fn fund_account(&self, request: FundAccountRequest) -> RpcResult<FundAccountResponse>;
-}
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]

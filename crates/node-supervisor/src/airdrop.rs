@@ -7,7 +7,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
-use thruput_json_rpc_api::{AirdropApiServer, LocalFundingApiServer};
 use thruput_json_rpc_server::{
     ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane,
     native::transaction::NativeTransactionReadPlane, tx::validate_raw_transaction_bytes,
@@ -631,22 +630,6 @@ impl LocalAirdropRpc {
             tx_hash: Some(tx_hash),
             retry_after_seconds: LOCAL_AIRDROP_RETRY_AFTER_SECONDS,
         }
-    }
-}
-
-#[async_trait]
-impl AirdropApiServer for LocalAirdropRpc {
-    #[tracing::instrument(skip_all, fields(?request.recipient))]
-    async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse> {
-        self.request(request).await.map_err(Into::into)
-    }
-}
-
-#[async_trait]
-impl LocalFundingApiServer for LocalAirdropRpc {
-    #[tracing::instrument(skip_all, fields(?request.recipient))]
-    async fn fund_account(&self, request: FundAccountRequest) -> RpcResult<FundAccountResponse> {
-        self.fund(request).await.map_err(Into::into)
     }
 }
 
