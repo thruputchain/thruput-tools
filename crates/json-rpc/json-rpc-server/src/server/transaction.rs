@@ -5,7 +5,7 @@ use crate::native::transaction::{
 };
 use crate::{
     ChainPlane, RpcRequestContext, RpcServerError, ValidatedTransaction,
-    tx::validate_raw_transaction,
+    tx::validate_raw_transaction_bytes,
 };
 use jsonrpsee::core::RpcResult;
 use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
@@ -15,7 +15,7 @@ impl<S, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
     pub(super) async fn prepare_transaction(
         &self,
         context: RpcRequestContext,
-        tx_hex: &str,
+        tx_bytes: Vec<u8>,
         hash: &mut Option<TxHash>,
     ) -> Result<ValidatedTransaction, RpcServerError> {
         // The pre-checks are advisory mirrors of what the scheduler and
@@ -27,7 +27,8 @@ impl<S, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
             .as_ref()
             .and_then(|tip| tip.params)
             .unwrap_or_default();
-        let tx = match validate_raw_transaction(tx_hex, &params) {
+        // Keep the bytes for the fresh-tip retry below.
+        let tx = match validate_raw_transaction_bytes(tx_bytes.clone(), &params) {
             Ok(tx) => tx,
             // A cached config can lag an upgrade that raised this
             // bound, so re-read the tip before rejecting. One this
@@ -39,7 +40,7 @@ impl<S, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
                     .as_ref()
                     .and_then(|tip| tip.params)
                     .unwrap_or(params);
-                validate_raw_transaction(tx_hex, &params)?
+                validate_raw_transaction_bytes(tx_bytes, &params)?
             }
             Err(error) => return Err(error),
         };
@@ -71,9 +72,8 @@ impl<S: NativeSubmitPlane, C: ChainPlane, R, V> GroundhogRpcServer<S, C, R, V> {
         let _cancel_on_drop = attempt.guard();
         let mut hash = None;
         let future = async {
-            let tx_hex = thruput_json_rpc_types::hex::prefixed_hex(&request.signed_transaction.0);
             let tx = self
-                .prepare_transaction(context, &tx_hex, &mut hash)
+                .prepare_transaction(context, request.signed_transaction.0, &mut hash)
                 .await?;
             // Synchronous validation can consume the remaining budget between
             // timer polls. Do not start a new submission after it expires.
