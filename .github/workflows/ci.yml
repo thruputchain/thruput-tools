@@ -22,7 +22,7 @@ jobs:
   dependency-policy:
     permissions:
       contents: read
-    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@6693fac8133585728ad3a4ca14e3441073b6def8
+    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
     with:
       registry-name: thruput
     secrets:
@@ -32,7 +32,7 @@ jobs:
   workflow-lint:
     permissions:
       contents: read
-    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@21f8d7cd8b80908dca701ac9dc8efd89798da085
+    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
     with:
       lint-app-id: ${{ vars.PROTOCOL_SYNCHRONIZER_APP_ID }}
     secrets:
