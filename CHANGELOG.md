@@ -4,10 +4,15 @@
 
 ### Breaking Rust API changes
 
-Tools now uses protocol 0.57.0 and SDK 0.54.0. Rust consumers that exchange
+Tools now uses protocol 0.58.0 and SDK 0.55.0. Rust consumers that exchange
 protocol types with the public client or JSON-RPC crates must update their
-protocol dependencies to 0.57.0 and SDK dependencies to 0.54.0; types from
-the previous versions are not interchangeable. Newly scaffolded projects pin SDK 0.54.0.
+protocol dependencies to 0.58.0 and SDK dependencies to 0.55.0; types from
+the previous versions are not interchangeable. Newly scaffolded projects pin SDK 0.55.0.
+The XDR codec and RPC driver now come from crates.io: depend on
+`xdrs = { package = "thruput-xdrs", version = "0.16.1" }` (and
+`thruput-xdr-common`, `thruput-rpc-driver` likewise) instead of the `thruput`
+registry's `xdrs` 0.12, `xdr-common` 0.12 and `rpc_driver` 0.15. The APIs are
+unchanged, but the crates are distinct, so their types do not mix.
 The default local runtime is hog-devnode 0.1.31-rc.14. This changes the Rust
 dependency boundary, not the public JSON-RPC wire format.
 
