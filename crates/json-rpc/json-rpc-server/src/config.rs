@@ -26,22 +26,6 @@ impl Default for ViewBatchConfig {
     }
 }
 
-impl ViewBatchConfig {
-    /// Describe the policy advertised by the public endpoint.
-    pub const fn server_limits(
-        self,
-        timeout_ms: u64,
-    ) -> thruput_json_rpc_types::server_limits::ViewBatchLimits {
-        thruput_json_rpc_types::server_limits::ViewBatchLimits {
-            max_calls: self.max_calls,
-            max_calldata_bytes: self.max_calldata_bytes,
-            max_gas: self.max_gas,
-            max_response_bytes: self.max_response_bytes,
-            timeout_ms,
-        }
-    }
-}
-
 /// Server-wide bounds on JSON-RPC requests.  The shared dispatcher
 /// rejects requests that exceed these before they reach a backend.
 #[derive(Debug, Clone)]

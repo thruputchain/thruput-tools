@@ -56,11 +56,6 @@ impl fmt::Debug for HogdDevReadBackend {
 }
 
 impl HogdDevReadBackend {
-    /// Share the validated indexer connection with the chain adapter.
-    pub(crate) fn indexer_client(&self) -> &IndexerBlockExplorer_IndexerBlockExplorer1_Client {
-        &self.indexer
-    }
-
     pub(crate) fn db_gateway_client(&self) -> Option<&DbGateway_DbGateway1_Client> {
         self.db_gateway.as_ref()
     }
@@ -114,7 +109,7 @@ impl HogdDevReadBackend {
             Some(connect_db_gateway(endpoint, protocol_version, expected_protocol).await?)
         } else {
             tracing::warn!(
-                "hogd-dev did not advertise a DbGateway endpoint; getStorageAt is unavailable"
+                "hogd-dev did not advertise a DbGateway endpoint; DB-backed state reads are unavailable"
             );
             None
         };

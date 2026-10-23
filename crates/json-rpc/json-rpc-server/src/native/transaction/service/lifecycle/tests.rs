@@ -6,9 +6,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use thruput_json_rpc_types::{
-    BlockHeight,
     base58::Base58,
-    block::{BlockInfo, ChainTip},
+    block::ChainTip,
     error::native::{BackendDataInvalidReason, ReceiptObservation, codes},
     hex::HexBytes,
 };
@@ -61,13 +60,6 @@ impl ChainPlane for Backend {
                 },
             },
         ))
-    }
-    async fn get_block_by_number(
-        &self,
-        _: RpcRequestContext,
-        _: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError> {
-        panic!("not used")
     }
     async fn pending_transaction_count(&self, _: RpcRequestContext) -> Result<u64, RpcServerError> {
         panic!("not used")
@@ -133,8 +125,8 @@ impl NativeTransactionReadPlane for Backend {
         })
     }
 }
-fn server(backend: Backend) -> GroundhogRpcServer<Backend, Backend, Backend> {
-    GroundhogRpcServer::new(
+fn server(backend: Backend) -> NativeTransactionService<Backend, Backend, Backend> {
+    NativeTransactionService::new(
         backend.clone(),
         backend.clone(),
         backend,
@@ -168,7 +160,7 @@ async fn invalid_encoding_and_expiry_are_not_attempted() {
     let backend = Backend::default();
     let server = server(backend.clone());
     let error = server
-        .native_send_transaction(input::SendTransactionRequest {
+        .send_transaction(input::SendTransactionRequest {
             signed_transaction: HexBytes(vec![1, 2, 3]),
         })
         .await
@@ -179,7 +171,7 @@ async fn invalid_encoding_and_expiry_are_not_attempted() {
     let mut tx = crate::tx::test_fixtures::canonical_signed_transaction();
     tx.tx.uniquifier.block_expiry_height = 42.into();
     let error = server
-        .native_send_transaction(input::SendTransactionRequest {
+        .send_transaction(input::SendTransactionRequest {
             signed_transaction: HexBytes(xdrs::txs::encode(&tx).unwrap()),
         })
         .await
@@ -194,7 +186,7 @@ async fn invalid_encoding_and_expiry_are_not_attempted() {
 async fn accepted_submission_returns_the_canonical_body_hash() {
     let backend = Backend::default();
     let result = server(backend.clone())
-        .native_send_transaction(request())
+        .send_transaction(request())
         .await
         .unwrap();
     assert_eq!(result.transaction_hash, hash());
@@ -216,7 +208,7 @@ async fn timeout_before_dispatch_closes_the_gate_but_dispatched_timeout_is_unkno
             ..Default::default()
         };
         let error = server(backend.clone())
-            .native_send_transaction(request())
+            .send_transaction(request())
             .await
             .unwrap_err();
         assert_eq!(error.code(), codes::BACKEND_TIMEOUT);
@@ -239,7 +231,7 @@ async fn caller_cancellation_also_closes_the_queued_dispatch_gate() {
         ..Default::default()
     };
     let server = server(backend.clone());
-    let mut future = Box::pin(server.native_send_transaction(request()));
+    let mut future = Box::pin(server.send_transaction(request()));
     std::future::poll_fn(|cx| {
         assert!(std::future::Future::poll(future.as_mut(), cx).is_pending());
         std::task::Poll::Ready(())
@@ -258,7 +250,7 @@ async fn receipt_identity_failure_omits_observation_and_valid_evidence_survives(
         corrupt_receipt: true,
         ..Default::default()
     })
-    .native_transaction_receipt(query())
+    .get_transaction_receipt(query())
     .await
     .unwrap_err();
     assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
@@ -272,7 +264,7 @@ async fn receipt_identity_failure_omits_observation_and_valid_evidence_survives(
             }),
             ..Default::default()
         })
-        .native_transaction_receipt(query())
+        .get_transaction_receipt(query())
         .await
         .unwrap_err();
         assert_eq!(data(&error).get("observation").is_some(), kept);
@@ -290,7 +282,7 @@ async fn precheck_timeout_has_no_hash_and_cannot_submit() {
         ..Default::default()
     };
     let error = server(backend.clone())
-        .native_send_transaction(request())
+        .send_transaction(request())
         .await
         .unwrap_err();
     assert_eq!(error.code(), codes::BACKEND_TIMEOUT);
@@ -307,7 +299,7 @@ async fn synchronous_preparation_overrun_cannot_start_submission() {
         ..Default::default()
     };
     let error = server(backend.clone())
-        .native_send_transaction(request())
+        .send_transaction(request())
         .await
         .unwrap_err();
     assert_eq!(error.code(), codes::BACKEND_TIMEOUT);

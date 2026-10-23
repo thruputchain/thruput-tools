@@ -1,8 +1,5 @@
 use serde_json::Value;
 
-use thruput_json_rpc_types::address_auth::{
-    AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey,
-};
 use thruput_json_rpc_types::airdrop::{AirdropRequest, ClientNonce};
 use thruput_json_rpc_types::block::{
     BlockInfo, BlockProjectionError, ChainTip, consensus_value_hash,
@@ -16,7 +13,6 @@ use thruput_json_rpc_types::network_descriptor::{
     NetworkDescriptor, NetworkDescriptorEndpoints,
 };
 use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use thruput_json_rpc_types::server_limits::ServerLimits;
 use thruput_json_rpc_types::state::StorageItemInfo;
 use thruput_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
@@ -28,11 +24,10 @@ use thruput_json_rpc_types::{
 };
 use thruput_scheduler::{ConsensusValue, ProposalTxsHash};
 use thruput_xdr::{
-    address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt},
     header::ProposalHeader,
     types::{
-        ConfigHash, ConsensusValueHash, Ed25519PublicKey, EventsHash, ExtensionPoint, NetworkHash,
-        Protocol, PublicKey, SHA256Hash as XdrHash, StorageShortHash, TimePoint, TxsHash,
+        ConfigHash, ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash, Protocol,
+        SHA256Hash as XdrHash, StorageShortHash, TimePoint, TxsHash,
     },
     validator::ValidatorID,
 };
@@ -268,24 +263,6 @@ fn view_request_wire_format() {
     assert_eq!(v["gasLimit"], "250000");
     let decoded: ViewRequest = serde_json::from_value(v).unwrap();
     assert_eq!(decoded.gas_limit, Some(250_000));
-}
-
-#[test]
-fn server_limits_wire_format() {
-    let limits = ServerLimits::new(10_000_000, 65_536, 200, 200, 256);
-    let v: Value = serde_json::to_value(limits).unwrap();
-    assert_eq!(
-        v,
-        serde_json::json!({
-            "maxViewGas": "10000000",
-            "maxViewCalldataBytes": "65536",
-            "maxEventsPerPage": 200,
-            "maxTransactionsPerPage": 200,
-            "maxCursorBytes": "256",
-        })
-    );
-    let decoded: ServerLimits = serde_json::from_value(v).unwrap();
-    assert_eq!(decoded, limits);
 }
 
 #[test]
@@ -629,75 +606,4 @@ fn storage_item_wire_format_uses_camel_case_variant_fields() {
     assert_eq!(unknown_json["kind"], "unknown");
     assert_eq!(unknown_json["typeId"], 9);
     assert!(unknown_json.get("type_id").is_none());
-}
-
-#[test]
-fn address_auth_data_wire_format_lists_occupied_slots_by_key_id() {
-    let mut public_keys: [PublicKeyConfigOpt; 21] =
-        std::array::from_fn(|_| PublicKeyConfigOpt::new(None));
-    for (slot, byte, weight) in [(0usize, 0xaa, 1), (3, 0xbb, 2)] {
-        public_keys[slot] = PublicKeyConfigOpt::new(Some(PublicKeyConfig {
-            key: PublicKey::Ed25519 {
-                ed25519: Ed25519PublicKey::from([byte; 32]),
-            },
-            max_weight: weight,
-        }));
-    }
-    let auth_data = AddressAuthData {
-        public_keys,
-        required_weight: 2,
-        last_written_height: BlockHeight::from(5i64),
-    };
-    let response = AddressAuthDataResponse {
-        address: zero_address(),
-        height: BlockHeight::from(9i64),
-        auth_data: Some(AddressAuthDataInfo::from(&auth_data)),
-    };
-
-    let v: Value = serde_json::to_value(&response).unwrap();
-    assert_eq!(
-        v,
-        serde_json::json!({
-            "address": thruput_encoding::encode(&[0x00; 32]),
-            "height": "9",
-            "authData": {
-                "signers": [
-                    {
-                        "keyId": 0,
-                        "publicKey": { "scheme": "ed25519", "key": thruput_encoding::encode(&[0xaa; 32]) },
-                        "maxWeight": 1,
-                    },
-                    {
-                        "keyId": 3,
-                        "publicKey": { "scheme": "ed25519", "key": thruput_encoding::encode(&[0xbb; 32]) },
-                        "maxWeight": 2,
-                    },
-                ],
-                "requiredWeight": 2,
-            },
-        })
-    );
-    let decoded: AddressAuthDataResponse = serde_json::from_value(v).unwrap();
-    assert_eq!(decoded, response);
-}
-
-#[test]
-fn address_auth_data_wire_format_reports_absent_configuration_as_null() {
-    let response = AddressAuthDataResponse {
-        address: zero_address(),
-        height: BlockHeight::from(9i64),
-        auth_data: None,
-    };
-    let v: Value = serde_json::to_value(&response).unwrap();
-    assert!(v["authData"].is_null());
-    assert_eq!(v["height"], "9");
-    let mut numeric_height = v.clone();
-    numeric_height["height"] = serde_json::json!(9);
-    assert!(serde_json::from_value::<AddressAuthDataResponse>(numeric_height).is_err());
-
-    let unknown = AuthPublicKey::Unknown { scheme_id: 7 };
-    assert_eq!(
-        serde_json::to_value(&unknown).unwrap(),
-        serde_json::json!({ "scheme": "unknown", "schemeId": 7 })
-    );
 }

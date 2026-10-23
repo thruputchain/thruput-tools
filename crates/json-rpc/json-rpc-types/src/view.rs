@@ -68,28 +68,6 @@ pub struct ViewBatchRequest {
     pub min_height: Option<BlockHeight>,
 }
 
-/// Ordered simulation results from a single committed snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ViewBatchResponse {
-    #[serde(with = "crate::decimal")]
-    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
-    pub height: BlockHeight,
-    pub results: Vec<ViewCallResult>,
-}
-
-/// One independent simulation's output and events; writes never reach another call.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ViewCallResult {
-    pub output: RootInvocationOutput,
-    pub events: Vec<EmittedEvent>,
-    /// Gas consumed by this independent simulation.
-    #[serde(with = "crate::decimal")]
-    #[schemars(with = "crate::decimal::Decimal<u64>")]
-    pub gas_used: u64,
-}
-
 /// Requested minimum height and the committed height of the selected snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -123,7 +101,7 @@ pub struct ViewRequest {
     pub caller: Option<ContractAddress>,
 
     /// Optional gas budget for the root invocation. Absent selects the
-    /// server's `maxViewGas` (see `serverLimits`); a value above it, or zero,
+    /// server's `maxSimulationGas` (see `getServerLimits`); a value above it, or zero,
     /// is rejected as an invalid parameter. No gas is charged for a view.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(with = "crate::decimal::option")]

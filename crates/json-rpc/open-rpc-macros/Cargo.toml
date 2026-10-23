@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Proc macro for generating OpenRPC specs from jsonrpsee traits"
+description = "Proc macro for generating OpenRPC specs from documentation-only API traits"
 
 [lib]
 proc-macro = true

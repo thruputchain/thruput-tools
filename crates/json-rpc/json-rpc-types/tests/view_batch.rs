@@ -1,25 +1,9 @@
 use serde_json::json;
-use thruput_json_rpc_types::view::{
-    RootInvocationOutput, ViewBatchRequest, ViewBatchResponse, ViewCallResult,
-    ViewHeightUnavailable,
-};
+use thruput_json_rpc_types::view::{ViewBatchRequest, ViewHeightUnavailable};
 
 #[test]
-fn batch_wide_integers_use_lossless_decimal_strings() {
+fn height_unavailable_detail_uses_lossless_decimal_strings() {
     let height = 9_007_199_254_740_993_i64;
-    let response = ViewBatchResponse {
-        height: height.into(),
-        results: vec![ViewCallResult {
-            output: RootInvocationOutput::Fault,
-            events: vec![],
-            gas_used: 17,
-        }],
-    };
-    let encoded = serde_json::to_value(response).unwrap();
-    assert_eq!(encoded["height"], "9007199254740993");
-    assert_eq!(encoded["results"][0]["gasUsed"], "17");
-    let decoded: ViewBatchResponse = serde_json::from_value(encoded).unwrap();
-    assert_eq!(*decoded.height, height);
     let detail = ViewHeightUnavailable {
         requested: height.into(),
         observed: (height - 1).into(),

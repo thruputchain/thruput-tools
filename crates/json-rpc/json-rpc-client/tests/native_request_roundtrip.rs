@@ -23,9 +23,9 @@ use thruput_json_rpc_types::{
 use thruput_open_rpc::{Project, ProjectInfo};
 use thruput_open_rpc_macros::open_rpc;
 
-// Object-mode documentation emits only metadata. Explicit adapters below own
+// The documentation macro emits only metadata. Explicit adapters below own
 // transport decoding; no jsonrpsee transport is generated from this declaration.
-#[open_rpc(params = "object")]
+#[open_rpc]
 trait NativeFixture {
     /// Network identity. Noarg also accepts omission, null and empty arrays.
     #[method(name = "getNetworkInfo")]

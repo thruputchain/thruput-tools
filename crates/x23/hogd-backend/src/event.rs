@@ -23,9 +23,9 @@ pub const MAX_TOPICS: u32 = 3;
 
 /// Events parsed from one hogd payload, with the malformed ones counted.
 ///
-/// A malformed event is dropped rather than failing the whole response, so
-/// one bad record cannot hide a page of good ones. `dropped` lets a caller
-/// that meters parse failures report them without re-walking the input.
+/// Parsing skips a malformed event and counts it in `dropped`, so a caller
+/// can reject the payload, as the native decoders do, without re-walking the
+/// input.
 #[derive(Debug, Default)]
 pub struct ParsedEvents {
     /// Events that parsed cleanly, in wire order.

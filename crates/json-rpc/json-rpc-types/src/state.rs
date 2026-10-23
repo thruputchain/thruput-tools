@@ -44,7 +44,7 @@ pub enum StorageItemInfo {
     },
 
     /// Authorization data is registered at this address.  Presence
-    /// indicator only; `getAddressAuthData` returns the signer set.
+    /// indicator only; `getRegisteredAuth` returns the signer set.
     AuthData,
 
     /// A retrocausal queue is registered at this address.  Presence

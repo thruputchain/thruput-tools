@@ -1,7 +1,6 @@
 use serde_json::json;
 use thruput_json_rpc_types::{
-    block::ChainTip, events::BlockAnchor, server_limits::ServerLimits,
-    transaction::TransactionStatus, view::ViewRequest,
+    block::ChainTip, events::BlockAnchor, transaction::TransactionStatus, view::ViewRequest,
 };
 
 #[test]
@@ -66,19 +65,4 @@ fn optional_gas_is_lossless_and_numeric_json_is_rejected() {
                 .is_err()
         );
     }
-}
-
-#[test]
-fn wide_limits_are_strings_while_page_limits_stay_numbers() {
-    let limits = ServerLimits::new(u64::MAX, u64::MAX, u32::MAX, u32::MAX, u64::MAX);
-    let wire = serde_json::to_value(limits).unwrap();
-    assert_eq!(wire["maxViewGas"], u64::MAX.to_string());
-    assert_eq!(wire["maxViewCalldataBytes"], u64::MAX.to_string());
-    assert_eq!(wire["maxCursorBytes"], u64::MAX.to_string());
-    assert_eq!(wire["maxEventsPerPage"], u32::MAX);
-    assert_eq!(wire["maxTransactionsPerPage"], u32::MAX);
-    assert_eq!(
-        serde_json::from_value::<ServerLimits>(wire).unwrap(),
-        limits
-    );
 }

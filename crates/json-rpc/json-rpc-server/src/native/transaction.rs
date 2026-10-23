@@ -2,8 +2,10 @@
 
 mod attempt;
 mod error;
+mod service;
 pub use attempt::{SubmissionAttempt, SubmissionGuard};
 pub(crate) use error::{invalid_receipt, read_error, submit_error};
+pub use service::NativeTransactionService;
 
 use crate::{RpcRequestContext, RpcServerError, ValidatedTransaction};
 use async_trait::async_trait;

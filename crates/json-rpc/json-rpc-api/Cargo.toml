@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "jsonrpsee trait definitions for the Thruput JSON-RPC API"
+description = "Method definitions for the Thruput JSON-RPC API"
 
 exclude = [
     "tests/",

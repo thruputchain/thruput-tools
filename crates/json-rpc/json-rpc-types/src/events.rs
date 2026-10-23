@@ -13,7 +13,7 @@ use std::borrow::Cow;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thruput_indexer::indexer as wire_indexer;
-use xdr_common::{BytesM, VecM};
+use xdr_common::VecM;
 
 use crate::hex::{HexBytes, Topic};
 use crate::transaction::TxHash;
@@ -450,43 +450,6 @@ impl<'a> IntoIterator for &'a EventFilterList {
     }
 }
 
-impl From<EventTopicFilter> for wire_indexer::EventTopicFilter {
-    fn from(value: EventTopicFilter) -> Self {
-        Self {
-            topic0: map_topic_list(value.topic0),
-            topic1: map_topic_list(value.topic1),
-            topic2: map_topic_list(value.topic2),
-        }
-    }
-}
-
-impl From<EventFilter> for wire_indexer::EventFilter {
-    fn from(value: EventFilter) -> Self {
-        Self {
-            contract_addresses: VecM(
-                value
-                    .contract_addresses
-                    .into_iter()
-                    .map(|addr| addr.0)
-                    .collect(),
-            ),
-            topics: value.topics.into(),
-        }
-    }
-}
-
-impl From<EventQuery> for wire_indexer::EventQuery {
-    fn from(value: EventQuery) -> Self {
-        Self {
-            filters: VecM(value.filters.into_iter().map(Into::into).collect()),
-            order: value.order.into(),
-            anchor: value.anchor.into(),
-            cursor: value.cursor.into(),
-            limit: value.limit,
-        }
-    }
-}
-
 impl From<IterationOrder> for thruput_indexer::pagination::IterationOrder {
     fn from(value: IterationOrder) -> Self {
         match value {
@@ -494,35 +457,4 @@ impl From<IterationOrder> for thruput_indexer::pagination::IterationOrder {
             IterationOrder::Descending => Self::IterationOrderDescending,
         }
     }
-}
-
-impl From<BlockAnchor> for thruput_indexer::pagination::BlockAnchor {
-    fn from(value: BlockAnchor) -> Self {
-        match value {
-            BlockAnchor::AtBeginning => Self::AnchorAtBeginning,
-            BlockAnchor::AtEnd => Self::AnchorAtEnd,
-            BlockAnchor::AtHeight { height } => Self::AnchorAtHeight { height },
-        }
-    }
-}
-
-impl From<PaginationCursor> for thruput_indexer::pagination::PaginationCursor {
-    fn from(value: PaginationCursor) -> Self {
-        BytesM(value.0)
-    }
-}
-
-impl From<thruput_indexer::pagination::PaginationCursor> for PaginationCursor {
-    fn from(value: thruput_indexer::pagination::PaginationCursor) -> Self {
-        Self(value.0)
-    }
-}
-
-fn map_topic_list(topics: TopicList) -> VecM<thruput_xdr::event::Topic> {
-    VecM(
-        topics
-            .into_iter()
-            .map(|topic| thruput_xdr::event::Topic::from(topic.0))
-            .collect(),
-    )
 }

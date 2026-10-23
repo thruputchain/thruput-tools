@@ -2,8 +2,8 @@
 //!
 //! [`RpcRequestContext`] carries one request deadline to every backend call.
 //! [`ChainPlane`] reads the committed tip with its network config, which the
-//! native read service and the submission pre-checks share, plus block lookup
-//! and the local pending count. Other backend planes are native and live under
+//! native read service and the submission pre-checks share, plus the local
+//! pending count. Other backend planes are native and live under
 //! [`crate::native`].
 //!
 //! Adapters translate hogd's x23 outcome-tagged results into these shapes, so
@@ -13,11 +13,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use thruput_json_rpc_types::{
-    BlockHeight,
-    block::{BlockInfo, ChainTip},
-    transaction::TxHash,
-};
+use thruput_json_rpc_types::{BlockHeight, block::ChainTip, transaction::TxHash};
 
 use thruput_xdr::network_config::NetworkConfig;
 
@@ -143,18 +139,11 @@ impl TipReading {
     }
 }
 
-/// Backend plane for chain metadata and block-oriented reads.
+/// Backend plane for the committed chain tip and the pending transaction count.
 #[async_trait]
 pub trait ChainPlane: Send + Sync + 'static {
     /// Return the current chain tip and the network config it carries.
     async fn chain_tip(&self, context: RpcRequestContext) -> Result<TipReading, RpcServerError>;
-
-    /// Return block data at a specific height, if available.
-    async fn get_block_by_number(
-        &self,
-        context: RpcRequestContext,
-        height: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError>;
 
     /// Return the number of currently pending transactions.
     async fn pending_transaction_count(

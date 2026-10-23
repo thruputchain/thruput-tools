@@ -8,7 +8,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use thruput_json_rpc_types::{BlockHeight, NetworkHash, block::BlockInfo, hex::HexBytes};
+use thruput_json_rpc_types::{BlockHeight, NetworkHash, hex::HexBytes};
 
 #[derive(Clone, Default)]
 struct Backend {
@@ -52,13 +52,6 @@ impl ChainPlane for Backend {
                 },
             },
         ))
-    }
-    async fn get_block_by_number(
-        &self,
-        _: RpcRequestContext,
-        _: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError> {
-        panic!("out of slice")
     }
     async fn pending_transaction_count(&self, _: RpcRequestContext) -> Result<u64, RpcServerError> {
         panic!("out of slice")

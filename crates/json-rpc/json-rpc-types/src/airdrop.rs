@@ -147,8 +147,10 @@ fn positive_raw_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Str
 }
 
 /// Authoritatively admitted (or already committed) local funding submission.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+///
+/// In-process only: the native `dev_fundAccount` result is
+/// `responses::FundingSubmission`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FundAccountResponse {
     /// Recipient of the retained transfer.

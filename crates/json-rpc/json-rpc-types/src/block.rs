@@ -21,7 +21,7 @@ pub struct ChainTip {
     pub block_hash: SHA256Hash,
 }
 
-/// Block data returned by getBlockByNumber.
+/// Block metadata projected from a committed `ConsensusValue`.
 ///
 /// Maps the XDR `ConsensusValue` to RPC-friendly serialization
 /// (camelCase fields, `0x`-prefixed hex). Add RPC-specific fields
