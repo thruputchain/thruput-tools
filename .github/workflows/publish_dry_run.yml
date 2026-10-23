@@ -57,7 +57,7 @@ jobs:
           tool: cargo-hack@0.6.45
 
       - name: publish dry run
-        uses: thruputchain/actions/cargo-publish-dry-run@6693fac8133585728ad3a4ca14e3441073b6def8
+        uses: thruputchain/actions/cargo-publish-dry-run@e2453db03db2b6eaa289e558bf3d7ed62d0f916b
         with:
           registry-name: thruput
           packages: ${{ env.PUBLISH_PACKAGES }}
