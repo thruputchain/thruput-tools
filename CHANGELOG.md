@@ -4,6 +4,13 @@
 
 ### Breaking Rust API changes
 
+Tools now uses protocol 0.57.0 and SDK 0.54.0. Rust consumers that exchange
+protocol types with the public client or JSON-RPC crates must update their
+protocol dependencies to 0.57.0 and SDK dependencies to 0.54.0; types from
+the previous versions are not interchangeable. Newly scaffolded projects pin SDK 0.54.0.
+The default local runtime is hog-devnode 0.1.31-rc.14. This changes the Rust
+dependency boundary, not the public JSON-RPC wire format.
+
 The published `thruput-hogd-backend` crate now requires transaction context in
 its event-parsing and transaction-lookup helpers so warnings include the hash
 even when handler spans are disabled. Update Rust callers as follows:

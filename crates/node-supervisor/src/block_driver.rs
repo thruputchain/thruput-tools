@@ -580,9 +580,9 @@ fn proposal_txs_compatibility_hash(
     proposal_txs: &thruput_scheduler::ProposalTxs,
 ) -> Result<ProposalTxsHash, BlockProductionError> {
     let mut base = proposal_txs.clone();
-    base.hash.segment_tokens.0.clear();
-    base.hash.segment_bytes.0.clear();
-    base.hash.xdr.0.clear();
+    base.signed_hash.segment_tokens.0.clear();
+    base.signed_hash.segment_bytes.0.clear();
+    base.signed_hash.xdr.0.clear();
     base.nondeterministic_data.segment_tokens.0.clear();
     base.nondeterministic_data.segment_bytes.0.clear();
     base.nondeterministic_data.xdr.0.clear();
@@ -595,7 +595,7 @@ fn proposal_txs_compatibility_hash(
         .into_inner();
     xor_hash(
         &mut result,
-        hash_parallel_batch_compatibility("hash", &proposal_txs.hash)?,
+        hash_parallel_batch_compatibility("signed_hash", &proposal_txs.signed_hash)?,
     );
     xor_hash(
         &mut result,
@@ -752,8 +752,8 @@ mod timepoint_tests {
 #[cfg(test)]
 mod hash_tests {
     use thruput_scheduler::{
-        ParallelBatch, ParallelNondeterministicProposalDataBatch, ParallelTransactionHashBatch,
-        ProposalTxs,
+        ParallelBatch, ParallelNondeterministicProposalDataBatch,
+        ParallelSignedTransactionHashBatch, ProposalTxs,
     };
     use thruput_xdr::types::{ExtensionPoint, SHA256Hash};
     use xdrs::{BytesM, VecM};
@@ -764,7 +764,7 @@ mod hash_tests {
     fn proposal_txs_compatibility_hash_matches_hogd_golden_vector() {
         let proposal_txs = ProposalTxs {
             ext: ExtensionPoint::_0,
-            hash: ParallelTransactionHashBatch::new(ParallelBatch {
+            signed_hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
                 segment_tokens: VecM(vec![1, 2]),
                 segment_bytes: VecM(vec![4, 8]),
                 xdr: BytesM(vec![0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3]),
@@ -792,7 +792,7 @@ mod hash_tests {
     fn proposal_txs_hash_rejects_segment_count_mismatch() {
         let proposal_txs = ProposalTxs {
             ext: ExtensionPoint::_0,
-            hash: ParallelTransactionHashBatch::new(ParallelBatch {
+            signed_hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
                 segment_tokens: VecM(vec![1]),
                 segment_bytes: VecM(vec![]),
                 xdr: BytesM(vec![]),
@@ -806,7 +806,10 @@ mod hash_tests {
             .expect_err("bug: mismatched segment metadata should fail");
         assert!(matches!(
             error,
-            BlockProductionError::MalformedSchedulerProposal { batch: "hash", .. }
+            BlockProductionError::MalformedSchedulerProposal {
+                batch: "signed_hash",
+                ..
+            }
         ));
     }
 
@@ -814,7 +817,7 @@ mod hash_tests {
     fn proposal_txs_hash_rejects_segment_byte_mismatch() {
         let proposal_txs = ProposalTxs {
             ext: ExtensionPoint::_0,
-            hash: ParallelTransactionHashBatch::new(ParallelBatch {
+            signed_hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
                 segment_tokens: VecM(vec![1]),
                 segment_bytes: VecM(vec![2]),
                 xdr: BytesM(vec![0]),
@@ -828,7 +831,10 @@ mod hash_tests {
             .expect_err("bug: segment lengths outside the payload should fail");
         assert!(matches!(
             error,
-            BlockProductionError::MalformedSchedulerProposal { batch: "hash", .. }
+            BlockProductionError::MalformedSchedulerProposal {
+                batch: "signed_hash",
+                ..
+            }
         ));
     }
 

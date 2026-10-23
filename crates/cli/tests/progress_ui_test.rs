@@ -116,15 +116,18 @@ if [ "$BUILD_UI_MODE" = diagnostics ] || [ "$BUILD_UI_MODE" = diagnostic-fail ];
   cp fixture.elf target/riscv32im-unknown-none-elf/release/demo
   exit 0
 fi
-printf 'compiler-stdout-first\n'
-printf 'compiler-stderr-first\n' >&2
+if [ "$BUILD_UI_MODE" != flood-stderr ]; then printf 'compiler-stdout-first\n'; fi
+if [ "$BUILD_UI_MODE" != flood-stdout ]; then printf 'compiler-stderr-first\n' >&2; fi
 if [ "$BUILD_UI_MODE" = hang ]; then while :; do sleep 1; done; fi
 if [ "$BUILD_UI_MODE" != fast ]; then sleep 0.5; fi
-if [ "$BUILD_UI_MODE" = flood ]; then
+if [ "$BUILD_UI_MODE" = flood-stdout ] || [ "$BUILD_UI_MODE" = flood-stderr ]; then
   i=0
   while [ "$i" -lt 300 ]; do
-    printf 'stdout-record-%04d\n' "$i"
-    printf 'stderr-record-%04d\n' "$i" >&2
+    if [ "$BUILD_UI_MODE" = flood-stdout ]; then
+      printf 'stdout-record-%04d\n' "$i"
+    else
+      printf 'stderr-record-%04d\n' "$i" >&2
+    fi
     i=$((i+1))
   done
 fi
@@ -149,10 +152,10 @@ if [ "$BUILD_UI_MODE" = fail ]; then
   exit 42
 fi
 cp fixture.elf target/riscv32im-unknown-none-elf/release/demo
-printf 'compiler-stdout-last\n'
+if [ "$BUILD_UI_MODE" != flood-stderr ]; then printf 'compiler-stdout-last\n'; fi
 if [ "$BUILD_UI_MODE" = partial ]; then
   printf 'compiler-stderr-last' >&2
-else
+elif [ "$BUILD_UI_MODE" != flood-stdout ]; then
   printf 'compiler-stderr-last\n' >&2
 fi
 "#,
@@ -470,39 +473,49 @@ fn attributes(file: &File) -> libc::termios {
 
 #[test]
 fn verbose_build_preserves_both_streams_scrollback_and_artifacts() {
-    let fixture = Fixture::new();
-    let mut command = fixture.verbose_command("flood");
-    command.args(["--bindings", "ts", "--show-cargo-commands"]);
-    let mut pty = Pty::spawn(command);
-    assert!(pty.finish().success());
-    assert_eq!(pty.progress_rows, 0, "verbose output bypasses animation");
-    let history = pty.history();
-    assert!(history.contains("PREEXISTING-SHELL-LINE"));
-    // Cargo stdout reaches the PTY directly, while stderr is relayed in chunks.
-    // A stdout record may appear inside a split stderr record without losing bytes.
-    let mut stderr = String::from_utf8_lossy(&pty.raw).into_owned();
-    for index in 0..300 {
-        let record = format!("stdout-record-{index:04}");
-        assert_eq!(
-            history.matches(&record).count(),
-            1,
-            "{record} missing or duplicated"
+    // stdout is inherited, while stderr is relayed in chunks. Concurrent writes
+    // can split either stream's records without losing bytes. Flood each stream
+    // separately so this checks preservation, not cross-process write atomicity.
+    for stream in ["stdout", "stderr"] {
+        let fixture = Fixture::new();
+        let mut command = fixture.verbose_command(&format!("flood-{stream}"));
+        command.args(["--bindings", "ts", "--show-cargo-commands"]);
+        let mut pty = Pty::spawn(command);
+        assert!(pty.finish().success(), "{stream} flood build failed");
+        assert_eq!(pty.progress_rows, 0, "verbose output bypasses animation");
+        let history = pty.history();
+        assert!(history.contains("PREEXISTING-SHELL-LINE"));
+        let raw = String::from_utf8_lossy(&pty.raw);
+        for index in 0..300 {
+            let record = format!("{stream}-record-{index:04}");
+            assert_eq!(
+                raw.matches(&record).count(),
+                1,
+                "{record} missing or duplicated in output"
+            );
+            assert_eq!(
+                history.matches(&record).count(),
+                1,
+                "{record} missing or duplicated in scrollback"
+            );
+        }
+        assert!(
+            history.contains("Build complete"),
+            "{stream} completion missing"
         );
-        stderr = stderr.replace(&record, "");
-    }
-    let stderr = stderr.replace(['\r', '\n'], "");
-    for index in 0..300 {
-        let record = format!("stderr-record-{index:04}");
-        assert_eq!(
-            stderr.matches(&record).count(),
-            1,
-            "{record} missing or duplicated"
+        assert!(
+            history.contains("Artifact size"),
+            "{stream} artifact report missing"
+        );
+        assert!(
+            fixture.root.join("target/thruput/demo.rv32a").exists(),
+            "{stream} artifact missing"
+        );
+        assert!(
+            fixture.root.join("target/thruput/demo.ts").exists(),
+            "{stream} bindings missing"
         );
     }
-    assert!(history.contains("Build complete"));
-    assert!(history.contains("Artifact size"));
-    assert!(fixture.root.join("target/thruput/demo.rv32a").exists());
-    assert!(fixture.root.join("target/thruput/demo.ts").exists());
 }
 
 #[test]
