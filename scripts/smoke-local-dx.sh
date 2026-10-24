@@ -16,8 +16,8 @@
 # Optional environment:
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hog-gateway
-#   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
-#   SMOKE_PROTOCOL_RS_PATH=/path/to/protocol-rs  # defaults to sdk_rs sibling
+#   SMOKE_SDK_PATH=/path/to/thruput-sdk-rs/crates/sdk  # test scaffold against local SDK
+#   SMOKE_PROTOCOL_RS_PATH=/path/to/thruput-protocol-rs  # defaults to SDK repo sibling
 #   CARGO_TARGET_DIR=/absolute/path/to/build-output
 #   SMOKE_NETWORK_HASH=<32-byte network hash in unprefixed base58>
 #   SMOKE_CHECKOUT_CLIENT=1  # use this checkout's unpublished Rust client
@@ -665,7 +665,10 @@ unset THRUPUT_PROFILE
 if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
     log "Using local SDK path: $SMOKE_SDK_PATH"
     SDK_REPO_ROOT="$(cd "$SMOKE_SDK_PATH/../.." && pwd)"
-    SMOKE_PROTOCOL_RS_PATH="${SMOKE_PROTOCOL_RS_PATH:-$(dirname "$SDK_REPO_ROOT")/protocol-rs}"
+    if [[ -z "${SMOKE_PROTOCOL_RS_PATH:-}" ]]; then
+        SMOKE_PROTOCOL_RS_PATH="$(dirname "$SDK_REPO_ROOT")/thruput-protocol-rs"
+        [[ -d "$SMOKE_PROTOCOL_RS_PATH" ]] || SMOKE_PROTOCOL_RS_PATH="$(dirname "$SDK_REPO_ROOT")/protocol-rs"
+    fi
     log "Using local protocol-rs path: $SMOKE_PROTOCOL_RS_PATH"
     override_sdk_path Cargo.toml "$SMOKE_SDK_PATH" "$SMOKE_PROTOCOL_RS_PATH"
 fi
