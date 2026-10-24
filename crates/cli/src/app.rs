@@ -85,8 +85,27 @@ struct RpcTargetArgs {
 
 #[derive(Args, Debug, Clone, Copy, Default)]
 struct ConfirmationArgs {
-    /// Confirm without prompting; the protected action cannot be undone
-    #[arg(short = 'f', long)]
+    /// Skip the confirmation prompt; required when no interactive terminal is available
+    #[arg(
+        short = 'y',
+        long = "yes",
+        visible_alias = "force",
+        visible_short_alias = 'f'
+    )]
+    force: bool,
+}
+
+/// Confirmation for removals and replacements whose prompts warn they cannot be undone.
+#[derive(Args, Debug, Clone, Copy, Default)]
+struct DestructiveConfirmationArgs {
+    /// Skip the confirmation prompt; required when no interactive terminal is available.
+    /// This cannot be undone
+    #[arg(
+        short = 'y',
+        long = "yes",
+        visible_alias = "force",
+        visible_short_alias = 'f'
+    )]
     force: bool,
 }
 
@@ -1246,7 +1265,7 @@ enum KeysCommand {
         /// Key name to remove
         name: String,
         #[command(flatten)]
-        confirmation: ConfirmationArgs,
+        confirmation: DestructiveConfirmationArgs,
     },
 }
 
@@ -1337,14 +1356,14 @@ enum ConfigCommand {
     #[command(
         long_about = "Remove an entire profile from one config layer, including its contract \
                       aliases and wallet bindings. Interactive use asks for confirmation; pass \
-                      --force to confirm non-interactively. A matching default profile selection \
+                      --yes to confirm non-interactively. A matching default profile selection \
                       is cleared in the same atomic update."
     )]
     Rm {
         /// Profile to remove
         profile: String,
         #[command(flatten)]
-        confirmation: ConfirmationArgs,
+        confirmation: DestructiveConfirmationArgs,
         /// Remove the profile from global config
         #[arg(long)]
         global: bool,
@@ -1690,7 +1709,7 @@ enum ChainCommand {
         #[arg(long)]
         input: PathBuf,
         #[command(flatten)]
-        confirmation: ConfirmationArgs,
+        confirmation: DestructiveConfirmationArgs,
     },
 }
 
@@ -2032,6 +2051,49 @@ mod tests {
     use super::*;
     use thruput_node_supervisor::ConfigParamName;
 
+    fn force_help(path: &[&str]) -> String {
+        let mut command = Cli::command();
+        let mut current = &mut command;
+        for name in path {
+            current = current.find_subcommand_mut(name).unwrap();
+        }
+        current
+            .get_arguments()
+            .find(|arg| arg.get_id() == "force")
+            .and_then(|arg| arg.get_help())
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn force_help_warns_only_where_the_prompt_says_the_action_cannot_be_undone() {
+        // Agents without a terminal must pass --yes for these. Calling them
+        // irreversible makes agent safety checks refuse ordinary setup.
+        for path in [
+            &["wallet", "create"][..],
+            &["wallet", "rm"],
+            &["airdrop"],
+            &["deploy"],
+            &["call"],
+            &["transfer"],
+            &["keys", "export"],
+            &["chain", "dump"],
+        ] {
+            let help = force_help(path);
+            assert!(help.contains("no interactive terminal"), "{path:?}: {help}");
+            assert!(!help.contains("cannot be undone"), "{path:?}: {help}");
+        }
+        for path in [
+            &["keys", "rm"][..],
+            &["config", "rm"],
+            &["chain", "restore"],
+        ] {
+            let help = force_help(path);
+            assert!(help.contains("no interactive terminal"), "{path:?}: {help}");
+            assert!(help.contains("cannot be undone"), "{path:?}: {help}");
+        }
+    }
+
     #[test]
     fn config_get_flags_and_command_name_parse() {
         let cli = Cli::parse_from(["thruput", "config", "get", "devnet", "--sources"]);
@@ -2215,7 +2277,7 @@ mod tests {
             Command::Config {
                 command: ConfigCommand::Rm {
                     profile,
-                    confirmation: ConfirmationArgs { force: true },
+                    confirmation: DestructiveConfirmationArgs { force: true },
                     global: false,
                     project: true,
                 }
@@ -2751,39 +2813,30 @@ mod tests {
     }
 
     #[test]
-    fn transaction_commands_parse_command_local_force() {
-        for args in [
-            vec!["thruput", "deploy", "--force"],
-            vec!["thruput", "call", "contract", "method", "--force"],
-            vec!["thruput", "transfer", "recipient", "1", "--force"],
-            vec!["thruput", "airdrop", "recipient", "--force"],
-            vec!["thruput", "wallet", "create", "--force"],
-        ] {
-            let cli = Cli::try_parse_from(args).expect("transaction command should accept --force");
-            let force = match cli.command {
-                Command::Deploy(DeployArgs { confirmation, .. })
-                | Command::Call(CallArgs { confirmation, .. })
-                | Command::Transfer(TransferArgs { confirmation, .. })
-                | Command::Airdrop(AirdropArgs { confirmation, .. })
-                | Command::Wallet {
-                    command: WalletCommand::Create { confirmation, .. },
-                } => confirmation.force,
-                _ => panic!("expected transaction command"),
-            };
-            assert!(force);
-        }
-    }
-
-    #[test]
-    fn airdrop_and_wallet_create_reject_yes() {
-        for args in [
-            vec!["thruput", "airdrop", "recipient", "--yes"],
-            vec!["thruput", "wallet", "create", "--yes"],
-        ] {
-            let Err(error) = Cli::try_parse_from(args) else {
-                panic!("--yes should be removed");
-            };
-            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    fn transaction_commands_parse_command_local_confirmation() {
+        // --yes is the documented name. -f/--force stay as aliases for existing scripts.
+        for flag in ["--yes", "-y", "--force", "-f"] {
+            for args in [
+                vec!["thruput", "deploy", flag],
+                vec!["thruput", "call", "contract", "method", flag],
+                vec!["thruput", "transfer", "recipient", "1", flag],
+                vec!["thruput", "airdrop", "recipient", flag],
+                vec!["thruput", "wallet", "create", flag],
+            ] {
+                let cli = Cli::try_parse_from(&args)
+                    .unwrap_or_else(|error| panic!("{args:?} should parse: {error}"));
+                let confirmed = match cli.command {
+                    Command::Deploy(DeployArgs { confirmation, .. })
+                    | Command::Call(CallArgs { confirmation, .. })
+                    | Command::Transfer(TransferArgs { confirmation, .. })
+                    | Command::Airdrop(AirdropArgs { confirmation, .. })
+                    | Command::Wallet {
+                        command: WalletCommand::Create { confirmation, .. },
+                    } => confirmation.force,
+                    _ => panic!("expected transaction command"),
+                };
+                assert!(confirmed, "{args:?}");
+            }
         }
     }
 

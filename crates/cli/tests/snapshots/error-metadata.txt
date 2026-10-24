@@ -300,7 +300,7 @@ InteractiveInputRequired
 
 ConfirmationRequired
   code: confirmation_required
-  hint text: rerun from an interactive terminal, or pass `--force` to proceed without a prompt
+  hint text: rerun from an interactive terminal, or pass `--yes` to proceed without a prompt
   details: computed
 
 FaucetService
@@ -515,7 +515,7 @@ ChainArchiveInvalid
 
 ChainDumpExists
   code: chain_dump_exists
-  hint text: review the existing archive and rerun with `--force`, or choose another output path
+  hint text: review the existing archive and rerun with `--yes`, or choose another output path
 
 ChainArchiveInsideDataDir
   code: chain_archive_inside_data_dir

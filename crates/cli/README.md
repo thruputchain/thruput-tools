@@ -217,7 +217,7 @@ the target rustflags.
 `--non-interactive` is a global flag, accepted before or after subcommands.
 It disables CLI prompts, boxes, styled tables, and progress-line updates while
 retaining ordinary status and data output. It does not mean yes: commands that
-require confirmation still need their explicit `--force` option. `init` needs
+require confirmation still need their explicit `--yes` option. `init` needs
 `--generate-key` to create an initial key. `--quiet` suppresses status output;
 `--json` selects structured output. Neither grants consent.
 
@@ -470,8 +470,8 @@ This needs a `hog-devnode` whose protocol includes ML-DSA-65 pubkey accounts.
 Create and manage wallets owned by stored signing keys:
 
 Live `deploy`, `call`, `transfer`, `airdrop`, and `wallet create` operations ask
-for confirmation before submitting transactions or saving local state. Pass command-local `--force` for automation. `--json`, `--quiet`,
-and non-TTY invocations fail closed without `--force`; `--dry-run` never prompts.
+for confirmation before submitting transactions or saving local state. Pass command-local `-y`/`--yes` for automation (`-f`/`--force` is an alias). `--json`, `--quiet`,
+and non-TTY invocations fail closed without `--yes`; `--dry-run` never prompts.
 
 ```bash
 thruput wallet create --key alice
@@ -592,7 +592,7 @@ thruput deploy --fund 10 -p counter
 thruput deploy --fund 10 --profile testnet
 thruput deploy --fund 10 --rpc-url http://<your-rpc-host>:8545
 thruput deploy --fund 10 --artifact target/thruput/counter.rv32a
-thruput deploy --fund 10 --json --force
+thruput deploy --fund 10 --json --yes
 ```
 
 At a Cargo workspace root, `-p <package>` (or `--package <package>`) selects the
@@ -672,7 +672,7 @@ thruput call my-counter get
 thruput call 0xabc123... get
 thruput call my-counter increment 5 --dry-run
 thruput call my-counter increment 5 --rpc-url http://<your-rpc-host>:8545
-thruput call my-counter increment 5 --json --force
+thruput call my-counter increment 5 --json --yes
 ```
 
 Embedded contract specs now drive selector resolution plus first-pass
@@ -952,11 +952,11 @@ recreated instead of archived.
 
 ```bash
 thruput chain dump --data-dir .thruput/node --output chain-backup.json
-thruput chain restore --data-dir .thruput/node --input chain-backup.json --force
+thruput chain restore --data-dir .thruput/node --input chain-backup.json --yes
 ```
 
 Both commands fail while `thruput node` is using the data directory. Dump
-asks before replacing an existing output; pass `--force` to confirm
+asks before replacing an existing output; pass `--yes` to confirm
 non-interactively. Restore does the same before replacing populated state and
 validates every archived file's size and SHA-256 before installing it.
 
@@ -1081,13 +1081,13 @@ thruput config get staging --sources
 
 Delete a profile with `config rm`. Normal output asks for confirmation and
 defaults to cancellation. Non-interactive use, including `--json` and
-`--quiet`, requires `-f` or `--force`; output formatting alone never authorizes
+`--quiet`, requires `-y` or `--yes`; output formatting alone never authorizes
 deletion. Deletion removes the entire selected-layer profile, including its
 contract aliases and wallet bindings, and clears a matching layer default.
 
 ```bash
 thruput config rm staging --global
-thruput --json config rm staging --global --force
+thruput --json config rm staging --global --yes
 thruput --json config profiles
 ```
 

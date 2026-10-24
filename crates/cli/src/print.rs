@@ -244,7 +244,7 @@ impl Print {
         }
     }
 
-    /// Confirm a protected action, or require `--force` when prompting is unavailable.
+    /// Confirm a protected action, or require `--yes` when prompting is unavailable.
     pub fn confirm(
         &self,
         force: bool,

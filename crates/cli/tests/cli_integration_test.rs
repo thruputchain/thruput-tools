@@ -196,7 +196,7 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     );
     assert_eq!(
         refused_overwrite_json["error"]["details"]["requiredFlag"],
-        "--force"
+        "--yes"
     );
     assert_eq!(std::fs::read(&archive).unwrap(), original_archive);
 
@@ -213,7 +213,7 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     assert!(!refused.status.success());
     let refused_json: serde_json::Value = serde_json::from_slice(&refused.stderr).unwrap();
     assert_eq!(refused_json["error"]["code"], "confirmation_required");
-    assert_eq!(refused_json["error"]["details"]["requiredFlag"], "--force");
+    assert_eq!(refused_json["error"]["details"]["requiredFlag"], "--yes");
 
     // Make the destination observably different so the final assertion proves
     // that forced restore replaced its contents with the archived source state.
@@ -879,7 +879,7 @@ fn config_rm_help_describes_confirmation_and_deleted_contents() {
     assert!(stdout.contains("contract aliases and wallet bindings"));
     assert!(stdout.contains("asks for confirmation"));
     assert!(stdout.contains("-f, --force"));
-    assert!(stdout.contains("without prompting"));
+    assert!(stdout.contains("Skip the confirmation prompt"));
     assert!(stdout.contains("cannot be undone"));
     assert!(stdout.contains("default profile selection is cleared"));
     assert!(stdout.contains("--global"));
@@ -1679,11 +1679,7 @@ fn config_rm_non_tty_input_requires_force() {
     let output = child.wait_with_output().unwrap();
 
     assert!(!output.status.success());
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("--force")
-    );
+    assert!(String::from_utf8(output.stderr).unwrap().contains("--yes"));
     assert_eq!(
         std::fs::read_to_string(config_home.join("thruput/config.toml")).unwrap(),
         contents
@@ -1735,7 +1731,7 @@ fn config_rm_non_interactive_modes_require_force() {
         error["error"]["details"]["action"],
         "remove a configuration profile"
     );
-    assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
+    assert_eq!(error["error"]["details"]["requiredFlag"], "--yes");
     assert_eq!(
         std::fs::read_to_string(config_home.join("thruput/config.toml")).unwrap(),
         contents
@@ -1748,7 +1744,7 @@ fn config_rm_non_interactive_modes_require_force() {
         .output()
         .unwrap();
     assert!(!quiet.status.success());
-    assert!(String::from_utf8(quiet.stderr).unwrap().contains("--force"));
+    assert!(String::from_utf8(quiet.stderr).unwrap().contains("--yes"));
     assert_eq!(
         std::fs::read_to_string(config_home.join("thruput/config.toml")).unwrap(),
         contents
@@ -3167,7 +3163,7 @@ fn global_non_interactive_terminal_key_removal_requires_force() {
                 let report: serde_json::Value = serde_json::from_str(&output).unwrap();
                 assert_eq!(report["error"]["code"], "confirmation_required");
             } else {
-                assert!(output.contains("--force"), "{output}");
+                assert!(output.contains("--yes"), "{output}");
                 assert!(!output.contains("Remove key `alice`?"), "{output}");
                 assert!(!output.contains("[y/N]"), "{output}");
             }
@@ -6208,7 +6204,7 @@ fn wallet_rm_reports_inherited_default_after_clearing_project_default() {
     assert!(!refused.status.success());
     let refused: serde_json::Value = serde_json::from_slice(&refused.stderr).unwrap();
     assert_eq!(refused["error"]["code"], "confirmation_required");
-    assert_eq!(refused["error"]["details"]["requiredFlag"], "--force");
+    assert_eq!(refused["error"]["details"]["requiredFlag"], "--yes");
 
     let output = thruput()
         .args([
@@ -7084,7 +7080,7 @@ fn transaction_commands_require_force_before_submission_or_attempt_state() {
             "{action}: {error}"
         );
         assert_eq!(error["error"]["details"]["action"], action);
-        assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
+        assert_eq!(error["error"]["details"]["requiredFlag"], "--yes");
     }
 
     assert!(!cache_home.join("thruput/airdrop-attempts").exists());
@@ -11527,7 +11523,7 @@ fn keys_export_requires_confirmation_before_loading_secret_material() {
     assert!(!output.status.success());
     let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(error["error"]["code"], "confirmation_required");
-    assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
+    assert_eq!(error["error"]["details"]["requiredFlag"], "--yes");
 }
 
 #[test]
@@ -11558,7 +11554,7 @@ fn keys_rm_help_documents_force() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("-f, --force"));
-    assert!(stdout.contains("without prompting"));
+    assert!(stdout.contains("Skip the confirmation prompt"));
     assert!(stdout.contains("cannot be undone"));
 }
 
@@ -11627,11 +11623,7 @@ fn keys_rm_non_tty_input_requires_force() {
     let output = child.wait_with_output().unwrap();
 
     assert!(!output.status.success());
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("--force")
-    );
+    assert!(String::from_utf8(output.stderr).unwrap().contains("--yes"));
     assert!(key_path.exists());
 }
 
@@ -11681,7 +11673,7 @@ fn keys_rm_non_interactive_modes_require_force() {
     assert!(!json.status.success());
     let error: serde_json::Value = serde_json::from_slice(&json.stderr).unwrap();
     assert_eq!(error["error"]["code"], "confirmation_required");
-    assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
+    assert_eq!(error["error"]["details"]["requiredFlag"], "--yes");
     assert!(key_path.exists());
 
     let quiet = thruput()
@@ -11690,7 +11682,7 @@ fn keys_rm_non_interactive_modes_require_force() {
         .output()
         .unwrap();
     assert!(!quiet.status.success());
-    assert!(String::from_utf8(quiet.stderr).unwrap().contains("--force"));
+    assert!(String::from_utf8(quiet.stderr).unwrap().contains("--yes"));
     assert!(key_path.exists());
 }
 

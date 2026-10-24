@@ -444,8 +444,8 @@ pub enum CliError {
     #[hint("provide the required input explicitly; for key import, pipe the seed on stdin")]
     InteractiveInputRequired,
     #[error("cannot confirm the request to {action}: no interactive terminal is available")]
-    #[hint("rerun from an interactive terminal, or pass `--force` to proceed without a prompt")]
-    #[details(expr = Some(json!({ "action": action, "requiredFlag": "--force" })))]
+    #[hint("rerun from an interactive terminal, or pass `--yes` to proceed without a prompt")]
+    #[details(expr = Some(json!({ "action": action, "requiredFlag": "--yes" })))]
     ConfirmationRequired { action: &'static str },
     #[error(
         "faucet service request `{url}` failed with HTTP {http_status}: {message} ({service_code}){}",
@@ -797,7 +797,7 @@ pub enum CliError {
     #[hint("use an unmodified archive produced by `thruput chain dump`")]
     ChainArchiveInvalid { path: String, message: String },
     #[error("chain dump output already exists: {0}")]
-    #[hint("review the existing archive and rerun with `--force`, or choose another output path")]
+    #[hint("review the existing archive and rerun with `--yes`, or choose another output path")]
     ChainDumpExists(String),
     #[error("chain archive path must be outside the data directory: {0}")]
     #[hint("place the archive outside the node data directory")]

@@ -344,7 +344,7 @@ fn run_installer(update: bool, options: &InstallOptions, print: &Print) -> Resul
         if options.global {
             child.arg("--global");
         }
-        for agent in &options.agents {
+        for agent in installer_agents(&options.agents) {
             child.arg("--agent").arg(agent);
         }
         if !print.can_prompt() {
@@ -373,6 +373,25 @@ fn run_installer(update: bool, options: &InstallOptions, print: &Print) -> Resul
         }
     }
     Ok(())
+}
+
+/// Agents passed to the installer, always including the canonical `.agents/skills` target.
+///
+/// Inside a coding agent, skills@1.7.0 installs in copy mode and writes only the selected
+/// agents' directories, such as `~/.claude/skills`. `show`, `list` and `update` read
+/// [`SKILL_DIRECTORY`], so also select the `universal` agent, whose directory is that
+/// canonical location. With it selected the installer links the other agents to the
+/// canonical copy instead of copying.
+fn installer_agents(agents: &[String]) -> Vec<&str> {
+    let mut selected: Vec<&str> = agents.iter().map(String::as_str).collect();
+    if !selected.is_empty()
+        && !selected
+            .iter()
+            .any(|agent| matches!(*agent, "*" | "universal"))
+    {
+        selected.push("universal");
+    }
+    selected
 }
 
 fn refresh_global() -> Result<(), CliError> {
