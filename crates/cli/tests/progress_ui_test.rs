@@ -82,7 +82,7 @@ if [ "$1" = metadata ]; then
   exit 0
 fi
 if [ "$1" = config ]; then
-  printf '%s' '["-C","link-arg=-Tgroundhog-rv32.ld"]'
+  printf '%s' '["-C","link-arg=-Tthruput-rv32.ld"]'
   exit 0
 fi
 if [ "$1" = test ]; then

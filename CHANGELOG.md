@@ -2,12 +2,24 @@
 
 ## Unreleased
 
+### Contract builds
+
+`thruput build` reads SDK 0.56's contract metadata: raw spec format 5 in the
+`thruputspecrawv5` section, the `thruput_rv32_interfaces` interface table, and
+`[package.metadata.thruput] raw_spec_format`. Contracts built against an older
+SDK are refused with a format-skew error naming their format; rebuild them
+against SDK 0.56. The SDK's linker script is now `thruput-rv32.ld`: existing
+projects must change `-Tgroundhog-rv32.ld` to `-Tthruput-rv32.ld` in
+`.cargo/config.toml` (the build warns, and a failed link says so). SDK 0.56 also
+moves interface IDs, the ERC20 error selectors and the ERC20 event signatures
+to `thruput` preimages.
+
 ### Breaking Rust API changes
 
-Tools now uses protocol 0.58.0 and SDK 0.55.0. Rust consumers that exchange
+Tools now uses protocol 0.58.0 and SDK 0.56.0. Rust consumers that exchange
 protocol types with the public client or JSON-RPC crates must update their
-protocol dependencies to 0.58.0 and SDK dependencies to 0.55.0; types from
-the previous versions are not interchangeable. Newly scaffolded projects pin SDK 0.55.0.
+protocol dependencies to 0.58.0 and SDK dependencies to 0.56.0; types from
+the previous versions are not interchangeable. Newly scaffolded projects pin SDK 0.56.0.
 The XDR codec and RPC driver now come from crates.io: depend on
 `xdrs = { package = "thruput-xdrs", version = "0.16.1" }` (and
 `thruput-xdr-common`, `thruput-rpc-driver` likewise) instead of the `thruput`

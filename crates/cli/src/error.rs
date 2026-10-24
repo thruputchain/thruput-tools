@@ -879,7 +879,11 @@ fn cargo_failure_hint(stderr: &str) -> Cow<'static, str> {
          be rebuilt from source; check that `.cargo/contract.toml` still \
          contains `[unstable]` and `build-std = [\"core\", \"alloc\"]`"
         } else if stderr.contains("groundhog-rv32.ld") {
-            "the link references `groundhog-rv32.ld`, which the Thruput SDK's \
+            "the link references `groundhog-rv32.ld`, the linker script's name before \
+         Thruput SDK 0.56; SDK 0.56 and later ship it as `thruput-rv32.ld`, so \
+         change `-Tgroundhog-rv32.ld` to `-Tthruput-rv32.ld` in `.cargo/config.toml`"
+        } else if stderr.contains("thruput-rv32.ld") {
+            "the link references `thruput-rv32.ld`, which the Thruput SDK's \
          build script supplies through a linker search path; check that the \
          `sdk` dependency resolves for this build, and rebuild after \
          `cargo clean` to re-run its build script"

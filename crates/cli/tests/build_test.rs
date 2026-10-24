@@ -15,7 +15,7 @@ fn write_scaffold_cargo_config(project_root: &Path) {
     fs::write(
         project_root.join(".cargo/config.toml"),
         "[target.riscv32im-unknown-none-elf]\n\
-         rustflags = [\"-C\", \"link-arg=-Tgroundhog-rv32.ld\"]\n",
+         rustflags = [\"-C\", \"link-arg=-Tthruput-rv32.ld\"]\n",
     )
     .unwrap();
 }
@@ -1061,7 +1061,7 @@ fn build_rv32_rejects_env_rustflags() {
 const CONFIG_GET_NOT_SET: &str = "echo 'error: config value `target.riscv32im-unknown-none-elf.rustflags` is not set' >&2\n  exit 101";
 /// `cargo config get` reply: rustflags carrying the Thruput linker script.
 const CONFIG_GET_THRUPUT_SCRIPT: &str =
-    "printf '%s' '[\"-C\",\"link-arg=-Tgroundhog-rv32.ld\"]'\n  exit 0";
+    "printf '%s' '[\"-C\",\"link-arg=-Tthruput-rv32.ld\"]'\n  exit 0";
 /// `cargo config get` reply: rustflags selecting a custom linker script.
 const CONFIG_GET_CUSTOM_SCRIPT: &str = "printf '%s' '[\"-C\",\"link-arg=-Tcustom.ld\"]'\n  exit 0";
 /// `cargo config get` reply: a non-nightly toolchain rejecting `-Z`.
@@ -1269,12 +1269,12 @@ fn build_rv32_link_failure_mentioning_script_gets_search_path_hint() {
     write_contract_toml(&root);
     let fake_bin = root.join("bin");
     // Config resolves correctly, but the link cannot find the script — the
-    // moved/missing groundhog-rv32.ld case, detectable only from lld's error.
+    // moved/missing thruput-rv32.ld case, detectable only from lld's error.
     write_fake_cargo_with_metadata(
         &fake_bin,
         &metadata_json,
         CONFIG_GET_THRUPUT_SCRIPT,
-        "echo 'ld.lld: error: unable to find groundhog-rv32.ld' >&2\nexit 1",
+        "echo 'ld.lld: error: unable to find thruput-rv32.ld' >&2\nexit 1",
     );
     let cargo_home = root.join("cargo-home");
     fs::create_dir_all(&cargo_home).unwrap();
@@ -1506,7 +1506,7 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
     fs::write(
         &cargo,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nif [ \"$1\" = \"config\" ]; then\n  printf '%s' '[\"-C\",\"link-arg=-Tgroundhog-rv32.ld\"]'\n  exit 0\nfi\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nif [ \"$1\" = \"config\" ]; then\n  printf '%s' '[\"-C\",\"link-arg=-Tthruput-rv32.ld\"]'\n  exit 0\nfi\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
             raw_elf
                 .parent()
                 .expect("bug: raw ELF parent should exist")
@@ -1609,7 +1609,7 @@ fn build_relays_what_cargo_reports_while_it_reads_the_registry() {
              \x20 exit 0\n\
              fi\n\
              if [ \"$1\" = \"config\" ]; then\n\
-             \x20 printf '%s' '[\"-C\",\"link-arg=-Tgroundhog-rv32.ld\"]'\n\
+             \x20 printf '%s' '[\"-C\",\"link-arg=-Tthruput-rv32.ld\"]'\n\
              \x20 exit 0\n\
              fi\n\
              /bin/mkdir -p '{}'\n\
@@ -1716,7 +1716,7 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
              \x20 exit 0\n\
              fi\n\
              if [ \"$1\" = \"config\" ]; then\n\
-             \x20 printf '%s' '[\"-C\",\"link-arg=-Tgroundhog-rv32.ld\"]'\n\
+             \x20 printf '%s' '[\"-C\",\"link-arg=-Tthruput-rv32.ld\"]'\n\
              \x20 exit 0\n\
              fi\n\
              exit 0\n",
@@ -1780,7 +1780,11 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
 /// deliberately not decodable: the format check must fire before any fragment
 /// byte is read, and well-formed bytes would let a too-late check pass.
 fn rv32_elf_with_raw_spec_format(format: u32) -> Vec<u8> {
-    support::minimal_rv32_elf_with_section(&format!("groundhogspecrawv{format}"), &[0xff; 16])
+    rv32_elf_with_raw_spec_section(thruput_spec_tool::RAW_SECTION_PREFIX, format)
+}
+
+fn rv32_elf_with_raw_spec_section(prefix: &str, format: u32) -> Vec<u8> {
+    support::minimal_rv32_elf_with_section(&format!("{prefix}v{format}"), &[0xff; 16])
 }
 
 fn finalize_rv32_spec_err(elf_bytes: &[u8]) -> String {
@@ -1824,6 +1828,19 @@ fn rv32_raw_spec_section_older_than_this_build_reports_skew() {
     assert!(
         message.contains(&(supported - 1).to_string()) && message.contains(&supported.to_string()),
         "expected both versions named, got: {message}"
+    );
+}
+
+#[test]
+fn rv32_pre_rename_raw_spec_section_reports_skew() {
+    // An ELF linked against an SDK before 0.56 names the section
+    // `groundhogspecrawv4`; it must read as an old format, not as "no spec".
+    let elf = rv32_elf_with_raw_spec_section(thruput_spec_tool::LEGACY_RAW_SECTION_PREFIX, 4);
+    let message = finalize_rv32_spec_err(&elf);
+
+    assert!(
+        message.contains("older Thruput SDK") && message.contains("format 4"),
+        "expected a version-skew diagnosis naming format 4, got: {message}"
     );
 }
 

@@ -817,8 +817,10 @@ struct DependencyPackage {
 }
 
 // This table is authored by the published SDK, independently of CLI project settings.
+// SDKs before 0.56 wrote it under `groundhog`.
 #[derive(Debug, serde::Deserialize)]
 struct SpecPackageMetadata {
+    thruput: Option<DependencySpecMetadata>,
     groundhog: Option<DependencySpecMetadata>,
 }
 
@@ -830,14 +832,16 @@ struct DependencySpecMetadata {
 impl DependencyPackage {
     /// The raw spec format this package declares.
     ///
-    /// A contract-spec package predating the manifest key is
-    /// pre-versioning and uses unsupported format 0. Missing metadata is not
-    /// treated as "unknown, allow it".
+    /// Read from `[package.metadata.thruput]`, or `[package.metadata.groundhog]`
+    /// for SDKs from before the rename, so an older SDK reports its real format.
+    /// A contract-spec package predating the manifest key is pre-versioning
+    /// and uses unsupported format 0. Missing metadata is not treated as
+    /// "unknown, allow it".
     fn raw_spec_format(&self) -> u32 {
         self.metadata
             .as_ref()
-            .and_then(|metadata| metadata.groundhog.as_ref())
-            .and_then(|groundhog| groundhog.raw_spec_format)
+            .and_then(|metadata| metadata.thruput.as_ref().or(metadata.groundhog.as_ref()))
+            .and_then(|table| table.raw_spec_format)
             .unwrap_or(0)
     }
 }
@@ -1029,13 +1033,17 @@ fn check_contract_raw_spec_format(
 }
 
 /// The linker script the Thruput SDK supplies for rv32 builds.
-pub(crate) const RV32_LINKER_SCRIPT: &str = "groundhog-rv32.ld";
+pub(crate) const RV32_LINKER_SCRIPT: &str = "thruput-rv32.ld";
+
+/// The name SDKs before 0.56 gave the same linker script; projects scaffolded
+/// against them still pass it in `.cargo/config.toml`.
+pub(crate) const LEGACY_RV32_LINKER_SCRIPT: &str = "groundhog-rv32.ld";
 
 /// What cargo's effective config says about the rv32 build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Rv32ConfigCheck {
     /// The Thruput linker script is in the effective rustflags.
-    GroundhogScript,
+    ThruputScript,
     /// A different `-T` linker script is configured.
     CustomScript(String),
     /// Rustflags resolve (or are unset) without any `-T` linker script.
@@ -1062,7 +1070,16 @@ fn check_rv32_build_config(
     print: &Print,
 ) -> Result<(), CliError> {
     match probe_rv32_config(workspace_root) {
-        Rv32ConfigCheck::GroundhogScript => Ok(()),
+        Rv32ConfigCheck::ThruputScript => Ok(()),
+        Rv32ConfigCheck::CustomScript(script) if script == LEGACY_RV32_LINKER_SCRIPT => {
+            print.warn(format_args!(
+                "the effective rv32 rustflags select `-T{LEGACY_RV32_LINKER_SCRIPT}`, the linker \
+                 script's name before SDK 0.56; SDK 0.56 and later ship it as \
+                 `{RV32_LINKER_SCRIPT}`, so change the flag to `-T{RV32_LINKER_SCRIPT}` in \
+                 `.cargo/config.toml`"
+            ));
+            Ok(())
+        }
         Rv32ConfigCheck::CustomScript(script) => {
             print.warn(format_args!(
                 "the effective rv32 rustflags select linker script `-T{script}` instead of \
@@ -1154,7 +1171,7 @@ fn classify_rv32_config_probe(success: bool, stdout: &str, stderr: &str) -> Rv32
         }
     };
     match rv32_linker_script(&tokens) {
-        Some(script) if script == RV32_LINKER_SCRIPT => Rv32ConfigCheck::GroundhogScript,
+        Some(script) if script == RV32_LINKER_SCRIPT => Rv32ConfigCheck::ThruputScript,
         Some(script) => Rv32ConfigCheck::CustomScript(script),
         None => Rv32ConfigCheck::NoScript,
     }
@@ -1222,22 +1239,31 @@ mod tests {
     }
 
     #[test]
-    fn probe_accepts_groundhog_script_in_array_flags() {
+    fn probe_accepts_thruput_script_in_array_flags() {
         assert_eq!(
             classify_rv32_config_probe(
                 true,
-                r#"["-C","target-feature=+unaligned-scalar-mem","-C","link-arg=-Tgroundhog-rv32.ld","-C","link-arg=-static"]"#,
+                r#"["-C","target-feature=+unaligned-scalar-mem","-C","link-arg=-Tthruput-rv32.ld","-C","link-arg=-static"]"#,
                 ""
             ),
-            Rv32ConfigCheck::GroundhogScript
+            Rv32ConfigCheck::ThruputScript
         );
     }
 
     #[test]
-    fn probe_accepts_groundhog_script_in_string_flags() {
+    fn probe_accepts_thruput_script_in_string_flags() {
+        assert_eq!(
+            classify_rv32_config_probe(true, r#""-C link-arg=-Tthruput-rv32.ld""#, ""),
+            Rv32ConfigCheck::ThruputScript
+        );
+    }
+
+    #[test]
+    fn probe_reports_the_pre_rename_script_as_custom() {
+        // `check_rv32_build_config` gives this case its own rename hint.
         assert_eq!(
             classify_rv32_config_probe(true, r#""-C link-arg=-Tgroundhog-rv32.ld""#, ""),
-            Rv32ConfigCheck::GroundhogScript
+            Rv32ConfigCheck::CustomScript(super::LEGACY_RV32_LINKER_SCRIPT.into())
         );
     }
 
@@ -1591,7 +1617,9 @@ mod raw_spec_format_preflight_tests {
         Absent,
         /// A copy declaring this raw spec format.
         Format(u32),
-        /// A copy predating `[package.metadata.groundhog] raw_spec_format`.
+        /// A pre-rename copy declaring this format under `metadata.groundhog`.
+        LegacyFormat(u32),
+        /// A copy predating `raw_spec_format` altogether.
         PreVersioning,
     }
 
@@ -1615,6 +1643,9 @@ mod raw_spec_format_preflight_tests {
                     return format!(r#"{{"id":"{member_id}","dependencies":[]}}"#);
                 }
                 SpecDep::Format(format) => {
+                    format!(r#"{{"thruput":{{"raw_spec_format":{format}}}}}"#)
+                }
+                SpecDep::LegacyFormat(format) => {
                     format!(r#"{{"groundhog":{{"raw_spec_format":{format}}}}}"#)
                 }
                 SpecDep::PreVersioning => "null".to_string(),
@@ -1702,8 +1733,8 @@ mod raw_spec_format_preflight_tests {
 
     #[test]
     fn treats_a_contract_spec_without_the_key_as_pre_versioning() {
-        // An SDK predating `[package.metadata.groundhog] raw_spec_format` is
-        // format 0, which is unsupported in both directions.
+        // An SDK predating `raw_spec_format` is format 0, which is
+        // unsupported in both directions.
         let message = check(&workspace_json(SpecDep::PreVersioning, SpecDep::Absent))
             .expect_err("a pre-versioning SDK must refuse the build")
             .to_string();
@@ -1711,6 +1742,24 @@ mod raw_spec_format_preflight_tests {
         assert!(
             message.contains("older Thruput SDK"),
             "expected a version-skew diagnosis, got: {message}"
+        );
+    }
+
+    #[test]
+    fn reads_the_pre_rename_metadata_key() {
+        // SDKs before 0.56 declared the format under `metadata.groundhog`; the
+        // skew report must name that format, not fall back to format 0.
+        let legacy = RAW_SPEC_FORMAT - 1;
+        let message = check(&workspace_json(
+            SpecDep::LegacyFormat(legacy),
+            SpecDep::Absent,
+        ))
+        .expect_err("an older SDK format must refuse the build")
+        .to_string();
+
+        assert!(
+            message.contains("older Thruput SDK") && message.contains(&format!("format {legacy}")),
+            "expected a version-skew diagnosis naming {legacy}, got: {message}"
         );
     }
 

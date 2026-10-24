@@ -34,7 +34,7 @@ pub const ALLOC_ALLOWLIST: [&str; 9] = [
 /// copied into VM memory only when [`INTERFACE_TABLE_ANCHOR_SECTION`] is,
 /// since the table has a reader exactly then. Names mirror the SDK's linker
 /// script.
-pub const INTERFACE_TABLE_SECTION: &str = "groundhog_rv32_interfaces";
+pub const INTERFACE_TABLE_SECTION: &str = "thruput_rv32_interfaces";
 
 /// Width of one interface-table record: an interface id is the leading eight
 /// bytes of a hash, like an entrypoint id.
@@ -44,7 +44,7 @@ pub const INTERFACE_ID_BYTES: usize = 8;
 /// that survives the link only if the SDK's table reader was instantiated (an
 /// ERC-165 impl). Its presence with nonzero size is what admits
 /// [`INTERFACE_TABLE_SECTION`] into the image.
-pub const INTERFACE_TABLE_ANCHOR_SECTION: &str = "groundhog_rv32_interfaces_anchor";
+pub const INTERFACE_TABLE_ANCHOR_SECTION: &str = "thruput_rv32_interfaces_anchor";
 
 /// Low data addresses reserved as a null guard. A static landing at address 0
 /// would make a Rust `&'static` to it a readable null pointer. The SDK linker
@@ -55,29 +55,40 @@ pub const NULL_GUARD_BYTES: u32 = 8;
 /// Name prefix shared by every version of the raw contract-spec section.
 ///
 /// Matched as a prefix, not an exact name: the raw section name carries a
-/// wire-format version (`groundhogspecrawv1`), and the lowerer drops these
+/// wire-format version (`thruputspecrawv5`), and the lowerer drops these
 /// bytes rather than decoding them. Recognizing every version keeps a spec
 /// format bump from turning into a lowering failure — or worse, spec content
 /// copied into the deployed memory image — over bytes that are discarded
 /// either way. Mirrors `thruput_spec_tool::RAW_SECTION_PREFIX`; kept local
 /// so the production lowerer has no spec-tool dependency, and pinned to it by
 /// `spec_metadata_section_names_match_spec_tool`.
-pub const RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
+pub const RAW_SPEC_SECTION_PREFIX: &str = "thruputspecraw";
+
+/// Raw contract-spec section prefix used through raw spec format 4.
+///
+/// Stripped like [`RAW_SPEC_SECTION_PREFIX`] so an ELF linked against an older
+/// SDK cannot carry spec bytes into the image. Mirrors
+/// `thruput_spec_tool::LEGACY_RAW_SECTION_PREFIX`.
+pub const LEGACY_RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
 
 /// Name prefix shared by every version of the finalized contract-spec
 /// section.
 ///
 /// Matched as a prefix for the reason the raw one is. The finalized name
-/// gained a version with `groundhogspecv1`, and an artifact carrying the
-/// older `groundhogspecv0` must still be stripped rather than reaching the
+/// gained a version with `groundhogspecv1`, and an artifact carrying an
+/// older version must still be stripped rather than reaching the
 /// "unexpected alloc section" path: these bytes are discarded either way, so
 /// a format bump is no reason to fail a lowering. Mirrors
 /// `thruput_spec_tool::FINAL_SECTION_NAME`, which this is a prefix of, and
 /// is pinned to it by `spec_metadata_section_names_match_spec_tool`.
-pub const FINAL_SPEC_SECTION_PREFIX: &str = "groundhogspecv";
+pub const FINAL_SPEC_SECTION_PREFIX: &str = "thruputspecv";
+
+/// Finalized contract-spec section prefix used before the `thruput` rename
+/// (`groundhogspecv0` through `groundhogspecv2`), stripped for the same reason.
+pub const LEGACY_FINAL_SPEC_SECTION_PREFIX: &str = "groundhogspecv";
 
 /// Name of the finalized contract-spec section this SDK generation writes.
-pub const FINAL_SPEC_SECTION: &str = "groundhogspecv2";
+pub const FINAL_SPEC_SECTION: &str = "thruputspecv2";
 
 /// The product of lowering: the serialized artifact plus the pieces that went
 /// into it (handy for metadata and tests).
@@ -185,7 +196,14 @@ fn spans_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
 }
 
 fn is_spec_metadata_section(name: &str) -> bool {
-    name.starts_with(RAW_SPEC_SECTION_PREFIX) || name.starts_with(FINAL_SPEC_SECTION_PREFIX)
+    [
+        RAW_SPEC_SECTION_PREFIX,
+        LEGACY_RAW_SPEC_SECTION_PREFIX,
+        FINAL_SPEC_SECTION_PREFIX,
+        LEGACY_FINAL_SPEC_SECTION_PREFIX,
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
 }
 
 /// Validate the interface table's shape and report duplicate ids.
