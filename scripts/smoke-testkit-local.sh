@@ -2,7 +2,7 @@
 #
 # thruput-testkit live-contract smoke-test
 #
-# Builds the caller-counter fixture from groundhog-examples and runs the
+# Builds the caller-counter fixture from thruput-examples and runs the
 # (usually ignored) testkit contract smoke-test against a real hog-devnode.
 #
 # (The test's `local` provider launches and owns the node itself, so this
@@ -13,7 +13,7 @@
 #
 # Optional environment:
 #   THRUPUT_BINARY=/path/to/thruput
-#   GROUNDHOG_EXAMPLES_ROOT=/path/to/groundhog-examples
+#   GROUNDHOG_EXAMPLES_ROOT=/path/to/thruput-examples
 #   ARTIFACT_ROOT=/path/to/prebuilt/target/thruput
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
 #   GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT=/path/to/devnode/built_contracts
@@ -39,10 +39,13 @@ find_examples_root() {
         expand_user_path "$GROUNDHOG_EXAMPLES_ROOT"
         return
     fi
-    local sibling="$REPO_ROOT/../groundhog-examples"
-    if [[ -d "$sibling" ]]; then
-        printf '%s\n' "$sibling"
-    fi
+    local sibling
+    for sibling in "$REPO_ROOT/../thruput-examples" "$REPO_ROOT/../groundhog-examples"; do
+        if [[ -d "$sibling" ]]; then
+            printf '%s\n' "$sibling"
+            return
+        fi
+    done
 }
 
 detect_hogd_protocol() {
@@ -92,7 +95,7 @@ else
     [[ -x "$THRUPUT_BINARY" ]] || die "thruput binary is not executable: $THRUPUT_BINARY"
 
     EXAMPLES_TARGET="$WORKDIR/groundhog-examples-target"
-    log "building groundhog-examples caller-counter fixture"
+    log "building thruput-examples caller-counter fixture"
     (
         cd "$EXAMPLES_ROOT"
         "$THRUPUT_BINARY" build -p caller-counter --target-dir "$EXAMPLES_TARGET"

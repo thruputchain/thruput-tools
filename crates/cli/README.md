@@ -1205,7 +1205,7 @@ examples differ.
 ```sh
 thruput docs                 # Serve bundled docs at http://127.0.0.1:4321
 thruput docs --port 8080     # Choose a port (0 selects an available one)
-thruput docs --dir /path/to/developers-site/dist/docs-snapshot
+thruput docs --dir /path/to/thruput-docs/dist/docs-snapshot
 thruput docs --background    # Return after the server is ready
 thruput docs status          # Inspect the per-user background instance
 thruput docs stop            # Stop it without deleting documentation
