@@ -154,7 +154,7 @@ fn computed_details_payloads_carry_their_keys() {
         details_of(&CliError::ConfirmationRequired {
             action: "remove key `alice`",
         }),
-        json!({ "action": "remove key `alice`", "requiredFlag": "--force" }),
+        json!({ "action": "remove key `alice`", "requiredFlag": "--yes" }),
     );
     assert_eq!(
         details_of(&CliError::FaucetService {
