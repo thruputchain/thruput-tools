@@ -140,8 +140,8 @@ jobs:
             test "$("target/debug/$app" --version)" = "$app $expected_version"
           done
 
-      - name: Native history and duplicate submission through both HTTP adapters
-        timeout-minutes: 10
+      - name: Real runtime qualification
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           cargo build --locked -p thruput-cli -p thruput-json-rpc-gateway --bins
@@ -150,7 +150,10 @@ jobs:
           export THRUPUT_DEVNODE_BINARY
           THRUPUT_DEVNODE_BINARY=$(python3 -c 'import json; print(json.load(open("/tmp/history-toolchain.json"))["data"]["path"])')
           export THRUPUT_GATEWAY_BINARY="$PWD/target/debug/hog-gateway"
-          cargo test --locked -p thruput-node-supervisor --test real_block_queries -- --ignored --test-threads=1
+          for test in real_block_queries real_local_state real_native_qualification real_network_identity; do
+            cargo test --locked -p thruput-node-supervisor --test "$test" -- --ignored --test-threads=1
+          done
+          cargo test --locked -p thruput-cli --test native_rpc_qualification -- --ignored --test-threads=1
 
   cli-smoke:
     needs: dependency-policy # Check deps before building anything

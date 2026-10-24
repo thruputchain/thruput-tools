@@ -80,6 +80,7 @@ tempfile = { workspace = true }
 signal-hook = { workspace = true }
 
 [dev-dependencies]
+thruput-json-rpc-api = { workspace = true }
 thruput-json-rpc-server = { workspace = true }
 thruput-domain-separator = { workspace = true }
 pretty_assertions = { workspace = true }

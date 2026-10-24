@@ -4,7 +4,9 @@ use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::HttpClientBuilder;
 use thruput_json_rpc_api::params::NamedParams;
 use thruput_json_rpc_types::{airdrop::ClientNonce, base58::Base58, requests::FundAccountRequest};
-use thruput_json_rpc_types::{requests as input, responses as output};
+use thruput_json_rpc_types::{
+    requests as input, responses as output, runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION,
+};
 use thruput_node_supervisor::{
     BlockDriverConfig, HogdDevConfig, LOCAL_FAUCET_KEY_FILE, LOCAL_FUNDING_ATTEMPTS_FILE,
     NodeSupervisorConfig, NodeSupervisorHandle,
@@ -31,7 +33,7 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
     };
     let node = NodeSupervisorHandle::start(config.clone()).await.unwrap();
     let manifest = node.hogd_readiness().runtime_manifest.as_ref().unwrap();
-    assert_eq!(manifest.schema_version, 4);
+    assert_eq!(manifest.schema_version, RUNTIME_MANIFEST_SCHEMA_VERSION);
     assert!(manifest.bootstrap_account_derivation.is_none());
     assert_eq!(manifest.bootstrap_accounts.len(), 1);
     let faucet = manifest.bootstrap_accounts[0].wallet_address;
