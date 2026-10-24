@@ -27,7 +27,9 @@ export function AirdropForm(props: {
     <Card className="w-full">
       <CardHeader className="sr-only">
         <CardTitle>Fund a wallet</CardTitle>
-        <CardDescription>Request native tokens for a Thruput address.</CardDescription>
+        <CardDescription>
+          Request native tokens for a Thruput address.
+        </CardDescription>
       </CardHeader>
       <form onSubmit={props.onSubmit} noValidate>
         <CardContent>
@@ -42,7 +44,7 @@ export function AirdropForm(props: {
                   onChange={(event) =>
                     props.onAddressChange(event.target.value)
                   }
-                  placeholder="Wallet address (0x...)"
+                  placeholder="Wallet address (C...)"
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={isInvalid || undefined}

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 7,
+  "kind": "groundhog-network",
+  "networkId": "devnet-preview",
+  "networkHash": "11111111111111111111111111111111",
+  "protocol": "x23",
+  "genesisHash": "11111111111111111111111111111111",
+  "endpoints": {
+    "rpcUrl": "https://rpc.devnet.example"
+  },
+  "nativeToken": {
+    "tokenAddress": "11111111111111111111111111111111",
+    "decimals": 7,
+    "transferEntrypoint": "0x63285b3523f9dc3f"
+  },
+  "faucet": {
+    "walletAddress": "11111111111111111111111111111111"
+  },
+  "airdrop": {
+    "rawAmount": "100000000",
+    "recipientCooldownSeconds": "43200",
+    "clientQuotaMax": 10,
+    "clientQuotaWindowSeconds": "3600",
+    "maxPendingPerRecipient": 1
+  }
+}

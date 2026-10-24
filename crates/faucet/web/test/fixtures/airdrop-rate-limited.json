@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "airdrop_capacity_exceeded",
+    "message": "airdrop attempt capacity reached",
+    "retryAfterSeconds": "1"
+  }
+}

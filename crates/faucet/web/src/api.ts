@@ -1,39 +1,22 @@
+import {
+  type NetworkDescriptor,
+  airdropRequestBody,
+  errorMessageFromPayload,
+  hasErrorEnvelope,
+  parseAirdropAttempt,
+  parseNetworkDescriptor,
+} from "./lib/faucet-payloads.ts"
+
+export {
+  type NetworkDescriptor,
+  formatNativeTokenAmount,
+} from "./lib/faucet-payloads.ts"
+
 const API_BASE = normalizeApiBase(
   import.meta.env.VITE_GROUNDHOG_FAUCET_API_BASE,
 )
 const AIRDROP_POLL_TIMEOUT_MS = 10 * 60 * 1000
 const pendingAirdropNonces = new Map<string, string>()
-
-export type NetworkDescriptor = {
-  networkId: string
-  networkHash: string
-  genesisHash: string
-  endpoints: {
-    rpcUrl: string
-  }
-  nativeToken: {
-    decimals: number
-  }
-  airdrop: {
-    rawAmount: string
-  }
-}
-
-export type AirdropSuccess = {
-  recipient: string
-  rawAmount: string
-  txHash: string
-  height: number
-  status: { result: string }
-}
-
-export type FaucetError = {
-  error?: {
-    code?: string
-    message?: string
-    retryAfterSeconds?: number
-  }
-}
 
 export async function fetchNetworkDescriptor() {
   ensureApiBase()
@@ -67,13 +50,9 @@ export async function requestAirdrop(
       response = await fetch(apiUrl("/v1/airdrop"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recipient,
-          clientNonce,
-          networkId: descriptor.networkId,
-          networkHash: descriptor.networkHash,
-          genesisHash: descriptor.genesisHash,
-        }),
+        body: JSON.stringify(
+          airdropRequestBody(recipient, clientNonce, descriptor),
+        ),
         signal: AbortSignal.timeout(remainingMs),
       })
       payload = await readJsonResponse(response, "airdrop response")
@@ -106,18 +85,6 @@ export async function requestAirdrop(
     }
     await sleep(retryDelayMs)
   }
-}
-
-export function formatNativeTokenAmount(rawAmount: string, decimals: number) {
-  const raw = BigInt(rawAmount)
-  const scale = 10n ** BigInt(decimals)
-  const whole = raw / scale
-  const fractional = raw % scale
-  if (fractional === 0n) {
-    return whole.toString()
-  }
-  const padded = fractional.toString().padStart(decimals, "0")
-  return `${whole}.${padded.replace(/0+$/, "")}`
 }
 
 function apiUrl(path: string) {
@@ -171,154 +138,9 @@ function nonJsonError(label: string, status: number, text: string) {
   return `The ${label} returned non-JSON content${status ? ` (HTTP ${status})` : ""}.`
 }
 
-function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
-  if (!isRecord(payload)) {
-    throw new Error("Faucet metadata had an unexpected shape.")
-  }
-  if (payload.schemaVersion !== 4 || payload.kind !== "groundhog-network") {
-    throw new Error("Faucet metadata uses an unsupported schema.")
-  }
-  const endpoints = payload.endpoints
-  const nativeToken = payload.nativeToken
-  const airdrop = payload.airdrop
-  if (
-    !isRecord(endpoints) ||
-    !isRecord(nativeToken) ||
-    !isRecord(airdrop)
-  ) {
-    throw new Error("Faucet metadata is missing required sections.")
-  }
-  const descriptor: NetworkDescriptor = {
-    networkId: requireString(payload.networkId, "networkId"),
-    networkHash: requireHexHash(payload.networkHash, "networkHash"),
-    genesisHash: requireHexHash(payload.genesisHash, "genesisHash"),
-    endpoints: {
-      rpcUrl: requireString(endpoints.rpcUrl, "endpoints.rpcUrl"),
-    },
-    nativeToken: {
-      decimals: requireNonNegativeInteger(
-        nativeToken.decimals,
-        "nativeToken.decimals",
-      ),
-    },
-    airdrop: {
-      rawAmount: requireDecimalString(airdrop.rawAmount, "airdrop.rawAmount"),
-    },
-  }
-  return descriptor
-}
-
-function parseAirdropAttempt(
-  payload: unknown,
-  expectedRecipient: string,
-  expectedRawAmount: string,
-):
-  | (AirdropSuccess & { attemptStatus: "succeeded" })
-  | { attemptStatus: "pending"; retryAfterSeconds: number } {
-  if (!isRecord(payload)) {
-    throw new Error("The airdrop response had an unexpected shape.")
-  }
-  const attemptStatus = requireString(payload.attemptStatus, "attemptStatus")
-  const recipient = requireHexHash(payload.recipient, "recipient")
-  const rawAmount = requireDecimalString(payload.rawAmount, "rawAmount")
-  if (recipient.toLowerCase() !== expectedRecipient.toLowerCase()) {
-    throw new Error("The airdrop response recipient did not match the request.")
-  }
-  if (BigInt(rawAmount) !== BigInt(expectedRawAmount)) {
-    throw new Error(
-      "The airdrop response amount did not match faucet metadata.",
-    )
-  }
-  if (attemptStatus === "pending") {
-    if (payload.txHash !== undefined) {
-      requireHexHash(payload.txHash, "txHash")
-    }
-    return {
-      attemptStatus,
-      retryAfterSeconds: requireNonNegativeInteger(
-        payload.retryAfterSeconds,
-        "retryAfterSeconds",
-      ),
-    }
-  }
-  if (attemptStatus !== "succeeded") {
-    throw new Error("The airdrop response had an unknown attempt status.")
-  }
-  const status = payload.status
-  if (!isRecord(status)) {
-    throw new Error("The airdrop response omitted transaction status.")
-  }
-  const result = requireString(status.result, "status.result")
-  if (result !== "ok") {
-    throw new Error("The airdrop transaction did not commit successfully.")
-  }
-  return {
-    attemptStatus,
-    recipient,
-    rawAmount,
-    txHash: requireHexHash(payload.txHash, "txHash"),
-    height: requireNonNegativeInteger(payload.height, "height"),
-    status: {
-      result,
-    },
-  }
-}
-
 function isJsonContentType(contentType: string) {
   const mediaType = contentType.toLowerCase().split(";", 1)[0]?.trim() ?? ""
   return mediaType === "application/json" || mediaType.endsWith("+json")
-}
-
-function errorMessageFromPayload(payload: unknown, fallback: string) {
-  if (!isRecord(payload) || !isRecord(payload.error)) {
-    return fallback
-  }
-  const message =
-    typeof payload.error.message === "string" ? payload.error.message : fallback
-  const retryAfterSeconds = payload.error.retryAfterSeconds
-  const retryAfter =
-    typeof retryAfterSeconds === "number" && Number.isFinite(retryAfterSeconds)
-      ? ` Try again in ${retryAfterSeconds}s.`
-      : ""
-  return `${message}${retryAfter}`
-}
-
-function hasErrorEnvelope(payload: unknown) {
-  return isRecord(payload) && isRecord(payload.error)
-}
-
-function requireString(value: unknown, field: string) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`Field ${field} is invalid.`)
-  }
-  return value
-}
-
-function requireHexHash(value: unknown, field: string) {
-  const text = requireString(value, field)
-  if (!/^0x[0-9a-fA-F]{64}$/.test(text)) {
-    throw new Error(`Field ${field} must be a 0x-prefixed 32-byte hex value.`)
-  }
-  return text
-}
-
-function requireDecimalString(value: unknown, field: string) {
-  const text = requireString(value, field)
-  if (!/^[0-9]+$/.test(text)) {
-    throw new Error(`Field ${field} must be a decimal string.`)
-  }
-  return text
-}
-
-function requireNonNegativeInteger(value: unknown, field: string) {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new Error(`Field ${field} must be a non-negative integer.`)
-  }
-  return value
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function randomClientNonce() {

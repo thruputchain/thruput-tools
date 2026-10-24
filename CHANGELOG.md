@@ -150,6 +150,13 @@ renamed:
 
 The JSON-RPC wire format changes only in documentation (wire 14.1.1).
 
+### Faucet web
+
+The faucet web app works with the current faucet API again: it reads
+network descriptor schema 7, base58 identifiers and decimal-string heights and
+retry delays. The address field takes a C StrKey or base58 address. CI now
+builds it and tests it against payloads captured from the faucet server.
+
 ### Gateway metrics
 
 `hog-gateway` no longer exports

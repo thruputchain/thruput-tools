@@ -23,6 +23,26 @@ This override configures Vite's local proxy only; it does not configure the
 built static app or Railway's Caddy proxy. For a production build, use
 `VITE_GROUNDHOG_FAUCET_API_BASE` as described below.
 
+## Checks
+
+CI runs these from this directory:
+
+```sh
+pnpm format:check
+pnpm build
+pnpm test
+```
+
+`pnpm test` parses JSON fixtures in `test/fixtures/` that the faucet server's
+own tests capture from its real responses. When the faucet's wire format
+changes, `cargo test -p thruput-faucet` fails until you regenerate them:
+
+```sh
+UPDATE_SNAPSHOTS=1 cargo test -p thruput-faucet --test http web_client
+```
+
+Then update this client until `pnpm test` passes.
+
 ## Railway Deployment
 
 Create a service from the `groundhogchain/groundhog-rpc` GitHub repository with

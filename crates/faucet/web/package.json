@@ -12,7 +12,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
