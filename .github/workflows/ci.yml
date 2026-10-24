@@ -441,22 +441,12 @@ jobs:
           node-version: '22'
 
       # corepack installs the pnpm version pinned by packageManager.
-      # TEMPORARY: resolve the lockfile in CI (the only place with registry
-      # access) and print it; the next commit checks it in and restores
-      # --frozen-lockfile.
       - name: Install dependencies
         run: |
           corepack enable
           # pnpm only reads registry tokens from user-level config.
           pnpm config set "//npm.pkg.github.com/:_authToken" "$GH_NPM_TOKEN"
-          pnpm install --no-frozen-lockfile
-          pnpm exec prettier --write pnpm-lock.yaml
-          echo "::group::pnpm-lock.yaml"
-          echo "-----BEGIN PNPM LOCK-----"
-          base64 -w0 pnpm-lock.yaml
-          echo
-          echo "-----END PNPM LOCK-----"
-          echo "::endgroup::"
+          pnpm install --frozen-lockfile
 
       - name: Check formatting
         run: pnpm format:check
