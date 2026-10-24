@@ -1,4 +1,2 @@
 dist/
 node_modules/
-# Written by the faucet server tests; see web_client_fixtures_match_server_responses.
-test/fixtures/

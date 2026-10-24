@@ -3,7 +3,8 @@
 interface ImportMetaEnv {
   readonly DEV: boolean
   readonly PROD: boolean
-  readonly VITE_GROUNDHOG_FAUCET_API_BASE?: string
+  /** JSON-RPC gateway serving `faucet_requestAirdrop`; defaults to public Devnet. */
+  readonly VITE_THRUPUT_RPC_URL?: string
 }
 
 interface ImportMeta {

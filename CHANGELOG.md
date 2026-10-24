@@ -152,10 +152,14 @@ The JSON-RPC wire format changes only in documentation (wire 14.1.1).
 
 ### Faucet web
 
-The faucet web app works with the current faucet API again: it reads
-network descriptor schema 7, base58 identifiers and decimal-string heights and
-retry delays. The address field takes a C StrKey or base58 address. CI now
-builds it and tests it against payloads captured from the faucet server.
+The faucet web app works with the current Devnet again. It now requests
+airdrops with `@thruputchain/client` through the RPC gateway's
+`faucet_requestAirdrop`, instead of its own client for the faucet's HTTP API,
+and its address field takes a C StrKey or base58 address. Building it needs
+`GH_NPM_TOKEN` (a token with `read:packages`) to install from GitHub Packages;
+set it as a Railway build variable. `VITE_GROUNDHOG_FAUCET_API_BASE` and the
+`/api` proxy are gone; `VITE_THRUPUT_RPC_URL` selects a gateway other than
+public Devnet. CI now checks its formatting and build.
 
 ### Gateway metrics
 

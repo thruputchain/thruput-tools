@@ -67,9 +67,9 @@ export function AirdropForm(props: {
                     <Spinner data-icon="inline-start" />
                   ) : null}
                   {props.isLoadingMetadata
-                    ? "Loading..."
+                    ? "Connecting..."
                     : props.isMetadataUnavailable
-                      ? "Metadata unavailable"
+                      ? "Faucet unavailable"
                       : props.isSubmitting
                         ? "Requesting..."
                         : "Request airdrop"}

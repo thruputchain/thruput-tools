@@ -419,18 +419,19 @@ jobs:
           node --version
           node decode-events.mjs "$out"
 
-  # The faucet web client parses payloads the faucet server captured into
-  # crates/faucet/web/test/fixtures; the Test job's cargo test fails when those
-  # fixtures go stale, and this job fails when the client stops parsing them.
   faucet-web:
-    name: Faucet web (format, build, server fixtures)
+    name: Faucet web (format, build)
     runs-on: namespace-profile-hogd-linux-2604
     timeout-minutes: 10
     permissions:
       contents: read
+      packages: read # install @thruputchain/* from GitHub Packages
     defaults:
       run:
         working-directory: crates/faucet/web
+    env:
+      # .npmrc reads this to install @thruputchain/* from GitHub Packages.
+      GH_NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
@@ -441,16 +442,23 @@ jobs:
           node-version: '22'
 
       # corepack installs the pnpm version pinned by packageManager.
+      # TEMPORARY: resolve the lockfile in CI (the only place with registry
+      # access) and print it; the next commit checks it in and restores
+      # --frozen-lockfile.
       - name: Install dependencies
         run: |
           corepack enable
-          pnpm install --frozen-lockfile
+          pnpm install --no-frozen-lockfile
+          pnpm exec prettier --write pnpm-lock.yaml
+          echo "::group::pnpm-lock.yaml"
+          echo "-----BEGIN PNPM LOCK-----"
+          base64 -w0 pnpm-lock.yaml
+          echo
+          echo "-----END PNPM LOCK-----"
+          echo "::endgroup::"
 
       - name: Check formatting
         run: pnpm format:check
 
       - name: Type-check and build
         run: pnpm build
-
-      - name: Test against faucet server fixtures
-        run: pnpm test
