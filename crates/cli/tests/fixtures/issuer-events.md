@@ -1,7 +1,7 @@
 # Issuer token events
 
 `issuer-events.json` contains RV32 runtime events from
-[SDK 0.42.1](https://github.com/groundhogchain/sdk_rs/tree/7b96330dcfc2a7240cfb052bcb0d47fa07ec51b4).
+[SDK 0.56.0](https://github.com/thruputchain/thruput-sdk-rs/tree/afcbd97b081a15ac5eddda33cd4492682182bd82).
 Regenerate from `example-contracts/` in that checkout:
 
 ```sh

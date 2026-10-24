@@ -49,6 +49,25 @@ fn unavailable_scaffold_client_has_a_version_specific_hint() {
 }
 
 #[test]
+fn linker_script_failures_have_name_specific_hints() {
+    let link_failure = |script: &str| CliError::CargoFailedWithOutput {
+        code: 101,
+        stdout: String::new(),
+        stderr: format!("ld.lld: error: cannot find linker script {script}"),
+    };
+
+    // A project still passing the pre-0.56 script name is told to rename it.
+    let legacy = link_failure("groundhog-rv32.ld").hint().unwrap();
+    assert!(legacy.contains("change `-Tgroundhog-rv32.ld` to `-Tthruput-rv32.ld`"));
+    assert!(!legacy.contains("linker search path"));
+
+    // The current name gets the search-path diagnosis instead.
+    let current = link_failure("thruput-rv32.ld").hint().unwrap();
+    assert!(current.contains("linker search path"));
+    assert!(!current.contains("groundhog-rv32.ld"));
+}
+
+#[test]
 fn metadata_matches_snapshot() {
     let actual = render_metadata();
     let path = snapshot_path();
