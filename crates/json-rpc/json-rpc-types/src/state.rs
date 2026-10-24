@@ -30,7 +30,7 @@ pub struct StorageItemRead {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StorageItemInfo {
-    /// Non-negative int128 (e.g., HOG balance).  Encoded as a
+    /// Non-negative int128 (e.g., native token balance).  Encoded as a
     /// decimal string because i128 exceeds JSON-number precision.
     NonnegativeInt {
         /// Decimal-string-encoded non-negative int128.

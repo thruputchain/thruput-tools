@@ -90,11 +90,11 @@ async fn network_returns_public_descriptor() {
     assert_eq!(json["networkId"], "devnet-preview");
     assert!(json["endpoints"].get("faucetUrl").is_none());
     assert_eq!(
-        json["nativeHog"]["transferEntrypoint"],
+        json["nativeToken"]["transferEntrypoint"],
         "0x63285b3523f9dc3f"
     );
     assert_eq!(json["airdrop"]["rawAmount"], "100000000");
-    assert!(json["airdrop"].get("amountHog").is_none());
+    assert!(json["airdrop"].get("amountTokens").is_none());
     assert_eq!(json["airdrop"]["recipientCooldownSeconds"], "43200");
     assert_eq!(json["airdrop"]["clientQuotaMax"], 10);
     assert_eq!(json["airdrop"]["clientQuotaWindowSeconds"], "3600");
@@ -1198,7 +1198,7 @@ fn test_network_descriptor() -> NetworkDescriptor {
         "endpoints": {
             "rpcUrl": "https://rpc.devnet.example"
         },
-        "nativeHog": {
+        "nativeToken": {
             "tokenAddress": identifier(0),
             "decimals": 7,
             "transferEntrypoint": "0x63285b3523f9dc3f"

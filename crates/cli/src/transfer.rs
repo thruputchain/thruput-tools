@@ -16,7 +16,7 @@ use crate::account_resolution::{
 };
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
-use crate::hog;
+use crate::native_token;
 
 use crate::result::{CommandError, CommandResult};
 use crate::terminal::terminal_safe;
@@ -67,7 +67,7 @@ struct TransferPlan {
     network_hash: NetworkHash,
 }
 
-/// Prepare a native HOG transfer from the effective profile wallet.
+/// Prepare a native token transfer from the effective profile wallet.
 // The command boundary mirrors its CLI flags plus shared output context.
 #[expect(clippy::too_many_arguments)]
 pub fn run(
@@ -84,18 +84,18 @@ pub fn run(
     let cwd = std::env::current_dir()?;
     let profile = resolve_profile_with_overrides(&cwd, profile_name, overrides)?;
     if !dry_run {
-        print.require_confirmation_available(force, "transfer HOG")?;
+        print.require_confirmation_available(force, "transfer native tokens")?;
     }
     let plan = prepare_plan(profile, recipient, amount, from)?;
     if !dry_run
         && !print.confirm_review(
             "Review transfer",
             force,
-            "transfer HOG",
+            "transfer native tokens",
             "Submit this transfer?",
             |print| {
                 print.detail("recipient", format_contract_address(&plan.recipient));
-                print.detail("amount", format_args!("{} HOG", plan.amount));
+                print.detail("amount", format_args!("{} native tokens", plan.amount));
                 print.detail("from", format_contract_address(&plan.sender));
                 print.detail("profile", &plan.profile);
             },
@@ -164,9 +164,9 @@ fn prepare_plan(
     let rpc_url = profile.rpc_endpoint()?.to_owned();
 
     let recipient = resolve_address_target(&profile, recipient_input)?;
-    let raw_amount = hog::parse_amount(amount_input)?;
-    let amount = hog::format_amount(raw_amount);
-    let token_address = hog::token_address();
+    let raw_amount = native_token::parse_amount(amount_input)?;
+    let amount = native_token::format_amount(raw_amount);
+    let token_address = native_token::token_address();
 
     let sender_account = resolve_sender_account(&profile, from)?;
     let sender = sender_account.wallet_address;
@@ -179,7 +179,7 @@ fn prepare_plan(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let resolved_sender = bind_sender_to_network(&profile, sender_account)?;
-    let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
+    let calldata = native_token::encode_transfer_calldata(&recipient, raw_amount)?;
     let wallet_context = resolved_sender.signing_context(&profile, &rt)?;
     let expiry_height = rt.block_on(resolve_block_expiry_height(&rpc_url))?;
 
@@ -187,7 +187,7 @@ fn prepare_plan(
         thruput_client::CallRequest {
             wallet: resolved_sender.wallet(wallet_context.entrypoints.do_action),
             target_address: token_address,
-            target_entrypoint: hog::transfer_entrypoint(),
+            target_entrypoint: native_token::transfer_entrypoint(),
             target_calldata: calldata.as_slice(),
             gas_limit: DEFAULT_TX_GAS_LIMIT,
             target_gas_limit: DEFAULT_TX_GAS_LIMIT,
@@ -267,7 +267,7 @@ fn print_dry_run(
 
     print.group(crate::print::Outcome::DryRun, "Transfer", |print| {
         print.status(format_args!(
-            "Prepared signed dry-run transfer of {} HOG to {}.",
+            "Prepared signed dry-run transfer of {} native tokens to {}.",
             prepared.amount, recipient
         ));
         print.detail("sender", &sender);
@@ -350,7 +350,10 @@ fn print_committed(
         "Transfer",
         |print| {
             if matches!(receipt.execution, ReceiptExecution::Return { .. }) {
-                print.success(format_args!("Transferred {} HOG.", prepared.amount));
+                print.success(format_args!(
+                    "Transferred {} native tokens.",
+                    prepared.amount
+                ));
             } else {
                 print.warn(format_args!("Transfer {status_summary}"));
             }

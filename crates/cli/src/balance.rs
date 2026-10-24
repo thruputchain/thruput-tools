@@ -12,15 +12,15 @@ use crate::account_resolution::resolve_address_target_or_default_wallet;
 use crate::checks::{Finding, FindingLevel};
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
-use crate::hog;
+use crate::native_token;
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 
 /// Schema version of the `balance --json` data payload.
-pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 3;
-const LOW_LOCAL_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
+pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 4;
+const LOW_LOCAL_FAUCET_BALANCE_RAW: u128 = 10 * native_token::SCALE;
 
-/// Read native HOG balance for a wallet, contract, dev account, or address.
+/// Read native token balance for a wallet, contract, dev account, or address.
 pub fn run(
     target: Option<&str>,
     project_start: &Path,
@@ -41,12 +41,12 @@ pub fn run(
     let raw_balance = u128::try_from(balance.raw_balance).map_err(|_| {
         crate::native_rpc::failure("negative free balance", json!({"result":balance}))
     })?;
-    let balance_hog = hog::format_amount(raw_balance);
+    let balance_tokens = native_token::format_amount(raw_balance);
 
     let warnings = task.finish();
     if print.has_human_ui() {
         let mut fields = vec![
-            ("Balance".into(), format!("{balance_hog} HOG")),
+            ("Balance".into(), format!("{balance_tokens} native tokens")),
             ("Raw balance".into(), balance.raw_balance.to_string()),
         ];
         if target != address_hex {
@@ -65,7 +65,7 @@ pub fn run(
             &warnings,
         );
     } else {
-        print.status(format_args!("Balance: {balance_hog} HOG"));
+        print.status(format_args!("Balance: {balance_tokens} native tokens"));
         print.status(format_args!("Address: {address_hex}"));
         for warning in warnings {
             print.warn(warning);
@@ -79,7 +79,7 @@ pub fn run(
             "target": target,
             "address": address_hex,
             "rawBalance": balance.raw_balance.to_string(),
-            "balanceHog": balance_hog,
+            "balanceTokens": balance_tokens,
             "stateBlockHeight": balance.state_block_height.to_string(),
         }),
     ))?;
@@ -155,9 +155,9 @@ pub(crate) fn local_funding_projection(
 
 pub(crate) fn insufficient_local_faucet_error(requested: u128, estimated_max: u128) -> CliError {
     CliError::Other(format!(
-        "local faucet has insufficient actionable balance: requested {} HOG, estimated maximum is {} HOG; reduce the amount or start a fresh local chain",
-        hog::format_amount(requested),
-        hog::format_amount(estimated_max)
+        "local faucet has insufficient actionable balance: requested {} native tokens, estimated maximum is {} native tokens; reduce the amount or start a fresh local chain",
+        native_token::format_amount(requested),
+        native_token::format_amount(estimated_max)
     ))
 }
 
@@ -171,8 +171,8 @@ pub(crate) fn low_local_faucet_balance_warning(projected_balance: Option<u128>) 
         level: FindingLevel::Warn,
         code: "low_local_faucet_balance",
         message: format!(
-            "local faucet balance is projected to fall below 10 HOG ({} HOG remaining)",
-            hog::format_amount(projected_balance)
+            "local faucet balance is projected to fall below 10 native tokens ({} native tokens remaining)",
+            native_token::format_amount(projected_balance)
         ),
         hint: Some(Cow::Borrowed(
             "reduce the amount or start a fresh local chain",
@@ -233,16 +233,16 @@ mod tests {
     }
 
     #[test]
-    fn low_faucet_warning_is_emitted_below_ten_hog() {
-        let warning = low_local_faucet_balance_warning(Some(10 * crate::hog::SCALE - 1))
+    fn low_faucet_warning_is_emitted_below_ten_tokens() {
+        let warning = low_local_faucet_balance_warning(Some(10 * crate::native_token::SCALE - 1))
             .expect("bug: balance below threshold should warn");
 
         assert_eq!(warning.code, "low_local_faucet_balance");
     }
 
     #[test]
-    fn low_faucet_warning_is_not_emitted_at_ten_hog() {
-        assert!(low_local_faucet_balance_warning(Some(10 * crate::hog::SCALE)).is_none());
+    fn low_faucet_warning_is_not_emitted_at_ten_tokens() {
+        assert!(low_local_faucet_balance_warning(Some(10 * crate::native_token::SCALE)).is_none());
     }
 
     fn costs() -> RuntimeManifestStorageCostModel {

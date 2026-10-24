@@ -13,7 +13,7 @@ use crate::CliError;
 const INITIAL_DEFAULT_PROFILE: &str = "local";
 const FUTURENET_RPC_URL: &str = "https://rpc.thruput.network";
 const FUTURENET_FAUCET_URL: &str = "https://faucet.thruput.network";
-const HOG_CONTRACT_ADDRESS: &str = "11111111111111111111111111111112";
+const NATIVE_TOKEN_CONTRACT_ADDRESS: &str = "11111111111111111111111111111112";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalRuntimeState {
@@ -189,13 +189,13 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
                     value("local"),
                 );
             }
-            if local_config.is_none_or(|profile| !profile.contracts.contains_key("HOG")) {
+            if local_config.is_none_or(|profile| !profile.contracts.contains_key("NATIVE_TOKEN")) {
                 insert_preserving_decor(
                     child_table(local, "contracts", "contracts must be a table")?
                         .as_table_like_mut()
                         .ok_or_else(|| CliError::Other("contracts must be a table".into()))?,
-                    "HOG",
-                    value(HOG_CONTRACT_ADDRESS),
+                    "NATIVE_TOKEN",
+                    value(NATIVE_TOKEN_CONTRACT_ADDRESS),
                 );
             }
         }
@@ -223,13 +223,13 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
             if hosted_config.is_none_or(|profile| profile.faucet_url.is_none()) {
                 insert_preserving_decor(hosted_table, "faucet_url", value(FUTURENET_FAUCET_URL));
             }
-            if hosted_config.is_none_or(|profile| !profile.contracts.contains_key("HOG")) {
+            if hosted_config.is_none_or(|profile| !profile.contracts.contains_key("NATIVE_TOKEN")) {
                 insert_preserving_decor(
                     child_table(hosted, "contracts", "contracts must be a table")?
                         .as_table_like_mut()
                         .ok_or_else(|| CliError::Other("contracts must be a table".into()))?,
-                    "HOG",
-                    value(HOG_CONTRACT_ADDRESS),
+                    "NATIVE_TOKEN",
+                    value(NATIVE_TOKEN_CONTRACT_ADDRESS),
                 );
             }
         }

@@ -886,7 +886,7 @@ pub(crate) async fn request_airdrop(
 /// Submits faucet airdrops for validated recipient wallet addresses.
 #[async_trait::async_trait]
 pub trait AirdropSubmitter: Send + Sync + 'static {
-    /// Raw HOG units transferred by this submitter.
+    /// Raw native token units transferred by this submitter.
     fn raw_amount(&self) -> u128;
 
     /// Build and sign an airdrop without broadcasting it.
@@ -914,7 +914,7 @@ pub trait AirdropSubmitter: Send + Sync + 'static {
 /// Faucet transaction ready to retain before broadcast.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedAirdrop {
-    /// Raw HOG units reported by the submitter.
+    /// Raw native token units reported by the submitter.
     pub raw_amount: String,
     /// Canonical transaction hash, computed before submission.
     pub tx_hash: TxHash,
@@ -951,8 +951,8 @@ pub enum AirdropSubmitError {
         method: &'static str,
         raw: serde_json::Value,
     },
-    /// The HOG transfer calldata could not be encoded.
-    #[error("failed to encode HOG transfer calldata: {0}")]
+    /// The native token transfer calldata could not be encoded.
+    #[error("failed to encode native token transfer calldata: {0}")]
     EncodeTransferCalldata(String),
     /// The faucet transaction could not be built.
     #[error("failed to build airdrop transaction: {0}")]
@@ -1008,7 +1008,7 @@ impl AirdropSubmitError {
 /// Runtime-only airdrop execution config.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AirdropRuntimeConfig {
-    /// Raw HOG units transferred for each airdrop request.
+    /// Raw native token units transferred for each airdrop request.
     pub raw_amount: u128,
     /// 32-byte faucet signing secret key.
     pub faucet_secret_key: Zeroizing<[u8; 32]>,
@@ -1029,8 +1029,8 @@ pub enum AirdropRuntimeConfigError {
     /// The configured raw airdrop amount was missing, invalid, or zero.
     #[error("airdrop raw amount must be greater than zero")]
     EmptyAmount,
-    /// The native HOG transfer selector must be eight bytes.
-    #[error("native HOG transfer entrypoint must be 8 bytes, got {0}")]
+    /// The native token transfer selector must be eight bytes.
+    #[error("native token transfer entrypoint must be 8 bytes, got {0}")]
     InvalidTransferEntrypoint(usize),
     /// The signing key must control the advertised native faucet account.
     #[error("faucet wallet address does not match the signing key nonce-zero pubkey account")]
@@ -1061,8 +1061,8 @@ pub struct RpcAirdropSubmitter {
     network_hash: thruput_xdr::types::NetworkHash,
     faucet_account: PubkeyAccount,
     faucet_signer: LocalSigner,
-    hog_token_address: thruput_xdr::types::ContractAddress,
-    hog_transfer_entrypoint: ContractEntrypointID,
+    native_token_address: thruput_xdr::types::ContractAddress,
+    native_token_transfer_entrypoint: ContractEntrypointID,
 }
 
 impl RpcAirdropSubmitter {
@@ -1084,9 +1084,9 @@ impl RpcAirdropSubmitter {
             network_hash,
             faucet_account,
             faucet_signer,
-            hog_token_address: descriptor.native_hog.token_address.0,
-            hog_transfer_entrypoint: ContractEntrypointID::from(entrypoint_bytes(
-                &descriptor.native_hog.transfer_entrypoint,
+            native_token_address: descriptor.native_token.token_address.0,
+            native_token_transfer_entrypoint: ContractEntrypointID::from(entrypoint_bytes(
+                &descriptor.native_token.transfer_entrypoint,
             )?),
         })
     }
@@ -1137,8 +1137,8 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
             .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;
         let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
             account: &self.faucet_account,
-            target_address: self.hog_token_address,
-            target_entrypoint: self.hog_transfer_entrypoint,
+            target_address: self.native_token_address,
+            target_entrypoint: self.native_token_transfer_entrypoint,
             target_calldata: transfer_calldata.as_slice(),
             gas_limit: DEFAULT_TX_GAS_LIMIT,
             target_gas_limit: DEFAULT_TX_GAS_LIMIT,
@@ -1258,7 +1258,7 @@ fn encode_transfer_calldata(
     recipient: &thruput_xdr::types::ContractAddress,
     raw_amount: u128,
 ) -> Result<Vec<u8>, AirdropSubmitError> {
-    thruput_signing::native_hog_transfer_calldata(recipient, raw_amount)
+    thruput_signing::native_token_transfer_calldata(recipient, raw_amount)
         .map_err(|error| AirdropSubmitError::EncodeTransferCalldata(error.to_string()))
 }
 

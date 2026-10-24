@@ -21,9 +21,9 @@ use thruput_node_supervisor::{
     BlockDriverConfig, HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle,
 };
 use thruput_signing::{
-    LocalSigner, NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, SignTransactionParams,
+    LocalSigner, NATIVE_TOKEN_TRANSFER_ENTRYPOINT, PubkeyAccount, SignTransactionParams,
     default_wallet::{BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction},
-    encode_signed_transaction_xdr, native_hog_transfer_calldata, sign_transaction,
+    encode_signed_transaction_xdr, native_token_transfer_calldata, sign_transaction,
     transaction_hash,
 };
 use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
@@ -120,7 +120,7 @@ async fn exercise(node: &NodeSupervisorHandle, sender: &LocalSigner) -> TestResu
     let recipient =
         Base58(PubkeyAccount::from_public_key_bytes(recipient.verifying_key_bytes(), 0).address());
     let account = PubkeyAccount::from_public_key_bytes(sender.verifying_key_bytes(), 0);
-    let calldata = native_hog_transfer_calldata(&recipient.0, AMOUNT)?;
+    let calldata = native_token_transfer_calldata(&recipient.0, AMOUNT)?;
     let costs = known(native.get_chain_config(input::EmptyRequest {}).await?)?
         .execution
         .ok_or_else(|| std::io::Error::other("authoritative execution config missing"))?
@@ -201,12 +201,12 @@ async fn submit_transfer(
     nonce: u64,
 ) -> TestResult<TxHash> {
     let account = PubkeyAccount::from_public_key_bytes(sender.verifying_key_bytes(), 0);
-    let calldata = native_hog_transfer_calldata(&recipient.0, AMOUNT)?;
+    let calldata = native_token_transfer_calldata(&recipient.0, AMOUNT)?;
     let tip = known(native.get_chain_tip(input::EmptyRequest {}).await?)?;
     let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
         account: &account,
         target_address: ADDRESS_NATIVE_TOKEN,
-        target_entrypoint: NATIVE_HOG_TRANSFER_ENTRYPOINT,
+        target_entrypoint: NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
         target_calldata: &calldata,
         target_gas_limit: GAS,
         gas_limit: GAS,
@@ -309,13 +309,13 @@ async fn check_simulation(
     calldata: Vec<u8>,
     before: output::BalanceResult,
 ) -> TestResult {
-    // Native HOG transfer debits GetMsgSender. Explicit caller supplies that
+    // Native token transfer debits GetMsgSender. Explicit caller supplies that
     // frame context; this direct token invocation needs no assumed signature.
     let result = known(
         native
             .simulate_invocation(input::SimulateInvocationRequest {
                 address: Base58(ADDRESS_NATIVE_TOKEN),
-                entrypoint: HexBytes(NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref().to_vec()),
+                entrypoint: HexBytes(NATIVE_TOKEN_TRANSFER_ENTRYPOINT.as_ref().to_vec()),
                 calldata: HexBytes(calldata),
                 caller: Some(sender),
                 assumed_auth: None,

@@ -216,11 +216,11 @@ enum Command {
                       pass an explicit 0x-prefixed 8-byte entrypoint ID \
                       and one raw hex calldata argument.")]
     Call(CallArgs),
-    /// Transfer native HOG from the effective profile wallet
+    /// Transfer native tokens from the effective profile wallet
     Transfer(TransferArgs),
-    /// Request HOG funding for a wallet
+    /// Request native token funding for a wallet
     Airdrop(AirdropArgs),
-    /// Read native HOG balance for an address, wallet, contract, or dev account
+    /// Read native token balance for an address, wallet, contract, or dev account
     Balance(BalanceArgs),
     /// Execute a sandboxed contract simulation against committed state
     #[command(long_about = "Execute a sandboxed contract simulation via \
@@ -784,8 +784,8 @@ struct DeployArgs {
     /// Inspect deployment storage funding without signing or submitting
     #[arg(long, conflicts_with_all = ["dry_run", "fund"])]
     estimate: bool,
-    /// Exact HOG or "minimum" for deployment collateral; zero skips funding
-    #[arg(long, value_name = "HOG|minimum")]
+    /// Exact native token amount or "minimum" for deployment collateral; zero skips funding
+    #[arg(long, value_name = "AMOUNT|minimum")]
     fund: Option<String>,
     /// Initialize the new contract atomically using a method name or 0x entrypoint
     #[arg(long, value_name = "METHOD")]
@@ -914,7 +914,7 @@ impl CallArgs {
 struct TransferArgs {
     /// Wallet name, contract alias, stored key, or direct address
     recipient: String,
-    /// Amount in HOG, with up to 7 decimal places
+    /// Amount in native tokens, with up to 7 decimal places
     amount: String,
     /// Build and sign the transfer without submitting it
     #[arg(long)]
@@ -951,7 +951,7 @@ impl TransferArgs {
 struct AirdropArgs {
     /// Wallet name, key name, contract alias, or direct address (default: effective wallet)
     recipient: Option<String>,
-    /// Amount in HOG, with up to 7 decimal places
+    /// Amount in native tokens, with up to 7 decimal places
     #[arg(long)]
     amount: Option<String>,
     /// Build and sign the airdrop transaction without submitting it
@@ -1095,11 +1095,11 @@ struct NodeArgs {
     /// Stored key to fund on a fresh chain; defaults to the selected project or global key
     #[arg(long)]
     key: Option<String>,
-    /// Initial HOG for the selected key (default: 100; up to 7 decimals)
-    #[arg(long, value_name = "HOG", value_parser = crate::node::parse_initial_account_hog)]
-    initial_account_hog: Option<u64>,
+    /// Initial native token balance for the selected key (default: 100; up to 7 decimals)
+    #[arg(long, value_name = "AMOUNT", value_parser = crate::node::parse_initial_account_tokens)]
+    initial_account_tokens: Option<u64>,
     /// JSON array of public key allocations for fixture-owned accounts
-    #[arg(long, value_name = "FILE", conflicts_with_all = ["key", "initial_account_hog"])]
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["key", "initial_account_tokens"])]
     bootstrap_accounts: Option<PathBuf>,
     /// Explicit hog-devnode binary path
     #[arg(long = "hog-devnode-binary", value_name = "THRUPUT_DEVNODE_BINARY")]
@@ -1171,7 +1171,7 @@ impl NodeArgs {
             (options.selected_key, options.bootstrap_accounts) =
                 crate::node::stored_key_allocation(
                     self.key.as_deref(),
-                    self.initial_account_hog
+                    self.initial_account_tokens
                         .unwrap_or(thruput_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS),
                 )?;
         }
@@ -2461,14 +2461,14 @@ mod tests {
     }
 
     #[test]
-    fn node_initial_account_hog_flag_parses_exact_raw_units() {
-        let cli = Cli::parse_from(["thruput", "node", "--initial-account-hog", "25.0000001"]);
+    fn node_initial_account_tokens_flag_parses_exact_raw_units() {
+        let cli = Cli::parse_from(["thruput", "node", "--initial-account-tokens", "25.0000001"]);
 
         match cli.command {
             Command::Node(NodeArgs {
-                initial_account_hog,
+                initial_account_tokens,
                 ..
-            }) => assert_eq!(initial_account_hog, Some(250_000_001)),
+            }) => assert_eq!(initial_account_tokens, Some(250_000_001)),
             _ => panic!("expected node command"),
         }
     }

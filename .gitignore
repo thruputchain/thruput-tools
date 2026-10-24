@@ -13,3 +13,6 @@ node_modules/
 # .github/scripts/ -- e.g. a test. Machine- and version-specific.
 __pycache__/
 *.py[co]
+
+# Core dumps from crashed fixtures or tools.
+*.core

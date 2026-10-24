@@ -275,7 +275,7 @@
     },
     {
       "name": "transfer_ed25519_devnode_bootstrap_0",
-      "description": "Default wallet execute with one native token transfer of 100000000 raw HOG units to the nonce-0 account of mldsa65_seed_00..1f.",
+      "description": "Default wallet execute with one native token transfer of 100000000 raw native token units to the nonce-0 account of mldsa65_seed_00..1f.",
       "key": "ed25519_devnode_bootstrap_0",
       "network": "devnode",
       "network_hash": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -312,7 +312,7 @@
     },
     {
       "name": "transfer_mldsa65_seed_00..1f",
-      "description": "Default wallet execute with one native token transfer of 1000 raw HOG units to the nonce-0 account of ed25519_devnode_bootstrap_0.",
+      "description": "Default wallet execute with one native token transfer of 1000 raw native token units to the nonce-0 account of ed25519_devnode_bootstrap_0.",
       "key": "mldsa65_seed_00..1f",
       "network": "devnode",
       "network_hash": "0000000000000000000000000000000000000000000000000000000000000000",

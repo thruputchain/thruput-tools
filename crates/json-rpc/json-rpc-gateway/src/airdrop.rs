@@ -551,7 +551,7 @@ mod tests {
                 .unwrap();
             let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
             assert_eq!(response["result"]["supportedMethods"], json!(registered));
-            assert_eq!(response["result"]["wireFormat"], "14.1.0");
+            assert_eq!(response["result"]["wireFormat"], "14.1.1");
         }
         faucet.abort();
     }
@@ -1726,7 +1726,7 @@ mod tests {
             "protocol": "hogp/test00000000000",
             "genesisHash": genesis_hash(),
             "endpoints": { "rpcUrl": "https://rpc.example" },
-            "nativeHog": {
+            "nativeToken": {
                 "tokenAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x11; 32])),
                 "decimals": 18,
                 "transferEntrypoint": "0x0102030405060708"

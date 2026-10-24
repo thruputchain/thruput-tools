@@ -215,7 +215,7 @@ fn collect_report_uses_effective_merged_project_profile_details() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
     let project = tmp.path().join("proj");
-    let global_hog = format!("0x{}", "11".repeat(32));
+    let global_token = format!("0x{}", "11".repeat(32));
     let project_counter = format!("0x{}", "22".repeat(32));
 
     fs::create_dir(&project).unwrap();
@@ -231,7 +231,7 @@ default_key = "alice"
 rpc_url = "http://global.example"
 
 [profile.local.contracts]
-HOG = "{global_hog}"
+NATIVE_TOKEN = "{global_token}"
 "#
         ),
     )
@@ -286,7 +286,7 @@ counter = "{project_counter}"
 #[serial]
 fn collect_report_shows_global_profile_details_outside_project() {
     let tmp = TempDir::new().unwrap();
-    let global_hog = format!("0x{}", "11".repeat(32));
+    let global_token = format!("0x{}", "11".repeat(32));
     let global_wallet = format!("0x{}", "22".repeat(32));
     let global_owner = format!("0x{}", "33".repeat(32));
 
@@ -302,7 +302,7 @@ rpc_url = "http://127.0.0.1:9545"
 default_wallet = "global-wallet"
 
 [profile.local.contracts]
-HOG = "{global_hog}"
+NATIVE_TOKEN = "{global_token}"
 
 [profile.local.wallets.global-wallet]
 address = "{global_wallet}"

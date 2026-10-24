@@ -28,8 +28,8 @@ use thruput_json_rpc_types::{
 };
 use thruput_signing::default_wallet::*;
 use thruput_signing::{
-    LocalSigner, NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, SignTransactionParams,
-    derive_deploy_address, native_hog_transfer_calldata, sign_and_encode_transaction_hex,
+    LocalSigner, NATIVE_TOKEN_TRANSFER_ENTRYPOINT, PubkeyAccount, SignTransactionParams,
+    derive_deploy_address, native_token_transfer_calldata, sign_and_encode_transaction_hex,
     transaction_hash, wallet_contract_hash,
 };
 use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
@@ -320,18 +320,21 @@ async fn qualify_native_deployment(atomic: bool) {
     let salt = SHA256Hash::from([2; 32]);
     let target = derive_deploy_address(&account.address(), &salt, &hash).unwrap();
     let before = balance(&client, account.address(), Some(&funding_block_height)).await;
-    let amount = 50_000_000; // 5 HOG tests feasibility, not a minimum-cost estimate.
-    assert!(before > amount, "local faucet must fund more than 5 HOG");
+    let amount = 50_000_000; // 5 native tokens test feasibility, not a minimum-cost estimate.
+    assert!(
+        before > amount,
+        "local faucet must fund more than 5 native tokens"
+    );
     let code_size = match &contract {
         Contract::kRv32 { rv32_contract } => rv32_contract.data.len() as u128,
         _ => unreachable!(),
     };
     if !atomic {
-        let calldata = native_hog_transfer_calldata(&target, amount).unwrap();
+        let calldata = native_token_transfer_calldata(&target, amount).unwrap();
         let transfer = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
             account: &account,
             target_address: ADDRESS_NATIVE_TOKEN,
-            target_entrypoint: NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            target_entrypoint: NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
             target_calldata: &calldata,
             target_gas_limit: 500_000,
             gas_limit: 1_000_000,
@@ -350,7 +353,7 @@ async fn qualify_native_deployment(atomic: bool) {
                 .unwrap()
                 .is_empty()
         );
-        // getBalance reports free HOG, after storage collateral is reserved. The
+        // getBalance reports free native tokens, after storage collateral is reserved. The
         // sender creates a replay entry; the fresh recipient creates a balance item.
         assert_eq!(
             balance(&client, account.address(), Some(&receipt.block_height)).await,

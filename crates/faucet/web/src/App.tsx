@@ -1,25 +1,25 @@
 import { type FormEvent, useEffect, useState } from "react"
 import { toast } from "sonner"
 
-import {
-  type NetworkDescriptor,
-  fetchNetworkDescriptor,
-  formatHogAmount,
-  requestAirdrop,
-} from "@/api"
 import { AirdropForm } from "@/components/airdrop-form"
 import { AppHeader } from "@/components/app-header"
 import { FaucetHero } from "@/components/faucet-hero"
 import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
-
-const ADDRESS_REGEX = /^0x[0-9a-fA-F]{64}$/
+import {
+  type FaucetClient,
+  airdrop,
+  connectFaucet,
+  describeFaucetError,
+  formatNativeTokens,
+  parseRecipient,
+} from "@/faucet"
+import { toBase58 } from "@thruputchain/client"
 
 export function App() {
   const [address, setAddress] = useState("")
   const [fieldError, setFieldError] = useState<string | null>(null)
-  const [networkDescriptor, setNetworkDescriptor] =
-    useState<NetworkDescriptor | null>(null)
+  const [client, setClient] = useState<FaucetClient | null>(null)
   const [metadataError, setMetadataError] = useState<string | null>(null)
   const [isLoadingMetadata, setIsLoadingMetadata] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -37,17 +37,17 @@ export function App() {
     setIsLoadingMetadata(true)
     setMetadataError(null)
     try {
-      const descriptor = await fetchNetworkDescriptor()
+      const connected = await connectFaucet()
       if (isCurrent()) {
-        setNetworkDescriptor(descriptor)
+        setClient(connected)
       }
     } catch (error) {
       if (isCurrent()) {
-        setNetworkDescriptor(null)
+        setClient(null)
         setMetadataError(
           error instanceof Error
             ? error.message
-            : "Unable to load faucet metadata.",
+            : "Unable to reach the faucet.",
         )
       }
     } finally {
@@ -67,13 +67,13 @@ export function App() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    const normalized = address.trim().toLowerCase()
-    if (!networkDescriptor) {
-      toast.error("Faucet metadata is still loading.")
+    if (!client) {
+      toast.error("The faucet is still connecting.")
       return
     }
-    if (!ADDRESS_REGEX.test(normalized)) {
-      setFieldError("Enter a 0x-prefixed 64-character Thruput address.")
+    const recipient = parseRecipient(address)
+    if (!recipient) {
+      setFieldError("Enter a Thruput address (C... StrKey or base58).")
       return
     }
 
@@ -81,15 +81,15 @@ export function App() {
     setFieldError(null)
 
     try {
-      const result = await requestAirdrop(normalized, networkDescriptor)
-      showSuccessToast(
-        formatAirdropAmount(result.rawAmount, networkDescriptor),
-        result.txHash,
+      const result = await airdrop(client, recipient)
+      toast.success(
+        `Sent ${formatNativeTokens(result.rawAmount)} native tokens`,
+        {
+          description: `Transaction ${shortHash(toBase58(result.transactionHash))}`,
+        },
       )
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Faucet request failed.",
-      )
+      toast.error(describeFaucetError(error))
     } finally {
       setIsSubmitting(false)
     }
@@ -103,7 +103,7 @@ export function App() {
           <FaucetHero />
           {metadataError ? (
             <div className="w-full rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-              <div className="font-medium">Faucet metadata unavailable</div>
+              <div className="font-medium">Faucet unavailable</div>
               <p className="mt-1 text-destructive/80">{metadataError}</p>
               <Button
                 type="button"
@@ -120,7 +120,7 @@ export function App() {
             address={address}
             fieldError={fieldError}
             isLoadingMetadata={isLoadingMetadata}
-            isMetadataUnavailable={!isLoadingMetadata && !networkDescriptor}
+            isMetadataUnavailable={!isLoadingMetadata && !client}
             isSubmitting={isSubmitting}
             onAddressChange={handleAddressChange}
             onSubmit={handleSubmit}
@@ -143,18 +143,4 @@ export function App() {
 
 function shortHash(value: string) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`
-}
-
-function showSuccessToast(amountHog: string | null, txHash: string) {
-  toast.success(amountHog ? `Sent ${amountHog} HOG` : "Airdrop sent", {
-    description: `Transaction ${shortHash(txHash)}`,
-  })
-}
-
-function formatAirdropAmount(rawAmount: string, descriptor: NetworkDescriptor) {
-  try {
-    return formatHogAmount(rawAmount, descriptor.nativeHog.decimals)
-  } catch {
-    return null
-  }
 }

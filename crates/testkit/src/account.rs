@@ -27,7 +27,7 @@ const EXPIRY_HEIGHT: i64 = 10_000_000;
 /// Explicit funding and optional initialization in the deployment transaction.
 #[derive(Debug, Clone, Copy)]
 pub struct DeployOptions<'a> {
-    /// Exact raw HOG amount transferred to the new contract. Zero skips funding.
+    /// Exact raw native token amount transferred to the new contract. Zero skips funding.
     pub amount: u128,
     /// Optional invocation on the new contract, called by its deploying wallet.
     pub initializer: Option<thruput_signing::default_wallet::WalletInitCall<'a>>,

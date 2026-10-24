@@ -373,7 +373,7 @@ fn transfer_results_distinguish_commitment_and_unconfirmed_evidence() {
                 mismatched_hash: false,
             },
             true,
-            "Transferred 1.5 HOG",
+            "Transferred 1.5 native tokens",
         ),
         (
             TransferPollMock::Status(serde_json::json!({"status":"invalid", "reason":"denied"})),

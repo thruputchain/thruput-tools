@@ -119,6 +119,48 @@ The remaining legacy-only items are gone too:
   `tags` field, and `MethodDoc::named_params` is now required. Build its
   `params` and `named_params` with `named_params`.
 
+### Native token naming
+
+The native token is no longer called HOG. Commands, help text and output say
+"native tokens", and every HOG-named field, flag, alias and Rust item is
+renamed:
+
+- `thruput node --initial-account-hog` is now `--initial-account-tokens`.
+- `thruput init` writes the native token contract alias as `NATIVE_TOKEN`
+  instead of `HOG`. Existing `HOG` aliases still resolve but are no longer
+  maintained; rename them in `config.toml`.
+- `--json` reports rename `amountHog` to `amountTokens` (airdrop, schema 6),
+  `balanceHog` to `balanceTokens` (balance schema 4, airdrop observations),
+  and `fundingHog` and `minimumFundingHog` to `fundingTokens` and
+  `minimumFundingTokens` (deploy, schema 9).
+- The `invalid_hog_amount` error code is now `invalid_native_token_amount`.
+- Network descriptors (schema 7) carry `nativeToken` instead of `nativeHog`,
+  and the faucet config section `[network.native_hog]` is now
+  `[network.native_token]`. Upgrade the faucet, gateway and CLI together.
+- `thruput-signing` renames `NATIVE_HOG_*` to `NATIVE_TOKEN_*`, the `hog`
+  module to `native_token`, `parse_hog_amount` and `ParseHogAmountError` to
+  `parse_native_token_amount` and `ParseNativeTokenAmountError`,
+  `native_hog_transfer_calldata` to `native_token_transfer_calldata`,
+  `*DevWalletHogTransfer` to `*DevWalletNativeTokenTransfer`, and
+  `build_signed_dev_wallet_hog_transfer` to
+  `build_signed_dev_wallet_native_token_transfer`.
+- `thruput-json-rpc-types` renames `NativeHogDescriptor` to
+  `NativeTokenDescriptor` and `NetworkDescriptor::native_hog` to
+  `native_token`.
+
+The JSON-RPC wire format changes only in documentation (wire 14.1.1).
+
+### Faucet web
+
+The faucet web app works with the current Devnet again. It now requests
+airdrops with `@thruputchain/client` through the RPC gateway's
+`faucet_requestAirdrop`, instead of its own client for the faucet's HTTP API,
+and its address field takes a C StrKey or base58 address. Installing it needs
+a token with `read:packages` in pnpm's user-level config (see its README),
+including on Railway. `VITE_GROUNDHOG_FAUCET_API_BASE` and the
+`/api` proxy are gone; `VITE_THRUPUT_RPC_URL` selects a gateway other than
+public Devnet. CI now checks its formatting and build.
+
 ### Gateway metrics
 
 `hog-gateway` no longer exports

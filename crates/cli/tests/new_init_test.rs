@@ -76,12 +76,12 @@ fn init_configures_profiles_and_succeeds() {
     assert!(global_config.contains("[profile.local]"));
     assert!(global_config.contains("network = \"local\""));
     assert!(global_config.contains("futurenet"));
-    assert!(global_config.contains("HOG = \"11111111111111111111111111111112\""));
+    assert!(global_config.contains("NATIVE_TOKEN = \"11111111111111111111111111111112\""));
     let local = thruput_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
     assert_eq!(local.network, Some(thruput_cli::config::Network::Local));
     assert!(local.rpc_url.is_none());
     assert_eq!(
-        local.contracts.get("HOG").map(String::as_str),
+        local.contracts.get("NATIVE_TOKEN").map(String::as_str),
         Some("11111111111111111111111111111112")
     );
     let futurenet = thruput_cli::config::resolve_profile(tmp.path(), Some("futurenet")).unwrap();
@@ -99,7 +99,7 @@ fn init_configures_profiles_and_succeeds() {
         Some("https://faucet.thruput.network")
     );
     assert_eq!(
-        futurenet.contracts.get("HOG").map(String::as_str),
+        futurenet.contracts.get("NATIVE_TOKEN").map(String::as_str),
         Some("11111111111111111111111111111112")
     );
 
@@ -182,7 +182,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
         Some("https://custom-faucet.devnet.example")
     );
     assert_eq!(
-        devnet.contracts.get("HOG").map(String::as_str),
+        devnet.contracts.get("NATIVE_TOKEN").map(String::as_str),
         Some("11111111111111111111111111111112")
     );
     let future = thruput_cli::config::resolve_profile(tmp.path(), Some("futurenet")).unwrap();

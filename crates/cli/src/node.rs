@@ -713,7 +713,7 @@ fn print_started_local_node(
                     print.detail(
                         "initial allocation",
                         format_args!(
-                            "{} raw HOG units to {} (nonce 0)",
+                            "{} raw native token units to {} (nonce 0)",
                             account.initial_storage_tokens,
                             crate::codec::format_contract_address(&account.wallet_address.0)
                         ),
@@ -1282,16 +1282,16 @@ fn rpc_url_for_addr(addr: SocketAddr) -> String {
     format!("http://{}", rpc_client_address(addr))
 }
 
-/// Parse an exact HOG bootstrap allocation into seven-decimal raw units.
-pub fn parse_initial_account_hog(input: &str) -> Result<u64, CliError> {
-    let raw = crate::hog::parse_amount(input)?;
+/// Parse an exact native token bootstrap allocation into seven-decimal raw units.
+pub fn parse_initial_account_tokens(input: &str) -> Result<u64, CliError> {
+    let raw = crate::native_token::parse_amount(input)?;
     if raw == 0 || raw > i64::MAX as u128 {
-        return Err(CliError::InvalidHogAmount {
+        return Err(CliError::InvalidNativeTokenAmount {
             input: input.to_owned(),
             message: "amount must be positive and fit signed 64-bit raw units".into(),
         });
     }
-    u64::try_from(raw).map_err(|_| CliError::InvalidHogAmount {
+    u64::try_from(raw).map_err(|_| CliError::InvalidNativeTokenAmount {
         input: input.to_owned(),
         message: "amount exceeds the supported raw-unit range".to_owned(),
     })
@@ -1699,24 +1699,24 @@ mod tests {
     }
 
     #[test]
-    fn dev_account_hog_parser_preserves_seven_decimal_places() {
+    fn dev_account_tokens_parser_preserves_seven_decimal_places() {
         assert_eq!(
-            super::parse_initial_account_hog("12.3456789").unwrap(),
+            super::parse_initial_account_tokens("12.3456789").unwrap(),
             123_456_789
         );
     }
 
     #[test]
-    fn dev_account_hog_parser_rejects_more_than_seven_decimal_places() {
-        let error = super::parse_initial_account_hog("1.00000001")
+    fn dev_account_tokens_parser_rejects_more_than_seven_decimal_places() {
+        let error = super::parse_initial_account_tokens("1.00000001")
             .expect_err("more than seven decimal places should fail");
 
-        assert_eq!(error.code(), "invalid_hog_amount");
+        assert_eq!(error.code(), "invalid_native_token_amount");
     }
 
     #[test]
-    fn dev_account_hog_parser_rejects_values_above_u64_raw_units() {
-        let error = super::parse_initial_account_hog("1844674407370.9551616")
+    fn dev_account_tokens_parser_rejects_values_above_u64_raw_units() {
+        let error = super::parse_initial_account_tokens("1844674407370.9551616")
             .expect_err("raw allocation above u64 should fail");
 
         assert!(error.to_string().contains("signed 64-bit raw units"));

@@ -3,30 +3,34 @@ use thruput_xdr::types::ContractAddress;
 
 use crate::CliError;
 
-// Native HOG uses these protocol-defined values on every network.
-pub(crate) const DECIMALS: u32 = thruput_signing::NATIVE_HOG_DECIMALS;
-pub(crate) const SCALE: u128 = thruput_signing::NATIVE_HOG_SCALE;
+// The native token uses these protocol-defined values on every network.
+pub(crate) const DECIMALS: u32 = thruput_signing::NATIVE_TOKEN_DECIMALS;
+pub(crate) const SCALE: u128 = thruput_signing::NATIVE_TOKEN_SCALE;
 pub(crate) const fn token_address() -> ContractAddress {
     thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN
 }
 
 pub(crate) fn transfer_entrypoint() -> ContractEntrypointID {
-    thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT
+    thruput_signing::NATIVE_TOKEN_TRANSFER_ENTRYPOINT
 }
 
 pub(crate) fn encode_transfer_calldata(
     recipient: &ContractAddress,
     raw_amount: u128,
 ) -> Result<Vec<u8>, CliError> {
-    thruput_signing::native_hog_transfer_calldata(recipient, raw_amount).map_err(|error| {
-        CliError::Other(format!("failed to encode HOG transfer calldata: {error}"))
+    thruput_signing::native_token_transfer_calldata(recipient, raw_amount).map_err(|error| {
+        CliError::Other(format!(
+            "failed to encode native token transfer calldata: {error}"
+        ))
     })
 }
 
 pub(crate) fn parse_amount(input: &str) -> Result<u128, CliError> {
-    thruput_signing::parse_hog_amount(input).map_err(|error| CliError::InvalidHogAmount {
-        input: input.trim().to_owned(),
-        message: error.to_string(),
+    thruput_signing::parse_native_token_amount(input).map_err(|error| {
+        CliError::InvalidNativeTokenAmount {
+            input: input.trim().to_owned(),
+            message: error.to_string(),
+        }
     })
 }
 
@@ -65,7 +69,7 @@ mod tests {
             let error = parse_amount(input).expect_err("invalid amount should fail");
             assert_eq!(
                 error.code(),
-                "invalid_hog_amount",
+                "invalid_native_token_amount",
                 "unexpected error for {input:?}"
             );
         }

@@ -30,21 +30,21 @@ use crate::{CliError, Print};
 mod funding;
 
 /// Current schema version for `deploy --json` data payloads.
-pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 8;
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 9;
 
-/// HOG that `thruput test --integration` transfers to the contract it deploys.
+/// Native tokens that `thruput test --integration` transfers to the contract it deploys.
 ///
 /// Matches the `100_000_000` storage tokens the removed local dev wallet contract
 /// moved to every address it deployed. hogd charges storage to the contract's
 /// own address, so an unfunded contract's initializer would never commit.
-pub(crate) const INTEGRATION_DEPLOY_FUND_HOG: &str = "10";
+pub(crate) const INTEGRATION_DEPLOY_FUND_TOKENS: &str = "10";
 
 /// Explicit native deployment funding and initialization.
 #[derive(Debug, Default)]
 pub struct DeploymentOptions<'a> {
     /// Inspect deployment collateral without loading a signer or submitting.
     pub estimate: bool,
-    /// Exact HOG transfer, including zero to skip funding.
+    /// Exact native token transfer, including zero to skip funding.
     pub fund: Option<&'a str>,
     /// Method name from the artifact spec, or an explicit eight-byte selector.
     pub init_method: Option<&'a str>,
@@ -79,7 +79,7 @@ struct NativeDeployment {
     #[serde(with = "thruput_json_rpc_types::decimal")]
     #[schemars(with = "thruput_json_rpc_types::decimal::Decimal<u64>")]
     gas_limit: u64,
-    funding_hog: String,
+    funding_tokens: String,
     funding_raw_amount: String,
     initializer: Option<InitializerReport>,
 }
@@ -173,9 +173,9 @@ pub fn run(
         )?;
         print.group(crate::print::Outcome::DryRun, "Deployment funding", |print| {
             print.detail("artifact bytes", report.artifact_bytes);
-            print.detail("balance deposit HOG", crate::hog::format_amount(report.balance_deposit()));
-            print.detail("deployment collateral HOG", crate::hog::format_amount(report.deployment_cost()));
-            print.detail("minimum funding HOG", &report.minimum_funding_hog);
+            print.detail("balance deposit (native tokens)", crate::native_token::format_amount(report.balance_deposit()));
+            print.detail("deployment collateral (native tokens)", crate::native_token::format_amount(report.deployment_cost()));
+            print.detail("minimum funding (native tokens)", &report.minimum_funding_tokens);
             print.detail("observed height", *report.execution.observed_tip.block_height);
             print.note("The minimum leaves no free balance for future storage. Sender storage and gas capacity are separate.");
             if options.init_method.is_some() {
@@ -221,7 +221,7 @@ pub fn run(
                     print.detail("contract hash", &native.contract_hash);
                     print.detail("deployment nonce", &native.deployment_nonce);
                     print.detail("predicted address", &plan.predicted_address);
-                    print.detail("funding HOG", &native.funding_hog);
+                    print.detail("funding (native tokens)", &native.funding_tokens);
                     print_initializer(native.initializer.as_ref(), print);
                     print.detail("expiry height", native.expiry_height);
                     print.detail("gas budget", native.gas_limit);
@@ -417,9 +417,9 @@ fn command_error_for_deploy_receipt(
         return Some(
             CommandError::new(
                 "transaction_insufficient_funds",
-                "the signing wallet has insufficient HOG to fund another contract deployment",
+                "the signing wallet has insufficient native tokens to fund another contract deployment",
                 json!({
-                    "reason": "nativeHogTransferOverdraft",
+                    "reason": "nativeTokenTransferOverdraft",
                     "walletEntrypoint": "deploy",
                     "erc20Error": "tooLarge",
                 }),
@@ -471,7 +471,7 @@ fn print_insufficient_deploy_funding(prepared: &PreparedDeploy, print: &Print) {
         .unwrap_or(&prepared.wallet_address);
     let wallet = crate::terminal::terminal_safe(wallet);
     print.warn(format_args!(
-        "Deploy failed because wallet `{wallet}` has insufficient HOG for deployment"
+        "Deploy failed because wallet `{wallet}` has insufficient native tokens for deployment"
     ));
     print.detail("wallet address", &prepared.wallet_address);
     print.detail(
@@ -505,7 +505,7 @@ fn print_dry_run(
             print.detail("network hash", &native.network_hash);
             print.detail("contract hash", &native.contract_hash);
             print.detail("deployment nonce", &native.deployment_nonce);
-            print.detail("funding HOG", &native.funding_hog);
+            print.detail("funding (native tokens)", &native.funding_tokens);
             print_initializer(native.initializer.as_ref(), print);
             print.detail("expiry height", native.expiry_height);
             print.detail("gas budget", native.gas_limit);
@@ -645,7 +645,7 @@ fn prepare_deploy_plan(
 /// Build and sign the deploy transaction `thruput test --integration` submits.
 ///
 /// The local-user sender is a native account, so the deployment funds the new
-/// contract with [`INTEGRATION_DEPLOY_FUND_HOG`].
+/// contract with [`INTEGRATION_DEPLOY_FUND_TOKENS`].
 pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     artifact_path: &Path,
     rpc_url: &str,
@@ -690,7 +690,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         &profile,
         None,
         &DeploymentOptions {
-            fund: Some(INTEGRATION_DEPLOY_FUND_HOG),
+            fund: Some(INTEGRATION_DEPLOY_FUND_TOKENS),
             ..DeploymentOptions::default()
         },
         Some(sender),
@@ -840,7 +840,7 @@ fn prepare_deploy_transaction_plan(
         deployment_nonce: format!("0x{}", hex::encode(deploy_nonce.as_ref())),
         expiry_height: block_expiry_height,
         gas_limit,
-        funding_hog: crate::hog::format_amount(amount),
+        funding_tokens: crate::native_token::format_amount(amount),
         funding_raw_amount: amount.to_string(),
         initializer: init_call.map(|(entrypoint, calldata)| InitializerReport {
             method: options
@@ -923,10 +923,10 @@ fn resolve_native_funding(native: bool, fund: Option<&str>) -> Result<Option<u12
         return Ok(None);
     }
     let amount = fund.ok_or(CliError::NativeDeploymentFundingRequired)?;
-    match thruput_signing::parse_hog_amount(amount) {
+    match thruput_signing::parse_native_token_amount(amount) {
         Ok(amount) => Ok(Some(amount)),
-        Err(thruput_signing::ParseHogAmountError::Zero) => Ok(Some(0)),
-        Err(error) => Err(CliError::InvalidHogAmount {
+        Err(thruput_signing::ParseNativeTokenAmountError::Zero) => Ok(Some(0)),
+        Err(error) => Err(CliError::InvalidNativeTokenAmount {
             input: amount.trim().to_owned(),
             message: error.to_string(),
         }),
@@ -1110,7 +1110,7 @@ mod tests {
         deploy_funding_commands, derive_deploy_address, newest_input_mtime,
         parse_predicted_address, resolve_deployed_address, stale_artifact_warning,
     };
-    use super::{INTEGRATION_DEPLOY_FUND_HOG, resolve_native_funding};
+    use super::{INTEGRATION_DEPLOY_FUND_TOKENS, resolve_native_funding};
     use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_thruput_artifact};
     use serial_test::serial;
     use tempfile::TempDir;
@@ -1126,11 +1126,11 @@ mod tests {
     #[test]
     fn integration_deploy_funds_the_contract_like_the_removed_dev_wallet() {
         // The dev wallet contract that `thruput test --integration` used to
-        // deploy through transferred 100_000_000 storage tokens (10 HOG) to
+        // deploy through transferred 100_000_000 storage tokens (10 native tokens) to
         // every new contract before deploying it. A native deployment has to
         // keep doing so: hogd charges storage to the contract's own address,
         // so an unfunded contract cannot commit what its initializer writes.
-        let funding = resolve_native_funding(true, Some(INTEGRATION_DEPLOY_FUND_HOG)).unwrap();
+        let funding = resolve_native_funding(true, Some(INTEGRATION_DEPLOY_FUND_TOKENS)).unwrap();
         assert_eq!(funding, Some(100_000_000));
     }
 
@@ -1323,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn native_hog_overdraft_is_actionable_deploy_failure() {
+    fn native_token_overdraft_is_actionable_deploy_failure() {
         let abort_data = xdrs::cxs::encode(&(
             <thruput_erc20_if::ERC20Error as thruput_sdk::exn::Exn>::SELECTOR,
             thruput_erc20_if::ERC20Error::TooLarge,
@@ -1333,11 +1333,11 @@ mod tests {
         let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
 
         let error = command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref(), None)
-            .expect("native HOG overdraft should be classified");
+            .expect("native token overdraft should be classified");
         let json = serde_json::to_value(error).expect("bug: command error should serialize");
 
         assert_eq!(json["code"], "transaction_insufficient_funds");
-        assert_eq!(json["details"]["reason"], "nativeHogTransferOverdraft");
+        assert_eq!(json["details"]["reason"], "nativeTokenTransferOverdraft");
         assert!(
             json["hint"]
                 .as_str()

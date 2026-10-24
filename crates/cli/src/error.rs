@@ -55,7 +55,7 @@ const TOOLCHAIN_RETRY_HINT: &str =
 pub enum CliError {
     #[error("deployment funding unavailable: {message}")]
     #[hint(
-        "use an RPC endpoint with authoritative chainConfig execution rules; explicit --fund <HOG> remains available"
+        "use an RPC endpoint with authoritative chainConfig execution rules; explicit --fund <AMOUNT> remains available"
     )]
     #[details]
     DeploymentFunding { message: String },
@@ -72,9 +72,9 @@ pub enum CliError {
     #[error("wallet create no longer accepts --prefund")]
     #[hint("create the empty wallet first, then run thruput airdrop <wallet-name>")]
     WalletCreatePrefundUnsupported,
-    #[error("native deployment requires an explicit --fund <HOG> amount")]
+    #[error("native deployment requires an explicit --fund <AMOUNT> amount")]
     #[hint(
-        "choose the HOG amount to transfer to the new contract; this is not an automatic storage-cost estimate"
+        "choose the native token amount to transfer to the new contract; this is not an automatic storage-cost estimate"
     )]
     NativeDeploymentFundingRequired,
     #[error("--fund and --init require a native wallet")]
@@ -485,10 +485,10 @@ pub enum CliError {
          as `getNetworkInfo` reports it"
     )]
     InvalidNetworkHash { value: String },
-    #[error("invalid HOG amount `{input}`: {message}")]
-    #[hint("enter a positive decimal HOG amount with at most seven decimal places")]
+    #[error("invalid native token amount `{input}`: {message}")]
+    #[hint("enter a positive decimal native token amount with at most seven decimal places")]
     #[details]
-    InvalidHogAmount { input: String, message: String },
+    InvalidNativeTokenAmount { input: String, message: String },
     #[error("address target {target:?} is invalid: {message}")]
     #[hint(text = ADDRESS_TARGET_HINT)]
     #[details]

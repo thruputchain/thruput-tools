@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_hog_balance_read_uses_free_native_token_balance_key() {
+    async fn native_token_balance_read_uses_free_native_token_balance_key() {
         let mock = MockSink::arc();
         let gate = mock.queue_gate();
         let batcher = StorageReadBatcher::spawn(

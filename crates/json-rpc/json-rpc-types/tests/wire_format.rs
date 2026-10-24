@@ -9,7 +9,7 @@ use thruput_json_rpc_types::events::{
     EventTopicFilter, IdentifiedEvent, IterationOrder, PaginationCursor, TopicList,
 };
 use thruput_json_rpc_types::network_descriptor::{
-    AirdropDescriptor, FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NativeHogDescriptor,
+    AirdropDescriptor, FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NativeTokenDescriptor,
     NetworkDescriptor, NetworkDescriptorEndpoints,
 };
 use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
@@ -71,7 +71,7 @@ fn test_network_descriptor() -> NetworkDescriptor {
         "x23".into(),
         zero_hash(),
         NetworkDescriptorEndpoints::new("https://rpc.devnet.example".into()),
-        NativeHogDescriptor::new(
+        NativeTokenDescriptor::new(
             zero_address(),
             7,
             HexBytes(vec![0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f]),
@@ -113,13 +113,13 @@ fn network_descriptor_wire_format_is_public_and_camel_case() {
     assert_eq!(value["networkHash"], thruput_encoding::encode(&[0x12; 32]));
     assert_eq!(value["endpoints"]["rpcUrl"], "https://rpc.devnet.example");
     assert!(value["endpoints"].get("faucetUrl").is_none());
-    assert_eq!(value["nativeHog"]["decimals"], 7);
+    assert_eq!(value["nativeToken"]["decimals"], 7);
     assert_eq!(
-        value["nativeHog"]["transferEntrypoint"],
+        value["nativeToken"]["transferEntrypoint"],
         "0x63285b3523f9dc3f"
     );
     assert_eq!(value["airdrop"]["rawAmount"], "100000000");
-    assert!(value["airdrop"].get("amountHog").is_none());
+    assert!(value["airdrop"].get("amountTokens").is_none());
 
     assert!(value.get("schema_version").is_none());
     assert!(value.get("bootstrapAccountDerivation").is_none());

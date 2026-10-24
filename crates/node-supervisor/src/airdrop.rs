@@ -839,12 +839,13 @@ impl AirdropTransactionBuilder for NativeAirdropBuilder {
         let build = || {
             let account =
                 PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0);
-            let calldata = thruput_signing::native_hog_transfer_calldata(&recipient.0, raw_amount)?;
+            let calldata =
+                thruput_signing::native_token_transfer_calldata(&recipient.0, raw_amount)?;
             let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
                 thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
                     account: &account,
                     target_address: thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
-                    target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+                    target_entrypoint: thruput_signing::NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
                     target_calldata: &calldata,
                     gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
                     target_gas_limit: DEFAULT_TX_GAS_LIMIT,

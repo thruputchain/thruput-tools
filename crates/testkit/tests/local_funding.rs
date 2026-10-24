@@ -203,13 +203,13 @@ fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
 
 fn funding_response(request: &FundAccountRequest, faucet: &LocalSigner) -> FundingSubmission {
     let calldata =
-        thruput_signing::native_hog_transfer_calldata(&request.recipient.0, request.raw_amount)
+        thruput_signing::native_token_transfer_calldata(&request.recipient.0, request.raw_amount)
             .unwrap();
     let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
         thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
             account: &PubkeyAccount::new(faucet.public_key(), 0),
             target_address: thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
-            target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            target_entrypoint: thruput_signing::NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
             target_calldata: &calldata,
             gas_limit: 20_000_000,
             target_gas_limit: 10_000_000,

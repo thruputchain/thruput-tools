@@ -1,4 +1,4 @@
-//! Native HOG-balance traffic, submitted directly to `SchedGateway`.
+//! Native native-token-balance traffic, submitted directly to `SchedGateway`.
 use thruput_scheduler::{
     ParallelBatch, ParallelSignedTransactionBatch, sched_gateway::SchedGateway_SchedGateway1_Client,
 };

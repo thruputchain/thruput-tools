@@ -16,6 +16,9 @@ importers:
       "@tailwindcss/vite":
         specifier: 4.3.1
         version: 4.3.1(vite@7.3.6(jiti@2.7.0)(lightningcss@1.32.0))
+      "@thruputchain/client":
+        specifier: 0.23.0
+        version: 0.23.0
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
@@ -610,6 +613,47 @@ packages:
       "@cfworker/json-schema":
         optional: true
 
+  "@noble/ciphers@2.4.0":
+    resolution:
+      {
+        integrity: sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw==,
+      }
+    engines: { node: ">= 20.19.0" }
+
+  "@noble/curves@2.4.0":
+    resolution:
+      {
+        integrity: sha512-P4/62zrgfH33CneE3Dn4WhJVA22YUU0eR51wKIan4NVRvwsA0YnPTwWGpNbpuacSujmSFLvyzpyuR30+fbq2Ew==,
+      }
+    engines: { node: ">= 20.19.0" }
+
+  "@noble/ed25519@3.2.0":
+    resolution:
+      {
+        integrity: sha512-criDgRlnUA09hchYrTy/JUWPIEap5rZxQe6wDWzRx51oWWpDRcUpuNzlgPxDJaOK6AsW9c0wKcj3rKRv6t+bPQ==,
+      }
+
+  "@noble/hashes@2.2.0":
+    resolution:
+      {
+        integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==,
+      }
+    engines: { node: ">= 20.19.0" }
+
+  "@noble/hashes@2.4.0":
+    resolution:
+      {
+        integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==,
+      }
+    engines: { node: ">= 20.19.0" }
+
+  "@noble/post-quantum@0.7.1":
+    resolution:
+      {
+        integrity: sha512-+P9981IiAnVh+rmcubozzVwrEy3XsN/tMhTnvsjV9VDaYpOnNCqWqKo2FLWxbu92YHfjGIlE5XnW175UK+ln+Q==,
+      }
+    engines: { node: ">= 20.19.0" }
+
   "@nodelib/fs.scandir@2.1.5":
     resolution:
       {
@@ -850,6 +894,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  "@scure/base@2.0.0":
+    resolution:
+      {
+        integrity: sha512-3E1kpuZginKkek01ovG8krQ0Z44E3DHPjc5S2rjJw9lZn3KSQOs8S7wqikF/AH7iRanHypj85uGyxk0XAyC37w==,
+      }
+
   "@sec-ant/readable-stream@0.4.1":
     resolution:
       {
@@ -1001,6 +1051,38 @@ packages:
       }
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
+
+  "@thruputchain/client@0.23.0":
+    resolution:
+      {
+        integrity: sha512-sqmBiOmoJyc8am1g8TUh6KNOMChTSjKxRVA/NKLw/7t14/uRh9TyPLQIfm7ZszAyYl3fDqs45FRIyabx2Ia7nQ==,
+        tarball: https://npm.pkg.github.com/download/@thruputchain/client/0.23.0/db93b9d1e6fbdc499f6d41fd21295d29564215a0,
+      }
+    engines: { node: ">=22.12.0" }
+
+  "@thruputchain/contract-spec@0.18.0":
+    resolution:
+      {
+        integrity: sha512-tnfrH6E89d+VmrEYpaPwpijjDDGKrqCEEG1n3kruSpeH5UNON9RxeRrlesRv9bCuXJFifFF3jYUdcAvepFzTLA==,
+        tarball: https://npm.pkg.github.com/download/@thruputchain/contract-spec/0.18.0/df0bd406f92c7d0892bcb1e4e45b8a4385a2941f,
+      }
+    engines: { node: ">=22.12.0" }
+
+  "@thruputchain/protocol@0.18.0":
+    resolution:
+      {
+        integrity: sha512-EzH8erwQlULsM5JaDjj++hmokiNzbgBOvXRxFO7eA0qtbx9442wYxF77Z5DAzXliNYQqvr0NJrpiFbOyHRthlg==,
+        tarball: https://npm.pkg.github.com/download/@thruputchain/protocol/0.18.0/8c155de27b2b8842d2a8fc61a0ce9f04d12efe46,
+      }
+    engines: { node: ">=22.12.0" }
+
+  "@thruputchain/xdr@0.18.0":
+    resolution:
+      {
+        integrity: sha512-dnqqP9+ByRyIahQdipxqri0+GM+MK6HMQFHEMtaqIUEKO8uKohB0Khuqd5iT7r1ScN7cpRe+UFsvSBfkmInklQ==,
+        tarball: https://npm.pkg.github.com/download/@thruputchain/xdr/0.18.0/20434cb9d01fbad218561008bc6b823c31ae8b3d,
+      }
+    engines: { node: ">=22.12.0" }
 
   "@ts-morph/common@0.27.0":
     resolution:
@@ -3617,6 +3699,24 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  "@noble/ciphers@2.4.0": {}
+
+  "@noble/curves@2.4.0":
+    dependencies:
+      "@noble/hashes": 2.4.0
+
+  "@noble/ed25519@3.2.0": {}
+
+  "@noble/hashes@2.2.0": {}
+
+  "@noble/hashes@2.4.0": {}
+
+  "@noble/post-quantum@0.7.1":
+    dependencies:
+      "@noble/ciphers": 2.4.0
+      "@noble/curves": 2.4.0
+      "@noble/hashes": 2.4.0
+
   "@nodelib/fs.scandir@2.1.5":
     dependencies:
       "@nodelib/fs.stat": 2.0.5
@@ -3706,6 +3806,8 @@ snapshots:
   "@rollup/rollup-win32-x64-msvc@4.62.2":
     optional: true
 
+  "@scure/base@2.0.0": {}
+
   "@sec-ant/readable-stream@0.4.1": {}
 
   "@sindresorhus/merge-streams@4.0.0": {}
@@ -3777,6 +3879,29 @@ snapshots:
       "@tailwindcss/oxide": 4.3.1
       tailwindcss: 4.3.1
       vite: 7.3.6(jiti@2.7.0)(lightningcss@1.32.0)
+
+  "@thruputchain/client@0.23.0":
+    dependencies:
+      "@noble/ed25519": 3.2.0
+      "@noble/hashes": 2.4.0
+      "@noble/post-quantum": 0.7.1
+      "@scure/base": 2.0.0
+      "@thruputchain/contract-spec": 0.18.0
+      "@thruputchain/protocol": 0.18.0
+      "@thruputchain/xdr": 0.18.0
+
+  "@thruputchain/contract-spec@0.18.0":
+    dependencies:
+      "@thruputchain/protocol": 0.18.0
+      "@thruputchain/xdr": 0.18.0
+
+  "@thruputchain/protocol@0.18.0":
+    dependencies:
+      "@noble/hashes": 2.2.0
+      "@scure/base": 2.0.0
+      "@thruputchain/xdr": 0.18.0
+
+  "@thruputchain/xdr@0.18.0": {}
 
   "@ts-morph/common@0.27.0":
     dependencies:

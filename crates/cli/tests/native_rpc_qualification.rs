@@ -17,7 +17,7 @@ use thruput_json_rpc_types::{
 };
 use thruput_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
 use thruput_signing::{
-    NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, native_hog_transfer_calldata,
+    NATIVE_TOKEN_TRANSFER_ENTRYPOINT, PubkeyAccount, native_token_transfer_calldata,
 };
 use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 
@@ -146,10 +146,13 @@ async fn exercise(fixture: &Fixture, node: &NodeSupervisorHandle) -> TestResult 
     let expected_balance = expected_free_balance(&native).await?;
     let recipient = Base58(PubkeyAccount::from_public_key_bytes([0x63; 32], 0).address());
     let token = thruput_encoding::encode(ADDRESS_NATIVE_TOKEN.as_ref());
-    let selector = format!("0x{}", hex::encode(NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref()));
+    let selector = format!(
+        "0x{}",
+        hex::encode(NATIVE_TOKEN_TRANSFER_ENTRYPOINT.as_ref())
+    );
     let calldata = format!(
         "0x{}",
-        hex::encode(native_hog_transfer_calldata(&recipient.0, AMOUNT)?)
+        hex::encode(native_token_transfer_calldata(&recipient.0, AMOUNT)?)
     );
     // Default commands must use the production native endpoint.
     let call = fixture

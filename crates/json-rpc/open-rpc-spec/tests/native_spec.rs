@@ -188,7 +188,7 @@ fn receipt() -> Value {
 fn native_contract_is_the_canonical_serving_artifact() {
     assert_eq!(native::build_spec(), build_spec());
     assert_eq!(build_spec()["info"]["version"], WIRE_FORMAT_VERSION);
-    assert_eq!(WIRE_FORMAT_VERSION, "14.1.0");
+    assert_eq!(WIRE_FORMAT_VERSION, "14.1.1");
 }
 
 #[test]

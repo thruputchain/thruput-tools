@@ -23,7 +23,7 @@ use crate::balance::{
 };
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
-use crate::hog;
+use crate::native_token;
 use crate::network_descriptor::{RemoteAirdropDescriptor, fetch_remote_airdrop_descriptor};
 use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
 use crate::remote_attempt::{
@@ -35,8 +35,8 @@ use crate::tx_utils::{ensure_tx_success, format_tx_hash};
 use crate::{CliError, Print};
 
 /// Schema version of the `airdrop --json` data payload.
-pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 5;
-const DEFAULT_AIRDROP_HOG: &str = "10";
+pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 6;
+const DEFAULT_AIRDROP_TOKENS: &str = "10";
 
 #[derive(Debug)]
 pub(crate) enum PreparedAirdrop {
@@ -49,7 +49,7 @@ pub(crate) struct PreparedLocalAirdrop {
     pub(crate) rpc_url: String,
     pub(crate) recipient_input: String,
     pub(crate) recipient_wallet: String,
-    pub(crate) amount_hog: String,
+    pub(crate) amount_tokens: String,
     pub(crate) raw_amount: u128,
     pub(crate) faucet_role: String,
     pub(crate) faucet_wallet: String,
@@ -67,7 +67,7 @@ pub(crate) struct PreparedRemoteAirdrop {
     client_nonce: String,
     network_hash: thruput_json_rpc_types::NetworkHash,
     airdrop_policy: thruput_json_rpc_types::network_descriptor::AirdropDescriptor,
-    amount_hog: String,
+    amount_tokens: String,
     attempt_path: PathBuf,
     _attempt_lock: File,
 }
@@ -92,7 +92,7 @@ struct LocalAirdropPlan {
     profile_name: String,
     recipient_input: String,
     recipient_wallet: String,
-    amount_hog: String,
+    amount_tokens: String,
     raw_amount: u128,
     faucet_role: String,
     faucet_wallet: String,
@@ -314,8 +314,8 @@ fn run_local_airdrop(
 ) -> Result<(), CliError> {
     let task = crate::print::progress::Task::start(print, "Requesting airdrop", true);
     task.print().phase(format_args!(
-        "Airdropping {} HOG to {}...",
-        prepared.amount_hog, prepared.recipient_wallet
+        "Airdropping {} native tokens to {}...",
+        prepared.amount_tokens, prepared.recipient_wallet
     ));
     let (path, _lock, request) = retain_local_funding_request(prepared)?;
     let runtime =
@@ -335,7 +335,10 @@ fn run_local_airdrop(
             print.status(format_args!("Airdrop sent: {tx_hash}"));
             if print.has_human_ui() {
                 print.detail("Recipient", &prepared.recipient_wallet);
-                print.detail("Amount", format_args!("{} HOG", prepared.amount_hog));
+                print.detail(
+                    "Amount",
+                    format_args!("{} native tokens", prepared.amount_tokens),
+                );
                 print.detail("Height", *receipt.block_height);
             }
         },
@@ -353,7 +356,7 @@ fn run_local_airdrop(
             "mode": "local",
             "recipient": prepared.recipient_input,
             "recipientWallet": prepared.recipient_wallet,
-            "amountHog": prepared.amount_hog,
+            "amountTokens": prepared.amount_tokens,
             "rawAmount": prepared.raw_amount.to_string(),
             "faucet": {
                 "address": prepared.faucet_wallet,
@@ -588,38 +591,47 @@ fn print_low_faucet_warning(prepared: &LocalAirdropPlan, print: &Print) {
 
     print.status(format_args!("Local faucet: {}", prepared.faucet_wallet));
     print.status(format_args!(
-        "Committed balance: {} HOG at block {}",
-        hog::format_amount(prepared.funding_projection.committed_balance),
+        "Committed balance: {} native tokens at block {}",
+        native_token::format_amount(prepared.funding_projection.committed_balance),
         *prepared.faucet_balance_height
     ));
     print.status(format_args!(
-        "Estimated max now: {} HOG",
-        hog::format_amount(prepared.funding_projection.estimated_max)
+        "Estimated max now: {} native tokens",
+        native_token::format_amount(prepared.funding_projection.estimated_max)
     ));
-    print.status(format_args!("Requested: {} HOG", prepared.amount_hog));
     print.status(format_args!(
-        "Projected faucet balance: {} HOG",
-        hog::format_amount(projected_balance)
+        "Requested: {} native tokens",
+        prepared.amount_tokens
     ));
-    print.warn("this would leave the local faucet below 10 HOG");
+    print.status(format_args!(
+        "Projected faucet balance: {} native tokens",
+        native_token::format_amount(projected_balance)
+    ));
+    print.warn("this would leave the local faucet below 10 native tokens");
 }
 
 fn print_airdrop_plan(plan: &AirdropPlan, print: &Print) {
     match plan {
         AirdropPlan::Local(plan) => {
             print.detail("recipient", &plan.recipient_wallet);
-            print.detail("amount", format_args!("{} HOG", plan.amount_hog));
+            print.detail(
+                "amount",
+                format_args!("{} native tokens", plan.amount_tokens),
+            );
             print.detail("faucet", &plan.faucet_wallet);
             print.detail("profile", &plan.profile_name);
             print_low_faucet_warning(plan, print);
         }
         AirdropPlan::Remote(plan) => {
             print.detail("recipient", &plan.recipient_wallet);
-            print.detail("amount", format_args!("{} HOG", plan.descriptor.amount_hog));
+            print.detail(
+                "amount",
+                format_args!("{} native tokens", plan.descriptor.amount_tokens),
+            );
             print.detail("profile", &plan.profile_name);
             print_remote_airdrop_policy(
                 &plan.descriptor.policy,
-                &plan.descriptor.amount_hog,
+                &plan.descriptor.amount_tokens,
                 print,
             );
         }
@@ -635,10 +647,10 @@ fn prepare_local_airdrop_plan(
     let manifest = load_configured_runtime_manifest(profile, "faucet")?
         .ok_or_else(|| CliError::Other("airdrop requires a local runtime manifest".into()))?;
     let recipient_wallet = recipient.wallet.clone();
-    let raw_amount = hog::parse_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
+    let raw_amount = native_token::parse_amount(amount.unwrap_or(DEFAULT_AIRDROP_TOKENS))?;
     if raw_amount == 0 {
-        return Err(CliError::InvalidHogAmount {
-            input: amount.unwrap_or(DEFAULT_AIRDROP_HOG).into(),
+        return Err(CliError::InvalidNativeTokenAmount {
+            input: amount.unwrap_or(DEFAULT_AIRDROP_TOKENS).into(),
             message: "amount must be positive".into(),
         });
     }
@@ -673,7 +685,7 @@ fn prepare_local_airdrop_plan(
         profile_name: profile.name.clone(),
         recipient_input: recipient.input.clone(),
         recipient_wallet,
-        amount_hog: hog::format_amount(raw_amount),
+        amount_tokens: native_token::format_amount(raw_amount),
         raw_amount,
         faucet_role: faucet.role,
         faucet_wallet,
@@ -712,14 +724,14 @@ fn observe_post_airdrop_balance(label: &str, rpc_url: &str, address: &str, print
                 ))
             })?;
             print.status(format_args!(
-                "{label}: {} HOG at block {}",
-                hog::format_amount(raw),
+                "{label}: {} native tokens at block {}",
+                native_token::format_amount(raw),
                 *balance.state_block_height
             ));
             Ok(json!({
                 "status": "observed",
                 "rawBalance": balance.raw_balance.to_string(),
-                "balanceHog": hog::format_amount(raw),
+                "balanceTokens": native_token::format_amount(raw),
                 "height": balance.state_block_height.to_string(),
             }))
         });
@@ -780,7 +792,7 @@ fn run_remote_airdrop(
             "rawAmount": raw_amount.to_string(),
             "policy": {
                 "rawAmount": prepared.airdrop_policy.raw_amount,
-                "amountHog": prepared.amount_hog,
+                "amountTokens": prepared.amount_tokens,
                 "recipientCooldownSeconds": prepared.airdrop_policy.recipient_cooldown_seconds.to_string(),
                 "clientQuotaMax": prepared.airdrop_policy.client_quota_max,
                 "clientQuotaWindowSeconds": prepared.airdrop_policy.client_quota_window_seconds.to_string(),
@@ -921,10 +933,12 @@ fn validate_remote_airdrop_amount(expected: &str, actual: &str) -> Result<(), Cl
 
 fn print_remote_airdrop_policy(
     policy: &thruput_json_rpc_types::network_descriptor::AirdropDescriptor,
-    amount_hog: &str,
+    amount_tokens: &str,
     print: &Print,
 ) {
-    print.status(format_args!("Fixed airdrop amount: {amount_hog} HOG"));
+    print.status(format_args!(
+        "Fixed airdrop amount: {amount_tokens} native tokens"
+    ));
     print.status(format_args!(
         "Recipient cooldown: {} seconds",
         policy.recipient_cooldown_seconds
@@ -988,7 +1002,7 @@ fn finalize_airdrop_plan(plan: AirdropPlan) -> Result<PreparedAirdrop, CliError>
             rpc_url: plan.rpc_url,
             recipient_input: plan.recipient_input,
             recipient_wallet: plan.recipient_wallet,
-            amount_hog: plan.amount_hog,
+            amount_tokens: plan.amount_tokens,
             raw_amount: plan.raw_amount,
             faucet_role: plan.faucet_role,
             faucet_wallet: plan.faucet_wallet,
@@ -1025,7 +1039,7 @@ fn prepare_remote_airdrop_with_descriptor(
         client_nonce: loaded_attempt.attempt.client_nonce,
         network_hash: descriptor.network_hash,
         airdrop_policy: descriptor.policy.clone(),
-        amount_hog: descriptor.amount_hog.clone(),
+        amount_tokens: descriptor.amount_tokens.clone(),
         attempt_path: loaded_attempt.path,
         _attempt_lock: attempt_lock,
     }))
@@ -1114,8 +1128,8 @@ fn print_dry_run(
         PreparedAirdrop::Local(prepared) => {
             print.group(crate::print::Outcome::DryRun, "Airdrop", |print| {
                 print.status(format_args!(
-                    "Prepared dry-run airdrop of {} HOG to {}.",
-                    prepared.amount_hog, prepared.recipient_wallet
+                    "Prepared dry-run airdrop of {} native tokens to {}.",
+                    prepared.amount_tokens, prepared.recipient_wallet
                 ));
                 print.status(format_args!("  raw amount: {}", prepared.raw_amount));
                 print.status(format_args!(
@@ -1134,7 +1148,7 @@ fn print_dry_run(
                     "mode": "local",
                     "recipient": prepared.recipient_input,
                     "recipientWallet": prepared.recipient_wallet,
-                    "amountHog": prepared.amount_hog,
+                    "amountTokens": prepared.amount_tokens,
                     "rawAmount": prepared.raw_amount.to_string(),
                     "faucet": {
                         "address": prepared.faucet_wallet,
@@ -1229,7 +1243,7 @@ mod tests {
         resolve_airdrop_recipient, validate_remote_airdrop_amount,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
-    use crate::hog;
+    use crate::native_token;
     use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
     use crate::remote_attempt::write_attempt;
 
@@ -1637,14 +1651,17 @@ mod tests {
     }
 
     #[test]
-    fn hog_transfer_entrypoint_matches_standard_erc20_interface() {
+    fn native_token_transfer_entrypoint_matches_standard_erc20_interface() {
         let entrypoint = contract_entrypoint_id(
             Some("ERC20"),
             "0.1.3",
             &NormalizedMethodSignature::new("transfer"),
         );
 
-        assert_eq!(entrypoint.as_ref(), hog::transfer_entrypoint().as_ref());
+        assert_eq!(
+            entrypoint.as_ref(),
+            native_token::transfer_entrypoint().as_ref()
+        );
     }
 
     #[test]
@@ -1743,7 +1760,7 @@ mod tests {
             rpc_url: String::new(),
             recipient_input: "alice".into(),
             recipient_wallet: thruput_encoding::encode(&[0xab; 32]),
-            amount_hog: "10".into(),
+            amount_tokens: "10".into(),
             raw_amount: 100_000_000,
             faucet_role: "faucet".into(),
             faucet_wallet: thruput_encoding::encode(&[0xcd; 32]),
@@ -1816,7 +1833,7 @@ mod tests {
             "protocol": "x23",
             "genesisHash": thruput_json_rpc_types::NetworkHashText::from([0x01; 32]),
             "endpoints": { "rpcUrl": "http://127.0.0.1:9545" },
-            "nativeHog": {
+            "nativeToken": {
                 "tokenAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x02; 32])),
                 "decimals": 7,
                 "transferEntrypoint": "0x63285b3523f9dc3f"

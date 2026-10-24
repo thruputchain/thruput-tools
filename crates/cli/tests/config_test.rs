@@ -355,8 +355,8 @@ default_key = "alice"
 fn resolve_profile_merges_global_and_project_profile_fields() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
-    let global_hog = thruput_encoding::encode(&[0x11; 32]);
-    let project_hog = thruput_encoding::encode(&[0x22; 32]);
+    let global_token = thruput_encoding::encode(&[0x11; 32]);
+    let project_token = thruput_encoding::encode(&[0x22; 32]);
     let counter = thruput_encoding::encode(&[0x33; 32]);
     let global_alice = thruput_encoding::encode(&[0x44; 32]);
     let project_alice = thruput_encoding::encode(&[0x55; 32]);
@@ -377,7 +377,7 @@ runtime_manifest = "global-runtime.json"
 runtime_artifacts_dir = "{}"
 
 [profile.devnet.contracts]
-HOG = "{global_hog}"
+NATIVE_TOKEN = "{global_token}"
 
 [profile.devnet.wallets]
 
@@ -400,7 +400,7 @@ default_key = "bob"
 default_wallet = "project-wallet"
 
 [profile.devnet.contracts]
-HOG = "{project_hog}"
+NATIVE_TOKEN = "{project_token}"
 counter = "{counter}"
 
 [profile.devnet.wallets]
@@ -434,7 +434,7 @@ owner_public_key = "0x{}"
         profile.runtime_artifacts_dir.as_deref(),
         Some(artifacts_dir.as_path())
     );
-    assert_eq!(profile.contracts.get("HOG"), Some(&project_hog));
+    assert_eq!(profile.contracts.get("NATIVE_TOKEN"), Some(&project_token));
     assert_eq!(profile.contracts.get("counter"), Some(&counter));
     assert_eq!(
         profile.wallets.get("alice").map(|wallet| &wallet.address),
@@ -1490,8 +1490,9 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
     assert_eq!(local.rpc_url.as_deref(), Some("http://127.0.0.1:9999"));
     for name in ["local", "futurenet"] {
         let profile = thruput_cli::config::resolve_profile(tmp.path(), Some(name)).unwrap();
-        let address = thruput_signing::strkey::parse_contract_address(&profile.contracts["HOG"])
-            .expect("initialized HOG alias must resolve");
+        let address =
+            thruput_signing::strkey::parse_contract_address(&profile.contracts["NATIVE_TOKEN"])
+                .expect("initialized NATIVE_TOKEN alias must resolve");
         assert_eq!(
             address,
             thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN
@@ -1738,7 +1739,7 @@ network = "devnet"
 rpc_url = "https://global.example"
 
 [profile.devnet.contracts]
-HOG = "0x01"
+NATIVE_TOKEN = "0x01"
 "#,
     )
     .unwrap();

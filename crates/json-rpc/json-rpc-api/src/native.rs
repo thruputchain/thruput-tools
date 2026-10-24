@@ -40,7 +40,7 @@ macro_rules! native_methods {
             simulate_invocations("simulateInvocations", named, plain): $crate::types::requests::SimulateInvocationsRequest => $crate::types::responses::SimulationResults;
             /// Read serialized storage at an address.
             get_storage("getStorage", named, plain): $crate::types::requests::StorageQuery => $crate::types::responses::StorageResult;
-            /// Read native HOG balance and its state height.
+            /// Read native token balance and its state height.
             get_balance("getBalance", named, plain): $crate::types::requests::AddressQuery => $crate::types::responses::BalanceResult;
             /// Read registered authorization at an address.
             get_registered_auth("getRegisteredAuth", named, plain): $crate::types::requests::AddressQuery => $crate::types::responses::RegisteredAuthResult;

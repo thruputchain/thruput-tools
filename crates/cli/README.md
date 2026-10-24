@@ -23,10 +23,10 @@ scripts/smoke-local-dx.sh
 ```
 
 The smoke scaffolds a counter project, builds the default artifact, starts
-`thruput node`, transfers HOG, inspects transaction status and paginated
-history, deploys and calls through a test-owned stored key, exercises `thruput view`, performs
-a raw `thruput storage` read, creates and funds a normal saved wallet, and
-verifies state after a persistent-node restart.
+`thruput node`, transfers native tokens, inspects transaction status and
+paginated history, deploys and calls through a test-owned stored key, exercises
+`thruput view`, performs a raw `thruput storage` read, creates and funds a
+normal saved wallet, and verifies state after a persistent-node restart.
 
 For a gateway/bench smoke against the runtime manifest path:
 
@@ -67,11 +67,12 @@ thruput call my-counter increment 1
 thruput storage my-counter <32-byte-storage-key>
 ```
 
-`thruput node` creates a private random faucet and gives the selected stored
-key a public initial allocation of 100 HOG. It does not generate user keys.
-`init` keeps its key-generation consent rules; scripted setup uses `--generate-key`.
-Without a selected key, the node starts with the faucet only and reports setup
-instructions. Create and select an ordinary key before starting a fresh node:
+`thruput node` creates a private random faucet and gives the selected stored key
+a public initial allocation of 100 native tokens. It does not generate user
+keys. `init` keeps its key-generation consent rules; scripted setup uses
+`--generate-key`. Without a selected key, the node starts with the faucet only
+and reports setup instructions. Create and select an ordinary key before
+starting a fresh node:
 
 ```bash
 thruput keys generate alice
@@ -172,10 +173,10 @@ thruput test --integration -p my-contract --node-arg "--ramdb-bytes 4294967296"
 
 ## Contract call gas
 
-`thruput call --gas-limit 200000000` sets the total transaction gas budget
-and the requested inner invocation budget; the inner call remains bounded by
-the transaction's remaining gas. The default is 25,000,000, which requires
-at least 2.5 HOG in the sending wallet. The CLI checks that balance before
+`thruput call --gas-limit 200000000` sets the total transaction gas budget and
+the requested inner invocation budget; the inner call remains bounded by the
+transaction's remaining gas. The default is 25,000,000, which requires at least
+2.5 native tokens in the sending wallet. The CLI checks that balance before
 submitting a call; use `--gas-limit` to set a different budget.
 
 ## Native RPC
@@ -519,12 +520,12 @@ thruput balance alice --profile futurenet
 ```
 
 Local requests are signed by the bootstrap faucet account and transfer its
-existing HOG; they do not mint. The Local default is 10 HOG, and `--amount`
-accepts any exact positive amount the finite faucet can cover. Local mode has no
-policy cap or rate limit. A conservative balance check rejects transfers the
-faucet cannot cover, and a transfer projected to leave less than 10 HOG adds a
-warning to the normal live-operation confirmation. Successful requests report best-effort committed
-faucet and recipient balances.
+existing native tokens; they do not mint. The Local default is 10 native tokens,
+and `--amount` accepts any exact positive amount the finite faucet can cover.
+Local mode has no policy cap or rate limit. A conservative balance check rejects
+transfers the faucet cannot cover, and a transfer projected to leave less than
+10 native tokens adds a warning to the normal live-operation confirmation.
+Successful requests report best-effort committed faucet and recipient balances.
 
 Futurenet requests go through the configured faucet HTTP service. The service
 chooses a fixed amount and enforces its advertised recipient cooldown,
@@ -534,8 +535,8 @@ Futurenet faucet balance or live quota usage.
 
 ### `thruput transfer` and `thruput tx`
 
-Transfer native HOG from the selected profile wallet, inspect one transaction,
-or request one page of address history:
+Transfer native tokens from the selected profile wallet, inspect one
+transaction, or request one page of address history:
 
 ```bash
 thruput transfer alice 10.5
@@ -607,14 +608,15 @@ thruput deploy --estimate --json
 thruput deploy --fund minimum
 ```
 
-These options require an RPC endpoint exposing authoritative `chainConfig.execution`
-rules. The estimate reports the observed tip, balance-item deposit, code storage
-collateral, and minimum transfer in raw integer units and HOG (10,000,000 raw units
-per HOG). It assumes a fresh, unfunded contract address. The runtime charges code
-by the deployed artifact's byte length. Prices come from the committed tip
-reported as the observed height, which the endpoint may have read shortly before
-this request rather than during it; either way they are not a guarantee of the
-rules at eventual inclusion.
+These options require an RPC endpoint exposing authoritative
+`chainConfig.execution` rules. The estimate reports the observed tip,
+balance-item deposit, code storage collateral, and minimum transfer in raw
+integer units and native tokens (10,000,000 raw units per native token). It
+assumes a fresh, unfunded contract address. The runtime charges code by the
+deployed artifact's byte length. Prices come from the committed tip reported as
+the observed height, which the endpoint may have read shortly before this
+request rather than during it; either way they are not a guarantee of the rules
+at eventual inclusion.
 
 `--fund minimum` covers deployment without an initializer and leaves zero free
 balance for future storage growth. Sender replay storage and gas scheduling capacity
@@ -622,7 +624,7 @@ are separate requirements. With `--init`, the estimate leaves initializer fundin
 unknown; choose an explicit total transfer instead. Missing prices are an error,
 not zero. Explicit amounts remain available for endpoints without this capability.
 
-Native senders accept an explicit `--fund <HOG>`:
+Native senders accept an explicit `--fund <AMOUNT>`:
 
 ```bash
 thruput deploy --fund 5 --dry-run
@@ -634,9 +636,10 @@ and later. Use the catalog-pinned local runtime or a network running a supportin
 release. Legacy senders reject these flags.
 
 Funding is an exact transfer from the sender to the new contract. Zero skips the
-transfer and uses any collateral already at the predicted address. Five HOG above
-is an example, not an estimated minimum. Funding must cover deployment and any
-state created by initialization; later storage growth may require more funds.
+transfer and uses any collateral already at the predicted address. Five native
+tokens above is an example, not an estimated minimum. Funding must cover
+deployment and any state created by initialization; later storage growth may
+require more funds.
 
 `--init <METHOD>` optionally initializes the new contract in the same transaction.
 Repeat `--init-arg <VALUE>` for typed arguments using the selected artifact's
@@ -812,7 +815,7 @@ Start the local development node backed by a supervised
 thruput node
 thruput node --port 9546
 thruput node --host 0.0.0.0 --port 9545
-thruput node --key alice --initial-account-hog 2500000.5
+thruput node --key alice --initial-account-tokens 2500000.5
 thruput node --bootstrap-accounts ./fixture-accounts.json
 thruput node --hog-devnode-binary /path/to/hog-devnode
 thruput node --hog-devnode-binary /path/to/hog-devnode --contract-artifacts-dir /path/to/built_contracts
@@ -845,15 +848,15 @@ Binding to `0.0.0.0` or another non-loopback address exposes an unauthenticated
 development RPC endpoint. Only do this on a trusted network or behind an
 appropriate container, VM, or host firewall.
 
-The supervisor owns a random private faucet with 1,000,000 HOG. Its key stays
-with the chain directory. The selected stored key receives 100 HOG by default;
-`--key` selects it and `--initial-account-hog <HOG>` changes that allocation. If local and hosted
-profiles select different keys, start the node with
-`THRUPUT_PROFILE=local thruput node` so it funds the key used by
-`--profile local` commands. The node otherwise follows the selected
-project/global key.
-HOG values accept up to seven decimal places. These options do not mint HOG or
-limit later transactions. Without a selected key, startup creates no user account.
+The supervisor owns a random private faucet with 1,000,000 native tokens. Its
+key stays with the chain directory. The selected stored key receives 100 native
+tokens by default; `--key` selects it and `--initial-account-tokens <AMOUNT>`
+changes that allocation. If local and hosted profiles select different keys,
+start the node with `THRUPUT_PROFILE=local thruput node` so it funds the key
+used by `--profile local` commands. The node otherwise follows the selected
+project/global key. Native token amounts accept up to seven decimal places.
+These options do not mint native tokens or limit later transactions. Without a
+selected key, startup creates no user account.
 
 Harnesses can pass `--bootstrap-accounts FILE`, an array of public allocations:
 
@@ -861,7 +864,7 @@ Harnesses can pass `--bootstrap-accounts FILE`, an array of public allocations:
 [{"publicKey":"<base58-public-key>","initialStorageTokens":"1000000000"}]
 ```
 
-This conflicts with `--key` and `--initial-account-hog`. Each entry names a
+This conflicts with `--key` and `--initial-account-tokens`. Each entry names a
 nonce-zero native account and a positive raw amount. Signers remain with the
 harness. The producer validates duplicates, supply and storage overhead.
 Recovered directories keep their persisted allocation; changing it requires a
@@ -914,12 +917,13 @@ recipient, caller nonce and public faucet address. Persist the request before
 sending. After a timeout, retry that request; changing the amount or nonce can
 create a second transfer. Admission returns the hash and exact signed bytes;
 execution requires an authoritative receipt. Unresolved errors return retained
-`transactionHash` and `signedTransaction` evidence, which does not prove admission or
-execution. The CLI saves this evidence and reports the hash and attempt path if
-receipt lookup fails. Inspect the hash with `thruput tx show`, then retry the
-original recipient and amount. The existing airdrop remains fixed
-at 10 HOG. Funding storage is bounded to 1024 retained attempts per chain and
-never evicts them; a full journal rejects new requests while reconciling old ones.
+`transactionHash` and `signedTransaction` evidence, which does not prove
+admission or execution. The CLI saves this evidence and reports the hash and
+attempt path if receipt lookup fails. Inspect the hash with `thruput tx show`,
+then retry the original recipient and amount. The existing airdrop remains fixed
+at 10 native tokens. Funding storage is bounded to 1024 retained attempts per
+chain and never evicts them; a full journal rejects new requests while
+reconciling old ones.
 
 Persistent state and `chain dump` include the private faucet credential and the
 funding journal. Archives use private permissions; keep them with their matching

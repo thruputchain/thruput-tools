@@ -418,3 +418,38 @@ jobs:
           echo '{ "type": "module" }' > "$out/package.json"
           node --version
           node decode-events.mjs "$out"
+
+  faucet-web:
+    name: Faucet web (format, build)
+    runs-on: namespace-profile-hogd-linux-2604
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read # install @thruputchain/* from GitHub Packages
+    defaults:
+      run:
+        working-directory: crates/faucet/web
+    env:
+      GH_NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      # corepack installs the pnpm version pinned by packageManager.
+      - name: Install dependencies
+        run: |
+          corepack enable
+          # pnpm only reads registry tokens from user-level config.
+          pnpm config set "//npm.pkg.github.com/:_authToken" "$GH_NPM_TOKEN"
+          pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Type-check and build
+        run: pnpm build

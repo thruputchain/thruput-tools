@@ -12,7 +12,7 @@ use thruput_json_rpc_types::{
     base58::Base58,
     hex::HexBytes,
     network_descriptor::{
-        FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
+        FaucetDescriptor, NativeTokenDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
     },
     requests,
     transaction::TxHash,
@@ -33,7 +33,7 @@ fn descriptor(account: &PubkeyAccount, rpc_url: String) -> NetworkDescriptor {
         "x23".into(),
         Base58([0x43; 32].into()),
         NetworkDescriptorEndpoints::new(rpc_url),
-        NativeHogDescriptor::new(
+        NativeTokenDescriptor::new(
             Base58([0x61; 32].into()),
             7,
             HexBytes(0x6328_5b35_23f9_dc3f_u64.to_be_bytes().to_vec()),
@@ -68,7 +68,7 @@ fn assert_native_transfers(
         let calls: Vec<(ContractAddress, ContractEntrypointID, u64, Vec<u8>)> =
             xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, descriptor.native_hog.token_address.0);
+        assert_eq!(calls[0].0, descriptor.native_token.token_address.0);
         assert_eq!(
             calls[0].1.as_ref(),
             &0x6328_5b35_23f9_dc3f_u64.to_be_bytes()

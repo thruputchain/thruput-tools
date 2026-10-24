@@ -14,24 +14,24 @@ use crate::{
     transaction_hash,
 };
 
-/// Number of fractional decimal places used by native HOG.
-pub const NATIVE_HOG_DECIMALS: u32 = 7;
+/// Number of fractional decimal places used by the native token.
+pub const NATIVE_TOKEN_DECIMALS: u32 = 7;
 
-/// Number of raw units in one native HOG.
-pub const NATIVE_HOG_SCALE: u128 = 10_000_000;
+/// Number of raw units in one native token.
+pub const NATIVE_TOKEN_SCALE: u128 = 10_000_000;
 
-/// Canonical native-HOG ERC-20 `transfer` entrypoint used on every network.
-pub const NATIVE_HOG_TRANSFER_ENTRYPOINT: ContractEntrypointID =
+/// Canonical native-token ERC-20 `transfer` entrypoint used on every network.
+pub const NATIVE_TOKEN_TRANSFER_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new([0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f]);
 
-/// Inputs for constructing and signing a native-HOG transfer through a dev wallet.
+/// Inputs for constructing and signing a native-token transfer through a dev wallet.
 #[derive(Clone, Debug)]
-pub struct BuildSignedDevWalletHogTransfer {
-    /// Dev-wallet contract that owns the HOG being transferred.
+pub struct BuildSignedDevWalletNativeTokenTransfer {
+    /// Dev-wallet contract that owns the native tokens being transferred.
     pub wallet_address: ContractAddress,
     /// Runtime-advertised dev-wallet `doAction` entrypoint.
     pub wallet_entrypoint: ContractEntrypointID,
-    /// Address receiving native HOG.
+    /// Address receiving native tokens.
     pub recipient: ContractAddress,
     /// Native amount in indivisible units.
     pub raw_amount: u128,
@@ -49,15 +49,15 @@ pub struct BuildSignedDevWalletHogTransfer {
 
 /// Exact signed transaction bytes and their canonical inner-transaction hash.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SignedDevWalletHogTransfer {
+pub struct SignedDevWalletNativeTokenTransfer {
     /// Canonical signed-transaction XDR bytes.
     pub bytes: Vec<u8>,
     /// SHA-256 hash of the unsigned inner transaction.
     pub tx_hash: SHA256Hash,
 }
 
-/// Encode native-HOG ERC-20 `transfer` calldata.
-pub fn native_hog_transfer_calldata(
+/// Encode native-token ERC-20 `transfer` calldata.
+pub fn native_token_transfer_calldata(
     recipient: &ContractAddress,
     raw_amount: u128,
 ) -> Result<Vec<u8>, SigningError> {
@@ -65,17 +65,17 @@ pub fn native_hog_transfer_calldata(
         .map_err(|error| SigningError::XdrEncode(error.to_string()))
 }
 
-/// Construct, sign, and encode one native-HOG transfer through a dev wallet.
-pub fn build_signed_dev_wallet_hog_transfer(
-    args: &BuildSignedDevWalletHogTransfer,
+/// Construct, sign, and encode one native-token transfer through a dev wallet.
+pub fn build_signed_dev_wallet_native_token_transfer(
+    args: &BuildSignedDevWalletNativeTokenTransfer,
     signer: &impl Signer,
-) -> Result<SignedDevWalletHogTransfer, SigningError> {
-    let transfer_calldata = native_hog_transfer_calldata(&args.recipient, args.raw_amount)?;
+) -> Result<SignedDevWalletNativeTokenTransfer, SigningError> {
+    let transfer_calldata = native_token_transfer_calldata(&args.recipient, args.raw_amount)?;
     let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
         wallet_address: args.wallet_address,
         wallet_entrypoint: args.wallet_entrypoint,
         target_address: ADDRESS_NATIVE_TOKEN,
-        target_entrypoint: NATIVE_HOG_TRANSFER_ENTRYPOINT,
+        target_entrypoint: NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
         target_calldata: &transfer_calldata,
         gas_limit: args.gas_limit,
         target_gas_limit: args.gas_limit,
@@ -85,7 +85,7 @@ pub fn build_signed_dev_wallet_hog_transfer(
     let tx_hash = transaction_hash(&tx)?;
     let signed_tx = sign_transaction(tx, signer, args.sign_params, &args.network_hash)?;
     let bytes = encode_signed_transaction_xdr(&signed_tx)?;
-    Ok(SignedDevWalletHogTransfer { bytes, tx_hash })
+    Ok(SignedDevWalletNativeTokenTransfer { bytes, tx_hash })
 }
 
 /// Encode the dev-wallet `create_wallet` calldata tuple.

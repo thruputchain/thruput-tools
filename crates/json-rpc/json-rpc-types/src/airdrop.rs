@@ -102,7 +102,7 @@ pub enum ClientNonceError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AirdropRequest {
-    /// Address receiving the native HOG transfer.
+    /// Address receiving the native token transfer.
     pub recipient: ContractAddress,
     /// Caller-selected idempotency key for this recipient and network.
     pub client_nonce: ClientNonce,
@@ -115,9 +115,9 @@ pub struct AirdropRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FundAccountRequest {
-    /// Native HOG transfer recipient.
+    /// Native token transfer recipient.
     pub recipient: ContractAddress,
-    /// Positive canonical decimal amount in raw HOG units.
+    /// Positive canonical decimal amount in raw native token units.
     #[serde(deserialize_with = "positive_raw_amount")]
     pub raw_amount: String,
     /// Retained caller-owned idempotency nonce.
@@ -155,7 +155,7 @@ fn positive_raw_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Str
 pub struct FundAccountResponse {
     /// Recipient of the retained transfer.
     pub recipient: ContractAddress,
-    /// Exact requested raw HOG amount.
+    /// Exact requested raw native token amount.
     pub raw_amount: String,
     /// Canonical body hash for status and receipt queries.
     pub tx_hash: TxHash,
@@ -184,7 +184,7 @@ impl FundAccountResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HostedAirdropRequest {
-    /// Address receiving the native HOG transfer.
+    /// Address receiving the native token transfer.
     pub recipient: ContractAddress,
     /// Caller-selected idempotency key for this recipient and network.
     pub client_nonce: ClientNonce,
@@ -207,7 +207,7 @@ pub struct HostedAirdropRequest {
 pub enum AirdropAttemptResponse {
     /// The logical attempt is in progress and may not have been submitted yet.
     Pending {
-        /// Address receiving the native HOG transfer.
+        /// Address receiving the native token transfer.
         recipient: ContractAddress,
         /// Native amount in indivisible units.
         raw_amount: String,
@@ -221,7 +221,7 @@ pub enum AirdropAttemptResponse {
     },
     /// The transaction committed successfully.
     Succeeded {
-        /// Address receiving the native HOG transfer.
+        /// Address receiving the native token transfer.
         recipient: ContractAddress,
         /// Canonical transaction hash.
         tx_hash: TxHash,

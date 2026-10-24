@@ -95,7 +95,7 @@ async fn endpoint_preparation_uses_only_native_reads() {
         (
             "getVersionInfo",
             Ok(version(
-                "14.1.0",
+                "14.1.1",
                 &["sendTransaction", "getTransactionReceipt"],
             )),
         ),

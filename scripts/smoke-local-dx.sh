@@ -36,7 +36,7 @@ PROJECT_NAME="smoke-counter"
 SMOKE_PROFILE="local"
 INITIAL_VALUE=7
 INCREMENT_AMOUNT=5
-CUSTOM_ACCOUNT_HOG="1234567.0000001"
+CUSTOM_ACCOUNT_TOKENS="1234567.0000001"
 CUSTOM_ACCOUNT_RAW="12345670000001"
 FIXED_FAUCET_RAW="10000000000000"
 
@@ -742,7 +742,7 @@ MANIFEST
 [[ "$(json_field bootstrapAccounts.1.role "$RUNTIME_JSON")" == "local_user" ]] \
     || die "runtime manifest account 1 was not a local user"
 [[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_ACCOUNT_RAW" ]] \
-    || die "runtime manifest did not propagate custom local-user HOG allocation"
+    || die "runtime manifest did not propagate custom local-user native token allocation"
 for index in 0 1 2 3; do
     expected_role="local_user"
     expected_tokens="$CUSTOM_ACCOUNT_RAW"
@@ -1150,7 +1150,7 @@ WALLET_FUNDED_JSON="$(run_json "explicitly funded native balance" "$CLI" --json 
 # A first transfer creates storage, so free balance can be below the exact
 # transfer amount. Check the returned raw amount separately from free balance.
 [[ "$(json_field data.rawAmount "$AIRDROP_JSON")" == "1000000000" ]] \
-    || die "airdrop did not transfer the requested 100 HOG"
+    || die "airdrop did not transfer the requested 100 native tokens"
 python3 - "$(json_field data.rawBalance "$WALLET_FUNDED_JSON")" <<'BALANCE'
 import sys
 balance = int(sys.argv[1])
@@ -1165,7 +1165,7 @@ USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
 [[ "$(json_field data.nativeDeployment.sender "$USER_DEPLOY_JSON")" == "$WALLET_ADDRESS" ]] \
     || die "native deployment changed the wallet identity"
 [[ "$(json_field data.nativeDeployment.fundingRawAmount "$USER_DEPLOY_JSON")" == "100000000" ]] \
-    || die "native deployment did not record the exact 10 HOG funding"
+    || die "native deployment did not record funding of exactly 10 native tokens"
 SAVED_ALIAS="$(toml_field thruput.toml "profile.$SMOKE_PROFILE.contracts.$PROJECT_NAME")"
 [[ "$SAVED_ALIAS" == "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy alias was $SAVED_ALIAS, expected $USER_CONTRACT_ADDRESS"
@@ -1258,7 +1258,7 @@ assert_rpc_network_identity "$RPC_URL"
 [[ "$(json_field bootstrapAccounts.0.initialStorageTokens "$RUNTIME_JSON")" == "$FIXED_FAUCET_RAW" ]] \
     || die "restarted runtime manifest faucet did not retain its fixed allocation"
 [[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_ACCOUNT_RAW" ]] \
-    || die "restarted runtime manifest did not retain custom local-user HOG allocation"
+    || die "restarted runtime manifest did not retain custom local-user native token allocation"
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     update_rpc_url thruput.toml "$SMOKE_PROFILE" "$RPC_URL"
 fi

@@ -15,12 +15,6 @@
 		respond "ok" 200
 	}
 
-	handle_path /api/* {
-		reverse_proxy https://faucet.thruput.network {
-			header_up Host faucet.thruput.network
-		}
-	}
-
 	handle {
 		root * dist
 		file_server
