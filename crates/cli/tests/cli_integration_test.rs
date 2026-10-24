@@ -879,7 +879,7 @@ fn config_rm_help_describes_confirmation_and_deleted_contents() {
     assert!(stdout.contains("contract aliases and wallet bindings"));
     assert!(stdout.contains("asks for confirmation"));
     assert!(stdout.contains("-f, --force"));
-    assert!(stdout.contains("without prompting"));
+    assert!(stdout.contains("Skip the confirmation prompt"));
     assert!(stdout.contains("cannot be undone"));
     assert!(stdout.contains("default profile selection is cleared"));
     assert!(stdout.contains("--global"));
@@ -11558,7 +11558,7 @@ fn keys_rm_help_documents_force() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("-f, --force"));
-    assert!(stdout.contains("without prompting"));
+    assert!(stdout.contains("Skip the confirmation prompt"));
     assert!(stdout.contains("cannot be undone"));
 }
 

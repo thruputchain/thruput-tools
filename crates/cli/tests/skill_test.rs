@@ -365,8 +365,37 @@ mod installer {
         assert!(String::from_utf8_lossy(&result.stderr).contains("installer output"));
         assert_eq!(
             fs::read_to_string(root.path().join("args")).unwrap(),
-            "--yes\nskills@1.7.0\nadd\nthruputchain/agent-skills\n--skill\nthruput\n--global\n--agent\nopencode\n--json\n--yes\n--yes\nskills@1.7.0\nlist\n--json\n--global\n"
+            "--yes\nskills@1.7.0\nadd\nthruputchain/agent-skills\n--skill\nthruput\n--global\n--agent\nopencode\n--agent\nuniversal\n--json\n--yes\n--yes\nskills@1.7.0\nlist\n--json\n--global\n"
         );
+    }
+
+    #[test]
+    fn unattended_install_does_not_repeat_an_agent_set_that_covers_the_canonical_directory() {
+        for agent in ["universal", "*"] {
+            let root = fixture();
+            let result = command(&root)
+                .args([
+                    "install",
+                    "--global",
+                    "--agent",
+                    agent,
+                    "--yes",
+                    "--non-interactive",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert_eq!(
+                fs::read_to_string(root.path().join("args")).unwrap(),
+                format!(
+                    "--yes\nskills@1.7.0\nadd\nthruputchain/agent-skills\n--skill\nthruput\n--global\n--agent\n{agent}\n--json\n--yes\n--yes\nskills@1.7.0\nlist\n--json\n--global\n"
+                )
+            );
+        }
     }
 
     #[test]

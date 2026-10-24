@@ -85,7 +85,16 @@ struct RpcTargetArgs {
 
 #[derive(Args, Debug, Clone, Copy, Default)]
 struct ConfirmationArgs {
-    /// Confirm without prompting; the protected action cannot be undone
+    /// Skip the confirmation prompt; required when no interactive terminal is available
+    #[arg(short = 'f', long)]
+    force: bool,
+}
+
+/// Confirmation for removals and replacements whose prompts warn they cannot be undone.
+#[derive(Args, Debug, Clone, Copy, Default)]
+struct DestructiveConfirmationArgs {
+    /// Skip the confirmation prompt; required when no interactive terminal is available.
+    /// This cannot be undone
     #[arg(short = 'f', long)]
     force: bool,
 }
@@ -1246,7 +1255,7 @@ enum KeysCommand {
         /// Key name to remove
         name: String,
         #[command(flatten)]
-        confirmation: ConfirmationArgs,
+        confirmation: DestructiveConfirmationArgs,
     },
 }
 
@@ -1344,7 +1353,7 @@ enum ConfigCommand {
         /// Profile to remove
         profile: String,
         #[command(flatten)]
-        confirmation: ConfirmationArgs,
+        confirmation: DestructiveConfirmationArgs,
         /// Remove the profile from global config
         #[arg(long)]
         global: bool,
@@ -1690,7 +1699,7 @@ enum ChainCommand {
         #[arg(long)]
         input: PathBuf,
         #[command(flatten)]
-        confirmation: ConfirmationArgs,
+        confirmation: DestructiveConfirmationArgs,
     },
 }
 
@@ -2032,6 +2041,49 @@ mod tests {
     use super::*;
     use thruput_node_supervisor::ConfigParamName;
 
+    fn force_help(path: &[&str]) -> String {
+        let mut command = Cli::command();
+        let mut current = &mut command;
+        for name in path {
+            current = current.find_subcommand_mut(name).unwrap();
+        }
+        current
+            .get_arguments()
+            .find(|arg| arg.get_id() == "force")
+            .and_then(|arg| arg.get_help())
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn force_help_warns_only_where_the_prompt_says_the_action_cannot_be_undone() {
+        // Agents without a terminal must pass --force for these. Calling them
+        // irreversible makes agent safety checks refuse ordinary setup.
+        for path in [
+            &["wallet", "create"][..],
+            &["wallet", "rm"],
+            &["airdrop"],
+            &["deploy"],
+            &["call"],
+            &["transfer"],
+            &["keys", "export"],
+            &["chain", "dump"],
+        ] {
+            let help = force_help(path);
+            assert!(help.contains("no interactive terminal"), "{path:?}: {help}");
+            assert!(!help.contains("cannot be undone"), "{path:?}: {help}");
+        }
+        for path in [
+            &["keys", "rm"][..],
+            &["config", "rm"],
+            &["chain", "restore"],
+        ] {
+            let help = force_help(path);
+            assert!(help.contains("no interactive terminal"), "{path:?}: {help}");
+            assert!(help.contains("cannot be undone"), "{path:?}: {help}");
+        }
+    }
+
     #[test]
     fn config_get_flags_and_command_name_parse() {
         let cli = Cli::parse_from(["thruput", "config", "get", "devnet", "--sources"]);
@@ -2215,7 +2267,7 @@ mod tests {
             Command::Config {
                 command: ConfigCommand::Rm {
                     profile,
-                    confirmation: ConfirmationArgs { force: true },
+                    confirmation: DestructiveConfirmationArgs { force: true },
                     global: false,
                     project: true,
                 }
