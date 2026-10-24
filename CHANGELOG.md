@@ -14,19 +14,27 @@ projects must change `-Tgroundhog-rv32.ld` to `-Tthruput-rv32.ld` in
 moves interface IDs, the ERC20 error selectors and the ERC20 event signatures
 to `thruput` preimages.
 
+### Local runtime
+
+The default local runtime is hog-devnode 0.1.31-rc.16, the first on protocol
+6705996 (protocol 0.61) and built against SDK 0.56's renamed hash domains: its
+native token emits `0.1::thruput-erc20-if::*` event topics and the new ERC20
+error selectors, so event filters on the old `groundhog-erc20-if` topics no
+longer match. 0.1.31-rc.14 remains selectable but reports an older protocol, so
+`thruput node` refuses to run it with this release.
+
 ### Breaking Rust API changes
 
-Tools now uses protocol 0.58.0 and SDK 0.56.0. Rust consumers that exchange
+Tools now uses protocol 0.61.0 and SDK 0.57.0. Rust consumers that exchange
 protocol types with the public client or JSON-RPC crates must update their
-protocol dependencies to 0.58.0 and SDK dependencies to 0.56.0; types from
-the previous versions are not interchangeable. Newly scaffolded projects pin SDK 0.56.0.
+protocol dependencies to 0.61.0 and SDK dependencies to 0.57.0; types from
+the previous versions are not interchangeable. Newly scaffolded projects pin SDK 0.57.0.
 The XDR codec and RPC driver now come from crates.io: depend on
-`xdrs = { package = "thruput-xdrs", version = "0.16.1" }` (and
+`xdrs = { package = "thruput-xdrs", version = "0.17.1" }` (and
 `thruput-xdr-common`, `thruput-rpc-driver` likewise) instead of the `thruput`
 registry's `xdrs` 0.12, `xdr-common` 0.12 and `rpc_driver` 0.15. The APIs are
 unchanged, but the crates are distinct, so their types do not mix.
-The default local runtime is hog-devnode 0.1.31-rc.14. This changes the Rust
-dependency boundary, not the public JSON-RPC wire format.
+These change the Rust dependency boundary, not the public JSON-RPC wire format.
 
 The published `thruput-hogd-backend` crate now requires transaction context in
 its event-parsing and transaction-lookup helpers so warnings include the hash

@@ -282,7 +282,6 @@ mod tests {
     };
     use thruput_xdr::PROTOCOL_VERSION;
 
-    use async_trait::async_trait;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use thruput_indexer::indexer::TxInfoResult;
     use thruput_indexer::{
@@ -325,7 +324,7 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         async fn indexer_block_explorer_intro(
             &self,
@@ -457,7 +456,7 @@ mod tests {
             .expect("test operation exceeded independent watchdog")
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl SchedGateway_SchedGateway1 for FakeScheduler {
         async fn schedgateway_intro(
             &self,

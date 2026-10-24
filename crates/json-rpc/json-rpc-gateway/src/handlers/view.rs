@@ -146,7 +146,6 @@ pub async fn native_simulate_batch(
 mod tests {
     use std::net::SocketAddr;
 
-    use async_trait::async_trait;
     use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
     use thruput_json_rpc_types::ContractAddress;
     use thruput_json_rpc_types::hex::HexBytes;
@@ -174,7 +173,7 @@ mod tests {
         mode: FakeViewGatewayMode,
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl ViewGateway_ViewGateway1 for FakeViewGateway {
         async fn viewgateway_view_batch(
             &self,

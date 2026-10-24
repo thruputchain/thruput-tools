@@ -1519,7 +1519,6 @@ fn bounded_error(message: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use std::{
         net::SocketAddr,
@@ -1624,7 +1623,7 @@ mod tests {
     }
     struct SaturatedViewGateway(HandlerGate);
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl IndexerBlockExplorer_IndexerBlockExplorer1 for SaturatedIndexer {
         async fn indexer_block_explorer_intro(
             &self,
@@ -1674,7 +1673,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl DbGateway_DbGateway1 for SaturatedDbGateway {
         async fn dbgateway_get_config(
             &self,
@@ -1700,7 +1699,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl ViewGateway_ViewGateway1 for SaturatedViewGateway {
         async fn viewgateway_view_batch(
             &self,
@@ -1960,7 +1959,7 @@ mod tests {
         assert_eq!(state.expected_network_hash, Some(pinned));
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl SchedGateway_SchedGateway1 for TestScheduler {
         async fn schedgateway_intro(
             &self,
@@ -2035,7 +2034,7 @@ mod tests {
 
     struct LifecycleIndexer;
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl IndexerBlockExplorer_IndexerBlockExplorer1 for LifecycleIndexer {
         async fn indexer_block_explorer_intro(
             &self,
@@ -2088,7 +2087,7 @@ mod tests {
 
     struct LifecycleDbGateway;
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl DbGateway_DbGateway1 for LifecycleDbGateway {
         async fn dbgateway_get_config(
             &self,
@@ -2125,7 +2124,7 @@ mod tests {
 
     struct LifecycleViewGateway;
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl ViewGateway_ViewGateway1 for LifecycleViewGateway {
         async fn viewgateway_view_batch(
             &self,
@@ -2310,7 +2309,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl IndexerBlockExplorer_IndexerBlockExplorer1 for SlowIntroIndexer {
         async fn indexer_block_explorer_intro(
             &self,

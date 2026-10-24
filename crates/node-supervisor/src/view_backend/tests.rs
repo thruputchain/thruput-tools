@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
 use thruput_json_rpc_server::native::read::NativeSimulationPlane;
 use thruput_json_rpc_types::ContractAddress;
@@ -31,7 +30,7 @@ struct FakeViewGateway {
     mode: FakeViewGatewayMode,
 }
 
-#[async_trait]
+#[allow(refining_impl_trait)]
 impl ViewGateway_ViewGateway1 for FakeViewGateway {
     async fn viewgateway_view_batch(
         &self,

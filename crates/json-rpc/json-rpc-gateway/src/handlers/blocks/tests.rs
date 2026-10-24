@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
 use thruput_indexer::{
     AddressTransactionQuery, BlockLookupOutcome, BlockLookupResult, BlockTransactionQuery,
@@ -26,7 +25,7 @@ use crate::{config::GatewayConfig, context::BackendClient, metrics::GatewayMetri
 
 struct Indexer;
 
-#[async_trait]
+#[allow(refining_impl_trait)]
 impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
     async fn indexer_block_explorer_intro(
         &self,

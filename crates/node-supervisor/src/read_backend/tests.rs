@@ -4,7 +4,6 @@ use std::sync::{
 };
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
-use async_trait::async_trait;
 use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
 use thruput_db_gateway::AddressAndKeyBatch;
 use thruput_db_gateway::{
@@ -148,7 +147,7 @@ fn dummy_proposed_transaction() -> thruput_xdr::transaction::ProposedTransaction
     }
 }
 
-#[async_trait]
+#[allow(refining_impl_trait)]
 impl SchedGateway_SchedGateway1 for FakeScheduler {
     async fn schedgateway_intro(
         &self,
@@ -420,7 +419,7 @@ impl FakeIndexer {
     }
 }
 
-#[async_trait]
+#[allow(refining_impl_trait)]
 impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     async fn indexer_block_explorer_intro(
         &self,
@@ -591,7 +590,7 @@ struct FakeDbGateway {
     requests: Arc<Mutex<Vec<AddressAndKeyBatch>>>,
 }
 
-#[async_trait]
+#[allow(refining_impl_trait)]
 impl DbGateway_DbGateway1 for FakeDbGateway {
     async fn dbgateway_get_config(
         &self,
