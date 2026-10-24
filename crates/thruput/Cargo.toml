@@ -31,10 +31,20 @@ path = "src/main.rs"
 thruput-cli = { path = "../cli", version = "=0.37.0", registry = "thruput" }
 
 # Profiles come from the root package being built, so this crate does not get
-# the workspace's. Keep it identical to the workspace `[profile.release]`.
+# the workspace's. Keep these identical to the workspace `[profile]` tables;
+# see the workspace Cargo.toml for why each setting is there.
 [profile.release]
 overflow-checks = true
 debug = "line-tables-only"
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
+[profile.dev.build-override]
+debug = false
 
 [lints.rust]
 unused-must-use = "deny"
