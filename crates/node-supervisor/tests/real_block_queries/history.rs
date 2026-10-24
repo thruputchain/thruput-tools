@@ -783,7 +783,7 @@ async fn exercise(fixture: &mut Fixture) -> Result {
     require_coverage_errors(&local, local_cursors).await?;
     require_coverage_errors(&remote, remote_cursors).await?;
     eprintln!(
-        "qualified {} receipts / {} HOG events through both endpoints and restored coverage",
+        "qualified {} receipts / {} native token events through both endpoints and restored coverage",
         receipts.len(),
         event_count
     );

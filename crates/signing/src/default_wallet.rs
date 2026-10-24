@@ -88,7 +88,7 @@ pub struct BuildDefaultWalletDeployTransaction<'a> {
     /// Stable 32-byte deployment salt, separate from the transaction uniquifier.
     pub deployment_nonce: SHA256Hash,
     pub code: DeploymentCode,
-    /// Exact raw HOG amount to transfer. Zero skips the transfer.
+    /// Exact raw native token amount to transfer. Zero skips the transfer.
     pub amount: u128,
     /// Initialization at the newly deployed address within the same root frame.
     pub initializer: Option<WalletInitCall<'a>>,

@@ -1,6 +1,6 @@
 DeploymentFunding
   code: deployment_funding
-  hint text: use an RPC endpoint with authoritative chainConfig execution rules; explicit --fund <HOG> remains available
+  hint text: use an RPC endpoint with authoritative chainConfig execution rules; explicit --fund <AMOUNT> remains available
   details: message
 
 InvalidWalletBinding
@@ -18,7 +18,7 @@ WalletCreatePrefundUnsupported
 
 NativeDeploymentFundingRequired
   code: native_deployment_funding_required
-  hint text: choose the HOG amount to transfer to the new contract; this is not an automatic storage-cost estimate
+  hint text: choose the native token amount to transfer to the new contract; this is not an automatic storage-cost estimate
 
 NativeDeploymentOptionsForLegacy
   code: native_deployment_options_for_legacy
@@ -320,9 +320,9 @@ InvalidNetworkHash
   code: invalid_network_hash
   hint text: network_hash is the 32-byte network hash in unprefixed base58, as `getNetworkInfo` reports it
 
-InvalidHogAmount
-  code: invalid_hog_amount
-  hint text: enter a positive decimal HOG amount with at most seven decimal places
+InvalidNativeTokenAmount
+  code: invalid_native_token_amount
+  hint text: enter a positive decimal native token amount with at most seven decimal places
   details: input, message
 
 InvalidAddressTarget

@@ -18,7 +18,7 @@ use tokio::io::AsyncReadExt;
 use crate::BenchError;
 use thruput_json_rpc_types::{base58::Base58, transaction::TxHash};
 
-const HOG_BALANCE_ENTRYPOINT: ContractEntrypointID =
+const NATIVE_TOKEN_BALANCE_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new(0x41ac_95d6_e06e_2620_u64.to_be_bytes());
 
 const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
@@ -66,7 +66,7 @@ pub(super) fn generate_tx_batch(
                 thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
                     account: &native,
                     target_address: thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
-                    target_entrypoint: HOG_BALANCE_ENTRYPOINT,
+                    target_entrypoint: NATIVE_TOKEN_BALANCE_ENTRYPOINT,
                     target_calldata: &calldata,
                     gas_limit: 20_000_000,
                     target_gas_limit: 10_000_000,

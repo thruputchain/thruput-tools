@@ -8,9 +8,9 @@ use sha2::{Digest, Sha256};
 use thruput_json_rpc_types::hex::Topic;
 use thruput_json_rpc_types::{ContractAddress, bootstrap_manifest::BootstrapManifestAllocation};
 use thruput_signing::{
-    NATIVE_HOG_TRANSFER_ENTRYPOINT, SignTransactionParams,
+    NATIVE_TOKEN_TRANSFER_ENTRYPOINT, SignTransactionParams,
     default_wallet::{BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction},
-    encode_signed_transaction_xdr, native_hog_transfer_calldata, sign_transaction,
+    encode_signed_transaction_xdr, native_token_transfer_calldata, sign_transaction,
     transaction_hash,
 };
 use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
@@ -50,11 +50,11 @@ async fn transfer(
         .network_hash
         .to_network_hash();
     let account = PubkeyAccount::from_public_key_bytes(sender.verifying_key_bytes(), 0);
-    let calldata = native_hog_transfer_calldata(&recipient.0, AMOUNT)?;
+    let calldata = native_token_transfer_calldata(&recipient.0, AMOUNT)?;
     let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
         account: &account,
         target_address: ADDRESS_NATIVE_TOKEN,
-        target_entrypoint: NATIVE_HOG_TRANSFER_ENTRYPOINT,
+        target_entrypoint: NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
         target_calldata: &calldata,
         target_gas_limit: GAS,
         gas_limit: GAS,

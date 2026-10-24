@@ -27,14 +27,14 @@ fn create_wallet_calldata_round_trips_expected_tuple() {
 }
 
 #[test]
-fn signed_hog_transfer_retains_exact_bytes_and_canonical_hash() {
+fn signed_native_token_transfer_retains_exact_bytes_and_canonical_hash() {
     let signer = LocalSigner::from_secret_key([0x44; 32]);
-    let transfer = build_signed_dev_wallet_hog_transfer(
-        &BuildSignedDevWalletHogTransfer {
+    let transfer = build_signed_dev_wallet_native_token_transfer(
+        &BuildSignedDevWalletNativeTokenTransfer {
             wallet_address: ContractAddress::from([0x11; 32]),
             wallet_entrypoint: ContractEntrypointID::from([0x22; 8]),
             recipient: ContractAddress::from([0x33; 32]),
-            raw_amount: 10 * NATIVE_HOG_SCALE,
+            raw_amount: 10 * NATIVE_TOKEN_SCALE,
             gas_limit: DEFAULT_TX_GAS_LIMIT,
             block_expiry_height: 1_007,
             nonce: 99,
@@ -43,7 +43,7 @@ fn signed_hog_transfer_retains_exact_bytes_and_canonical_hash() {
         },
         &signer,
     )
-    .expect("bug: native HOG transfer should build and sign");
+    .expect("bug: native token transfer should build and sign");
     let decoded: thruput_xdr::transaction::SignedTransaction =
         xdrs::txs::decode(&transfer.bytes).expect("bug: signed transfer bytes should decode");
 
@@ -58,10 +58,10 @@ fn signed_hog_transfer_retains_exact_bytes_and_canonical_hash() {
 }
 
 #[test]
-fn native_hog_transfer_calldata_encodes_recipient_and_raw_amount() {
+fn native_token_transfer_calldata_encodes_recipient_and_raw_amount() {
     let recipient = ContractAddress::from([0x55; 32]);
-    let calldata = native_hog_transfer_calldata(&recipient, 123)
-        .expect("bug: native HOG transfer calldata should encode");
+    let calldata = native_token_transfer_calldata(&recipient, 123)
+        .expect("bug: native token transfer calldata should encode");
     let decoded: (ContractAddress, u128) =
         xdrs::cxs::decode(&calldata).expect("bug: transfer calldata should decode");
 

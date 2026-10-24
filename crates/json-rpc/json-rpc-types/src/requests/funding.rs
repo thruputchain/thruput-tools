@@ -19,7 +19,7 @@ object_request! {
 /// Local funding request, including the expected local faucet identity.
 FundAccountRequest {
     recipient: ContractAddress,
-    /// Positive canonical decimal amount in raw HOG units.
+    /// Positive canonical decimal amount in raw native token units.
     #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_positive_amount")]
     #[schemars(schema_with = "positive_amount_schema")]
     raw_amount: u128,

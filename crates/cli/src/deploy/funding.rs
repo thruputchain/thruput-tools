@@ -26,7 +26,7 @@ pub(super) struct FundingReport {
     #[serde(with = "decimal")]
     #[schemars(with = "decimal::Decimal<u128>")]
     minimum_funding_raw: u128,
-    pub minimum_funding_hog: String,
+    pub minimum_funding_tokens: String,
     /// None means initializer effects were not estimated.
     initializer_funding_raw: Option<String>,
     pub execution: Arc<ExecutionConfig>,
@@ -90,7 +90,7 @@ fn calculate(
         balance_deposit_raw: balance,
         deployment_cost_raw: deployment,
         minimum_funding_raw: minimum,
-        minimum_funding_hog: crate::hog::format_amount(minimum),
+        minimum_funding_tokens: crate::native_token::format_amount(minimum),
         initializer_funding_raw: (!initializer).then(|| "0".into()),
         execution,
     })
@@ -206,7 +206,7 @@ mod tests {
     fn minimum_covers_first_credit_and_code_but_not_initializer() {
         let report = calculate(100, SIZES, rules("1234", "12000", "10"), true).unwrap();
         assert_eq!(report.minimum_funding(), 14_234);
-        assert_eq!(report.minimum_funding_hog, "0.0014234");
+        assert_eq!(report.minimum_funding_tokens, "0.0014234");
         assert_eq!(report.initializer_funding_raw, None);
         let changed = calculate(100, SIZES, rules("20", "30", "0"), false).unwrap();
         assert_eq!(changed.minimum_funding(), 50);

@@ -133,11 +133,12 @@ async fn fund(node: &NodeSupervisorHandle, recipient: ContractAddress) {
 
 fn transfer(signer: &LocalSigner, recipient: ContractAddress) -> Transaction {
     let account = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
-    let calldata = thruput_signing::native_hog_transfer_calldata(&recipient.0, 1_000_000).unwrap();
+    let calldata =
+        thruput_signing::native_token_transfer_calldata(&recipient.0, 1_000_000).unwrap();
     build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
         account: &account,
         target_address: thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
-        target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+        target_entrypoint: thruput_signing::NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
         target_calldata: &calldata,
         gas_limit: 25_000_000,
         target_gas_limit: 25_000_000,

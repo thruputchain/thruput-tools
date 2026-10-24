@@ -50,7 +50,7 @@ StorageItem, "kind" {
 }
 
 response_object! {
-/// Free native-HOG base units; storage collateral is separate.
+/// Free native-token base units; storage collateral is separate.
 BalanceResult {
     address: ContractAddress,
     #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]

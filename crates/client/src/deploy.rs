@@ -35,7 +35,7 @@ pub struct DeployRequest<'a> {
     pub account: &'a PubkeyAccount,
     /// Binary attached to this transaction, or the hash of an already registered binary.
     pub code: DeploymentCode,
-    /// Exact raw HOG amount transferred to the new contract. Zero skips funding.
+    /// Exact raw native token amount transferred to the new contract. Zero skips funding.
     pub amount: u128,
     /// Invocation of the new contract by the deploying wallet.
     pub initializer: Option<WalletInitCall<'a>>,

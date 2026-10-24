@@ -902,7 +902,7 @@ rpc_url = "https://global-rpc.example"
 runtime_manifest = "runtime/manifest.json"
 
 [profile.devnet.contracts]
-HOG = "0x01"
+NATIVE_TOKEN = "0x01"
 "#,
     );
     std::fs::write(
@@ -937,7 +937,7 @@ counter = "0x02"
     assert!(merged_stdout.contains("rpc_url"));
     assert!(merged_stdout.contains("https://project-rpc.example"));
     assert!(merged_stdout.contains("project"));
-    assert!(merged_stdout.contains("contracts.HOG"));
+    assert!(merged_stdout.contains("contracts.NATIVE_TOKEN"));
     assert!(merged_stdout.contains("global"));
 
     let plain = thruput()
@@ -2083,7 +2083,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
         .arg(fake)
         .arg("--data-dir")
         .arg(&data_dir)
-        .arg("--initial-account-hog")
+        .arg("--initial-account-tokens")
         .arg("25.0000001")
         .arg("--init-network-hash")
         .arg(thruput_encoding::encode(&[0xab; 32]))
@@ -4305,8 +4305,8 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("default: all zeros for new chains"));
     assert!(stdout.contains("persistent hog-devnode state"));
     assert!(stdout.contains("--key <KEY>"));
-    assert!(stdout.contains("--initial-account-hog <HOG>"));
-    assert!(stdout.contains("Initial HOG for the selected key"));
+    assert!(stdout.contains("--initial-account-tokens <AMOUNT>"));
+    assert!(stdout.contains("Initial native token balance for the selected key"));
     assert!(stdout.contains("--hogd-protocol"));
     assert!(stdout.contains("THRUPUT_DEVNODE_BINARY"));
     assert!(stdout.contains("THRUPUT_OFFLINE"));
@@ -5470,8 +5470,8 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(thruput_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 8);
-    assert_eq!(stdout["data"]["schemaVersion"], 8);
+    assert_eq!(thruput_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 9);
+    assert_eq!(stdout["data"]["schemaVersion"], 9);
     for old_key in ["dry_run", "rpc_url", "artifact_kind", "signed_tx"] {
         assert!(stdout["data"].get(old_key).is_none(), "found {old_key}");
     }
@@ -6310,12 +6310,12 @@ fn airdrop_dry_run_json_uses_default_wallet_when_recipient_is_omitted() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "airdrop");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 5);
+    assert_eq!(stdout["data"]["schemaVersion"], 6);
     assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["recipient"], "alice");
     assert_eq!(stdout["data"]["recipientWallet"], recipient_wallet);
-    assert_eq!(stdout["data"]["amountHog"], "1.25");
+    assert_eq!(stdout["data"]["amountTokens"], "1.25");
     assert_eq!(stdout["data"]["rawAmount"], "12500000");
     assert_eq!(stdout["data"]["faucet"]["address"], faucet_wallet);
     assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
@@ -6835,7 +6835,7 @@ fn airdrop_explicit_key_rejects_ambiguous_or_invalid_saved_accounts_before_rpc()
 }
 
 #[test]
-fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
+fn airdrop_json_rejects_invalid_native_token_amount_before_rpc() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -6870,7 +6870,7 @@ fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
     assert!(output.stdout.is_empty());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["command"], "airdrop");
-    assert_eq!(stderr["error"]["code"], "invalid_hog_amount");
+    assert_eq!(stderr["error"]["code"], "invalid_native_token_amount");
     assert_eq!(stderr["error"]["details"]["input"], "1.00000001");
     assert!(
         stderr["error"]["hint"]
@@ -6881,7 +6881,7 @@ fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
 }
 
 #[test]
-fn local_airdrop_json_warns_when_projected_faucet_balance_is_below_ten_hog() {
+fn local_airdrop_json_warns_when_projected_faucet_balance_is_below_ten_tokens() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -6915,7 +6915,7 @@ fn local_airdrop_json_warns_when_projected_faucet_balance_is_below_ten_hog() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["warnings"][0]["level"], "warn");
     assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
-    assert_eq!(payload["data"]["schemaVersion"], 5);
+    assert_eq!(payload["data"]["schemaVersion"], 6);
 }
 
 #[test]
@@ -6948,7 +6948,7 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["mode"], "remote");
-    assert_eq!(stdout["data"]["schemaVersion"], 5);
+    assert_eq!(stdout["data"]["schemaVersion"], 6);
     assert_eq!(stdout["data"]["recipientWallet"], recipient);
     assert_eq!(stdout["data"]["rawAmount"], "25000000");
     assert_eq!(
@@ -7044,7 +7044,7 @@ fn transaction_commands_require_force_before_submission_or_attempt_state() {
         ),
         (
             vec!["transfer".to_owned(), recipient, "1".to_owned()],
-            "transfer HOG",
+            "transfer native tokens",
         ),
         (
             vec!["airdrop".to_owned(), "alice".to_owned()],
@@ -7235,7 +7235,7 @@ fn transfer_dry_run_signs_with_an_mldsa65_key_and_attaches_the_claim_key() {
 }
 
 #[test]
-fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
+fn transfer_dry_run_json_outputs_signed_wallet_wrapped_native_token_transfer() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -7385,7 +7385,7 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
 }
 
 #[test]
-fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
+fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_native_token_constants() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     let config_home = tmp.path().join("config-home");
@@ -7728,7 +7728,7 @@ fn transfer_dry_run_rejects_invalid_inputs_before_rpc() {
         (
             thruput_encoding::encode(&[0xab; 32]),
             "1.00000001",
-            "invalid_hog_amount",
+            "invalid_native_token_amount",
         ),
         ("missing".to_owned(), "1", "unknown_address_target"),
     ] {
@@ -8304,7 +8304,7 @@ fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
     assert!(success.output.status.success());
     assert!(success.output.stdout.is_empty());
     let stderr = String::from_utf8(success.output.stderr).unwrap();
-    assert!(stderr.contains("Transferred 1.5 HOG."));
+    assert!(stderr.contains("Transferred 1.5 native tokens."));
     assert!(stderr.contains(&format!(
         "recipient: {}",
         thruput_encoding::encode(&[0xab; 32])
@@ -8458,7 +8458,7 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 8);
+    assert_eq!(stdout["data"]["schemaVersion"], 9);
     assert_eq!(stdout["data"]["artifactKind"], "rv32");
     assert_eq!(
         stdout["data"]["artifactPath"].as_str().unwrap(),
@@ -9126,7 +9126,7 @@ fn deploy_live_json_fails_with_receipt_context() {
 }
 
 #[test]
-fn deploy_live_json_reports_actionable_native_hog_overdraft() {
+fn deploy_live_json_reports_actionable_native_token_overdraft() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
@@ -9157,13 +9157,13 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 8);
+    assert_eq!(stdout["data"]["schemaVersion"], 9);
     assert_eq!(stdout["data"]["blockHeight"], "42");
     assert_eq!(stdout["data"]["execution"]["result"], "abort");
     assert_eq!(stdout["error"]["code"], "transaction_insufficient_funds");
     assert_eq!(
         stdout["error"]["details"]["reason"],
-        "nativeHogTransferOverdraft"
+        "nativeTokenTransferOverdraft"
     );
     assert!(stdout["error"]["hint"].as_str().is_some_and(|hint| {
         hint.contains("thruput balance --profile=default -- alice")
@@ -9205,7 +9205,7 @@ fn deploy_live_human_reports_selected_wallet_funding_commands() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("wallet `alice` has insufficient HOG"));
+    assert!(stderr.contains("wallet `alice` has insufficient native tokens"));
     assert!(stderr.contains("thruput balance --profile=default -- alice"));
     assert!(stderr.contains("thruput airdrop --profile=default -- alice"));
     assert!(stderr.contains("retry the original deploy command"));
@@ -9825,12 +9825,12 @@ fn balance_json_uses_default_wallet_when_target_is_omitted() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "balance");
-    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["schemaVersion"], 4);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["target"], "alice");
     assert_eq!(stdout["data"]["address"], address);
     assert_eq!(stdout["data"]["rawBalance"], "123456789");
-    assert_eq!(stdout["data"]["balanceHog"], "12.3456789");
+    assert_eq!(stdout["data"]["balanceTokens"], "12.3456789");
     assert_eq!(stdout["data"]["stateBlockHeight"], "34");
 }
 
@@ -9867,7 +9867,7 @@ fn balance_json_uses_global_default_profile_when_profile_omitted() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["address"], address);
-    assert_eq!(stdout["data"]["balanceHog"], "7");
+    assert_eq!(stdout["data"]["balanceTokens"], "7");
 }
 
 #[test]
@@ -15044,7 +15044,7 @@ fn spawn_network_descriptor_with_hash(
             "protocol": "hogp/test00000000000",
             "genesisHash": thruput_json_rpc_types::NetworkHashText::from([0x42; 32]),
             "endpoints": { "rpcUrl": rpc_url },
-            "nativeHog": {
+            "nativeToken": {
                 "tokenAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x61; 32])),
                 "decimals": 7,
                 "transferEntrypoint": "0x63285b3523f9dc3f"
@@ -15312,7 +15312,7 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
             entrypoint,
             format!(
                 "0x{}",
-                hex::encode(thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref())
+                hex::encode(thruput_signing::NATIVE_TOKEN_TRANSFER_ENTRYPOINT.as_ref())
             )
         );
         let (actual_recipient, amount): (thruput_xdr::types::ContractAddress, u128) =
@@ -15410,7 +15410,7 @@ fn serve_local_funding_transaction_outcome(
         thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
             account: &account,
             target_address: thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
-            target_entrypoint: thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            target_entrypoint: thruput_signing::NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
             target_calldata: &calldata,
             gas_limit: thruput_signing::DEFAULT_TX_GAS_LIMIT * 2,
             target_gas_limit: thruput_signing::DEFAULT_TX_GAS_LIMIT,

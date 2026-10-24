@@ -272,11 +272,11 @@ pub enum ConflictCode {
     /// A per-item capacity limit was hit.
     CapacityExceeded,
 
-    /// The native HOG balance at the diagnostic's address cannot cover the
+    /// The native token balance at the diagnostic's address cannot cover the
     /// debits in this block, or a newly created balance item cannot cover
     /// its own storage cost. Storage written under a contract's address is
     /// charged to that contract's balance, so a deployment reports this at
-    /// the new contract's address when it holds no HOG.
+    /// the new contract's address when it holds no native tokens.
     InsufficientFunds,
 
     /// Unrecognized conflict code. Check for gateway updates.

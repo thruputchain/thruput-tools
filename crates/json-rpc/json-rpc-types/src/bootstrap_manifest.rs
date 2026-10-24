@@ -58,7 +58,7 @@ impl BootstrapManifest {
 pub struct BootstrapManifestAllocation {
     /// Public key authorized to sign for the account.
     pub public_key: Ed25519PublicKey,
-    /// Positive canonical decimal allocation in raw HOG units.
+    /// Positive canonical decimal allocation in raw native token units.
     #[serde(deserialize_with = "positive_amount")]
     pub initial_storage_tokens: String,
 }

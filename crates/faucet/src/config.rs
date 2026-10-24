@@ -10,7 +10,7 @@ use std::net::IpAddr;
 use std::time::{Duration, SystemTime};
 use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::network_descriptor::{
-    AirdropDescriptor, FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor,
+    AirdropDescriptor, FaucetDescriptor, NativeTokenDescriptor, NetworkDescriptor,
     NetworkDescriptorEndpoints,
 };
 use thruput_json_rpc_types::{
@@ -331,8 +331,8 @@ pub struct NetworkConfig {
     pub network_hash: NetworkHashText,
     /// Public endpoint configuration.
     pub endpoints: EndpointConfig,
-    /// Native HOG token configuration.
-    pub native_hog: NativeHogConfig,
+    /// Native token configuration.
+    pub native_token: NativeTokenConfig,
     /// Public faucet account configuration.
     pub faucet: FaucetAccountConfig,
 }
@@ -350,10 +350,10 @@ impl NetworkConfig {
             self.protocol,
             self.genesis_hash,
             NetworkDescriptorEndpoints::new(self.endpoints.rpc_url),
-            NativeHogDescriptor::new(
-                self.native_hog.token_address,
-                self.native_hog.decimals,
-                self.native_hog.transfer_entrypoint,
+            NativeTokenDescriptor::new(
+                self.native_token.token_address,
+                self.native_token.decimals,
+                self.native_token.transfer_entrypoint,
             ),
             FaucetDescriptor::new(self.faucet.wallet_address),
         )
@@ -375,13 +375,13 @@ pub struct EndpointConfig {
     pub rpc_url: String,
 }
 
-/// Native HOG token configuration.
+/// Native token configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NativeHogConfig {
-    /// Native HOG token contract address.
+pub struct NativeTokenConfig {
+    /// Native token contract address.
     pub token_address: ContractAddress,
-    /// Display decimals for native HOG amounts.
+    /// Display decimals for native token amounts.
     pub decimals: u32,
     /// Standard ERC20-compatible transfer entrypoint.
     pub transfer_entrypoint: HexBytes,
@@ -412,7 +412,7 @@ fn validate_faucet_public_key_match(
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AirdropConfig {
-    /// Raw HOG units transferred for each airdrop request.
+    /// Raw native token units transferred for each airdrop request.
     pub raw_amount: String,
     /// Source used to load the faucet signing key at startup.
     pub secret_key_source: FaucetSecretKeySource,
@@ -481,7 +481,7 @@ mod tests {
         let config: FaucetConfigFile = toml::from_str(include_str!("../faucet.example.toml"))
             .expect("bug: example faucet config should parse");
 
-        assert_eq!(config.network.native_hog.decimals, 7);
+        assert_eq!(config.network.native_token.decimals, 7);
         assert_eq!(config.airdrop.raw_amount, "1000000000");
     }
 
@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(descriptor.kind, "groundhog-network");
         assert_eq!(descriptor.network_id, "devnet-preview");
         assert_eq!(descriptor.endpoints.rpc_url, "https://rpc.devnet.example");
-        assert_eq!(descriptor.native_hog.decimals, 7);
+        assert_eq!(descriptor.native_token.decimals, 7);
         let airdrop = descriptor
             .airdrop
             .expect("bug: faucet descriptor should advertise airdrop policy");
@@ -849,7 +849,7 @@ mod tests {
         [network.endpoints]
         rpc_url = "https://rpc.devnet.example"
 
-        [network.native_hog]
+        [network.native_token]
         token_address = "11111111111111111111111111111112"
         decimals = 7
         transfer_entrypoint = "0x63285b3523f9dc3f"

@@ -490,7 +490,7 @@ fn query_json_quiet_and_plain_modes_preserve_stream_contracts() {
                 } else if args[0] == "view" {
                     assert!(stderr.contains("Simulation aborted"), "{stderr}");
                 } else {
-                    assert!(stderr.contains("Balance: 0 HOG"));
+                    assert!(stderr.contains("Balance: 0 native tokens"));
                 }
             }
             query.finish(method);

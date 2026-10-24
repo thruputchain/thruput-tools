@@ -41,10 +41,10 @@ pub const DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE: Duration = Duration::from_
 /// Default startup timeout while waiting for hogd-dev readiness.
 pub const DEFAULT_HOGD_DEV_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Fixed local faucet allocation in raw HOG units.
+/// Fixed local faucet allocation in raw native token units.
 pub const LOCAL_FAUCET_STORAGE_TOKENS: u64 = 10_000_000_000_000;
 
-/// Default ordinary user allocation in raw HOG units (100 HOG).
+/// Default ordinary user allocation in raw native token units (100 native tokens).
 pub const DEFAULT_LOCAL_ACCOUNT_TOKENS: u64 = 1_000_000_000;
 
 /// Bootstrap manifest kind consumed by hog-devnode.
@@ -56,8 +56,8 @@ pub const DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE: &str = "local-dev";
 /// Default storage-cost model profile requested from hogd-dev.
 pub const DEFAULT_HOGD_DEV_STORAGE_COST_MODEL_PROFILE: &str = "hogd-default";
 
-/// Default local airdrop amount: 10 HOG in indivisible units.
-pub const DEFAULT_LOCAL_AIRDROP_RAW_AMOUNT: u128 = 10 * thruput_signing::NATIVE_HOG_SCALE;
+/// Default local airdrop amount: 10 native tokens in indivisible units.
+pub const DEFAULT_LOCAL_AIRDROP_RAW_AMOUNT: u128 = 10 * thruput_signing::NATIVE_TOKEN_SCALE;
 
 /// Resource bounds and transfer amount for the optional local airdrop RPC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

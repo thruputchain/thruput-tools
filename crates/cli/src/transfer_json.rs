@@ -8,7 +8,7 @@ use thruput_json_rpc_types::{BlockHeight, ContractAddress};
 
 pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 5;
 
-/// Stable JSON fields shared by every native HOG transfer outcome.
+/// Stable JSON fields shared by every native token transfer outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferReportCommon {
@@ -44,7 +44,7 @@ pub(crate) struct TransferFailureReport {
     pub evidence: serde_json::Value,
 }
 
-/// Stable JSON data for a prepared native HOG transfer.
+/// Stable JSON data for a prepared native token transfer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferDryRunReport {
@@ -56,7 +56,7 @@ pub struct TransferDryRunReport {
     pub signed_transaction: HexBytes,
 }
 
-/// Stable JSON data for a committed native HOG transfer.
+/// Stable JSON data for a committed native token transfer.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferCommittedReport {

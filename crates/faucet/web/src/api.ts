@@ -11,7 +11,7 @@ export type NetworkDescriptor = {
   endpoints: {
     rpcUrl: string
   }
-  nativeHog: {
+  nativeToken: {
     decimals: number
   }
   airdrop: {
@@ -108,7 +108,7 @@ export async function requestAirdrop(
   }
 }
 
-export function formatHogAmount(rawAmount: string, decimals: number) {
+export function formatNativeTokenAmount(rawAmount: string, decimals: number) {
   const raw = BigInt(rawAmount)
   const scale = 10n ** BigInt(decimals)
   const whole = raw / scale
@@ -179,11 +179,11 @@ function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
     throw new Error("Faucet metadata uses an unsupported schema.")
   }
   const endpoints = payload.endpoints
-  const nativeHog = payload.nativeHog
+  const nativeToken = payload.nativeToken
   const airdrop = payload.airdrop
   if (
     !isRecord(endpoints) ||
-    !isRecord(nativeHog) ||
+    !isRecord(nativeToken) ||
     !isRecord(airdrop)
   ) {
     throw new Error("Faucet metadata is missing required sections.")
@@ -195,10 +195,10 @@ function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
     endpoints: {
       rpcUrl: requireString(endpoints.rpcUrl, "endpoints.rpcUrl"),
     },
-    nativeHog: {
+    nativeToken: {
       decimals: requireNonNegativeInteger(
-        nativeHog.decimals,
-        "nativeHog.decimals",
+        nativeToken.decimals,
+        "nativeToken.decimals",
       ),
     },
     airdrop: {

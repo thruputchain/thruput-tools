@@ -11,7 +11,7 @@ use crate::hex::HexBytes;
 use crate::{ContractAddress, NetworkHash, SHA256Hash};
 
 /// Current public network descriptor schema version.
-pub const NETWORK_DESCRIPTOR_SCHEMA_VERSION: u32 = 6;
+pub const NETWORK_DESCRIPTOR_SCHEMA_VERSION: u32 = 7;
 /// Descriptor family for public hosted-network metadata.
 pub const NETWORK_DESCRIPTOR_KIND: &str = "groundhog-network";
 
@@ -34,8 +34,8 @@ pub struct NetworkDescriptor {
     pub genesis_hash: SHA256Hash,
     /// Public endpoints clients may call for this network.
     pub endpoints: NetworkDescriptorEndpoints,
-    /// Native HOG token metadata required to build public token calls.
-    pub native_hog: NativeHogDescriptor,
+    /// Native token metadata required to build public token calls.
+    pub native_token: NativeTokenDescriptor,
     /// Public faucet account metadata. No signing material is included.
     pub faucet: FaucetDescriptor,
     /// Static hosted-faucet airdrop policy. Live balance and usage are intentionally excluded.
@@ -51,7 +51,7 @@ impl NetworkDescriptor {
         protocol: String,
         genesis_hash: SHA256Hash,
         endpoints: NetworkDescriptorEndpoints,
-        native_hog: NativeHogDescriptor,
+        native_token: NativeTokenDescriptor,
         faucet: FaucetDescriptor,
     ) -> Self {
         Self {
@@ -62,7 +62,7 @@ impl NetworkDescriptor {
             protocol,
             genesis_hash,
             endpoints,
-            native_hog,
+            native_token,
             faucet,
             airdrop: None,
         }
@@ -81,7 +81,7 @@ impl NetworkDescriptor {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct AirdropDescriptor {
-    /// Fixed raw HOG amount transferred per successful request.
+    /// Fixed raw native token amount transferred per successful request.
     pub raw_amount: String,
     /// Cooldown applied to each recipient.
     #[serde(with = "crate::decimal")]
@@ -132,21 +132,21 @@ impl NetworkDescriptorEndpoints {
     }
 }
 
-/// Native HOG token metadata.
+/// Native token metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
-pub struct NativeHogDescriptor {
-    /// Native HOG token contract address.
+pub struct NativeTokenDescriptor {
+    /// Native token contract address.
     pub token_address: ContractAddress,
-    /// Display decimals for native HOG amounts.
+    /// Display decimals for native token amounts.
     pub decimals: u32,
     /// Standard ERC20-compatible transfer entrypoint.
     pub transfer_entrypoint: HexBytes,
 }
 
-impl NativeHogDescriptor {
-    /// Construct native HOG token metadata.
+impl NativeTokenDescriptor {
+    /// Construct native token metadata.
     pub fn new(
         token_address: ContractAddress,
         decimals: u32,

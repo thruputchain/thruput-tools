@@ -483,7 +483,7 @@ impl Network {
         if let Some(faucet) = self.inner.local_faucet {
             return self.submit_local_fund(recipient, amount, faucet).await;
         }
-        let calldata = thruput_signing::native_hog_transfer_calldata(&recipient, amount)
+        let calldata = thruput_signing::native_token_transfer_calldata(&recipient, amount)
             .map_err(TestkitError::signing)?;
         let faucet = self.inner.faucet.lock().await;
         let faucet = faucet.as_ref().ok_or(TestkitError::MissingFaucet)?;
@@ -496,7 +496,7 @@ impl Network {
         let (tx_hash, tx_hex) = crate::account::prepare_call(
             faucet,
             thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
-            thruput_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            thruput_signing::NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
             &calldata,
             u64::from_le_bytes(nonce),
         )?;
@@ -831,7 +831,7 @@ pub struct LocalNetworkConfig {
     /// honoring `RUST_LOG`) so the forwarded logs print. Leave `None` for a
     /// quiet node; call [`crate::init_tracing`] directly for finer control.
     pub log_level: Option<LogLevel>,
-    /// Initial raw HOG allocation per scenario-owned nonce-zero fixture account.
+    /// Initial raw native token allocation per scenario-owned nonce-zero fixture account.
     pub initial_account_tokens: u64,
     /// Maximum time to wait for the node to report readiness.
     pub startup_timeout: Duration,

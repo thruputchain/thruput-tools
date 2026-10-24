@@ -27,7 +27,7 @@ export function AirdropForm(props: {
     <Card className="w-full">
       <CardHeader className="sr-only">
         <CardTitle>Fund a wallet</CardTitle>
-        <CardDescription>Request HOG for a Thruput address.</CardDescription>
+        <CardDescription>Request native tokens for a Thruput address.</CardDescription>
       </CardHeader>
       <form onSubmit={props.onSubmit} noValidate>
         <CardContent>

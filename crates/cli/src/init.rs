@@ -191,7 +191,7 @@ fn handle_profile_step(project_start: &Path, ui: &mut InitUi<'_>) -> Result<(), 
 
     let local_rpc = local_rpc_url(project_start).unwrap_or_else(|| DEFAULT_LOCAL_RPC_URL.into());
     ui.success(format_args!("Local RPC: {local_rpc}"));
-    ui.success("HOG alias configured");
+    ui.success("NATIVE_TOKEN alias configured");
 
     Ok(())
 }

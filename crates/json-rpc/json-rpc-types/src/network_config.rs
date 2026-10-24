@@ -44,11 +44,11 @@ pub struct ExecutionConfig {
     pub config_hash: crate::SHA256Hash,
     /// Runtime-resolved limits; omissions are unavailable, never zero.
     pub effective_limits: NetworkConfigParams,
-    /// Active storage collateral schedule in native-HOG base units.
+    /// Active storage collateral schedule in native-token base units.
     pub storage_costs: StorageCosts,
 }
 
-/// Integer native-HOG base units (10,000,000 per HOG), encoded as decimal strings.
+/// Integer native-token base units (10,000,000 per native token), encoded as decimal strings.
 /// Storage collateral is separate from gas capacity. A first credit pays the
 /// recipient's balance deposit; code storage is charged to the deployed address.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

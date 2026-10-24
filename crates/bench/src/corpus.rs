@@ -357,7 +357,7 @@ async fn prepare_inner(
             seed_nonce_start: nonce_start,
             fixture: cli
                 .seed_count
-                .map(|_| "native-wallet-hog-balance-v1".into()),
+                .map(|_| "native-wallet-token-balance-v1".into()),
         },
         records,
     })

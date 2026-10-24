@@ -37,7 +37,7 @@ pub(crate) struct RemoteAirdropDescriptor {
     pub(crate) network_id: String,
     pub(crate) genesis_hash: String,
     pub(crate) policy: AirdropDescriptor,
-    pub(crate) amount_hog: String,
+    pub(crate) amount_tokens: String,
 }
 
 pub(crate) fn resolve_native_signing_context(
@@ -123,13 +123,13 @@ fn remote_airdrop_descriptor(
     descriptor: NetworkDescriptor,
 ) -> Result<RemoteAirdropDescriptor, CliError> {
     validate_descriptor_identity(rpc_url, &descriptor)?;
-    if descriptor.native_hog.decimals != crate::hog::DECIMALS {
+    if descriptor.native_token.decimals != crate::native_token::DECIMALS {
         return Err(descriptor_invalid(
-            "nativeHog.decimals",
+            "nativeToken.decimals",
             format!(
                 "unsupported value {}; expected {}",
-                descriptor.native_hog.decimals,
-                crate::hog::DECIMALS
+                descriptor.native_token.decimals,
+                crate::native_token::DECIMALS
             ),
         ));
     }
@@ -147,7 +147,7 @@ fn remote_airdrop_descriptor(
         network_id: descriptor.network_id,
         genesis_hash: descriptor.genesis_hash.to_string(),
         policy,
-        amount_hog: crate::hog::format_amount(raw_amount),
+        amount_tokens: crate::native_token::format_amount(raw_amount),
     })
 }
 
@@ -336,10 +336,10 @@ mod tests {
     #[test]
     fn remote_airdrop_rejects_unsupported_decimals_and_inexact_raw_amount() {
         let mut value = serde_json::to_value(descriptor()).unwrap();
-        value["nativeHog"]["decimals"] = serde_json::json!(6);
+        value["nativeToken"]["decimals"] = serde_json::json!(6);
         let error = parse_remote_airdrop_descriptor("https://rpc.devnet.example/", value)
-            .expect_err("bug: unsupported native HOG decimals should fail");
-        assert_invalid_field(error, "nativeHog.decimals");
+            .expect_err("bug: unsupported native token decimals should fail");
+        assert_invalid_field(error, "nativeToken.decimals");
 
         let mut value = serde_json::to_value(descriptor()).unwrap();
         value["airdrop"]["rawAmount"] = serde_json::json!("1.0");
@@ -352,7 +352,7 @@ mod tests {
     fn hosted_descriptor_reports_old_schema_before_missing_new_fields() {
         let mut value = serde_json::to_value(descriptor()).unwrap();
         value["schemaVersion"] = serde_json::json!(1);
-        value.as_object_mut().unwrap().remove("nativeHog");
+        value.as_object_mut().unwrap().remove("nativeToken");
 
         let error = parse_descriptor_value(value)
             .expect_err("bug: old descriptor schema should fail before deserialization");
@@ -466,7 +466,7 @@ mod tests {
             "protocol": "hogp/test00000000000",
             "genesisHash": thruput_json_rpc_types::NetworkHashText::from([0x42; 32]),
             "endpoints": { "rpcUrl": "https://rpc.devnet.example" },
-            "nativeHog": {
+            "nativeToken": {
                 "tokenAddress": thruput_json_rpc_types::NetworkHashText::from([0x61; 32]),
                 "decimals": 7,
                 "transferEntrypoint": "0x63285b3523f9dc3f"

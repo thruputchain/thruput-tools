@@ -13,8 +13,8 @@ use thruput_signing::default_wallet::{
 };
 use thruput_signing::{
     LocalSigner, MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SIGNATURE_LEN, MlDsa65Signer,
-    NATIVE_HOG_TRANSFER_ENTRYPOINT, PubkeyAccount, SchemeSigner, SignTransactionParams, Signer,
-    encode_signed_transaction_xdr, encode_transaction_xdr, native_hog_transfer_calldata,
+    NATIVE_TOKEN_TRANSFER_ENTRYPOINT, PubkeyAccount, SchemeSigner, SignTransactionParams, Signer,
+    encode_signed_transaction_xdr, encode_transaction_xdr, native_token_transfer_calldata,
     sign_transaction, transaction_hash, verify_mldsa65,
 };
 use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
@@ -187,12 +187,12 @@ fn default_wallet_transactions_build_sign_and_encode_identically() {
             assert_eq!(call.target, hex::encode(ADDRESS_NATIVE_TOKEN.as_ref()));
             assert_eq!(
                 call.entrypoint,
-                hex::encode(NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref())
+                hex::encode(NATIVE_TOKEN_TRANSFER_ENTRYPOINT.as_ref())
             );
             let receiver = ContractAddress::new(bytes(&transfer.receiver));
             let amount = transfer.amount.parse().expect("bug: decimal amount");
             assert_eq!(
-                native_hog_transfer_calldata(&receiver, amount).unwrap(),
+                native_token_transfer_calldata(&receiver, amount).unwrap(),
                 target_calldata,
                 "{}",
                 vector.name

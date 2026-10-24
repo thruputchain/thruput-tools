@@ -258,7 +258,7 @@ fn native_deploy_requires_explicit_funding_without_rpc() {
     let fixture = Fixture::new("http://127.0.0.1:1");
     for (args, code) in [
         (vec![], "native_deployment_funding_required"),
-        (vec!["--fund", "0.00000001"], "invalid_hog_amount"),
+        (vec!["--fund", "0.00000001"], "invalid_native_token_amount"),
     ] {
         let output = fixture.deploy(&args);
         assert!(!output.status.success());
@@ -582,7 +582,7 @@ async fn zero_funding_and_initializer_are_preserved_in_dry_run_and_recovery() {
                 vec![0xab, 0xcd]
             ))
         );
-        assert_eq!(data["schemaVersion"], 8);
+        assert_eq!(data["schemaVersion"], 9);
         assert_eq!(data["nativeDeployment"]["fundingRawAmount"], "0");
         assert_eq!(
             data["nativeDeployment"]["initializer"]["entrypointId"],

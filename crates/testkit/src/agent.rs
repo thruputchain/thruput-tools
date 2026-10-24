@@ -381,7 +381,7 @@ impl AgentContext {
             .await
     }
 
-    /// Submit an exact raw HOG transfer from the runtime's bootstrap faucet.
+    /// Submit an exact raw native token transfer from the runtime's bootstrap faucet.
     /// Existing-network fixtures start empty; local fixtures receive explicit genesis allocations.
     /// Retry uncertain local funding with the same amount on this scenario/network handle.
     pub async fn submit_fund(&self, amount: u128) -> Result<SubmittedTransaction> {

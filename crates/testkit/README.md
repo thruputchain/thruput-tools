@@ -3,8 +3,8 @@
 Run concurrent contract tests against an existing RPC or a harness-owned local
 node. Each agent receives a deterministic native account derived from the
 scenario seed. Managed local nodes allocate the configured genesis balance to
-these accounts (100 HOG by default). On existing networks, accounts start empty
-and funding is explicit.
+these accounts (100 native tokens by default). On existing networks, accounts
+start empty and funding is explicit.
 
 ```rust,no_run
 use thruput_testkit::{Agent, DeployOptions, LocalNetworkConfig, NetworkConfig, Scenario};
@@ -20,7 +20,7 @@ let scenario = Scenario::builder("counter-test")
     .await?;
 
 scenario.run_agents([Agent::new("alice", |mut ctx| async move {
-    ctx.fund(1_000_000_000).await?; // 100 HOG from the bootstrap faucet
+    ctx.fund(1_000_000_000).await?; // 100 native tokens from the bootstrap faucet
     let deployed = ctx.deploy_artifact("counter", DeployOptions::funded(100_000_000)).await?;
     assert!(deployed.registered);
     Ok(())
@@ -31,13 +31,13 @@ scenario.stop().await?;
 ```
 
 Native deployment uses `DefaultWallet.deploy(nonce, contract_hash, amount, initializer)`.
-Local nodes emit schema-4 public allocations. The scenario owns fixture keys derived from its seed and supplies their public allocations before startup. `accounts(count)` selects the fixture count (default 10); `LocalNetworkConfig.initial_account_tokens` selects their initial raw HOG allocation.
+Local nodes emit schema-4 public allocations. The scenario owns fixture keys derived from its seed and supplies their public allocations before startup. `accounts(count)` selects the fixture count (default 10); `LocalNetworkConfig.initial_account_tokens` selects their initial raw native token allocation.
 
-Every deploy helper takes `DeployOptions`. Amounts are exact raw HOG units,
-including explicit zero. An optional `WalletInitCall` supplies an entrypoint, gas
-budget, and encoded calldata; the initializer runs as the wallet against the new
-contract. Funding, deployment, and initialization commit atomically. Registered
-artifacts carry their code once, then deploy by hash.
+Every deploy helper takes `DeployOptions`. Amounts are exact raw native token
+units, including explicit zero. An optional `WalletInitCall` supplies an
+entrypoint, gas budget, and encoded calldata; the initializer runs as the wallet
+against the new contract. Funding, deployment, and initialization commit
+atomically. Registered artifacts carry their code once, then deploy by hash.
 
 `submit_fund`, `submit_deploy_artifact`, and `submit_call` return handles for manual
 block tests: await pending, produce a block, then await the receipt. Submissions

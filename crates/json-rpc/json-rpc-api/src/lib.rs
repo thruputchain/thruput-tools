@@ -7,6 +7,6 @@ pub mod params;
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "14.1.0";
+pub const WIRE_FORMAT_VERSION: &str = "14.1.1";
 
 pub mod native;

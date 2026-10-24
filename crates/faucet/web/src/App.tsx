@@ -4,7 +4,7 @@ import { toast } from "sonner"
 import {
   type NetworkDescriptor,
   fetchNetworkDescriptor,
-  formatHogAmount,
+  formatNativeTokenAmount,
   requestAirdrop,
 } from "@/api"
 import { AirdropForm } from "@/components/airdrop-form"
@@ -145,15 +145,15 @@ function shortHash(value: string) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`
 }
 
-function showSuccessToast(amountHog: string | null, txHash: string) {
-  toast.success(amountHog ? `Sent ${amountHog} HOG` : "Airdrop sent", {
+function showSuccessToast(amountTokens: string | null, txHash: string) {
+  toast.success(amountTokens ? `Sent ${amountTokens} native tokens` : "Airdrop sent", {
     description: `Transaction ${shortHash(txHash)}`,
   })
 }
 
 function formatAirdropAmount(rawAmount: string, descriptor: NetworkDescriptor) {
   try {
-    return formatHogAmount(rawAmount, descriptor.nativeHog.decimals)
+    return formatNativeTokenAmount(rawAmount, descriptor.nativeToken.decimals)
   } catch {
     return null
   }

@@ -9,10 +9,10 @@ pub mod dev_wallet;
 pub mod encode;
 pub mod error;
 pub mod hash;
-pub mod hog;
 pub mod indices;
 pub mod local;
 pub mod mldsa;
+pub mod native_token;
 pub mod signer;
 pub mod strkey;
 
@@ -30,18 +30,18 @@ pub use dev_account::{
     derive_default_dev_account_signer, derive_dev_account_signer,
 };
 pub use dev_wallet::{
-    BuildSignedDevWalletHogTransfer, NATIVE_HOG_DECIMALS, NATIVE_HOG_SCALE,
-    NATIVE_HOG_TRANSFER_ENTRYPOINT, SignedDevWalletHogTransfer,
-    build_signed_dev_wallet_hog_transfer, create_wallet_calldata, dev_wallet_contract,
-    native_hog_transfer_calldata, wallet_contract_hash,
+    BuildSignedDevWalletNativeTokenTransfer, NATIVE_TOKEN_DECIMALS, NATIVE_TOKEN_SCALE,
+    NATIVE_TOKEN_TRANSFER_ENTRYPOINT, SignedDevWalletNativeTokenTransfer,
+    build_signed_dev_wallet_native_token_transfer, create_wallet_calldata, dev_wallet_contract,
+    native_token_transfer_calldata, wallet_contract_hash,
 };
 pub use encode::{encode_signed_transaction_xdr, encode_transaction_xdr};
 pub use error::SigningError;
 pub use hash::transaction_hash;
-pub use hog::{ParseHogAmountError, parse_hog_amount};
 pub use indices::{AuthClaimIndex, PublicKeyId};
 pub use local::{LocalSigner, SchemeSigner};
 pub use mldsa::{
     MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SEED_LEN, MLDSA65_SIGNATURE_LEN, MlDsa65Signer, verify_mldsa65,
 };
+pub use native_token::{ParseNativeTokenAmountError, parse_native_token_amount};
 pub use signer::Signer;

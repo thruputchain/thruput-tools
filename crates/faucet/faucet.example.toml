@@ -15,7 +15,7 @@ network_hash = "11111111111111111111111111111111"
 [network.endpoints]
 rpc_url = "http://127.0.0.1:9545"
 
-[network.native_hog]
+[network.native_token]
 token_address = "11111111111111111111111111111112"
 decimals = 7
 transfer_entrypoint = "0x63285b3523f9dc3f"

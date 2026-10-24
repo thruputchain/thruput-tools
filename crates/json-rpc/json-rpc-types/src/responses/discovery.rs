@@ -211,7 +211,7 @@ ConfigLimits {
 }
 
 response_object! {
-/// Storage collateral in native-HOG base units. Each decimal amount retains
+/// Storage collateral in native-token base units. Each decimal amount retains
 /// the width of its protocol field; these prices are unrelated to gas burning.
 StorageCosts {
     #[serde(with = "crate::decimal")]

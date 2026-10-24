@@ -307,7 +307,7 @@
         "type": "object"
       },
       "BalanceResult": {
-        "description": "Free native-HOG base units; storage collateral is separate.",
+        "description": "Free native-token base units; storage collateral is separate.",
         "properties": {
           "address": {
             "$ref": "#/components/schemas/Base58_ContractAddress"
@@ -1456,7 +1456,7 @@
         "type": "object"
       },
       "StorageCosts": {
-        "description": "Storage collateral in native-HOG base units. Each decimal amount retains\nthe width of its protocol field; these prices are unrelated to gas burning.",
+        "description": "Storage collateral in native-token base units. Each decimal amount retains\nthe width of its protocol field; these prices are unrelated to gas burning.",
         "properties": {
           "authPerKeyCost": {
             "$ref": "#/components/schemas/DecimalU64"
@@ -1966,7 +1966,7 @@
   },
   "info": {
     "title": "Thruput JSON-RPC",
-    "version": "14.1.0"
+    "version": "14.1.1"
   },
   "methods": [
     {
@@ -33805,7 +33805,7 @@
           "$ref": "#/components/schemas/BalanceResult"
         }
       },
-      "summary": "Read native HOG balance and its state height.",
+      "summary": "Read native token balance and its state height.",
       "x-data-schema": {
         "BackendDataInvalid": {
           "$schema": "http://json-schema.org/draft-07/schema#",
@@ -61182,7 +61182,7 @@
           "name": "rawAmount",
           "required": true,
           "schema": {
-            "description": "Positive canonical decimal amount in raw HOG units.",
+            "description": "Positive canonical decimal amount in raw native token units.",
             "maxLength": 39,
             "pattern": "^[1-9][0-9]*(?![\\s\\S])",
             "type": "string",
@@ -65767,7 +65767,7 @@
             "$ref": "#/components/schemas/Base58_ContractAddress"
           },
           "rawAmount": {
-            "description": "Positive canonical decimal amount in raw HOG units.",
+            "description": "Positive canonical decimal amount in raw native token units.",
             "maxLength": 39,
             "pattern": "^[1-9][0-9]*(?![\\s\\S])",
             "type": "string",
