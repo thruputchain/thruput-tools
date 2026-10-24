@@ -115,6 +115,12 @@ test("rejects malformed addresses", () => {
   assert.equal(parseThruputAddress(""), null)
 })
 
+test("rejects oversized address text without decoding it", () => {
+  const started = performance.now()
+  assert.equal(parseThruputAddress("z".repeat(1_000_000)), null)
+  assert.ok(performance.now() - started < 1000)
+})
+
 test("base58 round-trips leading zero bytes", () => {
   const bytes = new Uint8Array([0, 0, 1, 2, 255])
   assert.deepEqual(decodeBase58(encodeBase58(bytes)), bytes)

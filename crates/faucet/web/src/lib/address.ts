@@ -5,6 +5,8 @@ const BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 const ADDRESS_BYTES = 32
+// Longest base58 text for 32 bytes; checked first because decoding is quadratic.
+const MAX_ADDRESS_BASE58_CHARS = 44
 // Stellar StrKey version byte for contract ("C") addresses.
 const CONTRACT_STRKEY_VERSION = 2 << 3
 const STRKEY_LENGTH = 56
@@ -66,7 +68,7 @@ export function decodeBase58(text: string): Uint8Array | null {
 
 /** Whether text is base58 that decodes to exactly 32 bytes, as API identifiers must. */
 export function isBase58Identifier(text: string): boolean {
-  return decodeBase58(text)?.length === ADDRESS_BYTES
+  return decodeAddressBase58(text) !== null
 }
 
 /**
@@ -79,8 +81,16 @@ export function parseThruputAddress(input: string): string | null {
   if (strkeyBytes) {
     return encodeBase58(strkeyBytes)
   }
+  const bytes = decodeAddressBase58(text)
+  return bytes ? encodeBase58(bytes) : null
+}
+
+function decodeAddressBase58(text: string): Uint8Array | null {
+  if (text.length > MAX_ADDRESS_BASE58_CHARS) {
+    return null
+  }
   const bytes = decodeBase58(text)
-  return bytes?.length === ADDRESS_BYTES ? encodeBase58(bytes) : null
+  return bytes?.length === ADDRESS_BYTES ? bytes : null
 }
 
 function decodeContractStrKey(text: string): Uint8Array | null {
