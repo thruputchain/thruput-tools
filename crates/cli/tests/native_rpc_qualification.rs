@@ -140,8 +140,8 @@ async fn exercise(fixture: &Fixture, node: &NodeSupervisorHandle) -> TestResult 
         return Err(std::io::Error::other("unsupported discovery response").into());
     };
     require(
-        version.wire_format == "14.0.0",
-        "native wire 14 is not serving",
+        version.wire_format == thruput_json_rpc_api::WIRE_FORMAT_VERSION,
+        "native wire version mismatch",
     )?;
     let expected_balance = expected_free_balance(&native).await?;
     let recipient = Base58(PubkeyAccount::from_public_key_bytes([0x63; 32], 0).address());

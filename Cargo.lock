@@ -4142,6 +4142,7 @@ dependencies = [
  "thruput-encoding",
  "thruput-erc20-if",
  "thruput-erc20-permit-if",
+ "thruput-json-rpc-api",
  "thruput-json-rpc-client",
  "thruput-json-rpc-server",
  "thruput-json-rpc-types",

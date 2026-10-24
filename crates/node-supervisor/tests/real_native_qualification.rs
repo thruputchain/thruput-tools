@@ -262,7 +262,7 @@ async fn wait_for_receipt(
 async fn check_discovery(native: &NativeClient<HttpClient>) -> TestResult {
     let version = known(native.get_version_info(input::EmptyRequest {}).await?)?;
     require(
-        version.wire_format == "14.0.0",
+        version.wire_format == thruput_json_rpc_api::WIRE_FORMAT_VERSION,
         "native wire version mismatch",
     )?;
     let mut expected_methods = [
