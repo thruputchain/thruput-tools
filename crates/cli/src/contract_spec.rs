@@ -145,7 +145,7 @@ fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpe
 
     // Raw fragments win over a finalized section, so decode the finalized
     // section only when there are no raw fragments. A stale or malformed
-    // `groundhogspecv0` section must not fail the build when the raw fragments
+    // finalized section must not fail the build when the raw fragments
     // already fully describe the spec.
     if !raw_fragments.is_empty() {
         return canonicalize_rv32_raw_fragments(&raw_fragments);

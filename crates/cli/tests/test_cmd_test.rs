@@ -13,7 +13,7 @@ fn write_rv32_build_fixture(project_root: &Path) -> (PathBuf, PathBuf) {
     fs::write(
         project_root.join(".cargo/config.toml"),
         "[target.riscv32im-unknown-none-elf]\n\
-         rustflags = [\"-C\", \"link-arg=-Tgroundhog-rv32.ld\"]\n",
+         rustflags = [\"-C\", \"link-arg=-Tthruput-rv32.ld\"]\n",
     )
     .unwrap();
     let fixture = project_root.join("fixture.elf");
@@ -514,7 +514,7 @@ fn write_workspace_fixture(
     fs::write(
         root.join(".cargo/config.toml"),
         "[target.riscv32im-unknown-none-elf]\n\
-         rustflags = [\"-C\", \"link-arg=-Tgroundhog-rv32.ld\"]\n",
+         rustflags = [\"-C\", \"link-arg=-Tthruput-rv32.ld\"]\n",
     )
     .unwrap();
     fs::write(

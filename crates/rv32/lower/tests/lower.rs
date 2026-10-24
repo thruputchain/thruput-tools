@@ -650,10 +650,14 @@ fn ignores_alloc_contract_spec_metadata_sections() {
     // written by an older or newer SDK must still be stripped instead of
     // failing the lowering with "unexpected alloc section".
     for name in [
-        "groundhogspecrawv0",
         thruput_spec_tool::RAW_SECTION_NAME,
-        "groundhogspecrawv99",
+        "thruputspecrawv99",
+        thruput_spec_tool::FINAL_SECTION_NAME,
+        // Written by SDKs from before the `thruput` rename.
+        "groundhogspecrawv0",
+        "groundhogspecrawv4",
         "groundhogspecv0",
+        "groundhogspecv2",
     ] {
         let mut spec = happy_spec();
         spec.extras.push(ExtraSection::progbits(
@@ -678,6 +682,10 @@ fn spec_metadata_section_names_match_spec_tool() {
     assert_eq!(
         thruput_rv32_lower::lower::RAW_SPEC_SECTION_PREFIX,
         thruput_spec_tool::RAW_SECTION_PREFIX,
+    );
+    assert_eq!(
+        thruput_rv32_lower::lower::LEGACY_RAW_SPEC_SECTION_PREFIX,
+        thruput_spec_tool::LEGACY_RAW_SECTION_PREFIX,
     );
     assert_eq!(
         thruput_rv32_lower::lower::FINAL_SPEC_SECTION,

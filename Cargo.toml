@@ -96,14 +96,14 @@ thruput-scp = { version = "=0.58.0", registry = "thruput" }
 thruput-coordinator = { version = "=0.58.0", registry = "thruput" }
 thruput-trace = { version = "=0.58.0", registry = "thruput" }
 # from the sdk crate:
-thruput-spec-tool = { version = "=0.55.0", registry = "thruput" }
-thruput-contract-util = { version = "=0.55.0", registry = "thruput" }
-thruput-domain-separator = { version = "=0.55.0", registry = "thruput" }
-thruput-contract-spec = { version = "=0.55.0", registry = "thruput" }
-thruput-u256 = { version = "=0.55.0", registry = "thruput" }
-thruput-erc20-if = { version = "=0.1.66", registry = "thruput" }
-thruput-erc20-permit-if = { version = "=0.1.66", registry = "thruput" }
-thruput-sdk = { version = "=0.55.0", registry = "thruput" }
+thruput-spec-tool = { version = "=0.56.0", registry = "thruput" }
+thruput-contract-util = { version = "=0.56.0", registry = "thruput" }
+thruput-domain-separator = { version = "=0.56.0", registry = "thruput" }
+thruput-contract-spec = { version = "=0.56.0", registry = "thruput" }
+thruput-u256 = { version = "=0.56.0", registry = "thruput" }
+thruput-erc20-if = { version = "=0.1.67", registry = "thruput" }
+thruput-erc20-permit-if = { version = "=0.1.67", registry = "thruput" }
+thruput-sdk = { version = "=0.56.0", registry = "thruput" }
 
 # --- xdrs (crates.io, published as thruput-*) ---
 # The XDR codec is the exception: caret, so an xdrs patch release reaches this

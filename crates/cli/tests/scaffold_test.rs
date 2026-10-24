@@ -55,7 +55,7 @@ fn assert_scaffold_cargo_config(dir: &std::path::Path) {
         &config,
         &[
             "target-feature=+unaligned-scalar-mem,+relax",
-            "link-arg=-Tgroundhog-rv32.ld",
+            "link-arg=-Tthruput-rv32.ld",
             "link-arg=--icf=all",
             "link-arg=--relax-gp",
             "trap-unreachable=false",
