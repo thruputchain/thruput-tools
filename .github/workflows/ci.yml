@@ -430,7 +430,6 @@ jobs:
       run:
         working-directory: crates/faucet/web
     env:
-      # .npmrc reads this to install @thruputchain/* from GitHub Packages.
       GH_NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
@@ -448,6 +447,8 @@ jobs:
       - name: Install dependencies
         run: |
           corepack enable
+          # pnpm only reads registry tokens from user-level config.
+          pnpm config set "//npm.pkg.github.com/:_authToken" "$GH_NPM_TOKEN"
           pnpm install --no-frozen-lockfile
           pnpm exec prettier --write pnpm-lock.yaml
           echo "::group::pnpm-lock.yaml"

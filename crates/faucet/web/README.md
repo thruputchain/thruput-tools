@@ -8,11 +8,11 @@ submits.
 ## Local Development
 
 `@thruputchain/*` packages are published to GitHub Packages, which requires a
-GitHub token with `read:packages` even to install. `.npmrc` reads it from
-`GH_NPM_TOKEN`:
+GitHub token with `read:packages` even to install. pnpm ignores tokens in the
+committed `.npmrc`, so set one once in your user-level config:
 
 ```sh
-export GH_NPM_TOKEN="$(gh auth token)"
+pnpm config set "//npm.pkg.github.com/:_authToken" "$(gh auth token)"
 pnpm install
 pnpm dev
 ```
@@ -52,8 +52,10 @@ The checked-in configuration selects Railpack, builds with pnpm, and checks
 `/healthz`. Leave the start command unset: Railpack detects Vite and serves
 `dist/` with the checked-in `Caddyfile`.
 
-Set `GH_NPM_TOKEN` as a build variable to a token with `read:packages`, so
-the install can fetch `@thruputchain/client`. The page talks to the public
+The install needs a token with `read:packages` to fetch
+`@thruputchain/client`, in pnpm's user-level config rather than the committed
+`.npmrc`. Set `GH_NPM_TOKEN` as a build variable and make the install command
+`pnpm config set "//npm.pkg.github.com/:_authToken" "$GH_NPM_TOKEN" && pnpm install --frozen-lockfile`. The page talks to the public
 Devnet gateway directly, which allows cross-origin requests; no signing key,
 database or volume is needed. The hosted faucet continues to sign and submit
 airdrops.
@@ -65,7 +67,8 @@ the faucet.
 ## Production Build
 
 ```sh
-GH_NPM_TOKEN=... pnpm install --frozen-lockfile
+pnpm config set "//npm.pkg.github.com/:_authToken" "$GH_NPM_TOKEN"
+pnpm install --frozen-lockfile
 VITE_THRUPUT_RPC_URL=https://rpc.example.com pnpm build
 ```
 
