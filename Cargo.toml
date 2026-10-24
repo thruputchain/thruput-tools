@@ -226,3 +226,21 @@ missing-panics-doc = "allow"
 [profile.release]
 overflow-checks = true
 debug = "line-tables-only"
+
+# Dev and test builds link 117 integration-test binaries, and by default each
+# one carries a full copy of the debuginfo for all ~560 crates it pulls in.
+# That debuginfo is most of the target directory. `test` inherits these.
+[profile.dev]
+# On Linux, leave the DWARF in per-object .dwo files instead of copying it into
+# every linked binary. Debuggers and backtraces still find it; macOS already
+# defaults to this.
+split-debuginfo = "unpacked"
+
+# Dependencies keep file:line for backtraces; only stepping into their source
+# in a debugger degrades. Workspace crates keep full debuginfo.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
+# Build scripts and proc macros are build-time machinery nobody debugs.
+[profile.dev.build-override]
+debug = false
