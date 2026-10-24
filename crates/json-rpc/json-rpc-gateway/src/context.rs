@@ -802,7 +802,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use thruput_scp::network::ProtocolCommit as Protocol;
 
-    use async_trait::async_trait;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use thruput_db_gateway::DbGatewayIntroOutcome;
     use thruput_db_gateway::{
@@ -882,7 +881,7 @@ mod tests {
     }
     struct SlowIntroViewGateway;
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl SchedGateway_SchedGateway1 for TestSchedulerGateway {
         async fn schedgateway_intro(
             &self,
@@ -937,7 +936,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl ViewGateway_ViewGateway1 for IntroRejectedViewGateway {
         async fn viewgateway_view_batch(
             &self,
@@ -960,7 +959,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl IndexerBlockExplorer_IndexerBlockExplorer1 for TestIndexer {
         async fn indexer_block_explorer_intro(
             &self,
@@ -1024,7 +1023,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl DbGateway_DbGateway1 for TestDbGateway {
         async fn dbgateway_get_config(
             &self,
@@ -1062,7 +1061,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl ViewGateway_ViewGateway1 for ProtocolCheckingViewGateway {
         async fn viewgateway_view_batch(
             &self,
@@ -1089,7 +1088,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[allow(refining_impl_trait)]
     impl ViewGateway_ViewGateway1 for SlowIntroViewGateway {
         async fn viewgateway_view_batch(
             &self,

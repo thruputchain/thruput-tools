@@ -101,7 +101,7 @@ async fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         // Unknown listeners are expected here. Attribute failures to candidates,
         // including diagnostics from the transport's independently spawned tasks.
         filter = filter
-            .add_directive("rpc_driver=off".parse()?)
+            .add_directive("thruput_rpc_driver=off".parse()?)
             .add_directive("thruput_x23_transport=off".parse()?);
     }
     tracing_subscriber::fmt()

@@ -13,7 +13,6 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1029,7 +1028,7 @@ fn hash_xdr<T: xdrs::WriteXDR>(value: &T) -> SHA256Hash {
     SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(encoded)))
 }
 
-#[async_trait]
+#[allow(refining_impl_trait)]
 impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
     async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
         Ok(())
@@ -1264,7 +1263,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
 struct FakeSchedulerGateway(FakeScheduler);
 
-#[async_trait]
+#[allow(refining_impl_trait)]
 impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
     async fn schedgateway_intro(
         &self,
@@ -1405,7 +1404,7 @@ struct FakeDbGateway {
     tip: Arc<Mutex<Option<DbTip>>>,
 }
 
-#[async_trait]
+#[allow(refining_impl_trait)]
 impl DbGateway_DbGateway1 for FakeDbGateway {
     async fn dbgateway_get_config(
         &self,
@@ -1712,7 +1711,7 @@ impl FakeIndexer {
     }
 }
 
-#[async_trait]
+#[allow(refining_impl_trait)]
 impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     #[tracing::instrument(skip_all)]
     async fn indexer_block_explorer_intro(

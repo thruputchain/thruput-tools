@@ -369,7 +369,7 @@ async fn event_history(
     // Pin the native-token event wire identity independently of receipt decoding.
     // Canonical TransferEvent: signature, sender, recipient, CXS i128.
     let topics = vec![
-        Topic(Sha256::digest(b"0.1::groundhog-erc20-if::TransferEvent").into()),
+        Topic(Sha256::digest(b"0.1::thruput-erc20-if::TransferEvent").into()),
         Topic(transfer.sender.0.as_ref().try_into()?),
         Topic(transfer.recipient.0.as_ref().try_into()?),
     ];
