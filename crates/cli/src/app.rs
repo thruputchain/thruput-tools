@@ -398,6 +398,7 @@ impl NewArgs {
 #[derive(Subcommand)]
 enum TemplatesCommand {
     /// List available project templates
+    #[command(visible_alias = "ls")]
     List,
     /// Show contents, prerequisites, and next steps
     Show { id: String },
@@ -468,6 +469,7 @@ enum SkillCommand {
         global: bool,
     },
     /// List references in the installed skill
+    #[command(visible_alias = "ls")]
     List {
         /// Read only the user-wide installation
         #[arg(long)]
@@ -1241,6 +1243,7 @@ enum KeysCommand {
         name: String,
     },
     /// List stored keys
+    #[command(visible_alias = "list")]
     Ls,
     /// Export a private key for client use
     #[command(
@@ -1524,6 +1527,7 @@ enum ToolchainCommand {
         version: Option<String>,
     },
     /// List catalog versions and local installation state
+    #[command(visible_alias = "ls")]
     List,
     /// Select an exact catalog version globally
     Use {
@@ -1567,6 +1571,7 @@ impl ToolchainCommand {
 #[derive(Subcommand)]
 enum WalletCommand {
     /// List saved project wallets
+    #[command(visible_alias = "list")]
     Ls {
         /// Config profile to use
         #[arg(long = "profile")]
@@ -1757,6 +1762,7 @@ enum TxCommand {
     },
     /// List one page of root-invocation transaction history
     #[command(
+        visible_alias = "ls",
         long_about = "List exactly one page of transactions whose root invocation targets \
                        the resolved address. Incoming wallet-wrapped transfers may not appear \
                        when querying the recipient.\n\nThe continuation cursor is opaque and reusable. \
@@ -1830,6 +1836,7 @@ impl TxCommand {
 enum EventsCommand {
     /// List one page of raw events emitted by a contract
     #[command(
+        visible_alias = "ls",
         long_about = "List exactly one newest-first page of raw events emitted by one resolved \
                        contract address. A global event scan is not performed.\n\nRepeat a topic \
                        option for OR within that position; constraints across topic positions \
@@ -2050,6 +2057,37 @@ pub fn main() {
 mod tests {
     use super::*;
     use thruput_node_supervisor::ConfigParamName;
+
+    #[test]
+    fn listing_aliases_preserve_commands_and_help() {
+        for (group, primary, alias, target, expected) in [
+            ("keys", "ls", "list", None, "keys.ls"),
+            ("wallet", "ls", "list", None, "wallet.ls"),
+            ("templates", "list", "ls", None, "templates.list"),
+            ("skill", "list", "ls", None, "skill list"),
+            ("toolchain", "list", "ls", None, "toolchain.list"),
+            ("tx", "list", "ls", Some("alice"), "tx.list"),
+            ("events", "list", "ls", Some("counter"), "events.list"),
+        ] {
+            for spelling in [primary, alias] {
+                let mut args = vec!["thruput", group, spelling];
+                args.extend(target);
+                let cli = Cli::try_parse_from(args).unwrap();
+                assert_eq!(cli.command.command_name(), expected, "{group} {spelling}");
+            }
+            let help = Cli::try_parse_from(["thruput", group, "--help"])
+                .err()
+                .unwrap();
+            assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+            assert!(
+                help.to_string().lines().any(|line| {
+                    line.split_whitespace().next() == Some(primary)
+                        && line.contains(&format!("[alias: {alias}]"))
+                }),
+                "{group}: {help}"
+            );
+        }
+    }
 
     fn force_help(path: &[&str]) -> String {
         let mut command = Cli::command();
