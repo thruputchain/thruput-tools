@@ -407,6 +407,22 @@ async fn read_deadlines_do_not_add_admission_claims() {
     assert_eq!(data["kind"], "backendTimeout");
     assert!(data.get("admission").is_none());
 }
+// Errors no read method should produce surface as a JSON-RPC internal error,
+// with no data that could be mistaken for a documented read failure.
+#[test]
+fn unmapped_errors_are_internal_errors_without_data() {
+    for error in [
+        RpcServerError::TxInvalid("bad".into()),
+        RpcServerError::TxRejected("refused".into()),
+        RpcServerError::TxNotFound,
+        RpcServerError::BlockNotFound,
+    ] {
+        let object = rpc_error(&error);
+        assert_eq!(object.code(), -32603, "{error}");
+        assert_eq!(object.message(), "Unexpected read backend error");
+        assert!(object.data().is_none());
+    }
+}
 #[test]
 fn native_invalid_data_has_evidence() {
     let error = invalid("bad result");
