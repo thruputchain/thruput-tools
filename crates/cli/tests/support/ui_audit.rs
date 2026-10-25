@@ -387,7 +387,7 @@ fn transfer_results_distinguish_commitment_and_unconfirmed_evidence() {
         let temp = TempDir::new().unwrap();
         let sender = advertised_dev_wallet_address(0);
         let manifest = write_runtime_manifest(temp.path(), 0, &sender, None);
-        let (rpc, server, hashes) = spawn_transfer_rpc(
+        let (rpc, server) = spawn_transfer_rpc(
             TransferRpcMock {
                 submit: TransferSubmitMock::MatchingHash,
                 poll: Some(poll),
@@ -417,8 +417,8 @@ fn transfer_results_distinguish_commitment_and_unconfirmed_evidence() {
             .chars()
             .filter(|c| !c.is_whitespace() && *c != '│')
             .collect();
-        assert!(compact.contains(&hashes.recv().unwrap().hash), "{text}");
-        server.join().unwrap();
+        let submission = server.join().unwrap();
+        assert!(compact.contains(&submission.hash), "{text}");
     }
 }
 
