@@ -4,8 +4,8 @@ use std::path::Path;
 use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
 use thruput_json_rpc_types::runtime_manifest::{
-    BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, BootstrapAccount, RuntimeManifest,
-    RuntimeManifestParseError, parse_runtime_manifest,
+    BOOTSTRAP_ACCOUNT_ROLE_HOSTED_DEV_ACCOUNT, BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, BootstrapAccount,
+    RuntimeManifest, RuntimeManifestParseError, parse_runtime_manifest,
 };
 use thruput_signing::{
     LocalSigner, PubkeyAccount, SignTransactionParams, derive_dev_account_signer,
@@ -111,7 +111,7 @@ fn manifest_bench_accounts(manifest: &RuntimeManifest) -> Result<Vec<BenchAccoun
     manifest
         .bootstrap_accounts
         .iter()
-        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
+        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_HOSTED_DEV_ACCOUNT)
         .map(|account| manifest_bench_account(manifest, account))
         .collect()
 }
@@ -291,6 +291,7 @@ mod tests {
         for (index, account) in manifest.bootstrap_accounts.iter_mut().enumerate() {
             let signer = derive_dev_account_signer(&format!("thruput-bench:{seed}"), index);
             account.index = None;
+            account.role = BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER.into();
             account.public_key = Base58(signer.verifying_key_bytes().into());
             account.wallet_address = Base58(
                 PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address(),
@@ -495,7 +496,7 @@ mod tests {
             },
             "bootstrapAccounts": [{
                 "index": 0,
-                "role": "local_user",
+                "role": "hosted_dev_account",
                 "publicKey": Base58(XdrEd25519PublicKey::from(public_key)),
                 "walletAddress": Base58(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()),
                 "initialStorageTokens": "1000000000",

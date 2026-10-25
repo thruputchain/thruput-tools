@@ -22,6 +22,10 @@ pub const BOOTSTRAP_ACCOUNT_ROLE_FAUCET: &str = "faucet";
 /// Runtime role assigned to local developer accounts.
 pub const BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER: &str = "local_user";
 
+/// Runtime role hogd's hosted bootstrap generator assigns to the deterministic
+/// dev accounts of a hosted devnet.
+pub const BOOTSTRAP_ACCOUNT_ROLE_HOSTED_DEV_ACCOUNT: &str = "hosted_dev_account";
+
 /// Runtime manifest written by a backend after bootstrap is complete.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

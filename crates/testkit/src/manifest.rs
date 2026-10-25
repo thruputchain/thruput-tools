@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use thruput_json_rpc_types::runtime_manifest::{
-    BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, RuntimeManifest, RuntimeManifestParseError,
+    BOOTSTRAP_ACCOUNT_ROLE_HOSTED_DEV_ACCOUNT, RuntimeManifest, RuntimeManifestParseError,
     parse_runtime_manifest,
 };
 use thruput_signing::{
@@ -86,7 +86,7 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<TestAccoun
     if !manifest
         .bootstrap_accounts
         .iter()
-        .any(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
+        .any(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_HOSTED_DEV_ACCOUNT)
     {
         return Err(TestkitError::NoBootstrapAccounts);
     }
@@ -95,7 +95,7 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<TestAccoun
     manifest
         .bootstrap_accounts
         .iter()
-        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
+        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_HOSTED_DEV_ACCOUNT)
         .map(|account| {
             let account_index = hosted_index(account)?;
             let index = account_index as usize;
@@ -206,4 +206,33 @@ fn hosted_index(
         field: "bootstrapAccounts.index",
         detail: "hosted bootstrap index is missing".into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hosted runtime manifest composed exactly as chuckd composes one from
+    /// the metadata that hogd v0.1.31-rc.17's `hog-hosted-bootstrap generate`
+    /// wrote, so testkit keeps reading what the producers actually emit.
+    const HOGD_HOSTED_RUNTIME: &str = include_str!("../tests/fixtures/hogd-hosted-runtime.json");
+
+    #[test]
+    fn derives_every_account_of_a_hogd_hosted_runtime() {
+        let manifest = parse_runtime_manifest(HOGD_HOSTED_RUNTIME.as_bytes()).unwrap();
+        let accounts = derive_manifest_accounts(&manifest).unwrap();
+        assert_eq!(
+            accounts
+                .iter()
+                .map(|account| account.index)
+                .collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        for (account, published) in accounts.iter().zip(&manifest.bootstrap_accounts) {
+            assert_eq!(account.wallet_address, published.wallet_address.0);
+        }
+        // hogd keeps the hosted faucet out of the published dev-account seed,
+        // and chuckd does not copy it into the runtime manifest.
+        assert!(derive_faucet(&manifest).unwrap().is_none());
+    }
 }

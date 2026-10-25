@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 4,
+  "kind": "hosted-devnet-runtime",
+  "networkHash": "11111111111111111111111111111111",
+  "protocol": "hogp/6705996afff00a0",
+  "producer": {
+    "binary": "chuckd",
+    "version": "0.1.31-rc.16"
+  },
+  "endpoints": {
+    "scheduler": "127.0.0.1:61000",
+    "schedulerGateway": "127.0.0.1:61001"
+  },
+  "bootstrapAccountDerivation": {
+    "scheme": "thruput-bootstrap-account-v1",
+    "seed": "groundhog-dev-accounts"
+  },
+  "bootstrapAccounts": [
+    {
+      "index": 0,
+      "role": "hosted_dev_account",
+      "publicKey": "6zuYLRYxQAB67xJh6rA1XdvNHNdnva4L9NmkcQkSyNpi",
+      "walletAddress": "FdeQxzjy9L1QWSCi58jWCEwgia3oiDuXikkK1TcxF1mu",
+      "initialStorageTokens": "1000000000"
+    },
+    {
+      "index": 1,
+      "role": "hosted_dev_account",
+      "publicKey": "HWVmHHujSXr1RkGrNv3p6iM1NGt33uTEsrWC7wGanp8N",
+      "walletAddress": "jJvZgDSNCR5qtiGvHhshRmr4x1iiGHV3MW1MhDQraNM",
+      "initialStorageTokens": "1000000000"
+    },
+    {
+      "index": 2,
+      "role": "hosted_dev_account",
+      "publicKey": "DSCMhMFvz5LC7d2Vr8XZemD23vaQiSKhZ4UcoKmkkrZS",
+      "walletAddress": "Bh2soS5mwKKNQm8YqdPX6qHigYF6sSFa9PPqriMC41U2",
+      "initialStorageTokens": "1000000000"
+    }
+  ],
+  "bootstrap": {
+    "storageCostModel": {
+      "hash": "9btQLv5PdVwzgrgXKD2Vq5EbWzoNmpwK2jnNg3Mi9FRP",
+      "baseDataItemCost": "12000",
+      "bytestringCostPerByte": "10",
+      "baseContractDeploymentCost": "12000",
+      "contractDeploymentCostPerByte": "10",
+      "authPerKeyCost": "1111",
+      "rcqCostPerEntry": "8",
+      "replayCacheCostPerEntry": "7",
+      "balanceCost": "1234"
+    }
+  },
+  "hostedBootstrap": {
+    "publicRpcUrl": "http://127.0.0.1:18545",
+    "commit": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}
