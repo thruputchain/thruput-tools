@@ -176,10 +176,8 @@ fn call() -> input::Invocation {
         gas_limit: request.gas_limit,
     }
 }
-#[tokio::test]
-async fn typed_requests_enforce_bounds_before_backend_dispatch() {
-    let backend = Backend::default();
-    let config = RpcServerConfig {
+fn bounded_config() -> RpcServerConfig {
+    RpcServerConfig {
         view_gas_limit: 100,
         max_view_calldata_bytes: 4,
         view_batch: ViewBatchConfig {
@@ -189,10 +187,23 @@ async fn typed_requests_enforce_bounds_before_backend_dispatch() {
             ..ViewBatchConfig::default()
         },
         ..RpcServerConfig::default()
-    };
+    }
+}
+fn batch(
+    invocations: Vec<input::Invocation>,
+    min_state_block_height: Option<i64>,
+) -> input::SimulateInvocationsRequest {
+    input::SimulateInvocationsRequest {
+        invocations,
+        min_state_block_height: min_state_block_height.map(Into::into),
+    }
+}
+#[tokio::test]
+async fn typed_requests_enforce_bounds_before_backend_dispatch() {
+    let backend = Backend::default();
     let service = service(
         backend.clone(),
-        config,
+        bounded_config(),
         NativeReadCapabilities::new(true, true),
     );
     let mut invalid = vec![];
@@ -263,6 +274,114 @@ async fn typed_requests_enforce_bounds_before_backend_dispatch() {
     assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
     service.simulate_invocation(invocation()).await.unwrap();
     assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn simulation_bounds_accept_values_equal_to_each_limit() {
+    let backend = Backend::default();
+    let service = service(
+        backend.clone(),
+        bounded_config(),
+        NativeReadCapabilities::new(true, true),
+    );
+    let mut request = invocation();
+    request.calldata = HexBytes(vec![0; 4]);
+    service.simulate_invocation(request).await.unwrap();
+    let mut small = call();
+    small.gas_limit = Some(1);
+    service
+        .simulate_invocations(batch(vec![small.clone(); 2], None))
+        .await
+        .unwrap();
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        service
+            .simulate_invocations(batch(vec![small; 3], None))
+            .await
+            .unwrap_err()
+            .code(),
+        codes::INVALID_PARAMS
+    );
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 2);
+}
+#[tokio::test]
+async fn simulation_floors_accept_snapshots_at_or_above_the_requested_height() {
+    let service = service(
+        Backend::default(),
+        RpcServerConfig::default(),
+        NativeReadCapabilities::new(true, true),
+    );
+    for floor in [0, 41, 42] {
+        let mut request = invocation();
+        request.min_state_block_height = Some(floor.into());
+        let single = service.simulate_invocation(request).await.unwrap();
+        assert_eq!(*single.state_block_height, 42);
+        let batch = service
+            .simulate_invocations(batch(vec![call()], Some(floor)))
+            .await
+            .unwrap();
+        assert_eq!(*batch.state_block_height, 42);
+    }
+    let mut request = invocation();
+    request.min_state_block_height = Some(43.into());
+    let error = service.simulate_invocation(request).await.unwrap_err();
+    assert_eq!(error.code(), codes::STATE_HEIGHT_UNAVAILABLE);
+    let data: serde_json::Value = serde_json::from_str(error.data().unwrap().get()).unwrap();
+    assert_eq!(data["requestedStateBlockHeight"], "43");
+    assert_eq!(data["observedStateBlockHeight"], "42");
+    assert_eq!(
+        service
+            .simulate_invocations(batch(vec![call()], Some(43)))
+            .await
+            .unwrap_err()
+            .code(),
+        codes::BACKEND_DATA_INVALID
+    );
+}
+#[tokio::test]
+async fn direct_producers_refuse_unconfigured_planes_without_probing() {
+    let backend = Backend::default();
+    let service = service(
+        backend.clone(),
+        RpcServerConfig::default(),
+        NativeReadCapabilities::new(false, false),
+    );
+    assert_eq!(
+        service
+            .get_chain_tip(input::EmptyRequest {})
+            .await
+            .unwrap_err()
+            .code(),
+        -32601
+    );
+    assert_eq!(
+        service
+            .simulate_invocations(batch(vec![call()], None))
+            .await
+            .unwrap_err()
+            .code(),
+        -32601
+    );
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+}
+#[tokio::test]
+async fn nonnegative_balance_rows_are_returned_verbatim() {
+    for value in [0, 7] {
+        let service = service(
+            Backend {
+                balance_item: Some(out::StorageItem::NonnegativeInt { value }),
+                ..Default::default()
+            },
+            RpcServerConfig::default(),
+            NativeReadCapabilities::new(true, true),
+        );
+        let balance = service
+            .get_balance(input::AddressQuery {
+                address: invocation().address,
+            })
+            .await
+            .unwrap();
+        assert_eq!(balance.raw_balance, value);
+    }
 }
 #[tokio::test]
 async fn read_deadlines_do_not_add_admission_claims() {
@@ -1147,6 +1266,59 @@ async fn reference_pages_enforce_order_height_and_progress() {
             .code(),
         -32054
     );
+}
+
+#[tokio::test]
+async fn block_continuations_may_target_the_latest_indexed_block() {
+    let mut page = reference_page();
+    page.latest_indexed_block_height = 9.into();
+    let service = service(
+        Backend {
+            history_refs: Some(page),
+            ..Backend::default()
+        },
+        RpcServerConfig::default(),
+        NativeReadCapabilities::new(false, false),
+    );
+    service
+        .get_transactions_by_block(input::BlockPageRequest {
+            block_height: 9.into(),
+            start: None,
+            cursor: Some(HexBytes(vec![1])),
+            limit: Some(2),
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn block_pages_accept_height_zero_and_reject_negative_heights_before_dispatch() {
+    let backend = Backend::default();
+    let service = service(
+        backend.clone(),
+        RpcServerConfig::default(),
+        NativeReadCapabilities::new(false, false),
+    );
+    let query = |height: i64| input::BlockPageRequest {
+        block_height: height.into(),
+        start: Some(input::BlockStart {
+            order: thruput_json_rpc_types::events::IterationOrder::Ascending,
+        }),
+        cursor: None,
+        limit: None,
+    };
+    let page = service.get_transactions_by_block(query(0)).await.unwrap();
+    assert!(page.transactions.is_empty());
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        service
+            .get_transactions_by_block(query(-1))
+            .await
+            .unwrap_err()
+            .code(),
+        codes::INVALID_PARAMS
+    );
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

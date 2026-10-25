@@ -199,3 +199,119 @@ fn identities_cannot_repeat_at_different_heights() {
     };
     assert!(validate_refs(&refs, Some(events::IterationOrder::Ascending)).is_err());
 }
+
+fn invalid_param(result: &Result<(), RpcServerError>) -> bool {
+    matches!(result, Err(RpcServerError::InvalidParam(_)))
+}
+fn invalid_data(result: &Result<(), RpcServerError>) -> bool {
+    matches!(result, Err(RpcServerError::BackendDataInvalid { .. }))
+}
+
+#[test]
+fn filter_bounds_accept_each_protocol_maximum() {
+    let mut q = query();
+    q.filters = vec![q.filters[0].clone(); events::MAX_EVENT_FILTERS_PER_QUERY as usize];
+    validate_filters(&q.filters).unwrap();
+    q.filters.push(q.filters[0].clone());
+    assert!(invalid_param(&validate_filters(&q.filters)));
+
+    let mut q = query();
+    let address = q.filters[0].addresses[0];
+    q.filters[0].addresses =
+        vec![address; events::MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER as usize];
+    validate_filters(&q.filters).unwrap();
+    q.filters[0].addresses.push(address);
+    assert!(invalid_param(&validate_filters(&q.filters)));
+
+    let mut q = query();
+    q.filters[0].topics = Some(input::TopicFilter {
+        topic0: None,
+        topic1: None,
+        topic2: Some(vec![
+            thruput_json_rpc_types::hex::Topic([0; 32]);
+            events::MAX_TOPIC_VALUES_PER_POSITION as usize
+        ]),
+    });
+    validate_filters(&q.filters).unwrap();
+}
+
+#[test]
+fn cursors_may_fill_the_configured_maximum() {
+    let mut q = query();
+    q.start = None;
+    q.cursor = Some(HexBytes(vec![1; 256]));
+    prepare(q.start.as_ref(), q.cursor.as_ref(), &mut q.limit, 17, 256).unwrap();
+    let mut result = events();
+    result.next_cursor = Some(HexBytes(vec![2; 256]));
+    validate_event_page(&query(), &result, 256).unwrap();
+}
+
+#[test]
+fn zero_is_a_valid_anchor_height() {
+    let start = input::HistoryStart::Ascending {
+        anchor: input::AscendingAnchor::AtHeight {
+            block_height: 0.into(),
+        },
+    };
+    assert_eq!(anchor(&start).unwrap(), Some(&0.into()));
+}
+
+#[test]
+fn descending_pages_must_descend_from_an_inclusive_anchor() {
+    let max = RpcServerConfig::default().max_cursor_bytes;
+    let at = |height: i64| {
+        Some(input::HistoryStart::Descending {
+            anchor: input::DescendingAnchor::AtHeight {
+                block_height: height.into(),
+            },
+        })
+    };
+    let mut request = query();
+    let mut result = events();
+    result.events.reverse();
+    request.start = Some(input::HistoryStart::Descending {
+        anchor: input::DescendingAnchor::AtEnd {},
+    });
+    validate_event_page(&request, &result, max).unwrap();
+    request.start = at(9);
+    validate_event_page(&request, &result, max).unwrap();
+    request.start = at(8);
+    assert!(invalid_data(&validate_event_page(&request, &result, max)));
+    request.start = at(9);
+    result.events.reverse();
+    assert!(invalid_data(&validate_event_page(&request, &result, max)));
+}
+
+#[test]
+fn indexed_range_and_anchor_retention_bounds_are_inclusive() {
+    let max = RpcServerConfig::default().max_cursor_bytes;
+    let mut result = events();
+    result.oldest_indexed_block_height = 9.into();
+    result.latest_indexed_block_height = 9.into();
+    validate_event_page(&query(), &result, max).unwrap();
+
+    let mut result = events();
+    result.events[1].block_height = 10.into();
+    validate_event_page(&query(), &result, max).unwrap();
+
+    let mut request = query();
+    request.start = Some(input::HistoryStart::Ascending {
+        anchor: input::AscendingAnchor::AtHeight {
+            block_height: 3.into(),
+        },
+    });
+    let mut result = events();
+    result.oldest_indexed_block_height = 3.into();
+    validate_event_page(&request, &result, max).unwrap();
+}
+
+#[test]
+fn events_carry_at_most_three_topics() {
+    let max = RpcServerConfig::default().max_cursor_bytes;
+    let topic = thruput_json_rpc_types::hex::Topic([0; 32]);
+    let mut result = events();
+    result.events[0].event.topics = vec![topic; 3];
+    validate_event_page(&query(), &result, max).unwrap();
+    result.events[0].event.topics.push(topic);
+    assert!(invalid_data(&validate_event_page(&query(), &result, max)));
+}
