@@ -163,3 +163,8 @@ behavior. Include tests for changed behavior and describe what you verified.
 - [Bundled documentation maintenance](docs/bundled-documentation.md): updating
   the developer guide shipped with the CLI.
 
+## License
+
+Copyright 2026 Stellar Development Foundation. Licensed under the Apache
+License, Version 2.0. Each published crate includes the workspace
+[LICENSE](LICENSE).
