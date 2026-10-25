@@ -26,6 +26,10 @@ const SHARED_CODES: &[(&str, &str)] = &[
     ("invalid_event_limit", "InvalidTokenTransferLimit"),
     ("invalid_event_cursor", "InvalidTokenTransferCursor"),
     ("invalid_event_options", "InvalidTokenTransferOptions"),
+    (
+        "network_descriptor_mismatch",
+        "NetworkDescriptorSchemaMismatch",
+    ),
 ];
 
 #[test]
