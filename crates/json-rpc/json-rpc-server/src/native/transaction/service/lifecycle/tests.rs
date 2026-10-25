@@ -38,6 +38,8 @@ struct Backend {
     precheck: Precheck,
     observation: Option<ReceiptObservation>,
     read_error: bool,
+    receipt_height: Option<i64>,
+    status: Option<out::TransactionStatus>,
 }
 #[async_trait]
 impl ChainPlane for Backend {
@@ -107,7 +109,7 @@ impl NativeTransactionReadPlane for Backend {
             } else {
                 hash
             },
-            block_height: 42.into(),
+            block_height: self.receipt_height.unwrap_or(42).into(),
             execution: out::ReceiptExecution::Return {
                 return_data: HexBytes(vec![]),
             },
@@ -120,9 +122,12 @@ impl NativeTransactionReadPlane for Backend {
         _: RpcRequestContext,
         _: TxHash,
     ) -> Result<out::TransactionStatus, NativeReadError> {
-        Ok(out::TransactionStatus::Committed {
-            block_height: 42.into(),
-        })
+        Ok(self
+            .status
+            .clone()
+            .unwrap_or(out::TransactionStatus::Committed {
+                block_height: 42.into(),
+            }))
     }
 }
 fn server(backend: Backend) -> NativeTransactionService<Backend, Backend, Backend> {
@@ -255,12 +260,17 @@ async fn receipt_identity_failure_omits_observation_and_valid_evidence_survives(
     .unwrap_err();
     assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
     assert!(data(&error).get("observation").is_none());
-    for (observed, kept) in [(hash(), true), (TxHash(Base58([9; 32].into())), false)] {
+    for (observed, height, kept) in [
+        (hash(), 42, true),
+        (hash(), 0, true),
+        (hash(), -1, false),
+        (TxHash(Base58([9; 32].into())), 42, false),
+    ] {
         let error = server(Backend {
             read_error: true,
             observation: Some(ReceiptObservation {
                 transaction_hash: observed,
-                block_height: 42.into(),
+                block_height: height.into(),
             }),
             ..Default::default()
         })
@@ -270,7 +280,79 @@ async fn receipt_identity_failure_omits_observation_and_valid_evidence_survives(
         assert_eq!(data(&error).get("observation").is_some(), kept);
         assert!(data(&error).get("admission").is_none());
         if kept {
-            assert_eq!(data(&error)["observation"]["blockHeight"], "42");
+            assert_eq!(
+                data(&error)["observation"]["blockHeight"],
+                height.to_string()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn receipt_height_must_be_nonnegative() {
+    let query = || input::TransactionQuery {
+        transaction_hash: hash(),
+    };
+    let receipt = server(Backend {
+        receipt_height: Some(0),
+        ..Default::default()
+    })
+    .get_transaction_receipt(query())
+    .await
+    .unwrap();
+    assert_eq!(receipt.map(|receipt| *receipt.block_height), Some(0));
+    let error = server(Backend {
+        receipt_height: Some(-1),
+        ..Default::default()
+    })
+    .get_transaction_receipt(query())
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
+    assert_eq!(data(&error)["reason"], "inconsistentResult");
+}
+
+#[tokio::test]
+async fn status_heights_must_be_nonnegative() {
+    let committed = |height: i64| out::TransactionStatus::Committed {
+        block_height: height.into(),
+    };
+    let failed = |height: i64| out::TransactionStatus::RecentFailure {
+        attempt_block_height: height.into(),
+        cause: out::FailureCause::ContractRejected {
+            contract_index: 0,
+            code: out::ContractRejectCode::Duplicate,
+        },
+    };
+    for (status, valid) in [
+        (committed(0), true),
+        (committed(-1), false),
+        (failed(0), true),
+        (failed(7), true),
+        (failed(-1), false),
+    ] {
+        let result = server(Backend {
+            status: Some(status.clone()),
+            ..Default::default()
+        })
+        .get_transaction_status(input::TransactionQuery {
+            transaction_hash: hash(),
+        })
+        .await;
+        match result {
+            Ok(observed) => {
+                assert!(valid, "{status:?}");
+                assert_eq!(
+                    serde_json::to_value(observed).unwrap(),
+                    serde_json::to_value(status).unwrap()
+                );
+            }
+            Err(error) => {
+                assert!(!valid, "{status:?}");
+                assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
+                assert_eq!(data(&error)["reason"], "inconsistentResult");
+                assert!(data(&error).get("admission").is_none());
+            }
         }
     }
 }

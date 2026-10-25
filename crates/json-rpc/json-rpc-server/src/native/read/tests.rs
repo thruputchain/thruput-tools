@@ -1268,6 +1268,27 @@ async fn native_event_limit_advertises_and_enforces_backend_ceiling() {
     assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
 }
 
+#[tokio::test]
+async fn server_limits_advertise_configured_request_bounds() {
+    let service = service(
+        Backend::default(),
+        RpcServerConfig::default()
+            .with_max_transactions_per_page(17)
+            .with_max_cursor_bytes(99)
+            .with_max_view_calldata_bytes(5)
+            .with_view_gas_limit(123),
+        NativeReadCapabilities::new(false, false),
+    );
+    let limits = service
+        .get_server_limits(input::EmptyRequest {})
+        .await
+        .unwrap();
+    assert_eq!(limits.max_transactions_per_page, 17);
+    assert_eq!(limits.max_cursor_bytes, 99);
+    assert_eq!(limits.max_simulation_calldata_bytes, 5);
+    assert_eq!(limits.max_simulation_gas, 123);
+}
+
 #[derive(Clone, Copy)]
 struct Funding(crate::native::funding::FundingCapabilities);
 #[async_trait]

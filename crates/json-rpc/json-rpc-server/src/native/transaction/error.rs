@@ -169,6 +169,7 @@ pub(crate) fn invalid_receipt() -> NativeReadError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use thruput_json_rpc_types::{base58::Base58, error::native::DecodedError};
 
     #[test]
@@ -250,13 +251,117 @@ mod tests {
                 raw["data"]["transactionHash"],
                 serde_json::to_value(hash).unwrap()
             );
-            assert!(
-                matches!(
-                    DecodedError::decode("sendTransaction", raw.clone()),
-                    DecodedError::Known { .. }
-                ),
-                "{raw}"
+            assert_known(&raw);
+        }
+    }
+
+    fn assert_known(raw: &serde_json::Value) {
+        assert!(
+            matches!(
+                DecodedError::decode("sendTransaction", raw.clone()),
+                DecodedError::Known { .. }
+            ),
+            "{raw}"
+        );
+    }
+
+    #[test]
+    fn rejection_reason_follows_attempt_evidence() {
+        for (dispatched, reason) in [(false, "expired"), (true, "authenticationRejected")] {
+            let attempt = SubmissionAttempt::default();
+            if dispatched {
+                assert!(attempt.begin_dispatch());
+                attempt.rejected();
+            }
+            let error = submit_error(
+                &RpcServerError::TxRejected("refused".into()),
+                &attempt,
+                None,
             );
+            assert_eq!(error.code(), codes::TRANSACTION_REJECTED);
+            let raw = serde_json::to_value(error).unwrap();
+            assert_eq!(raw["data"]["reason"], reason);
+            assert_known(&raw);
+        }
+    }
+
+    #[test]
+    fn invalid_backend_data_keeps_its_native_message_and_reason() {
+        let attempt = SubmissionAttempt::default();
+        assert!(attempt.begin_dispatch());
+        let error = submit_error(
+            &RpcServerError::invalid_data(
+                BackendDataInvalidReason::InvalidCardinality,
+                "invalid batch",
+            ),
+            &attempt,
+            None,
+        );
+        assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
+        assert_eq!(error.message(), "backend data invalid: invalid batch");
+        let raw = serde_json::to_value(error).unwrap();
+        assert_eq!(raw["data"]["reason"], "invalidCardinality");
+    }
+
+    #[test]
+    fn executor_bound_violations_carry_their_detail() {
+        for (detail, expected) in [
+            (
+                TxInvalidDetail::TooManyContracts {
+                    attached: 3,
+                    max: 2,
+                },
+                json!({"reason": "tooManyContracts", "attached": 3, "max": 2}),
+            ),
+            (
+                TxInvalidDetail::ContractTooLarge {
+                    index: 1,
+                    size_bytes: 9,
+                    max_bytes: 8,
+                },
+                json!({"reason": "contractTooLarge", "index": 1, "sizeBytes": 9, "maxBytes": 8}),
+            ),
+            (
+                TxInvalidDetail::DuplicateContract {
+                    index: 2,
+                    first_index: 0,
+                },
+                json!({"reason": "duplicateContract", "index": 2, "firstIndex": 0}),
+            ),
+            (
+                TxInvalidDetail::Rv32MemoryTooLarge {
+                    index: 1,
+                    memory_bytes: 9,
+                    max_bytes: 8,
+                },
+                json!({"reason": "rv32MemoryTooLarge", "index": 1, "memoryBytes": 9, "maxBytes": 8}),
+            ),
+            (
+                TxInvalidDetail::Rv32CodeTooLarge {
+                    index: 1,
+                    code_bytes: 9,
+                    max_bytes: 8,
+                },
+                json!({"reason": "rv32CodeTooLarge", "index": 1, "codeBytes": 9, "maxBytes": 8}),
+            ),
+            (
+                TxInvalidDetail::GasLimitTooHigh {
+                    gas_limit: 11,
+                    max_gas: 10,
+                },
+                json!({"reason": "gasLimitTooHigh", "gasLimit": "11", "maxGas": "10"}),
+            ),
+        ] {
+            let error = submit_error(
+                &RpcServerError::TxInvalidDetailed(detail),
+                &SubmissionAttempt::default(),
+                None,
+            );
+            assert_eq!(error.code(), codes::TRANSACTION_INVALID);
+            let raw = serde_json::to_value(error).unwrap();
+            assert_eq!(raw["data"]["reason"], "executorBoundViolation");
+            assert_eq!(raw["data"]["detail"], expected);
+            assert_known(&raw);
         }
     }
 }
