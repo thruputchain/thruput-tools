@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -6,25 +6,79 @@ pub(crate) const FAKE_HOGD_DEV_MODE_ENV: &str = "THRUPUT_FAKE_HOGD_DEV_MODE";
 
 /// Builds and returns the `fake_hogd_dev` example binary; `cargo test` builds it
 /// only as a test harness, so a copy on disk may predate a `thruput-xdr` bump.
+///
+/// The build runs once per test process, or once per nextest run when nextest
+/// gives every test its own process.
 pub(crate) fn fake_hogd_dev_binary() -> PathBuf {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
-    BINARY.get_or_init(build_fake_hogd_dev_binary).clone()
+    BINARY.get_or_init(build_once_per_run).clone()
+}
+
+/// Shares one build between the processes of a nextest run. Without this,
+/// every test process runs its own `cargo build`, and they queue on cargo's
+/// build-directory lock.
+///
+/// The record names the run, so a new run always rebuilds. Two checkouts
+/// running nextest concurrently against one target directory can still swap
+/// this executable, as they can every test executable nextest re-launches.
+fn build_once_per_run() -> PathBuf {
+    let target_dir = outer_target_dir();
+    let (Some(target_dir), Some(run_id)) = (&target_dir, std::env::var_os("NEXTEST_RUN_ID")) else {
+        return build_fake_hogd_dev_binary(target_dir.as_deref());
+    };
+    let lock = std::fs::File::create(target_dir.join("fake_hogd_dev.build.lock"))
+        .expect("bug: fake_hogd_dev build lock should be creatable");
+    lock.lock()
+        .expect("bug: fake_hogd_dev build lock should be acquirable");
+    let record = target_dir.join("fake_hogd_dev.build.run");
+    let run_id = run_id.to_string_lossy().into_owned();
+    if let Some(binary) = std::fs::read_to_string(&record)
+        .ok()
+        .and_then(|contents| {
+            let (recorded, binary) = contents.split_once('\n')?;
+            (recorded == run_id).then(|| PathBuf::from(binary))
+        })
+        .filter(|binary| binary.is_file())
+    {
+        return binary;
+    }
+    let binary = build_fake_hogd_dev_binary(Some(target_dir));
+    std::fs::write(&record, format!("{run_id}\n{}", binary.display()))
+        .expect("bug: fake_hogd_dev build record should be writable");
+    binary
+}
+
+/// The target directory this test executable was built into, so the nested
+/// build reuses it instead of falling back to the workspace default. Cargo
+/// marks the root of every target directory with `CACHEDIR.TAG`; executables
+/// sit below it at `<profile>/deps` or `<triple>/<profile>/deps`.
+fn outer_target_dir() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    executable
+        .ancestors()
+        .skip(1)
+        .find(|directory| directory.join("CACHEDIR.TAG").is_file())
+        .map(Path::to_path_buf)
 }
 
 /// Builds the example with the current cargo and returns the path it reports.
-fn build_fake_hogd_dev_binary() -> PathBuf {
+fn build_fake_hogd_dev_binary(target_dir: Option<&Path>) -> PathBuf {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(&cargo)
-        .args([
-            "build",
-            "--quiet",
-            "--locked",
-            "--message-format=json",
-            "-p",
-            "thruput-node-supervisor",
-            "--example",
-            "fake_hogd_dev",
-        ])
+    let mut command = Command::new(&cargo);
+    command.args([
+        "build",
+        "--quiet",
+        "--locked",
+        "--message-format=json",
+        "-p",
+        "thruput-node-supervisor",
+        "--example",
+        "fake_hogd_dev",
+    ]);
+    if let Some(target_dir) = target_dir {
+        command.arg("--target-dir").arg(target_dir);
+    }
+    let output = command
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         // PATH-resolution tests hide the toolchain while other tests build this helper.
         .env("PATH", env!("PATH"))
