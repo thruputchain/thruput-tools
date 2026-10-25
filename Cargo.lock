@@ -4269,23 +4269,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "thruput-e2e-tests"
-version = "0.0.0"
-dependencies = [
- "getrandom 0.4.3",
- "hex",
- "jsonrpsee",
- "serde_json",
- "thruput-json-rpc-client",
- "thruput-json-rpc-types",
- "thruput-signing",
- "thruput-xdr",
- "thruput-xdr-common",
- "thruput-xdrs",
- "tokio",
-]
-
-[[package]]
 name = "thruput-encoding"
 version = "0.40.0"
 dependencies = [
