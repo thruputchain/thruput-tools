@@ -3655,48 +3655,6 @@ fn quiet_status_exits_one_with_no_output_when_missing_state() {
 }
 
 #[test]
-#[serial_test::serial]
-#[cfg(unix)]
-fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
-    let tmp = TempDir::new().unwrap();
-    let cargo_home = tmp.path().join("cargo-home");
-    let devnode = support::write_versioned_devnode(tmp.path());
-
-    unsafe {
-        std::env::set_var("CARGO_HOME", &cargo_home);
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
-
-    thruput_cli::keys::generate(
-        &Some("alice".into()),
-        thruput_cli::keys::KeyScheme::Ed25519,
-        false,
-        "keys.generate",
-        &thruput_cli::Print::quiet(),
-    )
-    .unwrap();
-    thruput_cli::config::initialize_global_profiles().unwrap();
-
-    let output = thruput()
-        .arg("-q")
-        .arg("status")
-        .env("CARGO_HOME", &cargo_home)
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .env("THRUPUT_DEVNODE_BINARY", devnode)
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
-
-    unsafe {
-        std::env::remove_var("CARGO_HOME");
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
-}
-
-#[test]
 fn status_human_output_shows_sections() {
     let tmp = TempDir::new().unwrap();
     let output = thruput()

@@ -1,5 +1,4 @@
 use serial_test::serial;
-use std::env;
 use std::fs;
 #[cfg(unix)]
 use std::fs::{File, OpenOptions};
@@ -11,6 +10,10 @@ use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 use tempfile::TempDir;
+
+#[path = "support/env_guard.rs"]
+mod env_guard;
+use env_guard::EnvGuard;
 
 fn global_config_path(tmp: &TempDir) -> PathBuf {
     tmp.path().join("thruput/config.toml")
@@ -58,10 +61,9 @@ fn lock_config(path: &std::path::Path) -> File {
 fn config_dir_respects_xdg_env() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("custom_config");
-    unsafe { env::set_var("XDG_CONFIG_HOME", &path) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", &path);
     let result = thruput_cli::config::config_dir().unwrap();
     assert_eq!(result, path.join("thruput"));
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -69,29 +71,26 @@ fn config_dir_respects_xdg_env() {
 fn cache_dir_respects_xdg_env() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("custom_cache");
-    unsafe { env::set_var("XDG_CACHE_HOME", &path) };
+    let _cache_home = EnvGuard::set("XDG_CACHE_HOME", &path);
     let result = thruput_cli::config::cache_dir().unwrap();
     assert_eq!(result, path.join("thruput"));
-    unsafe { env::remove_var("XDG_CACHE_HOME") };
 }
 
 #[test]
 #[serial]
 fn load_returns_none_when_no_config() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("nonexistent")) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path().join("nonexistent"));
 
     let loaded = thruput_cli::config::load_default_key().unwrap();
     assert!(loaded.is_none());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn roundtrip_default_key() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -114,8 +113,6 @@ fn roundtrip_default_key() {
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains("# retained"));
     assert!(contents.contains("plugin = \"keep\""));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -136,7 +133,7 @@ fn project_profile_default_wallet_roundtrips() {
 #[serial]
 fn global_config_rewrite_replaces_permissive_file_with_private_permissions() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let path = global_config_path(&tmp);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, "default_key = \"old\"\n").unwrap();
@@ -152,8 +149,6 @@ fn global_config_rewrite_replaces_permissive_file_with_private_permissions() {
     let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
     assert!(!path.with_extension("toml.tmp").exists());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -233,7 +228,7 @@ greeter = "0xbeef"
 "#,
     )
     .unwrap();
-    unsafe { env::set_var("THRUPUT_PROFILE", "testnet") };
+    let _profile = EnvGuard::set("THRUPUT_PROFILE", "testnet");
 
     let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(profile.name, "testnet");
@@ -250,40 +245,34 @@ greeter = "0xbeef"
         profile.contracts.get("greeter").map(String::as_str),
         Some("0xbeef")
     );
-
-    unsafe { env::remove_var("THRUPUT_PROFILE") };
 }
 
 #[test]
 #[serial]
 fn resolve_profile_requires_selection_when_no_config_exists() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     let error = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
     assert_eq!(error.code(), "no_active_profile");
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn resolve_profile_requires_selection_when_project_has_no_default_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::write(tmp.path().join("thruput.toml"), "[contracts]\n").unwrap();
 
     let error = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
     assert_eq!(error.code(), "no_active_profile");
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn resolve_profile_uses_global_default_profile_when_no_project_config_exists() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         tmp.path().join("thruput/config.toml"),
@@ -302,8 +291,6 @@ default_key = "dev-0"
     assert_eq!(profile.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
     assert_eq!(profile.default_key.as_deref(), Some("dev-0"));
     assert_eq!(profile.source, Some(tmp.path().join("thruput/config.toml")));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -312,7 +299,7 @@ fn resolve_profile_project_default_profile_overrides_global_default_profile() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     fs::create_dir(&project).unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         tmp.path().join("thruput/config.toml"),
@@ -346,8 +333,6 @@ default_key = "alice"
     );
     assert_eq!(profile.default_key.as_deref(), Some("alice"));
     assert_eq!(profile.source, Some(project.join("thruput.toml")));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -364,7 +349,7 @@ fn resolve_profile_merges_global_and_project_profile_fields() {
     let artifacts_dir = tmp.path().join("global-artifacts");
     fs::create_dir(&project).unwrap();
     fs::create_dir(&artifacts_dir).unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         tmp.path().join("thruput/config.toml"),
@@ -444,8 +429,6 @@ owner_public_key = "0x{}"
         profile.wallets.get("bob").map(|wallet| &wallet.address),
         Some(&bob)
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -480,7 +463,7 @@ rpc_url = "http://localhost:9545" # keep this field comment
 #[serial]
 fn save_wallet_and_default_uses_one_profile_update() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::write(
         tmp.path().join("thruput.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
@@ -502,7 +485,6 @@ fn save_wallet_and_default_uses_one_profile_update() {
     let profile = thruput_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(profile.default_wallet.as_deref(), Some("alice"));
     assert_eq!(profile.wallets["alice"].address, address);
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -556,7 +538,7 @@ counter = "0x1111" # alias comment
 #[serial]
 fn save_profile_contract_alias_creates_selected_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     let addr = thruput_encoding::encode(&[0xbe; 32]);
     let written = thruput_cli::config::save_profile_contract_alias(
@@ -576,8 +558,6 @@ fn save_profile_contract_alias_creates_selected_profile() {
         testnet.contracts.get("greeter").map(String::as_str),
         Some(addr.as_str())
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -638,7 +618,7 @@ owner_public_key = "0x2222"
 #[serial]
 fn save_profile_wallet_address_creates_selected_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     let addr = thruput_encoding::encode(&[0xbe; 32]);
     let owner = thruput_encoding::encode(&[0xcd; 32]);
@@ -663,8 +643,6 @@ fn save_profile_wallet_address_creates_selected_profile() {
             .map(|wallet| wallet.address.as_str()),
         Some(addr.as_str())
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -682,7 +660,7 @@ default_key = "dev-0"
 "#,
     )
     .unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("manifests")).unwrap();
     let manifest = tmp.path().join("manifests/runtime-manifest.json");
     let artifacts_dir = tmp.path().join("hog-devnode");
@@ -720,8 +698,6 @@ default_key = "dev-0"
         profile.runtime_artifacts_dir.as_deref(),
         Some(artifacts_dir.as_path())
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -729,7 +705,7 @@ default_key = "dev-0"
 #[serial]
 fn save_local_runtime_state_keeps_global_config_private() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     thruput_cli::config::save_default_key("alice").unwrap();
     fs::create_dir_all(tmp.path().join("manifests")).unwrap();
     let manifest = tmp.path().join("manifests/runtime-manifest.json");
@@ -749,8 +725,6 @@ fn save_local_runtime_state_keeps_global_config_private() {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o600);
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -758,7 +732,7 @@ fn save_local_runtime_state_keeps_global_config_private() {
 #[serial]
 fn save_local_runtime_state_rejects_non_utf8_manifest_path() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let invalid_path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/manifest-\xff".to_vec()));
 
     let error =
@@ -776,7 +750,6 @@ fn save_local_runtime_state_rejects_non_utf8_manifest_path() {
             .contains("runtime_manifest must be valid UTF-8")
     );
     assert!(!global_config_path(&tmp).exists());
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -784,7 +757,7 @@ fn save_local_runtime_state_rejects_non_utf8_manifest_path() {
 #[serial]
 fn save_local_runtime_state_rejects_non_utf8_artifacts_path() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let invalid_path = PathBuf::from(std::ffi::OsString::from_vec(
         b"/tmp/artifacts-\xff".to_vec(),
     ));
@@ -804,14 +777,13 @@ fn save_local_runtime_state_rejects_non_utf8_artifacts_path() {
             .contains("runtime_artifacts_dir must be valid UTF-8")
     );
     assert!(!global_config_path(&tmp).exists());
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn non_local_profile_ignores_local_runtime_state() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::write(
         tmp.path().join("thruput.toml"),
         r#"
@@ -839,15 +811,13 @@ rpc_url = "https://rpc.devnet.example"
         Some("https://rpc.devnet.example")
     );
     assert!(profile.runtime_manifest.is_none());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn local_profile_explicit_fields_override_local_runtime_state() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let profile_manifest = tmp.path().join("profile-runtime-manifest.json");
     let state_manifest = tmp.path().join("state-runtime-manifest.json");
     fs::write(&profile_manifest, "{}").unwrap();
@@ -880,15 +850,13 @@ runtime_manifest = "{}"
         profile.runtime_manifest.as_deref(),
         Some(profile_manifest.as_path())
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn clear_local_runtime_state_removes_matching_state() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let manifest = tmp.path().join("runtime-manifest.json");
     fs::write(&manifest, "{}").unwrap();
     let state = thruput_cli::config::LocalRuntimeState {
@@ -907,15 +875,13 @@ fn clear_local_runtime_state_removes_matching_state() {
     assert!(!config.contains("local_runtime_state"));
     assert!(config.contains("# retained"));
     assert!(config.contains("plugin = \"keep\""));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn clear_local_runtime_state_preserves_changed_state() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let first_manifest = tmp.path().join("runtime-manifest-first.json");
     let second_manifest = tmp.path().join("runtime-manifest-second.json");
     fs::write(&first_manifest, "{}").unwrap();
@@ -948,15 +914,13 @@ fn clear_local_runtime_state_preserves_changed_state() {
         profile.runtime_manifest.as_deref(),
         Some(second_manifest.as_path())
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn resolve_default_key_falls_back_to_global_selection() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::write(
         tmp.path().join("thruput.toml"),
         r#"
@@ -972,15 +936,13 @@ rpc_url = "http://localhost:9545"
 
     let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert_eq!(resolved.as_deref(), Some("alice"));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn resolve_default_key_prefers_profile_value_over_global_selection() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::write(
         tmp.path().join("thruput.toml"),
         r#"
@@ -997,15 +959,13 @@ default_key = "project-key"
 
     let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert_eq!(resolved.as_deref(), Some("project-key"));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn resolve_default_key_does_not_infer_key_from_local_runtime() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let runtime_manifest = tmp.path().join("runtime-manifest.json");
     write_local_runtime_manifest(&runtime_manifest, &[(0, "faucet"), (1, "local_user")]);
     fs::write(
@@ -1028,8 +988,6 @@ network = "local"
 
     let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert_eq!(resolved, None);
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 fn write_local_runtime_manifest(path: &std::path::Path, accounts: &[(u32, &str)]) {
@@ -1085,7 +1043,7 @@ fn write_local_runtime_manifest(path: &std::path::Path, accounts: &[(u32, &str)]
 #[serial]
 fn resolve_default_key_does_not_use_builtin_dev_key_for_overridden_local_rpc() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let runtime_manifest = tmp.path().join("runtime-manifest.json");
     fs::write(&runtime_manifest, "{}").unwrap();
     fs::write(
@@ -1109,15 +1067,13 @@ rpc_url = "https://rpc.example.test"
 
     let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert!(resolved.is_none());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn resolve_default_key_does_not_use_builtin_dev_key_for_devnet_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::write(
         tmp.path().join("thruput.toml"),
         r#"
@@ -1131,8 +1087,6 @@ network = "devnet"
 
     let resolved = thruput_cli::config::resolve_default_key(tmp.path(), None).unwrap();
     assert!(resolved.is_none());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -1165,7 +1119,7 @@ fn save_alias_rejects_malformed_address() {
 #[serial]
 fn save_alias_accepts_valid_hex_address() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let addr = thruput_encoding::encode(&[0xab; 32]);
     let result = thruput_cli::config::save_profile_contract_alias(
         tmp.path(),
@@ -1175,8 +1129,6 @@ fn save_alias_accepts_valid_hex_address() {
     );
     assert!(result.is_ok());
     assert!(global_config_path(&tmp).exists());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -1219,7 +1171,7 @@ fn save_wallet_rejects_malformed_address() {
 #[serial]
 fn save_wallet_accepts_valid_hex_address() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let addr = thruput_encoding::encode(&[0xab; 32]);
     let owner = thruput_encoding::encode(&[0xcd; 32]);
     let result = thruput_cli::config::save_profile_wallet_address(
@@ -1231,8 +1183,6 @@ fn save_wallet_accepts_valid_hex_address() {
     );
     assert!(result.is_ok());
     assert!(global_config_path(&tmp).exists());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -1291,7 +1241,7 @@ address = "0x{}"
 #[serial]
 fn save_second_alias_preserves_first() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let addr_a = thruput_encoding::encode(&[0xaa; 32]);
     let addr_b = thruput_encoding::encode(&[0xbb; 32]);
 
@@ -1319,15 +1269,13 @@ fn save_second_alias_preserves_first() {
         profile.contracts.get("greeter").map(String::as_str),
         Some(addr_b.as_str())
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn save_second_wallet_preserves_first() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let addr_a = thruput_encoding::encode(&[0xaa; 32]);
     let addr_b = thruput_encoding::encode(&[0xbb; 32]);
     let owner_a = thruput_encoding::encode(&[0xcc; 32]);
@@ -1365,15 +1313,13 @@ fn save_second_wallet_preserves_first() {
             .map(|wallet| wallet.address.as_str()),
         Some(addr_b.as_str())
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn remove_wallet_deletes_saved_entry() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let addr_a = thruput_encoding::encode(&[0xaa; 32]);
     let addr_b = thruput_encoding::encode(&[0xbb; 32]);
     let owner_a = thruput_encoding::encode(&[0xcc; 32]);
@@ -1413,15 +1359,13 @@ fn remove_wallet_deletes_saved_entry() {
     let config = fs::read_to_string(config_path).unwrap();
     assert!(config.contains("# retained"));
     assert!(config.contains("plugin = true"));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn remove_wallet_clears_matching_default_in_same_write() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let address = thruput_encoding::encode(&[0xaa; 32]);
     let owner = thruput_encoding::encode(&[0xbb; 32]);
     fs::write(tmp.path().join("thruput.toml"), "").unwrap();
@@ -1443,15 +1387,13 @@ fn remove_wallet_clears_matching_default_in_same_write() {
     let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert!(profile.default_wallet.is_none());
     assert!(!profile.wallets.contains_key("alice"));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn remove_wallet_rejects_missing_entry() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let addr = thruput_encoding::encode(&[0xaa; 32]);
     let owner = thruput_encoding::encode(&[0xbb; 32]);
 
@@ -1467,15 +1409,13 @@ fn remove_wallet_rejects_missing_entry() {
         thruput_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "bob");
 
     assert!(result.is_err());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn initialize_global_profiles_preserves_inline_profile_fields() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -1500,15 +1440,13 @@ fn initialize_global_profiles_preserves_inline_profile_fields() {
     }
     let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(contents.contains("plugin = \"keep\""));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn initialize_futurenet_preserves_existing_networks_and_user_defaults() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let path = global_config_path(&tmp);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let original = "# keep\ndefault_profile = 'devnet'\n\n[profile.devnet]\nnetwork = 'devnet'\nrpc_url = 'https://legacy.example'\n\n[profile.futurenet]\nnetwork = 'futurenet'\nrpc_url = 'https://custom.example'\nfaucet_url = 'https://custom-faucet.example'\n\n[profile.futurenet.contracts]\ncounter = '11111111111111111111111111111112'\n";
@@ -1535,15 +1473,13 @@ fn initialize_futurenet_preserves_existing_networks_and_user_defaults() {
     );
     assert!(future.contracts.contains_key("counter"));
     assert!(future.network_hash.is_none());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn initialize_profiles_preserves_non_hosted_use_of_hosted_profile_names() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let path = global_config_path(&tmp);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(
@@ -1560,14 +1496,13 @@ fn initialize_profiles_preserves_non_hosted_use_of_hosted_profile_names() {
         assert!(profile.faucet_url.is_none());
         assert!(profile.contracts.is_empty());
     }
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn futurenet_project_overlay_inherits_global_endpoints_and_selection() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     thruput_cli::config::initialize_global_profiles().unwrap();
     let initial: toml::Value =
         toml::from_str(&fs::read_to_string(global_config_path(&tmp)).unwrap()).unwrap();
@@ -1627,8 +1562,6 @@ fn futurenet_project_overlay_inherits_global_endpoints_and_selection() {
             .name,
         "futurenet"
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -1636,7 +1569,7 @@ fn futurenet_project_overlay_inherits_global_endpoints_and_selection() {
 #[serial]
 fn concurrent_global_writers_preserve_independent_updates() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let path = global_config_path(&tmp);
     fs::write(&path, "plugin = true\n").unwrap();
@@ -1671,8 +1604,6 @@ fn concurrent_global_writers_preserve_independent_updates() {
             .as_deref(),
         Some("https://rpc.thruput.network")
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -1729,7 +1660,7 @@ fn persisted_profile_merge_tracks_sources_and_normalizes_runtime_paths() {
     let project = tmp.path().join("project");
     fs::create_dir(&project).unwrap();
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::write(
         global_config_path(&tmp),
         r#"default_profile = "devnet"
@@ -1793,15 +1724,13 @@ counter = "0x02"
             .map(|source| source.kind),
         Some(thruput_cli::config::ConfigSourceKind::Project)
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn profile_listing_isolates_invalid_and_active_missing_profiles() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::write(
         tmp.path().join("thruput.toml"),
         r#"[profile.valid]
@@ -1831,15 +1760,13 @@ network = "preview"
             && row.active
             && row.status == thruput_cli::config::ConfigProfileStatus::Missing
     }));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn config_get_json_projection_omits_protected_global_state() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -1884,8 +1811,6 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     assert!(!json.contains("private-password"));
     assert!(!json.contains("top-level-secret-selection"));
     assert!(!json.contains("node-private"));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -2050,7 +1975,7 @@ fn concurrent_config_new_allows_only_one_creator() {
 #[serial]
 fn config_new_project_allows_overlay_for_global_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -2086,14 +2011,13 @@ fn config_new_project_allows_overlay_for_global_profile() {
             .as_deref(),
         Some("https://project.example")
     );
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn config_new_project_use_rejects_invalid_global_layer_without_changes() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -2122,7 +2046,6 @@ fn config_new_project_use_rejects_invalid_global_layer_without_changes() {
 
     assert_eq!(error.code(), "profile_config_invalid");
     assert_eq!(fs::read_to_string(project_path).unwrap(), project_contents);
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -2232,7 +2155,7 @@ fn concurrent_config_rm_allows_only_one_removal() {
 #[serial]
 fn config_set_rejects_missing_target_layer_profile_without_creating_it() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -2255,7 +2178,6 @@ fn config_set_rejects_missing_target_layer_profile_without_creating_it() {
 
     assert_eq!(error.code(), "profile_not_found_in_scope");
     assert_eq!(fs::read_to_string(path).unwrap(), contents);
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -2417,7 +2339,7 @@ fn config_set_network_hash_rejects_a_non_canonical_value() {
 #[serial]
 fn config_set_updates_global_file_symlink_target_without_replacing_link() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let global_path = global_config_path(&tmp);
     fs::create_dir_all(global_path.parent().unwrap()).unwrap();
     let managed_dir = tmp.path().join("dotfiles");
@@ -2448,7 +2370,6 @@ fn config_set_updates_global_file_symlink_target_without_replacing_link() {
         fs::read_to_string(managed_path).unwrap(),
         "[profile.devnet]\nnetwork = \"devnet\"\nrpc_url = \"https://rpc.example\"\n"
     );
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -2498,7 +2419,7 @@ fn config_set_validation_failure_leaves_selected_profile_unchanged() {
 #[serial]
 fn config_use_updates_only_selected_default_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let path = global_config_path(&tmp);
     fs::write(
@@ -2514,7 +2435,6 @@ fn config_use_updates_only_selected_default_profile() {
         fs::read_to_string(path).unwrap(),
         "# retained\ndefault_profile = \"devnet\"\nunknown = true\n\n[profile.local]\nnetwork = \"local\"\n\n[profile.devnet]\nnetwork = \"devnet\"\n"
     );
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -2522,7 +2442,7 @@ fn config_use_updates_only_selected_default_profile() {
 #[serial]
 fn config_use_project_locks_global_before_updating_selection() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let global_path = global_config_path(&tmp);
     fs::write(&global_path, "[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
@@ -2535,7 +2455,6 @@ fn config_use_project_locks_global_before_updating_selection() {
 
     assert_eq!(error.code(), "config_lock_timeout");
     assert_eq!(fs::read_to_string(project_path).unwrap(), project_contents);
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -2543,7 +2462,7 @@ fn config_use_project_locks_global_before_updating_selection() {
 #[serial]
 fn config_use_project_validates_global_after_waiting_for_lock() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let global_path = global_config_path(&tmp);
     fs::write(&global_path, "[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
@@ -2563,14 +2482,13 @@ fn config_use_project_validates_global_after_waiting_for_lock() {
 
     assert_eq!(error.code(), "profile_config_invalid");
     assert_eq!(fs::read_to_string(project_path).unwrap(), project_contents);
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn config_use_global_rejects_project_only_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -2596,14 +2514,13 @@ fn config_use_global_rejects_project_only_profile() {
             .unwrap()
             .starts_with("default_profile = \"local\"")
     );
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn config_use_reports_noop_without_normalizing_string_style() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let path = global_config_path(&tmp);
     let contents = "default_profile = 'devnet'\n\n[profile.devnet]\nnetwork = \"devnet\"\n";
@@ -2613,14 +2530,13 @@ fn config_use_reports_noop_without_normalizing_string_style() {
 
     assert!(!report.changed);
     assert_eq!(fs::read_to_string(path).unwrap(), contents);
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn malformed_toml_reports_the_config_path() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let path = tmp.path().join("thruput.toml");
     fs::write(&path, "[profile.devnet\n").unwrap();
 
@@ -2632,14 +2548,13 @@ fn malformed_toml_reports_the_config_path() {
     assert_eq!(details["path"], path.display().to_string());
     assert!(details["line"].as_u64().is_some());
     assert!(details["column"].as_u64().is_some());
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn malformed_toml_reports_character_based_column() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let path = tmp.path().join("thruput.toml");
     fs::write(&path, "name = \"é\" trailing\n").unwrap();
 
@@ -2647,14 +2562,13 @@ fn malformed_toml_reports_character_based_column() {
 
     assert_eq!(error.code(), "config_parse_failed");
     assert_eq!(error.details_json().unwrap()["column"], 12);
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn invalid_unrelated_profile_does_not_hide_global_scalars_or_valid_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -2679,14 +2593,13 @@ network = "preview"
 
     assert_eq!(profile.name, "valid");
     assert_eq!(key.as_deref(), Some("alice"));
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn invalid_local_runtime_state_does_not_block_non_local_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -2712,14 +2625,13 @@ runtime_manifest = "relative.json"
         thruput_cli::config::resolve_default_key_for_profile(&profile).unwrap(),
         None
     );
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn invalid_local_runtime_state_is_rejected_for_local_profile() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
         global_config_path(&tmp),
@@ -2740,14 +2652,13 @@ runtime_manifest = "/tmp/runtime.json"
 
     assert_eq!(error.code(), "config_file_invalid");
     assert!(error.to_string().contains("local_runtime_state is invalid"));
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn invalid_persisted_default_profile_reports_its_layer_path() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let global_path = global_config_path(&tmp);
     fs::write(&global_path, "default_profile = \" \"\n").unwrap();
@@ -2773,14 +2684,13 @@ fn invalid_persisted_default_profile_reports_its_layer_path() {
             .to_string()
             .contains(project_path.to_string_lossy().as_ref())
     );
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn invalid_profile_reason_identifies_layer_without_duplicate_wrapping() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let project_path = tmp.path().join("thruput.toml");
     fs::write(
         &project_path,
@@ -2798,14 +2708,13 @@ fn invalid_profile_reason_identifies_layer_without_duplicate_wrapping() {
     );
     assert!(message.contains("project config"));
     assert!(message.contains(project_path.to_string_lossy().as_ref()));
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn unrelated_global_writes_preserve_ignored_legacy_executor_table() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     let legacy =
         "[executor]\npassword = 42 # legacy value is not interpreted\nplugin_token = \"keep\"\n";
@@ -2818,7 +2727,6 @@ fn unrelated_global_writes_preserve_ignored_legacy_executor_table() {
         thruput_cli::config::load_default_key().unwrap().as_deref(),
         Some("alice")
     );
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -2830,7 +2738,7 @@ fn profile_network_config_merges_layers_and_yields_to_flags() {
     let project = tmp.path().join("project");
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::create_dir(&project).unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     fs::write(
         global_config_path(&tmp),
         r#"
@@ -2934,15 +2842,13 @@ network = "devnet"
         sources.network_config["max_rv32_memory_bytes"].kind,
         thruput_cli::config::ConfigSourceKind::Global
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
 fn profile_network_config_rejects_unknown_names_and_bad_values() {
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     for table in [
         "network_config = 1",
         "network_config.max_rv32_memmory_bytes = 1",
@@ -2963,7 +2869,6 @@ fn profile_network_config_rejects_unknown_names_and_bad_values() {
             "{table}: {error}"
         );
     }
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -2996,7 +2901,7 @@ fn local_network_overrides_require_selecting_the_local_profile() {
     use thruput_node_supervisor::ConfigParamName;
 
     let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let config = tmp.path().join("thruput.toml");
     let profiles = r#"
 [profile.local]
@@ -3026,12 +2931,12 @@ network = "futurenet"
         vec![(ConfigParamName::MaxTxGas, 5_000_000_000)]
     );
 
-    unsafe { env::set_var("THRUPUT_PROFILE", "local") };
+    let profile = EnvGuard::set("THRUPUT_PROFILE", "local");
     assert_eq!(
         thruput_cli::node::with_profile_network_config(tmp.path(), None, Vec::new()).unwrap(),
         vec![(ConfigParamName::MaxTxGas, 5_000_000_000)]
     );
-    unsafe { env::remove_var("THRUPUT_PROFILE") };
+    drop(profile);
     assert!(matches!(
         thruput_cli::node::with_profile_network_config(tmp.path(), Some("missing"), Vec::new()),
         Err(thruput_cli::CliError::ProfileNotFound(_))
@@ -3053,5 +2958,4 @@ network = "futurenet"
         .unwrap(),
         vec![(ConfigParamName::MaxTxGas, 6_000_000_000)]
     );
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }

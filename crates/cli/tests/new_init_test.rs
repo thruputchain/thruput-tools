@@ -1,9 +1,12 @@
 use serial_test::serial;
-use std::env;
 use std::fs;
 use tempfile::TempDir;
 use thruput_cli::Print;
 use thruput_cli::init::InitOptions;
+
+#[path = "support/env_guard.rs"]
+mod env_guard;
+use env_guard::EnvGuard;
 
 fn quiet() -> Print {
     Print::quiet()
@@ -52,10 +55,8 @@ fn init_configures_profiles_and_succeeds() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     // Pre-store a key so the wizard does not prompt for key generation.
     thruput_cli::keys::generate(
@@ -102,11 +103,6 @@ fn init_configures_profiles_and_succeeds() {
         futurenet.contracts.get("NATIVE_TOKEN").map(String::as_str),
         Some("11111111111111111111111111111112")
     );
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -115,10 +111,8 @@ fn init_preserves_existing_global_profile_fields() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
     fs::write(
@@ -190,11 +184,6 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
         future.network,
         Some(thruput_cli::config::Network::Futurenet)
     );
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -203,10 +192,8 @@ fn init_preserves_ignored_legacy_executor_config() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     let legacy = "[executor]\nusername = \"legacy\"\npassword = \"private-password\"\n";
     fs::create_dir_all(tmp.path().join("thruput")).unwrap();
@@ -225,11 +212,6 @@ fn init_preserves_ignored_legacy_executor_config() {
 
     let contents = fs::read_to_string(tmp.path().join("thruput/config.toml")).unwrap();
     assert!(contents.contains(legacy));
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -238,10 +220,8 @@ fn quiet_init_does_not_generate_a_key_without_consent() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     assert!(thruput_cli::init::run(tmp.path(), &InitOptions::default(), "init", &quiet()).is_err());
 
@@ -250,11 +230,6 @@ fn quiet_init_does_not_generate_a_key_without_consent() {
     let keys = thruput_cli::keys::load_key_summaries().unwrap();
     assert!(keys.is_empty());
     assert!(!tmp.path().join("my-contract").exists());
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -271,10 +246,8 @@ fn init_rejects_dangling_project_key_despite_global_default() {
     )
     .unwrap();
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     thruput_cli::keys::generate(
         &Some("alice".into()),
@@ -286,11 +259,6 @@ fn init_rejects_dangling_project_key_despite_global_default() {
     .unwrap();
 
     assert!(thruput_cli::init::run(&project, &InitOptions::default(), "init", &quiet()).is_err());
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]

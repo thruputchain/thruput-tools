@@ -1,10 +1,13 @@
 use serial_test::serial;
-use std::env;
 use std::fs;
 use tempfile::TempDir;
 use thruput_cli::Print;
 
 mod support;
+
+#[path = "support/env_guard.rs"]
+mod env_guard;
+use env_guard::EnvGuard;
 
 fn quiet() -> Print {
     Print::quiet()
@@ -27,11 +30,9 @@ fn status_succeeds_when_fully_configured() {
     let cargo_home = tmp.path().join("cargo-home");
     let devnode = support::write_versioned_devnode(tmp.path());
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-        env::set_var("THRUPUT_DEVNODE_BINARY", &devnode);
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
+    let _devnode_binary = EnvGuard::set("THRUPUT_DEVNODE_BINARY", &devnode);
 
     write_groundhog_registry_config(&cargo_home);
 
@@ -55,12 +56,6 @@ fn status_succeeds_when_fully_configured() {
             .all_findings()
             .collect::<Vec<_>>()
     );
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-        env::remove_var("THRUPUT_DEVNODE_BINARY");
-    }
 }
 
 #[test]
@@ -68,18 +63,11 @@ fn status_succeeds_when_fully_configured() {
 fn status_returns_error_when_missing_state() {
     let tmp = TempDir::new().unwrap();
 
-    unsafe {
-        env::set_var("CARGO_HOME", tmp.path().join("cargo-home"));
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", tmp.path().join("cargo-home"));
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     let result = thruput_cli::status::run(tmp.path(), None, "status", &quiet());
     assert!(result.is_err());
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -96,10 +84,8 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
     )
     .unwrap();
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     write_groundhog_registry_config(&cargo_home);
 
@@ -125,11 +111,6 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
     assert_eq!(report.effective_default_key_source, Some("profile"));
     let summary = report.effective_default_key_summary().unwrap();
     assert_eq!(summary.name, "bob");
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -146,10 +127,8 @@ fn collect_report_does_not_invent_builtin_key_without_active_local_runtime() {
     )
     .unwrap();
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     write_groundhog_registry_config(&cargo_home);
 
@@ -162,11 +141,6 @@ fn collect_report_does_not_invent_builtin_key_without_active_local_runtime() {
             .iter()
             .any(|finding| finding.code == "no_keys")
     );
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -175,10 +149,8 @@ fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     write_groundhog_registry_config(&cargo_home);
 
@@ -202,11 +174,6 @@ fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
             .all_findings()
             .any(|finding| finding.code == "default_key_not_on_disk")
     );
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -250,10 +217,8 @@ counter = "{project_counter}"
     )
     .unwrap();
 
-    unsafe {
-        env::set_var("CARGO_HOME", &cargo_home);
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     write_groundhog_registry_config(&cargo_home);
     thruput_cli::keys::generate(
@@ -275,11 +240,6 @@ counter = "{project_counter}"
     assert_eq!(report.effective_default_key.as_deref(), Some("alice"));
     assert_eq!(report.effective_default_key_source, Some("global"));
     assert!(report.effective_default_key_summary().is_some());
-
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -312,10 +272,8 @@ owner_public_key = "{global_owner}"
     )
     .unwrap();
 
-    unsafe {
-        env::set_var("CARGO_HOME", tmp.path().join("cargo-home"));
-        env::set_var("XDG_CONFIG_HOME", tmp.path());
-    }
+    let _cargo_home = EnvGuard::set("CARGO_HOME", tmp.path().join("cargo-home"));
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
     let report = thruput_cli::checks::collect_report(tmp.path(), None).unwrap();
     assert!(report.project.config_path.is_none());
@@ -331,9 +289,43 @@ owner_public_key = "{global_owner}"
         Some("global-wallet")
     );
     assert_eq!(report.project.default_wallet_source, Some("global"));
+}
 
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
+#[test]
+#[serial]
+#[cfg(unix)]
+fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
+    let tmp = TempDir::new().unwrap();
+    let cargo_home = tmp.path().join("cargo-home");
+    let devnode = support::write_versioned_devnode(tmp.path());
+
+    let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
+
+    thruput_cli::keys::generate(
+        &Some("alice".into()),
+        thruput_cli::keys::KeyScheme::Ed25519,
+        false,
+        "keys.generate",
+        &thruput_cli::Print::quiet(),
+    )
+    .unwrap();
+    thruput_cli::config::initialize_global_profiles().unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
+        .arg("-q")
+        .arg("status")
+        .env_remove("THRUPUT_PROFILE")
+        .env_remove("THRUPUT_RUNTIME_MANIFEST")
+        .env_remove("THRUPUT_BUNDLE_MANIFEST")
+        .env_remove("THRUPUT_OFFLINE")
+        .env("CARGO_HOME", &cargo_home)
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .env("THRUPUT_DEVNODE_BINARY", devnode)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
 }
