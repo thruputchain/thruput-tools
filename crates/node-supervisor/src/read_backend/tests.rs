@@ -2,7 +2,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
 use thruput_db_gateway::AddressAndKeyBatch;
@@ -15,7 +15,7 @@ use thruput_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1, IndexerBlockExplorer_IndexerBlockExplorer1_Client,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
     TransactionPage as IdxTransactionPage, TransactionPageResult, TransactionQuery,
-    TransactionRefPage, TransactionRefPageResult, TxInfo, TxInfoResult,
+    TransactionRefPage, TransactionRefPageResult, TxInfoResult,
 };
 use thruput_json_rpc_server::native::read::{NativeStatePlane, StateKey};
 use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
@@ -37,17 +37,12 @@ use thruput_scheduler::{
 };
 use thruput_scp::network::ProtocolCommit as Protocol;
 use thruput_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
-use thruput_xdr::event::IdentifiedEvent as IdxIdentifiedEvent;
-use thruput_xdr::transaction::{
-    Invocation, OptSignedTransactionBatch, SignedTransaction, Transaction, TransactionHashBatch,
-    Uniquifier,
-};
+use thruput_xdr::transaction::{OptSignedTransactionBatch, TransactionHashBatch};
 use thruput_xdr::types::BlockHeight as IdxBlockHeight;
 use thruput_xdr::types::{Ed25519PublicKey, PublicKey, StorageKey};
 use thruput_xdr::{
     PROTOCOL_VERSION,
     event::TxEmittedEvent,
-    exec_result::ExecResult,
     storage_item::WireStorageItem,
     transaction::TransactionHash,
     types::{AddressAndKey, ContractAddress, SHA256Hash},
@@ -57,23 +52,17 @@ use xdr_common::{BytesM, VecM};
 
 use super::{HogdDevReadBackend, shared_db_gateway};
 use crate::airdrop::FundingStatusPlane;
+use crate::canned_x23::{
+    CANNED_EVENT_CURSOR, CANNED_GAS_USED_A, CANNED_HEIGHT_A, CANNED_HEIGHT_B,
+    CANNED_STORAGE_HEIGHT, CANNED_STORAGE_KEY, CANNED_STORAGE_VALUE, CANNED_TX_HASH_A,
+    CANNED_TX_HASH_UNKNOWN, CommittedSet, EventPages, committed_set, dummy_signed_transaction,
+    event_pages, resolve_event_page,
+};
 
-// These constants mirror the fake_hogd_dev fixture. Defined here so the
-// unit tests in this file have no dependency on the example binary's types.
-const CANNED_TX_HASH_A: [u8; 32] = [0xAAu8; 32];
-const CANNED_TX_HASH_B: [u8; 32] = [0xBBu8; 32];
+// The indexer fake below also reports a recent failure for this hash.
 const CANNED_TX_HASH_FAILED: [u8; 32] = [0xCCu8; 32];
-const CANNED_TX_HASH_UNKNOWN: [u8; 32] = [0xFFu8; 32];
-const CANNED_HEIGHT_A: i64 = 5;
-const CANNED_HEIGHT_B: i64 = 10;
-const CANNED_GAS_USED_A: u64 = 1_500;
-const CANNED_GAS_USED_B: u64 = 2_500;
 const CANNED_FAILURE_HEIGHT: i64 = 11;
 const CANNED_FAILURE_ADDRESS: [u8; 32] = [0x0Du8; 32];
-const CANNED_EVENT_CURSOR: &[u8] = b"cursor-page-2";
-const CANNED_STORAGE_KEY: [u8; 32] = [0x42u8; 32];
-const CANNED_STORAGE_VALUE: &[u8] = b"local-node-storage";
-const CANNED_STORAGE_HEIGHT: i64 = 12;
 
 // -----------------------------------------------------------------------
 // Fake scheduler
@@ -84,13 +73,10 @@ const CANNED_STORAGE_HEIGHT: i64 = 12;
 enum FakeSchedulerMode {
     /// Returns one `None` per queried hash — nothing pending.
     NoPending,
-    Outcome(thruput_scheduler::SchedulerTransactionOutcome),
     /// Returns one `Some(dummy_tx)` per queried hash — all pending.
     AllPending,
     /// Returns an empty batch — no per-hash answer at all.
     EmptyBatch,
-    /// Returns more slots than hashes — an invalid cardinality response.
-    ExtraSlot,
     /// RPC call itself fails.
     RpcFail,
 }
@@ -99,52 +85,6 @@ struct FakeScheduler {
     mode: FakeSchedulerMode,
     /// How many `schedgateway_lookup_tx` calls the fake has served.
     lookups: Arc<AtomicUsize>,
-}
-
-/// Build a minimal dummy `SignedTransaction` suitable for testing the
-/// pending-detection path. The transaction is not valid on-chain; it only
-/// needs to be `Some(...)` so `Option::is_some()` returns true.
-fn dummy_signed_transaction() -> SignedTransaction {
-    use thruput_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
-    use thruput_xdr::contract::ContractEntrypointID;
-    use thruput_xdr::types::GasAmount;
-    SignedTransaction {
-        tx: Transaction {
-            invocation: Invocation {
-                invoked_address: ContractAddress::from([0u8; 32]),
-                entrypoint: ContractEntrypointID::from([0u8; 8]),
-                gas_limit: GasAmount::from(0u64),
-                calldata: BytesM(vec![]),
-            },
-            uniquifier: Uniquifier {
-                block_expiry_height: IdxBlockHeight::from(0i64),
-                nonce: 0,
-            },
-            contracts_to_deploy: VecM(vec![]),
-            auth_claim: AuthClaim::kSourceAddressAuthData {
-                source_address_claim: AuthClaim_source_address_claim {
-                    allowed_keys: 0,
-                    required_weight: 0,
-                },
-            },
-        },
-        signatures: VecM(vec![]),
-        pubkey_claim_key: None,
-    }
-}
-
-/// Wrap [`dummy_signed_transaction`] with empty nondeterministic
-/// proposal data so it can stand in for a `TxInfo.tx` body in tests.
-fn dummy_proposed_transaction() -> thruput_xdr::transaction::ProposedTransaction {
-    use thruput_xdr::transaction::{NondeterministicProposalData, ProposedTransaction};
-    ProposedTransaction {
-        signed_tx: dummy_signed_transaction(),
-        nondeterministic_proposal_data: NondeterministicProposalData {
-            nondeterministic_bits: BytesM(vec![]),
-            nondeterministic_bit_count: 0,
-            observed_queue_entry_sequence: VecM(vec![]),
-        },
-    }
 }
 
 #[allow(refining_impl_trait)]
@@ -178,9 +118,6 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
     ) -> Result<OptSignedTransactionBatch, ProgramError> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
         match &self.mode {
-            FakeSchedulerMode::Outcome(_) => {
-                panic!("old lookup must not be used for retained outcomes")
-            }
             FakeSchedulerMode::NoPending => Ok(VecM(hashes.0.into_iter().map(|_| None).collect())),
             FakeSchedulerMode::AllPending => {
                 // Return one Some(dummy_tx) per queried hash to signal pending.
@@ -192,7 +129,6 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
                 Ok(VecM(results))
             }
             FakeSchedulerMode::EmptyBatch => Ok(VecM(vec![])),
-            FakeSchedulerMode::ExtraSlot => Ok(VecM(vec![None, None])),
             FakeSchedulerMode::RpcFail => Err(ProgramError::msg("fake scheduler lookup rpc-fail")),
         }
     }
@@ -205,10 +141,6 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
             SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
             SchedulerTransactionStatus,
         };
-        if let FakeSchedulerMode::Outcome(outcome) = &self.mode {
-            self.lookups.fetch_add(1, Ordering::SeqCst);
-            return Ok(VecM(vec![outcome.clone(); hashes.0.len()]));
-        }
         let results = self.schedgateway_lookup_tx(hashes).await?;
         Ok(VecM(
             results
@@ -285,9 +217,6 @@ enum FakeIndexerMode {
     ReceiptInvalidOutput,
 }
 
-type CommittedSet = HashMap<[u8; 32], TxInfo>;
-type EventPages = Vec<(Vec<IdxIdentifiedEvent>, Vec<u8>)>;
-
 struct FakeIndexer {
     mode: FakeIndexerMode,
     committed: CommittedSet,
@@ -296,7 +225,7 @@ struct FakeIndexer {
 
 impl FakeIndexer {
     fn new(mode: FakeIndexerMode) -> Self {
-        let mut committed = Self::build_committed_set();
+        let mut committed = committed_set();
         let log = &mut committed.get_mut(&CANNED_TX_HASH_A).unwrap().events;
         match mode {
             FakeIndexerMode::ReceiptHashMismatch => log.tx_hash = [3; 32].into(),
@@ -315,106 +244,7 @@ impl FakeIndexer {
         Self {
             mode,
             committed,
-            event_pages: Self::build_event_pages(),
-        }
-    }
-
-    fn build_committed_set() -> CommittedSet {
-        use thruput_xdr::{event::TxEventLog, transaction::InvocationFrameOutput};
-        use xdr_common::BytesM;
-
-        let mut map = HashMap::new();
-
-        let tx_a = TxInfo {
-            height: IdxBlockHeight::from(CANNED_HEIGHT_A),
-            tx: dummy_proposed_transaction(),
-            events: TxEventLog {
-                tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
-                exec_result: ExecResult::ExecResultOK,
-                root_output: InvocationFrameOutput::Return {
-                    return_buffer: BytesM(vec![]),
-                },
-                gas_consumed: CANNED_GAS_USED_A,
-                events: VecM(vec![]),
-            },
-        };
-        map.insert(CANNED_TX_HASH_A, tx_a);
-
-        let tx_b = TxInfo {
-            height: IdxBlockHeight::from(CANNED_HEIGHT_B),
-            tx: dummy_proposed_transaction(),
-            events: TxEventLog {
-                tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
-                exec_result: ExecResult::ExecResultOK,
-                root_output: InvocationFrameOutput::Return {
-                    return_buffer: BytesM(vec![]),
-                },
-                gas_consumed: CANNED_GAS_USED_B,
-                events: VecM(vec![]),
-            },
-        };
-        map.insert(CANNED_TX_HASH_B, tx_b);
-
-        map
-    }
-
-    fn build_event_pages() -> EventPages {
-        use thruput_xdr::types::ContractAddress;
-
-        let event1 = IdxIdentifiedEvent {
-            tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
-            block_height: IdxBlockHeight::from(CANNED_HEIGHT_A),
-            sequence_number: 0,
-            emitted_event: TxEmittedEvent {
-                contract_address: ContractAddress::from([0x01u8; 32]),
-                num_topics: 0,
-                serialized_event: BytesM(vec![]),
-            },
-        };
-        let event2 = IdxIdentifiedEvent {
-            tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
-            block_height: IdxBlockHeight::from(CANNED_HEIGHT_A),
-            sequence_number: 1,
-            emitted_event: TxEmittedEvent {
-                contract_address: ContractAddress::from([0x01u8; 32]),
-                num_topics: 0,
-                serialized_event: BytesM(vec![]),
-            },
-        };
-        let event3 = IdxIdentifiedEvent {
-            tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
-            block_height: IdxBlockHeight::from(CANNED_HEIGHT_B),
-            sequence_number: 0,
-            emitted_event: TxEmittedEvent {
-                contract_address: ContractAddress::from([0x02u8; 32]),
-                num_topics: 0,
-                serialized_event: BytesM(vec![]),
-            },
-        };
-
-        vec![
-            (vec![event1, event2], CANNED_EVENT_CURSOR.to_vec()),
-            (vec![event3], vec![]),
-        ]
-    }
-
-    fn resolve_event_page(
-        &self,
-        cursor: &[u8],
-    ) -> Result<&(Vec<IdxIdentifiedEvent>, Vec<u8>), ProgramError> {
-        if cursor.is_empty() {
-            Ok(&self.event_pages[0])
-        } else {
-            self.event_pages
-                .iter()
-                .enumerate()
-                .find(|(_, (_, next))| !next.is_empty() && next.as_slice() == cursor)
-                .map(|(i, _)| &self.event_pages[i + 1])
-                .ok_or_else(|| {
-                    ProgramError::msg(
-                        "unknown event cursor; test indexer only handles canned dataset",
-                    )
-                })
+            event_pages: event_pages(),
         }
     }
 }
@@ -484,7 +314,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail"));
         }
-        let (events, next_cursor) = self.resolve_event_page(&arg0.cursor.0)?;
+        let (events, next_cursor) = resolve_event_page(&self.event_pages, &arg0.cursor.0)?;
         Ok(EventPageResult::IndexerQueryOk {
             page: IdxEventPage {
                 events: VecM(events.clone()),
@@ -1126,259 +956,106 @@ async fn native_registered_auth_without_gateway_surfaces_backend_unavailable() {
 
 // -----------------------------------------------------------------------
 // funding_status tests
+//
+// `thruput_hogd_backend::status` owns which probe is asked when and which
+// answer wins (`hogd-backend/tests/status.rs`), and `hogd-backend` decodes
+// each answer. These smokes cover how this adapter wires its x23 lookups in.
 // -----------------------------------------------------------------------
 
 #[tokio::test]
-async fn funding_status_pending_in_scheduler_returns_pending() {
-    // Arrange: scheduler says all queried hashes are pending.
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::AllPending).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    // Use an unknown hash — scheduler says it's pending regardless.
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
-
-    // Act
-    let status = backend
-        .funding_status(RpcRequestContext::unbounded(), tx_hash)
-        .await
-        .expect("bug: status check should succeed");
-
-    // Assert
-    assert!(
-        matches!(status, TransactionStatus::Pending),
-        "expected Pending, got {status:?}"
-    );
-}
-
-#[tokio::test]
-async fn funding_status_committed_not_pending_returns_committed() {
-    // Arrange: scheduler says not pending; indexer has the tx committed.
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_A);
-
-    // Act
-    let status = backend
-        .funding_status(RpcRequestContext::unbounded(), tx_hash)
-        .await
-        .expect("bug: status check should succeed");
-
-    // Assert
-    assert!(
-        matches!(status, TransactionStatus::Committed { ref height } if **height == CANNED_HEIGHT_A),
-        "expected Committed({CANNED_HEIGHT_A}), got {status:?}",
-    );
-}
-
-#[tokio::test]
-async fn funding_status_scheduler_retained_outcomes() {
-    use thruput_scheduler::{
-        SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
-        SchedulerTransactionStatus as Status,
-    };
-    for (status, tag) in [
-        (Status::SchedulerTransactionSucceeded, "committed"),
-        (Status::SchedulerTransactionRetry, "retry"),
-        (Status::SchedulerTransactionDropped, "dropped"),
-    ] {
+async fn funding_status_wires_the_indexer_and_scheduler_probes() {
+    use thruput_json_rpc_types::transaction::{ConflictCode, TransactionFailureCause};
+    type Expected = fn(&TransactionStatus) -> bool;
+    let cases: [(_, _, Expected); 4] = [
+        (CANNED_TX_HASH_A, FakeSchedulerMode::NoPending, |status| {
+            matches!(
+                status,
+                TransactionStatus::Committed { height } if **height == CANNED_HEIGHT_A
+            )
+        }),
+        (
+            CANNED_TX_HASH_FAILED,
+            FakeSchedulerMode::NoPending,
+            |status| {
+                matches!(
+                    status,
+                    TransactionStatus::RecentFailure {
+                        attempt_height,
+                        cause: TransactionFailureCause::DbConflict { conflict },
+                    } if **attempt_height == CANNED_FAILURE_HEIGHT
+                        && conflict.address.0 == ContractAddress::from(CANNED_FAILURE_ADDRESS)
+                        && conflict.code == ConflictCode::ExclusiveLock
+                )
+            },
+        ),
+        (
+            CANNED_TX_HASH_UNKNOWN,
+            FakeSchedulerMode::AllPending,
+            |status| matches!(status, TransactionStatus::Pending),
+        ),
+        (
+            CANNED_TX_HASH_UNKNOWN,
+            FakeSchedulerMode::NoPending,
+            |status| matches!(status, TransactionStatus::Unknown),
+        ),
+    ];
+    for (hash, scheduler, expected) in cases {
         let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-        let outcome = SchedulerTransactionOutcome {
-            status,
-            error_source: Source::SchedulerTransactionErrorExecutor,
-            error_code: -4,
-            height: 42.into(),
-        };
-        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
+        let (sched_addr, _sched, lookups) = start_counting_fake_scheduler(scheduler).await;
         let backend = make_read_backend(idx_addr, sched_addr).await;
+
         let status = backend
-            .funding_status(RpcRequestContext::unbounded(), canned_tx_hash([0x99; 32]))
+            .funding_status(RpcRequestContext::unbounded(), canned_tx_hash(hash))
             .await
-            .unwrap();
-        let value = serde_json::to_value(status).unwrap();
-        assert_eq!(value["status"], tag);
-        if tag == "committed" {
-            assert_eq!(
-                value,
-                serde_json::json!({"status": "committed", "height": "42"})
-            );
-        } else {
-            assert_eq!(
-                value["error"],
-                serde_json::json!({"source":"executor", "code":-4})
-            );
-        }
+            .expect("bug: status check should succeed");
+
+        assert!(expected(&status), "unexpected status {status:?}");
+        // Only an indexed commitment answers without the scheduler lookup.
+        assert_eq!(
+            lookups.load(Ordering::SeqCst),
+            usize::from(hash != CANNED_TX_HASH_A),
+            "{status:?}"
+        );
     }
 }
 
 #[tokio::test]
-async fn funding_status_in_neither_returns_unknown() {
-    // Arrange: scheduler says not pending; indexer doesn't have it.
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
+async fn funding_status_names_the_unreachable_backend() {
+    use crate::service::{INDEXER, SCHEDULER_GATEWAY};
+    // A transport failure on either probe, with a miss from the other, must
+    // not become a definite answer: the transaction may be where we could
+    // not look.
+    for (indexer, scheduler, service) in [
+        (
+            FakeIndexerMode::RpcFail,
+            FakeSchedulerMode::NoPending,
+            INDEXER,
+        ),
+        (
+            FakeIndexerMode::Normal,
+            FakeSchedulerMode::RpcFail,
+            SCHEDULER_GATEWAY,
+        ),
+    ] {
+        let (idx_addr, _idx) = start_fake_indexer(indexer).await;
+        let (sched_addr, _sched) = start_fake_scheduler(scheduler).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
 
-    // Act
-    let status = backend
-        .funding_status(RpcRequestContext::unbounded(), tx_hash)
-        .await
-        .expect("bug: status check should succeed");
+        let result = backend
+            .funding_status(
+                RpcRequestContext::unbounded(),
+                canned_tx_hash(CANNED_TX_HASH_UNKNOWN),
+            )
+            .await;
 
-    // Assert
-    assert!(
-        matches!(status, TransactionStatus::Unknown),
-        "expected Unknown, got {status:?}"
-    );
-}
-
-#[tokio::test]
-async fn funding_status_recent_failure_returns_diagnostic() {
-    // Arrange: scheduler says not pending; indexer holds a recent
-    // nondeterministic-failure diagnostic for the hash.
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched, lookups) =
-        start_counting_fake_scheduler(FakeSchedulerMode::NoPending).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_FAILED);
-
-    // Act
-    let status = backend
-        .funding_status(RpcRequestContext::unbounded(), tx_hash)
-        .await
-        .expect("bug: status check should succeed");
-
-    assert_eq!(lookups.load(Ordering::SeqCst), 1);
-
-    // Assert
-    match status {
-        TransactionStatus::RecentFailure {
-            attempt_height,
-            cause:
-                thruput_json_rpc_types::transaction::TransactionFailureCause::DbConflict { conflict },
-        } => {
-            assert_eq!(*attempt_height, CANNED_FAILURE_HEIGHT);
-            assert_eq!(
-                conflict.address.0,
-                ContractAddress::from(CANNED_FAILURE_ADDRESS)
-            );
-            assert_eq!(
-                conflict.code,
-                thruput_json_rpc_types::transaction::ConflictCode::ExclusiveLock
-            );
-        }
-        other => panic!("expected RecentFailure, got {other:?}"),
+        assert!(
+            matches!(
+                &result,
+                Err(RpcServerError::BackendUnavailable(message)) if message.starts_with(service)
+            ),
+            "expected {service} BackendUnavailable, got {result:?}"
+        );
     }
-}
-
-#[tokio::test]
-async fn native_receipt_recent_failure_returns_none() {
-    // Arrange: the indexer reports a recent nondeterministic failure,
-    // which is not a committed record and must not become an error.
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_FAILED);
-
-    // Act
-    let receipt = backend
-        .native_receipt(RpcRequestContext::unbounded(), tx_hash)
-        .await
-        .expect("bug: receipt lookup should succeed");
-
-    // Assert
-    assert!(receipt.is_none(), "expected None, got {receipt:?}");
-}
-
-#[tokio::test]
-async fn funding_status_scheduler_rpc_fail_still_returns_committed_from_indexer() {
-    // Arrange: scheduler RPC fails (degraded mode); indexer has the tx.
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_B);
-
-    // Act
-    let status = backend
-        .funding_status(RpcRequestContext::unbounded(), tx_hash)
-        .await
-        .expect("bug: status check should succeed even with scheduler failure");
-
-    // Assert: scheduler failure is non-fatal; we still get the indexer answer.
-    assert!(
-        matches!(status, TransactionStatus::Committed { ref height } if **height == CANNED_HEIGHT_B),
-        "expected Committed({CANNED_HEIGHT_B}) despite scheduler failure, got {status:?}",
-    );
-}
-
-#[tokio::test]
-async fn funding_status_scheduler_rpc_fail_and_indexer_miss_surfaces_backend_unavailable() {
-    // Arrange: scheduler RPC fails, and the indexer has no record. The
-    // transaction may still be pending in the unreachable mempool, so a
-    // definite `Unknown` would be a false "not anywhere" claim.
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
-
-    // Act
-    let result = backend
-        .funding_status(RpcRequestContext::unbounded(), tx_hash)
-        .await;
-
-    // Assert
-    assert!(
-        matches!(
-            result,
-            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
-                _
-            ))
-        ),
-        "unconsulted mempool with indexer miss should surface BackendUnavailable, got {result:?}"
-    );
-}
-
-#[tokio::test]
-async fn funding_status_empty_lookup_batch_and_indexer_miss_surfaces_backend_unavailable() {
-    // Arrange: the scheduler lookup succeeds but returns no slot for the
-    // queried hash, so there is no per-transaction mempool answer.
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::EmptyBatch).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
-
-    // Act
-    let result = backend
-        .funding_status(RpcRequestContext::unbounded(), tx_hash)
-        .await;
-
-    // Assert
-    assert!(
-        matches!(
-            result,
-            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
-                _
-            ))
-        ),
-        "lookup with no per-tx answer should surface BackendUnavailable, got {result:?}"
-    );
-}
-
-#[tokio::test]
-async fn funding_status_extra_lookup_slot_and_indexer_miss_surfaces_backend_unavailable() {
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::ExtraSlot).await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
-
-    let result = backend
-        .funding_status(RpcRequestContext::unbounded(), tx_hash)
-        .await;
-
-    assert!(
-        matches!(result, Err(RpcServerError::BackendUnavailable(_))),
-        "lookup with an extra per-tx answer should surface BackendUnavailable, got {result:?}"
-    );
 }
 
 #[tokio::test]
@@ -1409,28 +1086,22 @@ async fn funding_status_slow_indexer_exhausts_deadline_before_mempool_is_asked()
 }
 
 #[tokio::test]
-async fn funding_status_indexer_rpc_fail_surfaces_backend_unavailable() {
-    // Arrange
-    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::RpcFail).await;
+async fn native_receipt_recent_failure_returns_none() {
+    // Arrange: the indexer reports a recent nondeterministic failure,
+    // which is not a committed record and must not become an error.
+    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
     let backend = make_read_backend(idx_addr, sched_addr).await;
-    let tx_hash = canned_tx_hash(CANNED_TX_HASH_A);
+    let tx_hash = canned_tx_hash(CANNED_TX_HASH_FAILED);
 
     // Act
-    let result = backend
-        .funding_status(RpcRequestContext::unbounded(), tx_hash)
-        .await;
+    let receipt = backend
+        .native_receipt(RpcRequestContext::unbounded(), tx_hash)
+        .await
+        .expect("bug: receipt lookup should succeed");
 
     // Assert
-    assert!(
-        matches!(
-            result,
-            Err(thruput_json_rpc_server::RpcServerError::BackendUnavailable(
-                _
-            ))
-        ),
-        "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
-    );
+    assert!(receipt.is_none(), "expected None, got {receipt:?}");
 }
 
 // -----------------------------------------------------------------------
@@ -1635,32 +1306,6 @@ async fn native_status_requires_both_misses_and_valid_scheduler_cardinality() {
             ..
         }
     ));
-}
-
-#[tokio::test]
-async fn native_local_status_does_not_hide_indexer_failure_with_terminal_scheduler_state() {
-    use thruput_scheduler::{
-        SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
-        SchedulerTransactionStatus as Status,
-    };
-    let (idx_addr, _indexer) = start_fake_indexer(FakeIndexerMode::RpcFail).await;
-    let (sched_addr, _scheduler) =
-        start_fake_scheduler(FakeSchedulerMode::Outcome(SchedulerTransactionOutcome {
-            status: Status::SchedulerTransactionDropped,
-            height: 7.into(),
-            error_source: Source::SchedulerTransactionErrorAuth,
-            error_code: 1,
-        }))
-        .await;
-    let backend = make_read_backend(idx_addr, sched_addr).await;
-    let error = backend
-        .native_status(
-            RpcRequestContext::unbounded(),
-            canned_tx_hash(CANNED_TX_HASH_A),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(error.error, RpcServerError::BackendUnavailable(_)));
 }
 
 #[tokio::test]

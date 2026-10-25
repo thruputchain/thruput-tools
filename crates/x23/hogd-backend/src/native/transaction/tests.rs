@@ -187,10 +187,9 @@ fn scheduler_checks_cardinality_tags_and_committed_height() {
         vec![],
         vec![scheduler(Status::SchedulerTransactionPending); 2],
     ] {
-        reason(
-            &scheduler_status(&VecM(values)).unwrap_err(),
-            Reason::InvalidCardinality,
-        );
+        let error = scheduler_status(&VecM(values)).unwrap_err();
+        reason(&error, Reason::InvalidCardinality);
+        assert!(error.observation.is_none());
     }
     for value in [
         scheduler(Status(9999)),
@@ -225,17 +224,25 @@ fn scheduler_checks_cardinality_tags_and_committed_height() {
             recent_failure: None
         })
     ));
-    assert!(
-        matches!(scheduler_status(&VecM(vec![scheduler(Status::SchedulerTransactionSucceeded)])).unwrap(),Some(out::TransactionStatus::Committed {block_height}) if block_height==42.into())
-    );
-    for status in [
-        Status::SchedulerTransactionRetry,
-        Status::SchedulerTransactionDropped,
+    // Genesis is a real block, so a commitment at height 0 is valid.
+    for height in [42, 0] {
+        let value = SchedulerTransactionOutcome {
+            height: height.into(),
+            ..scheduler(Status::SchedulerTransactionSucceeded)
+        };
+        assert_eq!(
+            serde_json::to_value(scheduler_status(&VecM(vec![value])).unwrap()).unwrap(),
+            serde_json::json!({"status": "committed", "blockHeight": height.to_string()})
+        );
+    }
+    for (status, tag) in [
+        (Status::SchedulerTransactionRetry, "retry"),
+        (Status::SchedulerTransactionDropped, "dropped"),
     ] {
-        for source in [
-            Source::SchedulerTransactionErrorAuth,
-            Source::SchedulerTransactionErrorScheduler,
-            Source::SchedulerTransactionErrorExecutor,
+        for (source, name) in [
+            (Source::SchedulerTransactionErrorAuth, "auth"),
+            (Source::SchedulerTransactionErrorScheduler, "scheduler"),
+            (Source::SchedulerTransactionErrorExecutor, "executor"),
         ] {
             let result = scheduler_status(&VecM(vec![SchedulerTransactionOutcome {
                 error_source: source,
@@ -243,8 +250,10 @@ fn scheduler_checks_cardinality_tags_and_committed_height() {
             }]))
             .unwrap()
             .unwrap();
-            let value = serde_json::to_value(result).unwrap();
-            assert_eq!(value["error"]["code"], i32::MIN);
+            assert_eq!(
+                serde_json::to_value(result).unwrap(),
+                serde_json::json!({"status": tag, "error": {"source": name, "code": i32::MIN}})
+            );
         }
     }
 }
