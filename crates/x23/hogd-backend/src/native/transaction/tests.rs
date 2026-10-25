@@ -268,6 +268,90 @@ fn conflict(code: DbConflictCode) -> TxFailureCause {
         },
     }
 }
+// The wire names are the public diagnostic vocabulary; each hogd code must
+// keep mapping to its own name.
+#[test]
+fn every_known_failure_code_maps_to_its_wire_name() {
+    for (code, wire) in [
+        (DbConflictCode::ExclusiveLockDenied, "exclusiveLock"),
+        (DbConflictCode::TypeMismatch, "typeMismatch"),
+        (DbConflictCode::ValueMismatch, "valueMismatch"),
+        (DbConflictCode::BoundsExceeded, "boundsExceeded"),
+        (DbConflictCode::Overflow, "overflow"),
+        (DbConflictCode::ReplayProtection, "replayProtection"),
+        (DbConflictCode::QueueConsumer, "queueConsumer"),
+        (DbConflictCode::CapacityExceeded, "capacityExceeded"),
+        (DbConflictCode::InsufficientFunds, "insufficientFunds"),
+    ] {
+        let result = indexed_status(hash(), recent(conflict(code), 43))
+            .unwrap()
+            .unwrap();
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["cause"]["kind"], "dbConflict", "{wire}");
+        assert_eq!(value["cause"]["conflict"]["code"], wire);
+    }
+    for (code, wire) in [
+        (ContractRejectCode::ContractRejectTooMany, "tooMany"),
+        (
+            ContractRejectCode::ContractRejectBlobTooLarge,
+            "blobTooLarge",
+        ),
+        (
+            ContractRejectCode::ContractRejectNotDeployable,
+            "notDeployable",
+        ),
+        (ContractRejectCode::ContractRejectDuplicate, "duplicate"),
+        (
+            ContractRejectCode::ContractRejectMalformedArtifact,
+            "malformedArtifact",
+        ),
+        (
+            ContractRejectCode::ContractRejectUnsupportedFormat,
+            "unsupportedFormat",
+        ),
+        (
+            ContractRejectCode::ContractRejectUnsupportedAbi,
+            "unsupportedAbi",
+        ),
+        (
+            ContractRejectCode::ContractRejectGasScheduleMismatch,
+            "gasScheduleMismatch",
+        ),
+        (
+            ContractRejectCode::ContractRejectMemoryTooLarge,
+            "memoryTooLarge",
+        ),
+        (
+            ContractRejectCode::ContractRejectCodeSizeInvalid,
+            "codeSizeInvalid",
+        ),
+        (
+            ContractRejectCode::ContractRejectInitialMemoryInvalid,
+            "initialMemoryInvalid",
+        ),
+        (
+            ContractRejectCode::ContractRejectDigestMismatch,
+            "digestMismatch",
+        ),
+        (
+            ContractRejectCode::ContractRejectInvalidProgram,
+            "invalidProgram",
+        ),
+    ] {
+        let cause = TxFailureCause::TxFailureContractRejected {
+            contract: ContractRejectDiagnostic {
+                contract_index: 3,
+                code,
+            },
+        };
+        let result = indexed_status(hash(), recent(cause, 43)).unwrap().unwrap();
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["cause"]["kind"], "contractRejected", "{wire}");
+        assert_eq!(value["cause"]["contractIndex"], 3);
+        assert_eq!(value["cause"]["code"], wire);
+    }
+}
+
 #[test]
 fn indexed_diagnostics_are_typed_and_unknown_values_are_errors() {
     let input = recent(conflict(DbConflictCode::ReplayProtection), 43);

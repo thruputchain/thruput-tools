@@ -35,6 +35,12 @@ fn single_read_requires_one_answer_and_nonnegative_height() {
         Reason::InconsistentResult,
     );
     assert!(storage(7.into(), absent()).unwrap().item.is_none());
+    // Genesis commits at height 0; only -1 means no committed snapshot yet.
+    assert!(storage(0.into(), absent()).unwrap().item.is_none());
+    assert!(matches!(
+        storage((-1).into(), absent()),
+        Err(RpcServerError::BackendUnavailable(_))
+    ));
     assert!(
         storage(
             7.into(),

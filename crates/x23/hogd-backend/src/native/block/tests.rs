@@ -116,3 +116,17 @@ fn unsupported_consensus_extension_cannot_decode_as_a_valid_base_value() {
     bytes[4..8].copy_from_slice(&1u32.to_be_bytes());
     assert!(xdrs::txs::decode::<ConsensusValue>(&bytes).is_err());
 }
+
+#[test]
+fn unencodable_committed_metadata_is_an_encoding_error() {
+    let mut value = value();
+    // An upgrade above the 128-byte XDR limit cannot be re-encoded for hashing.
+    value.upgrades = xdr_common::VecM(vec![xdr_common::BytesM(vec![0; 129])]);
+    assert!(matches!(
+        block_lookup(&99.into(), BlockLookupResult::BlockFound { value }),
+        Err(RpcServerError::BackendDataInvalid {
+            reason: BackendDataInvalidReason::InvalidEncoding,
+            ..
+        })
+    ));
+}
