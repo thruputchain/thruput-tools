@@ -7,6 +7,10 @@ use tempfile::TempDir;
 
 mod support;
 
+#[path = "support/env_guard.rs"]
+mod env_guard;
+use env_guard::EnvGuard;
+
 fn write_rv32_build_fixture(project_root: &Path) -> (PathBuf, PathBuf) {
     fs::create_dir_all(project_root.join(".cargo")).unwrap();
     fs::write(project_root.join(".cargo/contract.toml"), "").unwrap();
@@ -266,7 +270,7 @@ fn test_failed_rv32_tests_update_rerun_cache() {
 
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fake_bin.as_os_str());
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path().join("config-home"));
 
     let err = thruput_cli::test_cmd::run_with_options(
         Some("demo-contract"),
@@ -289,8 +293,6 @@ fn test_failed_rv32_tests_update_rerun_cache() {
     let cache = fs::read_to_string(cache_path).unwrap();
     assert!(cache.contains("\"package\": \"demo-contract\""));
     assert!(cache.contains("\"tests::fails\""));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 /// A build warning reaches `test --json`, so automation learns that the
@@ -427,7 +429,7 @@ fn test_cargo_test_invocation_omits_host_target() {
 
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fake_bin.as_os_str());
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path().join("config-home"));
 
     thruput_cli::test_cmd::run_with_options(
         Some("demo-contract"),
@@ -454,8 +456,6 @@ fn test_cargo_test_invocation_omits_host_target() {
         args.contains(&"test_rv32"),
         "expected test_rv32 target, got: {args:?}"
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 struct CurrentDirGuard {
@@ -627,7 +627,7 @@ fn test_workspace_runs_every_rv32_member_and_reports_failures() {
 
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fixture.fake_bin.as_os_str());
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path().join("config-home"));
 
     let err = thruput_cli::test_cmd::run_with_options(
         None,
@@ -661,8 +661,6 @@ fn test_workspace_runs_every_rv32_member_and_reports_failures() {
     )
     .unwrap();
     assert!(cache.contains("\"tests::fails\""));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -678,7 +676,7 @@ fn test_workspace_fail_fast_stops_after_first_failing_member() {
 
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fixture.fake_bin.as_os_str());
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path().join("config-home"));
 
     let err = thruput_cli::test_cmd::run_with_options(
         None,
@@ -710,8 +708,6 @@ fn test_workspace_fail_fast_stops_after_first_failing_member() {
         vec!["alpha-contract".to_string(), "beta-contract".to_string()],
         "--fail-fast should leave gamma-contract unrun"
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 /// `thruput --json test --workspace` emits one record whose `data` is the
@@ -780,7 +776,7 @@ fn test_workspace_build_error_ends_the_run_with_that_error() {
 
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fixture.fake_bin.as_os_str());
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path().join("config-home"));
 
     let err = thruput_cli::test_cmd::run_with_options(
         None,
@@ -805,8 +801,6 @@ fn test_workspace_build_error_ends_the_run_with_that_error() {
         vec!["alpha-contract".to_string()],
         "beta-contract never built, so neither it nor gamma-contract should run tests"
     );
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 /// A member that fails to build under `--json` still yields the workspace

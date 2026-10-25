@@ -7,6 +7,10 @@ use tempfile::TempDir;
 
 mod support;
 
+#[path = "support/env_guard.rs"]
+mod env_guard;
+use env_guard::EnvGuard;
+
 /// Minimal stand-in for the `.cargo/config.toml` that `thruput new`
 /// scaffolds: the Thruput RV32 target rustflags table, which is what the
 /// workspace-config guard requires at the cargo workspace root.
@@ -405,7 +409,7 @@ fn build_rejects_missing_active_profile_before_compiling() {
     );
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fake_bin.as_os_str());
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path().join("config-home"));
 
     for (config, explicit_profile, expected_code) in [
         ("", None, "no_active_profile"),
@@ -434,7 +438,6 @@ fn build_rejects_missing_active_profile_before_compiling() {
         assert_eq!(error.code(), expected_code);
         assert!(!compile_marker.exists());
     }
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
@@ -448,7 +451,7 @@ fn build_rv32_project_compiles_and_lowers_elf_without_global_setup() {
         include_str!("../templates/thruput.toml.tmpl"),
     )
     .unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path().join("config-home"));
     fs::write(
         project_root.join("Cargo.toml"),
         "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
@@ -585,7 +588,6 @@ fn build_rv32_project_compiles_and_lowers_elf_without_global_setup() {
         metadata["build_flags"],
         "cargo --config .cargo/contract.toml build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
     );
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
