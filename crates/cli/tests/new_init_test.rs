@@ -13,6 +13,7 @@ fn quiet() -> Print {
 }
 
 #[test]
+#[serial_test::parallel]
 fn new_creates_subdirectory_and_scaffolds() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("my-project");
@@ -40,6 +41,7 @@ fn new_creates_subdirectory_and_scaffolds() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn new_fails_if_dir_exists() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("existing");
@@ -262,6 +264,7 @@ fn init_rejects_dangling_project_key_despite_global_default() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn new_rejects_reserved_name_without_creating_directory() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("test");
