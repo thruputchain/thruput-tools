@@ -8,9 +8,22 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// A test root on the same filesystem as the built CLI, so `isolated_cli` can
+/// hard-link the binary instead of copying it.
+fn test_root() -> tempfile::TempDir {
+    tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap()
+}
+
+/// Run the CLI from `root`, away from any hog-devnode beside the built binary.
+///
+/// A hard link opens no write handle. A freshly written copy is held open
+/// for writing by any child that another test thread forks mid-write, and
+/// executing it in that window fails with "text file busy".
 fn isolated_cli(root: &std::path::Path) -> Command {
     let executable = root.join("thruput");
-    if !executable.exists() {
+    if !executable.exists()
+        && std::fs::hard_link(env!("CARGO_BIN_EXE_thruput"), &executable).is_err()
+    {
         let contents = std::fs::read(env!("CARGO_BIN_EXE_thruput")).unwrap();
         std::fs::write(&executable, contents).unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -31,7 +44,7 @@ fn isolated_cli(root: &std::path::Path) -> Command {
 
 #[test]
 fn implicit_offline_node_uses_path_when_cache_is_read_only() {
-    let root = tempfile::tempdir().unwrap();
+    let root = test_root();
     let cache = root.path().join("cache");
     let bin = root.path().join("bin");
     std::fs::create_dir_all(&cache).unwrap();
@@ -80,7 +93,7 @@ fn implicit_offline_node_uses_path_when_cache_is_read_only() {
 
 #[test]
 fn saved_selection_does_not_fall_back_to_path_when_cache_is_unusable() {
-    let root = tempfile::tempdir().unwrap();
+    let root = test_root();
     let config = root.path().join("config/thruput");
     let bin = root.path().join("bin");
     std::fs::create_dir_all(&config).unwrap();
@@ -123,7 +136,7 @@ fn status_retains_uninstalled_and_stale_managed_selections() {
     let catalog = thruput_toolchain::Catalog::embedded().unwrap();
     for selected in [None, Some(catalog.default_version()), Some("0.0.0-retired")] {
         let version = selected.unwrap_or(catalog.default_version());
-        let root = tempfile::tempdir().unwrap();
+        let root = test_root();
         let config = root.path().join("config/thruput");
         std::fs::create_dir_all(&config).unwrap();
         if selected.is_some() {
@@ -149,7 +162,7 @@ fn status_retains_uninstalled_and_stale_managed_selections() {
 
 #[test]
 fn interrupted_acquisition_reports_json_failure_and_nonzero_exit() {
-    let root = tempfile::tempdir().unwrap();
+    let root = test_root();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut child = isolated_cli(root.path())

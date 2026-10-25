@@ -14,8 +14,9 @@ use super::{
     DEFAULT_HOGD_DEV_BINARY, DEVNODE_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
     PERSISTENT_PID_FILE_NAME, RuntimeManifestChainState,
     build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line, prepare_persistent_data_dir,
-    resolve_hogd_dev_binary, resolve_hogd_dev_binary_before_path, resolve_hogd_dev_binary_on_path,
-    validate_bootstrap_accounts, validate_runtime_identity, write_bootstrap_manifest,
+    resolve_hogd_dev_binary, resolve_hogd_dev_binary_before_path, resolve_hogd_dev_binary_beside,
+    resolve_hogd_dev_binary_on_path, validate_bootstrap_accounts, validate_runtime_identity,
+    write_bootstrap_manifest,
 };
 use crate::{
     ConfigParamName, HogdDevConfig, NodeSupervisorError,
@@ -1502,16 +1503,6 @@ impl Drop for EnvGuard {
     }
 }
 
-struct FileGuard {
-    path: PathBuf,
-}
-
-impl Drop for FileGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
 #[test]
 #[serial]
 fn env_binary_path_resolves() {
@@ -1556,33 +1547,21 @@ fn pre_path_resolution_leaves_path_for_managed_orchestration() {
     assert_eq!(resolve_hogd_dev_binary_on_path(), Some(path));
 }
 
+// Points resolution at a temporary executable rather than writing beside the
+// real test binary, where a concurrent test process would find it.
 #[test]
 #[serial]
 fn sibling_binary_path_resolves() {
-    let current_exe = env::current_exe().expect("bug: current exe should resolve");
-    let sibling_dir = current_exe
-        .parent()
-        .expect("bug: current exe should have a parent");
-    let sibling = sibling_dir.join(DEFAULT_HOGD_DEV_BINARY);
-    assert!(
-        !sibling.exists(),
-        "test would clobber existing sibling hog-devnode at {}",
-        sibling.display()
-    );
-    fs::write(&sibling, b"").expect("bug: sibling file should be written");
-    fs::set_permissions(&sibling, fs::Permissions::from_mode(0o755))
-        .expect("bug: sibling permissions should be set");
-    let _file_guard = FileGuard {
-        path: sibling.clone(),
-    };
+    let tmp = TempDir::new().expect("bug: temp dir should be created");
+    let sibling = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
     let _new_env_guard = EnvGuard::remove(DEVNODE_BINARY_ENV);
-    let empty_path = TempDir::new().expect("bug: temp dir should be created");
-    let _path_guard = EnvGuard::set("PATH", empty_path.path());
 
     assert_eq!(
-        resolve_hogd_dev_binary(&HogdDevConfig::default())
-            .expect("bug: sibling binary should resolve"),
-        sibling
+        resolve_hogd_dev_binary_beside(&HogdDevConfig::default(), || Ok(tmp
+            .path()
+            .join("thruput")))
+        .expect("bug: sibling binary should resolve"),
+        Some(sibling)
     );
 }
 

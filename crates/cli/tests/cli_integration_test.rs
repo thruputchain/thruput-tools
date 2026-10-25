@@ -364,6 +364,15 @@ fn install_fake_managed_toolchain(
     root.join("hog-devnode")
 }
 
+/// Write `input` to a child that may refuse without reading it: if it has
+/// already exited, the pipe is closed and the write fails with `BrokenPipe`.
+fn offer_stdin(child: &mut std::process::Child, input: &[u8]) {
+    let stdin = child.stdin.as_mut().expect("bug: stdin should be piped");
+    if let Err(error) = stdin.write_all(input) {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
+}
+
 #[cfg(unix)]
 fn send_sigint(child: &std::process::Child) {
     let pid = i32::try_from(child.id()).expect("bug: child pid should fit i32");
@@ -530,13 +539,27 @@ impl ChildGuard {
     }
 }
 
+/// Interrupt first so `thruput node` can stop the hog-devnode it supervises:
+/// with `--data-dir` that child outlives a killed parent and would be left
+/// running. Kill only if the CLI does not exit in time.
 #[cfg(unix)]
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if let Some(child) = self.0.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
+        let Some(child) = self.0.as_mut() else {
+            return;
+        };
+        if matches!(child.try_wait(), Ok(None))
+            && let Ok(pid) = i32::try_from(child.id())
+        {
+            // SAFETY: sends SIGINT to the CLI process this guard spawned.
+            unsafe { libc::kill(pid, libc::SIGINT) };
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
         }
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -1736,7 +1759,7 @@ fn config_rm_non_tty_input_requires_force() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.as_mut().unwrap().write_all(b"y\n").unwrap();
+    offer_stdin(&mut child, b"y\n");
     let output = child.wait_with_output().unwrap();
 
     assert!(!output.status.success());
@@ -11575,7 +11598,7 @@ fn keys_rm_non_tty_input_requires_force() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.as_mut().unwrap().write_all(b"y\n").unwrap();
+    offer_stdin(&mut child, b"y\n");
     let output = child.wait_with_output().unwrap();
 
     assert!(!output.status.success());
