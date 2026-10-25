@@ -7955,10 +7955,8 @@ fn transfer_live_reports_selected_saved_wallet_for_each_report_shape() {
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Receipt {
-                status: serde_json::json!({ "result": "ok" }),
+                execution: serde_json::json!({ "result": "return", "returnData": "0x" }),
                 events: serde_json::json!([]),
-                return_data: None,
-                abort_data: None,
                 mismatched_hash: false,
             }),
         },
@@ -7991,7 +7989,7 @@ fn transfer_live_reports_selected_saved_wallet_for_each_report_shape() {
 #[test]
 fn transfer_live_success_returns_matching_receipt_and_events() {
     let event = serde_json::json!({
-        "contractAddress": thruput_encoding::encode(&[0x01; 32]),
+        "address": thruput_encoding::encode(&[0x01; 32]),
         "topics": [format!("0x{}", "02".repeat(32))],
         "data": "0x0304",
     });
@@ -7999,10 +7997,8 @@ fn transfer_live_success_returns_matching_receipt_and_events() {
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Receipt {
-                status: serde_json::json!({ "result": "ok" }),
+                execution: serde_json::json!({ "result": "return", "returnData": "0x0506" }),
                 events: serde_json::json!([event.clone()]),
-                return_data: Some("0x0506"),
-                abort_data: None,
                 mismatched_hash: false,
             }),
         },
@@ -8027,8 +8023,6 @@ fn transfer_live_success_returns_matching_receipt_and_events() {
         serde_json::json!({"result":"return","returnData":"0x0506"})
     );
     assert_eq!(data["gasUsed"], "1500");
-    let mut event = event;
-    native_event_fixture(&mut event);
     assert_eq!(data["events"], serde_json::json!([event]));
     assert_eq!(data["execution"]["returnData"], "0x0506");
     for absent in [
@@ -8074,18 +8068,18 @@ fn transfer_live_rejects_invalid_persisted_rpc_url() {
 
 #[test]
 fn transfer_live_committed_failures_preserve_receipt_context() {
-    for (status, expected_code) in [
+    for (execution, expected_code) in [
         (
-            serde_json::json!({ "result": "reverted", "message": "denied" }),
+            serde_json::json!({ "result": "abort", "abortData": "0x0304" }),
             "transaction_reverted",
         ),
         (
-            serde_json::json!({ "result": "deterministicError", "kind": "outOfGas" }),
+            serde_json::json!({ "result": "fault" }),
             "transaction_deterministic_error",
         ),
     ] {
         let event = serde_json::json!({
-            "contractAddress": thruput_encoding::encode(&[0x09; 32]),
+            "address": thruput_encoding::encode(&[0x09; 32]),
             "topics": [],
             "data": "0x0a0b",
         });
@@ -8093,10 +8087,8 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
             TransferRpcMock {
                 submit: TransferSubmitMock::MatchingHash,
                 poll: Some(TransferPollMock::Receipt {
-                    status: status.clone(),
+                    execution: execution.clone(),
                     events: serde_json::json!([event.clone()]),
-                    return_data: Some("0x0102"),
-                    abort_data: Some("0x0304"),
                     mismatched_hash: false,
                 }),
             },
@@ -8110,27 +8102,15 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
         assert_eq!(stdout["error"]["code"], expected_code);
         assert_transfer_live_common(&stdout["data"], &run.local_hash, None);
         assert_eq!(stdout["data"]["blockHeight"], "43");
-        let mut expected_event = event;
-        native_event_fixture(&mut expected_event);
-        assert_eq!(
-            stdout["data"]["events"],
-            serde_json::json!([expected_event])
-        );
-        if status["result"] == "reverted" {
-            assert_eq!(
-                stdout["data"]["execution"],
-                serde_json::json!({"result":"abort","abortData":"0x0304"})
-            );
+        assert_eq!(stdout["data"]["events"], serde_json::json!([event]));
+        assert_eq!(stdout["data"]["execution"], execution);
+        if execution["result"] == "abort" {
             assert!(
                 stdout["data"]["abortDecodeError"]
                     .as_str()
                     .is_some_and(|error| error.contains("selector"))
             );
         } else {
-            assert_eq!(
-                stdout["data"]["execution"],
-                serde_json::json!({"result":"fault"})
-            );
             assert!(stdout["data"].get("abortDecodeError").is_none());
         }
         for absent in [
@@ -8156,17 +8136,14 @@ fn transfer_live_decodes_standard_exception_abort() {
         thruput_erc20_if::ERC20Error::TooLarge,
     ))
     .expect("bug: ERC20 exception should encode");
-    let abort_hex: &'static str =
-        Box::leak(format!("0x{}", hex::encode(&abort_data)).into_boxed_str());
+    let abort_hex = format!("0x{}", hex::encode(&abort_data));
 
     let run = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Receipt {
-                status: serde_json::json!({ "result": "reverted", "message": null }),
+                execution: serde_json::json!({ "result": "abort", "abortData": abort_hex }),
                 events: serde_json::json!([]),
-                return_data: None,
-                abort_data: Some(abort_hex),
                 mismatched_hash: false,
             }),
         },
@@ -8291,10 +8268,8 @@ fn transfer_live_hash_mismatches_never_report_commitment() {
         (
             TransferSubmitMock::MatchingHash,
             Some(TransferPollMock::Receipt {
-                status: serde_json::json!({"result":"ok"}),
+                execution: serde_json::json!({ "result": "return", "returnData": "0x" }),
                 events: serde_json::json!([]),
-                return_data: None,
-                abort_data: None,
                 mismatched_hash: true,
             }),
             "acknowledged",
@@ -8347,10 +8322,8 @@ fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Receipt {
-                status: serde_json::json!({ "result": "ok" }),
+                execution: serde_json::json!({ "result": "return", "returnData": "0x" }),
                 events: serde_json::json!([]),
-                return_data: None,
-                abort_data: None,
                 mismatched_hash: false,
             }),
         },
@@ -8371,13 +8344,8 @@ fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Receipt {
-                status: serde_json::json!({
-                    "result": "reverted",
-                    "message": "denied",
-                }),
+                execution: serde_json::json!({ "result": "abort", "abortData": "0x0102" }),
                 events: serde_json::json!([]),
-                return_data: None,
-                abort_data: Some("0x0102"),
                 mismatched_hash: false,
             }),
         },
@@ -8390,32 +8358,6 @@ fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
     assert!(stderr.contains(&format!("tx: {}", failure.local_hash)));
     assert!(stderr.contains("height: 43"));
     assert!(stderr.contains("abort data: 0x0102"));
-}
-
-#[test]
-fn transfer_live_human_output_escapes_untrusted_status_text() {
-    let output = run_transfer_live_mock(
-        TransferRpcMock {
-            submit: TransferSubmitMock::MatchingHash,
-            poll: Some(TransferPollMock::Receipt {
-                status: serde_json::json!({
-                    "result": "reverted",
-                    "message": "denied\n\u{1b}[31m",
-                }),
-                events: serde_json::json!([]),
-                return_data: None,
-                abort_data: None,
-                mismatched_hash: false,
-            }),
-        },
-        false,
-    );
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("Transfer aborted"));
-    assert!(!stderr.contains("denied"));
-    assert!(!stderr.contains('\u{1b}'));
 }
 
 #[test]
@@ -10617,7 +10559,8 @@ fn call_human_raw_return_uses_child_bytes_for_native_and_legacy_wallets() {
             } else {
                 child.clone()
             };
-            receipt["returnData"] = serde_json::json!(format!("0x{}", hex::encode(returned)));
+            receipt["execution"]["returnData"] =
+                serde_json::json!(format!("0x{}", hex::encode(returned)));
             let (rpc, server) = spawn_transaction_rpc(42, receipt);
             let owner = write_project_config_with_alice_wallet(tmp.path(), &rpc, &config);
             if native {
@@ -11832,18 +11775,16 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     .unwrap();
     let hash = thruput_encoding::encode(&[0xab; 32]);
     let event = serde_json::json!({
-        "contractAddress": thruput_encoding::encode(&[0x11; 32]),
+        "address": thruput_encoding::encode(&[0x11; 32]),
         "topics": [format!("0x{}", "22".repeat(32))],
         "data": "0x0304",
     });
     let receipt = serde_json::json!({
-        "txHash": hash,
-        "height": "42",
-        "gasUsed": "1500",
-        "status": { "result": "ok" },
+        "transactionHash": hash,
+        "blockHeight": "42",
+        "execution": { "result": "return", "returnData": "0x0506" },
         "events": [event.clone()],
-        "returnData": "0x0506",
-        "abortData": "0x0708",
+        "gasUsed": "1500",
     });
     let (rpc_url, rpc_server) = spawn_tx_show_rpc(
         &hash,
@@ -11886,9 +11827,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     assert_eq!(stdout["data"]["txHash"], hash);
     assert_eq!(stdout["data"]["status"]["status"], "committed");
     assert_eq!(stdout["data"]["status"]["blockHeight"], "42");
-    assert_eq!(stdout["data"]["receipt"], native_receipt_fixture(receipt));
-    let mut event = event;
-    native_event_fixture(&mut event);
+    assert_eq!(stdout["data"]["receipt"], receipt);
     assert_eq!(stdout["data"]["receipt"]["events"][0], event);
 }
 
@@ -11900,11 +11839,11 @@ fn tx_show_committed_height_handles_indexer_catching_up() {
             let tmp = TempDir::new().unwrap();
             let receipt = if receipt_available {
                 serde_json::json!({
-                    "txHash": hash,
-                    "height": "42",
-                    "gasUsed": "1500",
-                    "status": { "result": "ok" },
+                    "transactionHash": hash,
+                    "blockHeight": "42",
+                    "execution": { "result": "return", "returnData": "0x" },
                     "events": [],
+                    "gasUsed": "1500",
                 })
             } else {
                 serde_json::Value::Null
@@ -11937,7 +11876,7 @@ fn tx_show_committed_height_handles_indexer_catching_up() {
                     stdout["data"]["status"],
                     serde_json::json!({"status": "committed", "blockHeight": "42"})
                 );
-                assert_eq!(stdout["data"]["receipt"], native_receipt_fixture(receipt));
+                assert_eq!(stdout["data"]["receipt"], receipt);
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(stderr.contains(r#""status":"committed""#));
@@ -12009,7 +11948,7 @@ fn tx_show_human_output_includes_raw_committed_receipt_data() {
     let tmp = TempDir::new().unwrap();
     let hash = thruput_encoding::encode(&[0xac; 32]);
     let event = serde_json::json!({
-        "contractAddress": thruput_encoding::encode(&[0x11; 32]),
+        "address": thruput_encoding::encode(&[0x11; 32]),
         "topics": [],
         "data": "0xaabb",
     });
@@ -12020,13 +11959,11 @@ fn tx_show_human_output_includes_raw_committed_receipt_data() {
             "height": "43",
         })),
         Some(TxShowRpcResponse::Result(serde_json::json!({
-            "txHash": hash,
-            "height": "43",
-            "gasUsed": "1500",
-            "status": { "result": "reverted", "message": "bad\ncall" },
+            "transactionHash": hash,
+            "blockHeight": "43",
+            "execution": { "result": "abort", "abortData": "0xeeff" },
             "events": [event],
-            "returnData": "0xccdd",
-            "abortData": "0xeeff",
+            "gasUsed": "1500",
         }))),
     );
 
@@ -12138,11 +12075,11 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
             "height": "52",
         })),
         Some(TxShowRpcResponse::Result(serde_json::json!({
-            "txHash": hash,
-            "height": "52",
-            "gasUsed": "1500",
-            "status": { "result": "ok" },
+            "transactionHash": hash,
+            "blockHeight": "52",
+            "execution": { "result": "return", "returnData": "0x" },
             "events": [],
+            "gasUsed": "1500",
         }))),
     );
 
@@ -12240,21 +12177,21 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
         (
             "hash",
             serde_json::json!({
-                "txHash": thruput_encoding::encode(&[0xef; 32]),
-                "height": "61",
-                "gasUsed": "1500",
-                "status": { "result": "ok" },
+                "transactionHash": thruput_encoding::encode(&[0xef; 32]),
+                "blockHeight": "61",
+                "execution": { "result": "return", "returnData": "0x" },
                 "events": [],
+                "gasUsed": "1500",
             }),
         ),
         (
             "height",
             serde_json::json!({
-                "txHash": hash,
-                "height": "62",
-                "gasUsed": "1500",
-                "status": { "result": "ok" },
+                "transactionHash": hash,
+                "blockHeight": "62",
+                "execution": { "result": "return", "returnData": "0x" },
                 "events": [],
+                "gasUsed": "1500",
             }),
         ),
     ] {
@@ -14950,11 +14887,6 @@ fn spawn_tx_show_rpc(
             );
             match receipt {
                 TxShowRpcResponse::Result(value) => {
-                    let value = if value.get("transactionHash").is_some() {
-                        value
-                    } else {
-                        native_receipt_fixture(value)
-                    };
                     send_jsonrpc_response(stream, &request["id"], value);
                 }
                 error @ TxShowRpcResponse::Error(..) => {
@@ -15643,10 +15575,8 @@ enum TransferSubmitMock {
 #[derive(Clone)]
 enum TransferPollMock {
     Receipt {
-        status: serde_json::Value,
+        execution: serde_json::Value,
         events: serde_json::Value,
-        return_data: Option<&'static str>,
-        abort_data: Option<&'static str>,
         mismatched_hash: bool,
     },
     Status(serde_json::Value),
@@ -15788,40 +15718,6 @@ fn read_after_network_check(
     }
 }
 
-fn native_receipt_fixture(mut receipt: serde_json::Value) -> serde_json::Value {
-    if receipt.is_null() {
-        return receipt;
-    }
-    for (old, new) in [("txHash", "transactionHash"), ("height", "blockHeight")] {
-        if let Some(value) = receipt.as_object_mut().unwrap().remove(old) {
-            receipt[new] = value;
-        }
-    }
-    let status = receipt.as_object_mut().unwrap().remove("status").unwrap();
-    let returned = receipt
-        .as_object_mut()
-        .unwrap()
-        .remove("returnData")
-        .filter(|v| !v.is_null())
-        .unwrap_or(serde_json::json!("0x"));
-    let aborted = receipt
-        .as_object_mut()
-        .unwrap()
-        .remove("abortData")
-        .filter(|v| !v.is_null())
-        .unwrap_or(serde_json::json!("0x"));
-    receipt["execution"] = match status["result"].as_str() {
-        Some("ok") => serde_json::json!({"result":"return","returnData":returned}),
-        Some("reverted") => serde_json::json!({"result":"abort","abortData":aborted}),
-        Some("deterministicError") => serde_json::json!({"result":"fault"}),
-        _ => status,
-    };
-    for event in receipt["events"].as_array_mut().unwrap() {
-        native_event_fixture(event);
-    }
-    receipt
-}
-
 fn spawn_transfer_rpc(
     mock: TransferRpcMock,
     expected_sender: String,
@@ -15934,30 +15830,22 @@ fn serve_transfer_poll(
     assert_eq!(request["params"]["transactionHash"], local_hash);
     match poll {
         TransferPollMock::Receipt {
-            status,
+            execution,
             events,
-            return_data,
-            abort_data,
             mismatched_hash,
         } => {
-            let mut receipt = serde_json::json!({
-                "txHash": if mismatched_hash {
+            let receipt = serde_json::json!({
+                "transactionHash": if mismatched_hash {
                     thruput_encoding::encode(&[0xee; 32])
                 } else {
                     local_hash.to_owned()
                 },
-                "height": "43",
-                "status": status,
+                "blockHeight": "43",
+                "execution": execution,
                 "events": events,
                 "gasUsed": "1500",
             });
-            if let Some(value) = return_data {
-                receipt["returnData"] = serde_json::json!(value);
-            }
-            if let Some(value) = abort_data {
-                receipt["abortData"] = serde_json::json!(value);
-            }
-            send_jsonrpc_response(stream, &request["id"], native_receipt_fixture(receipt));
+            send_jsonrpc_response(stream, &request["id"], receipt);
         }
         TransferPollMock::Status(status) => {
             send_jsonrpc_response(stream, &request["id"], serde_json::Value::Null);
@@ -16585,7 +16473,7 @@ fn spawn_transaction_rpc(
                 .unwrap()
                 .as_ref(),
         );
-        receipt["txHash"] = serde_json::json!(tx_hash);
+        receipt["transactionHash"] = serde_json::json!(tx_hash);
         send_jsonrpc_response(
             stream,
             &request["id"],
@@ -16596,7 +16484,7 @@ fn spawn_transaction_rpc(
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionReceipt");
         assert_eq!(request["method"], "getTransactionReceipt");
         assert_eq!(request["params"]["transactionHash"], tx_hash);
-        send_jsonrpc_response(stream, &request["id"], native_receipt_fixture(receipt));
+        send_jsonrpc_response(stream, &request["id"], receipt);
 
         assert_no_follow_up_rpc(&listener);
     });
@@ -16606,27 +16494,21 @@ fn spawn_transaction_rpc(
 
 fn sample_deploy_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
-        "txHash": mock_tx_hash(),
-        "height": height.to_string(),
-        "gasUsed": "1500",
-        "status": { "result": "ok" },
+        "transactionHash": mock_tx_hash(),
+        "blockHeight": height.to_string(),
+        "execution": { "result": "return", "returnData": format!("0x{}", "bb".repeat(32)) },
         "events": [],
-        "returnData": format!("0x{}", "bb".repeat(32)),
+        "gasUsed": "1500",
     })
 }
 
 fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
-        "txHash": mock_tx_hash(),
-        "height": height.to_string(),
-        "gasUsed": "4242",
-        "status": {
-            "result": "deterministicError",
-            "kind": "outOfGas",
-        },
+        "transactionHash": mock_tx_hash(),
+        "blockHeight": height.to_string(),
+        "execution": { "result": "fault" },
         "events": [],
-        "returnData": "0x0102",
-        "abortData": "0x0304",
+        "gasUsed": "4242",
     })
 }
 
@@ -16637,12 +16519,11 @@ fn sample_insufficient_funding_deploy_receipt(height: i64) -> serde_json::Value 
     ))
     .expect("bug: ERC20 exception should encode");
     serde_json::json!({
-        "txHash": mock_tx_hash(),
-        "height": height.to_string(),
-        "gasUsed": "1500",
-        "status": { "result": "reverted", "message": null },
+        "transactionHash": mock_tx_hash(),
+        "blockHeight": height.to_string(),
+        "execution": { "result": "abort", "abortData": format!("0x{}", hex::encode(abort_data)) },
         "events": [],
-        "abortData": format!("0x{}", hex::encode(abort_data)),
+        "gasUsed": "1500",
     })
 }
 
@@ -16651,40 +16532,35 @@ fn sample_call_receipt(height: i64) -> serde_json::Value {
         thruput_xdr::types::ContractAddress::from([0x11; 32]),
     );
     serde_json::json!({
-        "txHash": mock_tx_hash(),
-        "height": height.to_string(),
-        "gasUsed": "1500",
-        "status": { "result": "ok" },
+        "transactionHash": mock_tx_hash(),
+        "blockHeight": height.to_string(),
+        "execution": { "result": "return", "returnData": "0x0102" },
         "events": [{
-            "contractAddress": contract_address,
+            "address": contract_address,
             "topics": [format!("0x{}", "22".repeat(32))],
             "data": "0x1234",
         }],
-        "returnData": "0x0102",
+        "gasUsed": "1500",
     })
 }
 
 fn sample_deterministic_error_call_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
-        "txHash": mock_tx_hash(),
-        "height": height.to_string(),
-        "gasUsed": "1500",
-        "status": {
-            "result": "deterministicError",
-            "kind": "fault",
-        },
+        "transactionHash": mock_tx_hash(),
+        "blockHeight": height.to_string(),
+        "execution": { "result": "fault" },
         "events": [],
+        "gasUsed": "1500",
     })
 }
 
 fn sample_reverted_call_receipt(height: i64, abort_hex: &str) -> serde_json::Value {
     serde_json::json!({
-        "txHash": mock_tx_hash(),
-        "height": height.to_string(),
-        "gasUsed": "1500",
-        "status": { "result": "reverted" },
+        "transactionHash": mock_tx_hash(),
+        "blockHeight": height.to_string(),
+        "execution": { "result": "abort", "abortData": abort_hex },
         "events": [],
-        "abortData": abort_hex,
+        "gasUsed": "1500",
     })
 }
 

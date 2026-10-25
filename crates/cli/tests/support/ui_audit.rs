@@ -366,10 +366,8 @@ fn transfer_results_distinguish_commitment_and_unconfirmed_evidence() {
     for (poll, success, label) in [
         (
             TransferPollMock::Receipt {
-                status: serde_json::json!({"result":"ok"}),
+                execution: serde_json::json!({"result":"return","returnData":"0x"}),
                 events: serde_json::json!([]),
-                return_data: None,
-                abort_data: None,
                 mismatched_hash: false,
             },
             true,
