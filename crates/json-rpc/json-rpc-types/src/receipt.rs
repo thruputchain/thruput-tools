@@ -17,7 +17,7 @@ use crate::transaction::TxHash;
 /// - `gasUsed` is committed by consensus as part of the transaction's event
 ///   log (`TxEventLog.gas_consumed`).
 ///
-/// `storage_delta` (net HOG locked/unlocked) is deferred — hogd's
+/// `storage_delta` (net native tokens locked/unlocked) is deferred — hogd's
 /// `TxInfo` doesn't include it. Will be added when indexer support lands.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
