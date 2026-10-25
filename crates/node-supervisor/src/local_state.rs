@@ -611,7 +611,10 @@ mod tests {
     // until it execs, so the next owner must wait out that window rather than
     // report another process. The child's exec time on a loaded machine is
     // unbounded, so the retry window here only guards against a hang.
+    // Serial because the child is found on PATH, which binary-resolution tests
+    // replace.
     #[test]
+    #[serial_test::serial]
     fn chain_lock_handoff_waits_out_a_concurrent_spawn() {
         use std::os::fd::AsRawFd;
         let dir = tempfile::tempdir().unwrap();

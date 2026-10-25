@@ -1487,13 +1487,7 @@ async fn native_events_follow_the_indexer_cursor_and_surface_rpc_failures() {
 #[tokio::test]
 async fn connect_to_dead_indexer_port_fails_startup_probe() {
     // Arrange: grab a port and immediately drop the listener so it's closed.
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bug: ephemeral bind should succeed");
-    let dead_addr = listener
-        .local_addr()
-        .expect("bug: bound listener should have local addr");
-    drop(listener);
+    let dead_addr = crate::test_support::DEAD_LOOPBACK_ADDR;
 
     let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
     let scheduler_gateway = make_scheduler_client(sched_addr).await;
@@ -1696,12 +1690,14 @@ async fn native_block_miss_invalid_outcome_outage_and_timeout_remain_distinct() 
     ] {
         let (idx_addr, _indexer) = start_fake_indexer(mode).await;
         let backend = make_read_backend(idx_addr, sched_addr).await;
-        let result = backend
-            .native_block(
-                RpcRequestContext::new(Some(Duration::from_millis(20))),
-                0.into(),
-            )
-            .await;
+        // Only the slow indexer, which never answers, gets a short deadline;
+        // a tight one would also cut off a healthy reply on a loaded machine.
+        let context = if mode == FakeIndexerMode::Slow {
+            RpcRequestContext::new(Some(Duration::from_millis(20)))
+        } else {
+            RpcRequestContext::unbounded()
+        };
+        let result = backend.native_block(context, 0.into()).await;
         match mode {
             FakeIndexerMode::Normal => {
                 assert!(result.unwrap().is_none());

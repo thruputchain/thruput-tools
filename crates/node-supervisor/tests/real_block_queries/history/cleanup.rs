@@ -1,6 +1,7 @@
 use super::*;
 use std::{future::Future, os::unix::fs::PermissionsExt, task::Poll};
 
+#[allow(dead_code)]
 #[path = "../../../src/test_support.rs"]
 mod test_support;
 

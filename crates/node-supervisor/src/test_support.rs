@@ -4,6 +4,13 @@ use std::sync::OnceLock;
 
 pub(crate) const FAKE_HOGD_DEV_MODE_ENV: &str = "THRUPUT_FAKE_HOGD_DEV_MODE";
 
+/// A loopback address that refuses connections. Port 1 is privileged, so no
+/// test can be listening on it; a freshly closed ephemeral port is not dead,
+/// because a test running in parallel can bind it first.
+pub(crate) const DEAD_LOOPBACK_ADDR: std::net::SocketAddr = std::net::SocketAddr::V4(
+    std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 1),
+);
+
 /// Builds and returns the `fake_hogd_dev` example binary; `cargo test` builds it
 /// only as a test harness, so a copy on disk may predate a `thruput-xdr` bump.
 ///

@@ -5,7 +5,6 @@ use std::{
 
 use jsonrpsee::core::{ClientError, client::ClientT};
 use jsonrpsee::http_client::HttpClientBuilder;
-use serial_test::serial;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use thruput_bundle_identity::{BundleIdentity, BundleSubject};
@@ -90,34 +89,6 @@ async fn invalid_local_airdrop_config_is_rejected_before_child_start() {
     ));
 }
 
-/// Set an env var for the duration of a test that needs the fake child
-/// to enter `ready` mode. Restored on drop. `#[serial]` ensures we are
-/// the only test mutating env at a time, per workspace convention.
-struct EnvGuard {
-    key: &'static str,
-    prev: Option<std::ffi::OsString>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let prev = std::env::var_os(key);
-        // SAFETY: `#[serial]` serializes all env-mutating tests in this
-        // process; no other thread is reading or writing env concurrently.
-        unsafe { std::env::set_var(key, value) };
-        Self { key, prev }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        // SAFETY: see EnvGuard::set.
-        match self.prev.take() {
-            Some(value) => unsafe { std::env::set_var(self.key, value) },
-            None => unsafe { std::env::remove_var(self.key) },
-        }
-    }
-}
-
 /// Poll `kill(pid, 0)` until ESRCH or until `deadline` passes. Returns
 /// `true` if the OS confirmed the process is gone within the deadline.
 async fn wait_pid_gone(pid: i32, deadline: Instant) -> bool {
@@ -152,15 +123,15 @@ async fn wait_path_exists(path: &std::path::Path, deadline: Instant) -> bool {
 }
 
 async fn start_fake_supervisor_expect_error(mode: &str) -> NodeSupervisorError {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, mode);
     let pid_dir = TempDir::new().expect("bug: tempdir creates");
     let pid_path = pid_dir.path().join("hogd.pid");
-    let _pid_guard = EnvGuard::set(
-        FAKE_HOGD_DEV_PID_FILE_ENV,
-        pid_path.to_str().expect("bug: tempdir path is utf-8"),
-    );
 
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, mode)
+        .with_test_child_env(
+            FAKE_HOGD_DEV_PID_FILE_ENV,
+            pid_path.to_str().expect("bug: tempdir path is utf-8"),
+        )
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -184,13 +155,19 @@ async fn start_fake_supervisor_expect_error(mode: &str) -> NodeSupervisorError {
 async fn start_fake_with_block_driver(
     mode: &str,
     block_driver: BlockDriverConfig,
-) -> (
-    EnvGuard,
-    NodeSupervisorHandle,
-    jsonrpsee::http_client::HttpClient,
-) {
-    let mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, mode);
-    let hogd = HogdDevConfig::default()
+) -> (NodeSupervisorHandle, jsonrpsee::http_client::HttpClient) {
+    start_fake_with_block_driver_and_env(mode, block_driver, HogdDevConfig::default()).await
+}
+
+/// Like [`start_fake_with_block_driver`], starting from `hogd` so a test can
+/// add child environment of its own.
+async fn start_fake_with_block_driver_and_env(
+    mode: &str,
+    block_driver: BlockDriverConfig,
+    hogd: HogdDevConfig,
+) -> (NodeSupervisorHandle, jsonrpsee::http_client::HttpClient) {
+    let hogd = hogd
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, mode)
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -204,21 +181,21 @@ async fn start_fake_with_block_driver(
     let client = HttpClientBuilder::default()
         .build(format!("http://{}", handle.rpc_addr()))
         .expect("bug: jsonrpsee http client builds");
-    (mode_guard, handle, client)
+    (handle, client)
 }
 
 #[tokio::test]
-#[serial]
+#[allow(clippy::too_many_lines)]
 async fn start_serves_json_rpc_with_scheduler_chain_backend() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready");
     let pid_dir = TempDir::new().expect("bug: tempdir creates");
     let pid_path = pid_dir.path().join("hogd.pid");
-    let _pid_guard = EnvGuard::set(
-        FAKE_HOGD_DEV_PID_FILE_ENV,
-        pid_path.to_str().expect("bug: tempdir path is utf-8"),
-    );
 
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready")
+        .with_test_child_env(
+            FAKE_HOGD_DEV_PID_FILE_ENV,
+            pid_path.to_str().expect("bug: tempdir path is utf-8"),
+        )
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -395,9 +372,8 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
 }
 
 #[tokio::test]
-#[serial]
 async fn scheduler_gateway_rejection_surfaces_tx_rejected_without_coordinator_fallback() {
-    let (_mode_guard, handle, client) = start_fake_with_block_driver(
+    let (handle, client) = start_fake_with_block_driver(
         "scheduler-gateway-submit-rejected",
         BlockDriverConfig::manual(),
     )
@@ -416,11 +392,9 @@ async fn scheduler_gateway_rejection_surfaces_tx_rejected_without_coordinator_fa
 }
 
 #[tokio::test]
-#[serial]
 async fn submit_wakes_hogd_dev_block_driver() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine");
-
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "automine")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -462,17 +436,16 @@ async fn submit_wakes_hogd_dev_block_driver() {
 }
 
 #[tokio::test]
-#[serial]
 async fn concurrent_public_submissions_are_batched_for_scheduler() {
     const SUBMIT_LOG_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG";
     let directory = tempfile::tempdir().expect("bug: tempdir");
     let submit_log = directory.path().join("submit-batches.log");
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe");
-    let _log_guard = EnvGuard::set(
-        SUBMIT_LOG_ENV,
-        submit_log.to_str().expect("bug: tempdir path is utf-8"),
-    );
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe")
+        .with_test_child_env(
+            SUBMIT_LOG_ENV,
+            submit_log.to_str().expect("bug: tempdir path is utf-8"),
+        )
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -487,7 +460,7 @@ async fn concurrent_public_submissions_are_batched_for_scheduler() {
         .expect("bug: jsonrpsee http client builds");
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
 
-    let (a, b, c, d, e) = tokio::join!(
+    let (first, second, third, fourth, fifth) = tokio::join!(
         client.request::<out::SendTransactionResult, _>(
             "sendTransaction",
             NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
@@ -510,7 +483,7 @@ async fn concurrent_public_submissions_are_batched_for_scheduler() {
         ),
     );
 
-    for result in [a, b, c, d, e] {
+    for result in [first, second, third, fourth, fifth] {
         result.expect("bug: concurrent transaction should be submitted");
     }
     let sizes: Vec<usize> = std::fs::read_to_string(submit_log)
@@ -526,18 +499,17 @@ async fn concurrent_public_submissions_are_batched_for_scheduler() {
 }
 
 #[tokio::test]
-#[serial]
 async fn rpc_array_limit_rejects_oversized_submissions_before_dispatch() {
     use jsonrpsee::core::{client::ClientT, params::BatchRequestBuilder};
 
     let directory = tempfile::tempdir().unwrap();
     let submit_log = directory.path().join("submit-batches.log");
-    let _mode = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe");
-    let _log = EnvGuard::set(
-        "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
-        submit_log.to_str().unwrap(),
-    );
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe")
+        .with_test_child_env(
+            "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
+            submit_log.to_str().unwrap(),
+        )
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -602,19 +574,18 @@ async fn rpc_array_limit_rejects_oversized_submissions_before_dispatch() {
 }
 
 #[tokio::test]
-#[serial]
 async fn homogeneous_rpc_array_is_batched_for_scheduler() {
     use jsonrpsee::core::{client::ClientT, params::BatchRequestBuilder};
 
     for concurrency in [1, 4, 128] {
         let directory = tempfile::tempdir().expect("bug: tempdir");
         let submit_log = directory.path().join("submit-batches.log");
-        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe");
-        let _log_guard = EnvGuard::set(
-            "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
-            submit_log.to_str().expect("bug: tempdir path is utf-8"),
-        );
         let hogd = HogdDevConfig::default()
+            .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe")
+            .with_test_child_env(
+                "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
+                submit_log.to_str().expect("bug: tempdir path is utf-8"),
+            )
             .with_binary_path(fake_hogd_dev_binary())
             .with_startup_timeout(Duration::from_secs(5))
             .with_shutdown_grace(Duration::from_secs(2));
@@ -661,11 +632,9 @@ async fn homogeneous_rpc_array_is_batched_for_scheduler() {
 }
 
 #[tokio::test]
-#[serial]
 async fn block_driver_coalesces_rapid_submit_wakes() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine-slow-commit");
-
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "automine-slow-commit")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -682,7 +651,7 @@ async fn block_driver_coalesces_rapid_submit_wakes() {
         .expect("bug: jsonrpsee http client builds");
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
 
-    let (a, b, c, d, e) = tokio::join!(
+    let (first, second, third, fourth, fifth) = tokio::join!(
         client.request::<out::SendTransactionResult, _>(
             "sendTransaction",
             NamedParams(serde_json::json!({"signedTransaction": tx_hex.clone()}))
@@ -704,7 +673,7 @@ async fn block_driver_coalesces_rapid_submit_wakes() {
             NamedParams(serde_json::json!({"signedTransaction": tx_hex}))
         ),
     );
-    for result in [a, b, c, d, e] {
+    for result in [first, second, third, fourth, fifth] {
         result.expect("bug: sendRawTransaction should dispatch to fake scheduler");
     }
 
@@ -740,11 +709,9 @@ async fn block_driver_coalesces_rapid_submit_wakes() {
 }
 
 #[tokio::test]
-#[serial]
 async fn interval_block_driver_paces_submit_commit() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine");
-
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "automine")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -797,11 +764,9 @@ async fn interval_block_driver_paces_submit_commit() {
 }
 
 #[tokio::test]
-#[serial]
 async fn manual_block_driver_only_commits_on_explicit_request() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine");
-
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "automine")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -846,11 +811,11 @@ async fn manual_block_driver_only_commits_on_explicit_request() {
         "manual mode must not automine submits"
     );
 
-    let produced = producer
+    let block = producer
         .produce_block()
         .await
         .expect("bug: explicit production should commit one block");
-    assert_eq!(produced.height, 1);
+    assert_eq!(block.height, 1);
     let after = client
         .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
         .await
@@ -878,9 +843,8 @@ async fn manual_block_driver_only_commits_on_explicit_request() {
 }
 
 #[tokio::test]
-#[serial]
 async fn manual_block_requests_are_serialized_without_coalescing() {
-    let (_mode_guard, handle, client) =
+    let (handle, client) =
         start_fake_with_block_driver("automine-serialize-probe", BlockDriverConfig::manual()).await;
     let producer = handle
         .manual_block_producer()
@@ -916,9 +880,8 @@ async fn manual_block_requests_are_serialized_without_coalescing() {
 }
 
 #[tokio::test]
-#[serial]
 async fn malformed_scheduler_proposal_returns_typed_error_without_panicking_driver() {
-    let (_mode_guard, handle, client) =
+    let (handle, client) =
         start_fake_with_block_driver("automine-malformed-proposal", BlockDriverConfig::manual())
             .await;
     let producer = handle
@@ -950,9 +913,8 @@ async fn malformed_scheduler_proposal_returns_typed_error_without_panicking_driv
 }
 
 #[tokio::test]
-#[serial]
 async fn retained_commit_rejection_stops_manual_producer() {
-    let (_mode_guard, handle, client) =
+    let (handle, client) =
         start_fake_with_block_driver("automine-commit-rejected", BlockDriverConfig::manual()).await;
     let producer = handle
         .manual_block_producer()
@@ -984,9 +946,8 @@ async fn retained_commit_rejection_stops_manual_producer() {
 }
 
 #[tokio::test]
-#[serial]
 async fn manual_block_request_times_out_instead_of_hanging() {
-    let (_mode_guard, handle, client) = start_fake_with_block_driver(
+    let (handle, client) = start_fake_with_block_driver(
         "automine-hanging-commit",
         BlockDriverConfig::manual().with_manual_request_timeout(Duration::from_millis(100)),
     )
@@ -1014,17 +975,13 @@ async fn manual_block_request_times_out_instead_of_hanging() {
 }
 
 #[tokio::test]
-#[serial]
 async fn shutdown_resolves_an_in_flight_manual_request() {
     let marker_dir = TempDir::new().expect("bug: tempdir creates");
     let marker_path = marker_dir.path().join("commit-entered");
-    let _marker_guard = EnvGuard::set(
-        FAKE_COMMIT_ENTERED_FILE_ENV,
-        marker_path.to_str().expect("bug: tempdir path is utf-8"),
-    );
-    let (_mode_guard, handle, client) = start_fake_with_block_driver(
+    let (handle, client) = start_fake_with_block_driver_and_env(
         "automine-hanging-commit",
         BlockDriverConfig::manual().with_manual_request_timeout(Duration::from_secs(30)),
+        HogdDevConfig::default().with_test_child_env(FAKE_COMMIT_ENTERED_FILE_ENV, &marker_path),
     )
     .await;
     let producer = handle
@@ -1053,9 +1010,8 @@ async fn shutdown_resolves_an_in_flight_manual_request() {
 }
 
 #[tokio::test]
-#[serial]
 async fn commit_rpc_error_is_reconciled_against_the_scheduler_tip() {
-    let (_mode_guard, handle, client) =
+    let (handle, client) =
         start_fake_with_block_driver("automine-commit-response-lost", BlockDriverConfig::manual())
             .await;
     let producer = handle
@@ -1066,19 +1022,18 @@ async fn commit_rpc_error_is_reconciled_against_the_scheduler_tip() {
         .await
         .expect("bug: submit should reach fake scheduler");
 
-    let produced = producer
+    let block = producer
         .produce_block()
         .await
         .expect("bug: reconciled tip should confirm the committed block");
-    assert_eq!(produced.height, 1);
+    assert_eq!(block.height, 1);
 
     handle.stop().await.expect("bug: clean shutdown");
 }
 
 #[tokio::test]
-#[serial]
 async fn commit_rpc_error_without_tip_confirmation_is_indeterminate() {
-    let (_mode_guard, handle, client) =
+    let (handle, client) =
         start_fake_with_block_driver("automine-commit-error", BlockDriverConfig::manual()).await;
     let producer = handle
         .manual_block_producer()
@@ -1106,10 +1061,9 @@ async fn commit_rpc_error_without_tip_confirmation_is_indeterminate() {
 }
 
 #[tokio::test]
-#[serial]
 async fn runtime_scheduler_rpc_failures_are_typed() {
     for mode in ["automine-runtime-get-tip-error", "automine-nominate-error"] {
-        let (_mode_guard, handle, client) =
+        let (handle, client) =
             start_fake_with_block_driver(mode, BlockDriverConfig::manual()).await;
         let producer = handle
             .manual_block_producer()
@@ -1148,7 +1102,6 @@ async fn runtime_scheduler_rpc_failures_are_typed() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_scheduler_connect_fails() {
     let err = start_fake_supervisor_expect_error("dead-scheduler").await;
 
@@ -1159,7 +1112,6 @@ async fn start_rolls_back_hogd_dev_when_scheduler_connect_fails() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_scheduler_gateway_connect_fails() {
     let err = start_fake_supervisor_expect_error("dead-scheduler-gateway").await;
 
@@ -1170,7 +1122,6 @@ async fn start_rolls_back_hogd_dev_when_scheduler_gateway_connect_fails() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_scheduler_gateway_intro_is_rejected() {
     let err = start_fake_supervisor_expect_error("scheduler-gateway-intro-rejected").await;
 
@@ -1188,7 +1139,6 @@ async fn start_rolls_back_hogd_dev_when_scheduler_gateway_intro_is_rejected() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rejects_scheduler_gateway_from_a_different_network() {
     let err = start_fake_supervisor_expect_error("scheduler-gateway-network-hash-mismatch").await;
 
@@ -1202,17 +1152,16 @@ async fn start_rejects_scheduler_gateway_from_a_different_network() {
 }
 
 #[tokio::test]
-#[serial]
 async fn custom_network_preserves_independent_scheduler_and_gateway_checks() {
     for mode in [
         "scheduler-network-hash-mismatch",
         "scheduler-gateway-network-hash-mismatch",
     ] {
-        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, mode);
         let config = NodeSupervisorConfig::default()
             .with_rpc_listen_address("127.0.0.1:0")
             .with_hogd_dev(
                 HogdDevConfig::default()
+                    .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, mode)
                     .with_binary_path(fake_hogd_dev_binary())
                     .with_init_network_hash([0xab; 32].into())
                     .with_startup_timeout(Duration::from_secs(5)),
@@ -1227,7 +1176,6 @@ async fn custom_network_preserves_independent_scheduler_and_gateway_checks() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rejects_incoherent_scheduler_plane_tips() {
     let err = start_fake_supervisor_expect_error("scheduler-gateway-tip-mismatch").await;
 
@@ -1238,7 +1186,6 @@ async fn start_rejects_incoherent_scheduler_plane_tips() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_scheduler_get_tip_rpc_fails() {
     let err = start_fake_supervisor_expect_error("scheduler-get-tip-error").await;
 
@@ -1255,7 +1202,6 @@ async fn start_rolls_back_hogd_dev_when_scheduler_get_tip_rpc_fails() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_scheduler_network_hash_mismatches_manifest() {
     let err = start_fake_supervisor_expect_error("scheduler-network-hash-mismatch").await;
 
@@ -1273,7 +1219,6 @@ async fn start_rolls_back_hogd_dev_when_scheduler_network_hash_mismatches_manife
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_readiness_precedes_genesis() {
     let err = start_fake_supervisor_expect_error("scheduler-no-genesis").await;
 
@@ -1290,17 +1235,16 @@ async fn start_rolls_back_hogd_dev_when_readiness_precedes_genesis() {
 }
 
 #[tokio::test]
-#[serial]
 async fn run_until_stop_signal_error_stops_hogd_dev() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready");
     let pid_dir = TempDir::new().expect("bug: tempdir creates");
     let pid_path = pid_dir.path().join("hogd.pid");
-    let _pid_guard = EnvGuard::set(
-        FAKE_HOGD_DEV_PID_FILE_ENV,
-        pid_path.to_str().expect("bug: tempdir path is utf-8"),
-    );
 
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready")
+        .with_test_child_env(
+            FAKE_HOGD_DEV_PID_FILE_ENV,
+            pid_path.to_str().expect("bug: tempdir path is utf-8"),
+        )
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1331,11 +1275,9 @@ async fn run_until_stop_signal_error_stops_hogd_dev() {
 }
 
 #[tokio::test]
-#[serial]
 async fn stopped_observes_hogd_dev_exit_and_tears_down_rpc() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-then-exit");
-
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-then-exit")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1391,15 +1333,9 @@ async fn stopped_observes_hogd_dev_exit_and_tears_down_rpc() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_rpc_bind_fails() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready");
     let pid_dir = TempDir::new().expect("bug: tempdir creates");
     let pid_path = pid_dir.path().join("hogd.pid");
-    let _pid_guard = EnvGuard::set(
-        FAKE_HOGD_DEV_PID_FILE_ENV,
-        pid_path.to_str().expect("bug: tempdir path is utf-8"),
-    );
 
     // Occupy a loopback port so the supervisor's RPC bind hits EADDRINUSE.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1410,6 +1346,11 @@ async fn start_rolls_back_hogd_dev_when_rpc_bind_fails() {
         .expect("bug: bound listener has local addr");
 
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready")
+        .with_test_child_env(
+            FAKE_HOGD_DEV_PID_FILE_ENV,
+            pid_path.to_str().expect("bug: tempdir path is utf-8"),
+        )
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1605,10 +1546,9 @@ const CANNED_STORAGE_VALUE_HEX: &str = "0x6c6f63616c2d6e6f64652d73746f72616765";
 const CANNED_STORAGE_HEIGHT: i64 = 12;
 
 #[tokio::test]
-#[serial]
 async fn start_with_indexer_reports_hogd_dev_full_backend_planes() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1646,10 +1586,9 @@ async fn start_with_indexer_reports_hogd_dev_full_backend_planes() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_with_gateway_without_indexer_reports_storage_only_backend_planes() {
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-gateway");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-gateway")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1688,13 +1627,12 @@ async fn start_with_gateway_without_indexer_reports_storage_only_backend_planes(
 }
 
 #[tokio::test]
-#[serial]
 async fn transaction_status_committed_returns_committed_with_correct_height() {
     // Arrange: start supervisor against fake that has both scheduler + indexer.
     // The fake scheduler returns empty (no pending), the fake indexer has
     // CANNED_TX_HASH_A committed at CANNED_HEIGHT_A.
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1734,11 +1672,10 @@ async fn transaction_status_committed_returns_committed_with_correct_height() {
 }
 
 #[tokio::test]
-#[serial]
 async fn transaction_status_unknown_hash_returns_unknown() {
     // Arrange
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1773,11 +1710,10 @@ async fn transaction_status_unknown_hash_returns_unknown() {
 }
 
 #[tokio::test]
-#[serial]
 async fn transaction_receipt_committed_returns_some() {
     // Arrange
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1827,11 +1763,10 @@ async fn transaction_receipt_committed_returns_some() {
 }
 
 #[tokio::test]
-#[serial]
 async fn contract_events_first_page_returns_two_events() {
     // Arrange
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1892,11 +1827,10 @@ async fn contract_events_first_page_returns_two_events() {
 }
 
 #[tokio::test]
-#[serial]
 async fn get_storage_existing_key_returns_item_from_hogd_dev_gateway() {
     // Arrange
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1931,11 +1865,10 @@ async fn get_storage_existing_key_returns_item_from_hogd_dev_gateway() {
 }
 
 #[tokio::test]
-#[serial]
 async fn get_storage_works_when_gateway_is_advertised_without_indexer() {
     // Arrange
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-gateway");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-gateway")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -1982,11 +1915,10 @@ async fn get_storage_works_when_gateway_is_advertised_without_indexer() {
 }
 
 #[tokio::test]
-#[serial]
 async fn get_storage_missing_key_returns_null_item_with_snapshot_height() {
     // Arrange
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -2025,11 +1957,10 @@ async fn get_storage_missing_key_returns_null_item_with_snapshot_height() {
 }
 
 #[tokio::test]
-#[serial]
 async fn get_storage_without_gateway_endpoint_is_not_registered() {
     // Arrange
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer-no-gateway");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer-no-gateway")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));
@@ -2065,7 +1996,6 @@ async fn get_storage_without_gateway_endpoint_is_not_registered() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_indexer_connect_fails() {
     let err = start_fake_supervisor_expect_error("indexer-connect-fail").await;
 
@@ -2076,7 +2006,6 @@ async fn start_rolls_back_hogd_dev_when_indexer_connect_fails() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_indexer_rpc_fail_at_startup() {
     // The `indexer-rpc-fail` fake mode returns a ProgramError even for the
     // intro handshake. With the intro probe in HogdDevReadBackend::connect,
@@ -2096,7 +2025,6 @@ async fn start_rolls_back_hogd_dev_when_indexer_rpc_fail_at_startup() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_db_gateway_connect_fails() {
     let err = start_fake_supervisor_expect_error("db-gateway-connect-fail").await;
 
@@ -2107,7 +2035,6 @@ async fn start_rolls_back_hogd_dev_when_db_gateway_connect_fails() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_db_gateway_rpc_fail_at_startup() {
     let err = start_fake_supervisor_expect_error("db-gateway-rpc-fail").await;
 
@@ -2124,7 +2051,6 @@ async fn start_rolls_back_hogd_dev_when_db_gateway_rpc_fail_at_startup() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_db_gateway_intro_rejected() {
     let err = start_fake_supervisor_expect_error("db-gateway-intro-rejected").await;
 
@@ -2156,7 +2082,6 @@ async fn start_rolls_back_hogd_dev_when_db_gateway_intro_rejected() {
 }
 
 #[tokio::test]
-#[serial]
 async fn start_rolls_back_hogd_dev_when_indexer_intro_rejected() {
     let err = start_fake_supervisor_expect_error("indexer-intro-rejected").await;
 
@@ -2188,13 +2113,12 @@ async fn start_rolls_back_hogd_dev_when_indexer_intro_rejected() {
 }
 
 #[tokio::test]
-#[serial]
 async fn transaction_status_indexer_runtime_rpc_fail_surfaces_backend_unavailable() {
     // The `indexer-runtime-rpc-fail` fake mode lets intro succeed but
     // returns errors for all data-plane RPCs (get_transaction_info, etc).
     // Startup should succeed; JSON-RPC calls should return a backend error.
-    let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "indexer-runtime-rpc-fail");
     let hogd = HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "indexer-runtime-rpc-fail")
         .with_binary_path(fake_hogd_dev_binary())
         .with_startup_timeout(Duration::from_secs(5))
         .with_shutdown_grace(Duration::from_secs(2));

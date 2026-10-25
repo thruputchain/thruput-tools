@@ -187,13 +187,7 @@ async fn connect_optional_without_endpoint_uses_stub() {
 
 #[tokio::test]
 async fn connect_to_dead_view_gateway_port_fails_startup_probe() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bug: ephemeral bind should succeed");
-    let dead_addr = listener
-        .local_addr()
-        .expect("bug: bound listener should have local addr");
-    drop(listener);
+    let dead_addr = crate::test_support::DEAD_LOOPBACK_ADDR;
 
     let result = tokio::time::timeout(
         Duration::from_secs(5),
