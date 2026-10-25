@@ -22,6 +22,32 @@ async fn health_status(address: std::net::SocketAddr) -> String {
     response.lines().next().unwrap().to_owned()
 }
 
+/// The `--tip-stale-seconds` the server runs with.
+const STALE_AFTER: Duration = Duration::from_secs(1);
+/// Scheduling slack on top of an expected transition. The stale window is
+/// wall-clock, so a fixed sleep either wastes time or fails on a slow runner.
+const SLACK: Duration = Duration::from_secs(3);
+
+/// Poll until health reports `expected`, failing if that takes until
+/// `deadline`. Deadlines are anchored before the event that starts the clock,
+/// so a stale window longer than `STALE_AFTER + SLACK` fails.
+async fn wait_for_health(
+    address: std::net::SocketAddr,
+    expected: &str,
+    deadline: tokio::time::Instant,
+) {
+    tokio::time::timeout_at(deadline, async {
+        loop {
+            if health_status(address).await.contains(expected) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("health did not report {expected} by its deadline"));
+}
+
 #[tokio::test]
 async fn serve_http_health_is_starting_then_healthy_then_stale_without_writer() {
     let dir = tempfile::tempdir().unwrap();
@@ -29,6 +55,7 @@ async fn serve_http_health_is_starting_then_healthy_then_stale_without_writer() 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
+    let spawned = tokio::time::Instant::now();
     let mut process = tokio::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose-serve"))
         .args([
             "--store",
@@ -40,7 +67,7 @@ async fn serve_http_health_is_starting_then_healthy_then_stale_without_writer() 
             "--poll-interval-ms",
             "10",
             "--tip-stale-seconds",
-            "1",
+            &STALE_AFTER.as_secs().to_string(),
         ])
         .kill_on_drop(true)
         .spawn()
@@ -56,10 +83,8 @@ async fn serve_http_health_is_starting_then_healthy_then_stale_without_writer() 
     })
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(health_status(address).await.contains("200"));
-    tokio::time::sleep(Duration::from_millis(1100)).await;
-    assert!(health_status(address).await.contains("503"));
+    wait_for_health(address, "200", tokio::time::Instant::now() + SLACK).await;
+    wait_for_health(address, "503", spawned + STALE_AFTER + SLACK).await;
     assert!(
         !archive.exists(),
         "serve must not create its archive or LOCK"
@@ -74,17 +99,16 @@ async fn serve_http_health_is_starting_then_healthy_then_stale_without_writer() 
         .proposal_header
         .block_height = 0.into();
     common::rehash(&mut first);
+    let appended = tokio::time::Instant::now();
     writer.append(&first).unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(health_status(address).await.contains("200"));
+    wait_for_health(address, "200", appended + SLACK).await;
     drop(writer);
-    tokio::time::sleep(Duration::from_millis(1100)).await;
-    assert!(health_status(address).await.contains("503"));
+    wait_for_health(address, "503", appended + STALE_AFTER + SLACK).await;
     assert!(process.try_wait().unwrap().is_none());
     let mut writer = Store::open(&archive).unwrap();
+    let appended = tokio::time::Instant::now();
     writer.append(&next(&first)).unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(health_status(address).await.contains("200"));
+    wait_for_health(address, "200", appended + SLACK).await;
     process.kill().await.unwrap();
     process.wait().await.unwrap();
 }

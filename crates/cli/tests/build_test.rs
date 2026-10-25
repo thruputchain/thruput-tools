@@ -1692,6 +1692,7 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
     write_contract_toml(&project_root);
 
     let finished = project_root.join("cargo-ran-to-completion");
+    let cargo_pid = project_root.join("cargo.pid");
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         project_root.display(),
@@ -1710,6 +1711,7 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
              \x20 case \" $* \" in\n\
              \x20   *\" --no-deps \"*) printf '%s' '{metadata_json}'; exit 0 ;;\n\
              \x20 esac\n\
+             \x20 echo $$ > '{}'\n\
              \x20 echo '    Updating `thruput` index' >&2\n\
              \x20 /bin/sleep 1\n\
              \x20 echo '    Blocking waiting for file lock on package cache' >&2\n\
@@ -1722,6 +1724,7 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
              \x20 exit 0\n\
              fi\n\
              exit 0\n",
+            cargo_pid.display(),
             finished.display()
         ),
     )
@@ -1770,12 +1773,29 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
 
     child.wait().expect("bug: the build should exit");
 
-    // Past the point a cargo left running would have recorded finishing.
-    std::thread::sleep(std::time::Duration::from_secs(5));
+    // Either the build took the relayed cargo down, or it ran to completion
+    // and recorded that.
+    wait_for_recorded_process_exit(&cargo_pid, "cargo outlived the build that spawned it");
     assert!(
         !finished.exists(),
-        "cargo outlived the build that spawned it"
+        "cargo ran to completion after the build stopped reading it"
     );
+}
+
+/// Wait for the process whose pid is recorded in `pid_file` to exit.
+#[cfg(unix)]
+fn wait_for_recorded_process_exit(pid_file: &Path, outlived: &str) {
+    let pid: libc::pid_t = fs::read_to_string(pid_file)
+        .expect("bug: the process should record its pid")
+        .trim()
+        .parse()
+        .expect("bug: the recorded pid should parse");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // SAFETY: signal 0 only checks whether the process exists.
+    while unsafe { libc::kill(pid, 0) } == 0 {
+        assert!(std::time::Instant::now() < deadline, "{outlived}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Build an ELF whose raw spec section carries `format`, with a body that is
