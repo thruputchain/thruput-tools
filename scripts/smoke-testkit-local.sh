@@ -135,4 +135,8 @@ log "running testkit repeated scenario smoke"
 env "${ENV_ARGS[@]}" \
     cargo test -p thruput-testkit --test contract_smoke multiple_runs_are_possible -- --ignored --nocapture
 
+log "running testkit two-agent live smoke"
+env "${ENV_ARGS[@]}" \
+    cargo test -p thruput-testkit --test trivial_scenario local_two_agents_live_smoke -- --ignored --nocapture
+
 log "testkit live contract smoke passed"

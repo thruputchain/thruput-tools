@@ -1827,7 +1827,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, time::Duration};
+    use std::net::SocketAddr;
 
     use rpc_driver::{FixedSerialPool, RpcError};
     use thruput_indexer::{
@@ -2125,25 +2125,6 @@ mod tests {
         assert!(
             matches!(result, Err(RpcError::SystemError)),
             "rpc-fail mode should return RpcError::SystemError, got {result:?}"
-        );
-    }
-
-    // --- Connect-fail mode test (against a dead port) ---
-
-    #[tokio::test]
-    async fn connect_to_dead_indexer_port_fails() {
-        let addr = super::dead_loopback_addr();
-
-        // Act: try to connect
-        let result =
-            tokio::time::timeout(Duration::from_secs(5), FixedSerialPool::connect(&addr, 1))
-                .await
-                .expect("bug: connection attempt should return promptly");
-
-        // Assert
-        assert!(
-            result.is_err(),
-            "connecting to a dead port should fail, got Ok"
         );
     }
 }

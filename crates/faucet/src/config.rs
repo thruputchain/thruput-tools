@@ -781,10 +781,10 @@ mod tests {
             "[wallet_create]\nwallet_artifact_path = \"dev_wallet.rv32a\"",
             "[policy.wallet_create]\nowner_quota_max = 3",
         ] {
-            assert!(
+            let error =
                 toml::from_str::<FaucetConfigFile>(&format!("{}\n{section}", test_config()))
-                    .is_err()
-            );
+                    .expect_err("retired wallet configuration must be refused");
+            assert!(error.to_string().contains("unknown field"), "{error}");
         }
     }
 

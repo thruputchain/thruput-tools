@@ -29,9 +29,14 @@ use tokio::sync::Barrier;
 const INTERFACE: &str = "CallerCounter";
 const VERSION: &str = "0.1.0";
 
-fn caller_counter_artifact() -> Option<PathBuf> {
-    let root = std::env::var("GROUNDHOG_TESTKIT_ARTIFACT_ROOT").ok()?;
-    Some(PathBuf::from(root).join("caller_counter.rv32a"))
+/// The built fixture. These tests only run when asked for with `--ignored`, so
+/// a missing fixture is a setup error to report, not a reason to pass.
+fn caller_counter_artifact() -> PathBuf {
+    let root = std::env::var("GROUNDHOG_TESTKIT_ARTIFACT_ROOT").expect(
+        "set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing caller_counter.rv32a \
+         (see scripts/smoke-testkit-local.sh)",
+    );
+    PathBuf::from(root).join("caller_counter.rv32a")
 }
 
 /// Read the caller's counter via `simulateInvocation`, decoding the CXS `u64`.
@@ -148,13 +153,7 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
 #[tokio::test]
 #[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
 async fn caller_counter_deploy_call_read() {
-    let Some(artifact) = caller_counter_artifact() else {
-        eprintln!(
-            "skipping: set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing \
-             caller_counter.rv32a (see scripts/smoke-testkit-local.sh)"
-        );
-        return;
-    };
+    let artifact = caller_counter_artifact();
 
     let mut config = LocalNetworkConfig::default();
     // config.log_level = Some(thruput_testkit::LogLevel::Trace);
@@ -236,13 +235,7 @@ async fn caller_counter_deploy_call_read() {
 #[tokio::test]
 #[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
 async fn multiple_runs_are_possible() {
-    let Some(artifact) = caller_counter_artifact() else {
-        eprintln!(
-            "skipping: set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing \
-             caller_counter.rv32a (see scripts/smoke-testkit-local.sh)"
-        );
-        return;
-    };
+    let artifact = caller_counter_artifact();
 
     let mut config = LocalNetworkConfig::default();
     // config.log_level = Some(thruput_testkit::LogLevel::Trace);
@@ -294,13 +287,7 @@ async fn multiple_runs_are_possible() {
 #[tokio::test]
 #[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
 async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
-    let Some(artifact) = caller_counter_artifact() else {
-        eprintln!(
-            "skipping: set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing \
-             caller_counter.rv32a (see scripts/smoke-testkit-local.sh)"
-        );
-        return;
-    };
+    let artifact = caller_counter_artifact();
 
     let mut config = LocalNetworkConfig::default();
     config.block_driver = BlockDriverConfig::manual();
@@ -383,13 +370,7 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
 #[tokio::test]
 #[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
 async fn manual_block_production_stages_deploys_and_calls() {
-    let Some(artifact) = caller_counter_artifact() else {
-        eprintln!(
-            "skipping: set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing \
-             caller_counter.rv32a (see scripts/smoke-testkit-local.sh)"
-        );
-        return;
-    };
+    let artifact = caller_counter_artifact();
 
     let mut config = LocalNetworkConfig::default();
     config.block_driver = BlockDriverConfig::manual();

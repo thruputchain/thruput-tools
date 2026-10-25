@@ -492,37 +492,6 @@ async fn http_source_rejects_an_advertised_oversized_body_before_writing() {
     );
 }
 
-#[tokio::test]
-#[ignore = "requires access to the public artifact bucket"]
-async fn public_bundle_installs_with_the_embedded_catalog() {
-    let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
-    let target = HostTarget::current().expect("bug: smoke must run on a managed target");
-    let source = HttpSource::new(DEFAULT_PUBLIC_ARTIFACT_BASE_URL)
-        .expect("bug: public source should construct");
-    let cache = tempfile::tempdir().expect("bug: cache tempdir should create");
-    let installer = Installer::new(cache.path());
-
-    let installation = installer
-        .install(&catalog, catalog.default_version(), target, &source)
-        .await
-        .expect("bug: published bundle should verify and install");
-
-    assert!(installation.binary_path().is_file());
-    assert!(
-        installation
-            .path()
-            .join("contracts/genesis_root.rv32a")
-            .is_file()
-    );
-    assert!(
-        !installation
-            .path()
-            .join("contracts/dev_wallet.rv32a")
-            .exists()
-    );
-    assert!(installation.path().join(".ok").is_file());
-}
-
 // Synthetic bundles declare both contract artifacts so archive-validation tests do not
 // inherit the file inventory or compatibility floor of the current production release.
 fn fixture_catalog() -> serde_json::Value {
@@ -749,6 +718,14 @@ async fn public_catalog_installs_all_targets() {
                 file.path()
             );
         }
+        // Released bundles no longer ship the retired dev-wallet artifact.
+        assert!(
+            !installation
+                .path()
+                .join("contracts/dev_wallet.rv32a")
+                .exists(),
+            "retired dev_wallet.rv32a shipped for {target:?}"
+        );
         assert!(installation.path().join(".ok").is_file());
     }
 }
