@@ -25,7 +25,4 @@ pub enum SigningError {
     /// A single-call wallet invocation returned an unexpected number of results.
     #[error("expected one native wallet call result, received {0}")]
     UnexpectedWalletReturnCount(usize),
-    /// The dev-wallet artifact is not an RV32 artifact.
-    #[error("unsupported dev-wallet artifact extension for {0}; expected .rv32a")]
-    UnsupportedDevWalletArtifact(std::path::PathBuf),
 }
