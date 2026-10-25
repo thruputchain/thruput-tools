@@ -1752,7 +1752,7 @@ enum TxCommand {
                        inferred transfers, and deep traces are not available."
     )]
     Show {
-        /// Transaction hash as exactly 32 bytes of hex
+        /// Transaction hash as unprefixed base58 (32 bytes)
         tx_hash: String,
         /// Config profile to use
         #[arg(long = "profile")]
@@ -2876,6 +2876,20 @@ mod tests {
                 assert!(confirmed, "{args:?}");
             }
         }
+    }
+
+    #[test]
+    fn tx_show_hash_help_matches_the_base58_parser() {
+        // `tx::parse_tx_hash` accepts only base58, so the help must not ask for hex.
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("tx")
+            .and_then(|tx| tx.find_subcommand_mut("show"))
+            .and_then(|show| show.get_arguments().find(|arg| arg.get_id() == "tx_hash"))
+            .and_then(|arg| arg.get_help())
+            .unwrap()
+            .to_string();
+        assert!(help.contains("base58"), "{help}");
     }
 
     #[test]
