@@ -22,7 +22,7 @@ hog-firehose-store verify --store ./archive
 
 See [the subscription protocol and backpressure policy](subscriptions.md) for
 subscribe/ack/resume, bounded queues, limits and metrics, and
-[Brief 09 measurements](subscription-measurement-2026-09-18.md) for fanout evidence.
+[measured costs](#measured-costs) for fanout figures.
 Serve listeners default to loopback. Non-loopback binding requires
 `--allow-remote` and emits an unauthenticated-service startup warning.
 It also defaults to one subscription per connection and logs that choice;
@@ -288,10 +288,37 @@ lag is **NaN**, not a misleading zero. The sampled gauge can miss short spikes
 and reflects observations from two independently moving services. Allocation
 metrics exclude directory metadata, the shutdown watermark and lock/temporary files.
 
-## Reproducible local measurements
+## Measured costs
 
-See [the measurement report](measurement-2026-09-18.md) for conditions, measured
-latencies, growth estimates, restart evidence, and design differences.
+Smoke measurements from September 2026 on a local Apple-silicon debug build.
+They size the design; they do not qualify a deployment.
+
+- **Record size.** An archive record is the block's XDR plus a 100-byte origin
+  and identity envelope: 400 bytes for an empty block, 27,600 for a block of 100
+  dev-wallet calls and 272,400 for 1,000. hogd's `.events` files carry
+  transaction bodies as well as event logs, so the archive grows much faster
+  than event-log size alone suggests.
+- **Allocation.** Each height is a file and costs at least one filesystem
+  allocation unit: an empty block's 400 bytes occupied 4,096 on APFS, about
+  410 MB per 100,000 empty blocks.
+- **Following.** Commit request to archive-file visibility took 11–14 ms for
+  empty and 100-call blocks and 56 ms for a 1,000-call block. A fresh archive
+  replayed about 110 small blocks/s, dominated by per-file sync.
+- **Fanout.** With 100-call blocks, the single process that then ingested,
+  verified, archived and fanned out used 6% of one core with one subscriber and
+  47% with fifty; p95 ingest-to-subscriber latency was 4.8 ms and 21 ms.
+  Subscribers add no event-service calls. A catch-up subscriber replayed a warm
+  archive at about 205 blocks/s over loopback.
+
+Ingestion has since moved to `hog-firehose-store`. The current benchmark runs
+the store and serve processes separately and attributes CPU to serve alone:
+
+```sh
+cargo test -p thruput-firehose --test subscriptions measure_fanout_and_catchup \
+  -- --ignored --nocapture
+```
+
+## Reproducible local measurements
 
 The examples are **local-node test drivers**, not production coordinators:
 
