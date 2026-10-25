@@ -1,5 +1,8 @@
 //! Real runtime coverage for the default native endpoint.
 
+#[path = "support/ramdb.rs"]
+mod ramdb;
+
 use std::{error::Error, path::PathBuf, time::Duration};
 
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
@@ -85,7 +88,7 @@ async fn real_native_submit_receipt_balance_and_simulation() {
                 HogdDevConfig::default()
                     .with_binary_path(binary)
                     .with_startup_timeout(Duration::from_mins(1))
-                    .with_ramdb_bytes(ramdb_bytes())
+                    .with_ramdb_bytes(ramdb::ramdb_bytes(256 * ramdb::MIB))
                     .with_contract_artifact_directories([artifacts_for_devnode])
                     .with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(
                         Base58(sender.verifying_key_bytes().into()),
@@ -101,18 +104,6 @@ async fn real_native_submit_receipt_balance_and_simulation() {
     let outcome = exercise(&node, &sender, &deployable).await;
     node.stop().await.unwrap();
     outcome.unwrap();
-}
-
-/// hog-devnode divides its RAM database between the cores it may run on, so a
-/// fixed size that suffices on a small runner runs out on a larger host,
-/// failing genesis or a later commit with a system error.
-fn ramdb_bytes() -> u64 {
-    const MIB: u64 = 1024 * 1024;
-    let cores = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
-    u64::try_from(cores)
-        .unwrap_or(u64::MAX)
-        .saturating_mul(16 * MIB)
-        .max(256 * MIB)
 }
 
 async fn exercise(

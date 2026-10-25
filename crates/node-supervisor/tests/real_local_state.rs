@@ -1,5 +1,8 @@
 //! Qualification against a compatible real runtime; run explicitly with --ignored.
 
+#[path = "support/ramdb.rs"]
+mod ramdb;
+
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::HttpClientBuilder;
 use thruput_json_rpc_api::params::NamedParams;
@@ -25,7 +28,7 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
             HogdDevConfig::default()
                 .with_binary_path(binary)
                 .with_data_dir(dir.path())
-                .with_ramdb_bytes(128 * 1024 * 1024),
+                .with_ramdb_bytes(ramdb::ramdb_bytes(256 * ramdb::MIB)),
         );
     let config = match std::env::var("GROUNDHOG_DEVNODE_PROTOCOL") {
         Ok(protocol) => config.with_hogd_protocol_override(protocol),
@@ -124,7 +127,7 @@ async fn stopped_raw_process_handle_releases_persistent_chain_lock() {
     let config = HogdDevConfig::default()
         .with_binary_path(binary)
         .with_data_dir(dir.path())
-        .with_ramdb_bytes(128 * 1024 * 1024);
+        .with_ramdb_bytes(ramdb::ramdb_bytes(256 * ramdb::MIB));
     let mut first = HogdDevProcess::start(&config).await.unwrap();
     first.stop().await.unwrap();
     let mut second = HogdDevProcess::start(&config).await.unwrap();

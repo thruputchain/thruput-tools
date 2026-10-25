@@ -53,7 +53,7 @@ impl Fixture {
                     .with_binary_path(binary)
                     .with_startup_timeout(Duration::from_mins(1))
                     .with_data_dir(directory.path().join("data"))
-                    .with_ramdb_bytes(1024 * 1024 * 1024),
+                    .with_ramdb_bytes(crate::ramdb::ramdb_bytes(1024 * crate::ramdb::MIB)),
             );
         Ok(Self {
             directory,
