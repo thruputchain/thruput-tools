@@ -1222,4 +1222,30 @@ mod tests {
         )
         .expect("bug: manifest should write");
     }
+
+    #[test]
+    fn project_template_placeholders_parse_when_uncommented() {
+        let mut checked = 0;
+        for line in include_str!("../templates/thruput.toml.tmpl").lines() {
+            let Some((key, value)) = line
+                .strip_prefix("# ")
+                .and_then(|line| line.split_once(" = \""))
+            else {
+                continue;
+            };
+            let value = value.trim_end_matches('"');
+            match key {
+                "{{PROJECT_NAME}}" | "address" => {
+                    codec::parse_contract_address(value).unwrap_or_else(|e| panic!("{line}: {e}"));
+                }
+                "owner_public_key" => {
+                    parse_owner_public_key("alice", value)
+                        .unwrap_or_else(|e| panic!("{line}: {e}"));
+                }
+                _ => continue,
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 6);
+    }
 }
