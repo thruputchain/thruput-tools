@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     env, fs,
     io::{self, Write},
     net::SocketAddr,
@@ -26,7 +25,7 @@ use thruput_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
     TransactionPage, TransactionPageResult, TransactionQuery, TransactionRefPage,
-    TransactionRefPageResult, TxInfo, TxInfoResult,
+    TransactionRefPageResult, TxInfoResult,
 };
 use thruput_json_rpc_types::base58::Base58;
 use thruput_json_rpc_types::protocol_token::protocol_text;
@@ -42,7 +41,6 @@ use thruput_scheduler::{
 };
 use thruput_xdr::PROTOCOL_VERSION;
 use thruput_xdr::contract::{ContractType, DeployedContractHash};
-use thruput_xdr::event::IdentifiedEvent;
 use thruput_xdr::genesis::GenesisConfiguration;
 use thruput_xdr::header::{ProposalContext, ProposalHeader};
 use thruput_xdr::network::ProtocolCommit;
@@ -113,30 +111,15 @@ impl FakeStartupConfig {
     }
 }
 
-// --- Well-known canned tx hashes used across fake-indexer tests ---
+// Only the self-tests below read the hash the dataset leaves out.
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "canned_x23.rs"]
+mod canned_x23;
 
-/// First well-known committed tx hash (all 0xAA bytes).
-pub const CANNED_TX_HASH_A: [u8; 32] = [0xAAu8; 32];
-/// Second well-known committed tx hash (all 0xBB bytes).
-pub const CANNED_TX_HASH_B: [u8; 32] = [0xBBu8; 32];
-/// A hash that is *not* in the committed set (all 0xFF bytes).
-pub const CANNED_TX_HASH_UNKNOWN: [u8; 32] = [0xFFu8; 32];
-/// Block height for `CANNED_TX_HASH_A`.
-pub const CANNED_HEIGHT_A: i64 = 5;
-/// Block height for `CANNED_TX_HASH_B`.
-pub const CANNED_HEIGHT_B: i64 = 10;
-/// Gas the fake indexer's event log records for `CANNED_TX_HASH_A`.
-pub const CANNED_GAS_USED_A: u64 = 1_500;
-/// Gas the fake indexer's event log records for `CANNED_TX_HASH_B`.
-pub const CANNED_GAS_USED_B: u64 = 2_500;
-/// Cursor value the fake uses between page 1 and page 2 of `get_events`.
-pub const CANNED_EVENT_CURSOR: &[u8] = b"cursor-page-2";
-/// Storage key that returns `CANNED_STORAGE_VALUE` from the fake `DbGateway`.
-pub const CANNED_STORAGE_KEY: [u8; 32] = [0x42u8; 32];
-/// Storage value returned for `CANNED_STORAGE_KEY`.
-pub const CANNED_STORAGE_VALUE: &[u8] = b"local-node-storage";
-/// Snapshot height returned by the fake `DbGateway` for storage reads.
-pub const CANNED_STORAGE_HEIGHT: i64 = 12;
+use canned_x23::{
+    CANNED_HEIGHT_B, CANNED_STORAGE_HEIGHT, CANNED_STORAGE_KEY, CANNED_STORAGE_VALUE, CommittedSet,
+    EventPages, committed_set, event_pages, resolve_event_page,
+};
 
 extern "C" fn handle_sigterm(_: i32) {
     TERMINATED.store(true, Ordering::SeqCst);
@@ -1532,12 +1515,6 @@ enum FakeIndexerMode {
     RuntimeRpcFail,
 }
 
-/// Committed tx set: maps `TransactionHash` bytes to `TxInfo`.
-type CommittedSet = HashMap<[u8; 32], TxInfo>;
-
-/// Canned event pages served by the fake in Normal mode.
-type EventPages = Vec<(Vec<IdentifiedEvent>, Vec<u8>)>;
-
 #[derive(Debug)]
 struct FakeIndexer {
     mode: FakeIndexerMode,
@@ -1549,162 +1526,10 @@ struct FakeIndexer {
 
 impl FakeIndexer {
     fn new(mode: FakeIndexerMode) -> Self {
-        let committed = Self::build_committed_set();
-        let event_pages = Self::build_event_pages();
         Self {
             mode,
-            committed,
-            event_pages,
-        }
-    }
-
-    /// Build a minimal `ProposedTransaction` to stand in for a `TxInfo.tx`
-    /// body. The transaction is not valid on-chain; it only needs to be
-    /// present so the committed dataset round-trips through the indexer RPC.
-    fn dummy_proposed_transaction() -> thruput_xdr::transaction::ProposedTransaction {
-        use thruput_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
-        use thruput_xdr::contract::ContractEntrypointID;
-        use thruput_xdr::transaction::{
-            Invocation, NondeterministicProposalData, ProposedTransaction, SignedTransaction,
-            Transaction, Uniquifier,
-        };
-        use thruput_xdr::types::{ContractAddress, GasAmount};
-        ProposedTransaction {
-            signed_tx: SignedTransaction {
-                tx: Transaction {
-                    invocation: Invocation {
-                        invoked_address: ContractAddress::from([0u8; 32]),
-                        entrypoint: ContractEntrypointID::from([0u8; 8]),
-                        gas_limit: GasAmount::from(0u64),
-                        calldata: BytesM(vec![]),
-                    },
-                    uniquifier: Uniquifier {
-                        block_expiry_height: BlockHeight::from(0i64),
-                        nonce: 0,
-                    },
-                    contracts_to_deploy: VecM(vec![]),
-                    auth_claim: AuthClaim::kSourceAddressAuthData {
-                        source_address_claim: AuthClaim_source_address_claim {
-                            allowed_keys: 0,
-                            required_weight: 0,
-                        },
-                    },
-                },
-                signatures: VecM(vec![]),
-                pubkey_claim_key: None,
-            },
-            nondeterministic_proposal_data: NondeterministicProposalData {
-                nondeterministic_bits: BytesM(vec![]),
-                nondeterministic_bit_count: 0,
-                observed_queue_entry_sequence: VecM(vec![]),
-            },
-        }
-    }
-
-    fn build_committed_set() -> CommittedSet {
-        use thruput_xdr::{
-            event::TxEventLog, exec_result::ExecResult, transaction::InvocationFrameOutput,
-        };
-
-        let mut map = HashMap::new();
-
-        let tx_a = TxInfo {
-            height: BlockHeight::from(CANNED_HEIGHT_A),
-            tx: Self::dummy_proposed_transaction(),
-            events: TxEventLog {
-                tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
-                exec_result: ExecResult::ExecResultOK,
-                root_output: InvocationFrameOutput::Return {
-                    return_buffer: BytesM(vec![]),
-                },
-                gas_consumed: CANNED_GAS_USED_A,
-                events: VecM(vec![]),
-            },
-        };
-        map.insert(CANNED_TX_HASH_A, tx_a);
-
-        let tx_b = TxInfo {
-            height: BlockHeight::from(CANNED_HEIGHT_B),
-            tx: Self::dummy_proposed_transaction(),
-            events: TxEventLog {
-                tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
-                exec_result: ExecResult::ExecResultOK,
-                root_output: InvocationFrameOutput::Return {
-                    return_buffer: BytesM(vec![]),
-                },
-                gas_consumed: CANNED_GAS_USED_B,
-                events: VecM(vec![]),
-            },
-        };
-        map.insert(CANNED_TX_HASH_B, tx_b);
-
-        map
-    }
-
-    fn build_event_pages() -> EventPages {
-        use thruput_xdr::{event::TxEmittedEvent, types::ContractAddress};
-
-        // Page 1: two events, non-empty cursor pointing to page 2.
-        let event1 = IdentifiedEvent {
-            tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
-            block_height: BlockHeight::from(CANNED_HEIGHT_A),
-            sequence_number: 0,
-            emitted_event: TxEmittedEvent {
-                contract_address: ContractAddress::from([0x01u8; 32]),
-                num_topics: 0,
-                serialized_event: BytesM(vec![]),
-            },
-        };
-        let event2 = IdentifiedEvent {
-            tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
-            block_height: BlockHeight::from(CANNED_HEIGHT_A),
-            sequence_number: 1,
-            emitted_event: TxEmittedEvent {
-                contract_address: ContractAddress::from([0x01u8; 32]),
-                num_topics: 0,
-                serialized_event: BytesM(vec![]),
-            },
-        };
-
-        // Page 2: one event, empty cursor (stream exhausted).
-        let event3 = IdentifiedEvent {
-            tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
-            block_height: BlockHeight::from(CANNED_HEIGHT_B),
-            sequence_number: 0,
-            emitted_event: TxEmittedEvent {
-                contract_address: ContractAddress::from([0x02u8; 32]),
-                num_topics: 0,
-                serialized_event: BytesM(vec![]),
-            },
-        };
-
-        vec![
-            (vec![event1, event2], CANNED_EVENT_CURSOR.to_vec()),
-            (vec![event3], vec![]),
-        ]
-    }
-
-    /// Find the page to return based on the request cursor.
-    /// Returns an error if the cursor does not match any known page continuation.
-    fn resolve_event_page(
-        &self,
-        cursor: &[u8],
-    ) -> Result<&(Vec<IdentifiedEvent>, Vec<u8>), ProgramError> {
-        if cursor.is_empty() {
-            // Initial call: return page 0.
-            Ok(&self.event_pages[0])
-        } else {
-            // Continuation: find the page whose cursor matches the incoming cursor.
-            self.event_pages
-                .iter()
-                .enumerate()
-                .find(|(_, (_, next))| !next.is_empty() && next.as_slice() == cursor)
-                .map(|(i, _)| &self.event_pages[i + 1])
-                .ok_or_else(|| {
-                    ProgramError::msg(
-                        "unknown event cursor; fake indexer only handles canned dataset",
-                    )
-                })
+            committed: committed_set(),
+            event_pages: event_pages(),
         }
     }
 }
@@ -1756,7 +1581,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
         }
-        let (events, next_cursor) = self.resolve_event_page(&arg0.cursor.0)?;
+        let (events, next_cursor) = resolve_event_page(&self.event_pages, &arg0.cursor.0)?;
         Ok(EventPageResult::IndexerQueryOk {
             page: EventPage {
                 events: VecM(events.clone()),
@@ -1839,10 +1664,13 @@ mod tests {
     use tokio::net::TcpListener;
     use xdr_common::{BytesM, VecM};
 
-    use super::{
+    use super::canned_x23::{
         CANNED_EVENT_CURSOR, CANNED_HEIGHT_A, CANNED_HEIGHT_B, CANNED_TX_HASH_A, CANNED_TX_HASH_B,
-        CANNED_TX_HASH_UNKNOWN, FakeIndexer, FakeIndexerMode,
-        IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, RpcServer, ServiceMap,
+        CANNED_TX_HASH_UNKNOWN,
+    };
+    use super::{
+        FakeIndexer, FakeIndexerMode, IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
+        RpcServer, ServiceMap,
     };
 
     async fn start_test_indexer(

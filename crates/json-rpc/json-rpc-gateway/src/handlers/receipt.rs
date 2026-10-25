@@ -384,13 +384,10 @@ mod tests {
     enum FakeSchedulerMode {
         GatedMiss(Arc<LookupGate>),
         Pending,
+        /// Mempool lookup reports this retained scheduler outcome.
         Outcome(thruput_scheduler::SchedulerTransactionOutcome),
         /// Mempool lookup succeeds and reports the transaction absent.
         MempoolMiss,
-        /// Mempool lookup succeeds but returns no slot for the queried hash.
-        EmptyBatch,
-        /// Mempool lookup violates the exact-cardinality response contract.
-        ExtraSlot,
         /// Mempool lookup fails at the RPC layer.
         RpcFail,
         /// Mempool lookup waits until the test replaces the active generation.
@@ -492,18 +489,16 @@ mod tests {
                     gate.active.fetch_sub(1, Ordering::SeqCst);
                     Ok(VecM(vec![None]))
                 }
-                FakeSchedulerMode::Outcome(_) => {
-                    panic!("old lookup must not be used for retained outcomes")
-                }
                 FakeSchedulerMode::Pending => {
                     let TxInfoResult::TxInfoFound { info } = committed_result() else {
                         unreachable!()
                     };
                     Ok(VecM(vec![Some(info.tx.signed_tx)]))
                 }
+                FakeSchedulerMode::Outcome(_) => {
+                    panic!("old lookup must not be used for retained outcomes")
+                }
                 FakeSchedulerMode::MempoolMiss => Ok(VecM(vec![None])),
-                FakeSchedulerMode::EmptyBatch => Ok(VecM(vec![])),
-                FakeSchedulerMode::ExtraSlot => Ok(VecM(vec![None, None])),
                 FakeSchedulerMode::RpcFail => {
                     Err(ProgramError::msg("fake scheduler lookup failure"))
                 }
@@ -1290,51 +1285,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_status_rejects_malformed_scheduler_cardinality() {
-        for mode in [FakeSchedulerMode::EmptyBatch, FakeSchedulerMode::ExtraSlot] {
-            let (scheduler_addr, _scheduler) = start_fake_scheduler(mode).await;
-            let (indexer_addr, _indexer) = start_not_found_indexer().await;
-            let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-            let error = watchdog(native_transaction_status(
-                &ctx,
-                RpcRequestContext::unbounded(),
-                test_hash(),
-            ))
-            .await
-            .unwrap_err();
-            assert!(matches!(error.error, RpcServerError::BackendDataInvalid { reason: thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidCardinality, .. }));
-            assert!(error.observation.is_none());
-        }
-    }
-
-    #[tokio::test]
-    async fn native_status_refuses_terminal_scheduler_answer_when_indexer_failed() {
-        use thruput_scheduler::{
-            SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
-            SchedulerTransactionStatus as Status,
-        };
-        let (scheduler_addr, _scheduler) =
-            start_fake_scheduler(FakeSchedulerMode::Outcome(SchedulerTransactionOutcome {
-                status: Status::SchedulerTransactionDropped,
-                height: 7.into(),
-                error_source: Source::SchedulerTransactionErrorAuth,
-                error_code: 1,
-            }))
-            .await;
-        let (indexer_addr, _indexer) =
-            start_scripted_indexer(vec![None], Arc::new(AtomicUsize::new(0))).await;
-        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-        let error = watchdog(native_transaction_status(
-            &ctx,
-            RpcRequestContext::unbounded(),
-            test_hash(),
-        ))
-        .await
-        .unwrap_err();
-        assert!(matches!(error.error, RpcServerError::BackendUnavailable(_)));
-    }
-
-    #[tokio::test]
     async fn receipt_reports_the_committed_gas() {
         let calls = Arc::new(AtomicUsize::new(0));
         let (indexer_addr, _indexer) = start_fake_indexer(committed_result(), calls.clone()).await;
@@ -1368,6 +1318,9 @@ mod tests {
             .map_err(|error| error.error)
     }
 
+    // `native_transaction::sequence_status` owns which status answer wins
+    // (`hogd-backend/src/native/transaction/status.rs`); the status tests here
+    // cover how this adapter feeds it through its lookup lane.
     #[tokio::test]
     async fn committed_status_skips_scheduler_lookup() {
         let gate = LookupGate::new();
@@ -1387,96 +1340,69 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scheduler_retained_outcomes_are_exposed_when_indexer_misses() {
-        use thruput_scheduler::{
-            SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
-            SchedulerTransactionStatus as Status,
+    async fn indexer_diagnostic_survives_a_pending_or_missing_scheduler_answer() {
+        let recent = || TxInfoResult::TxInfoRecentFailure {
+            recent_failure: recent_diagnostic(),
         };
-        for (status, tag) in [
-            (Status::SchedulerTransactionSucceeded, "committed"),
-            (Status::SchedulerTransactionRetry, "retry"),
-            (Status::SchedulerTransactionDropped, "dropped"),
+        let diagnostic = serde_json::to_value(
+            native_transaction::indexed_status(test_hash(), recent())
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(diagnostic["status"], "recentFailure");
+        assert_eq!(diagnostic["attemptBlockHeight"], "43");
+        let attempt = serde_json::json!({
+            "attemptBlockHeight": diagnostic["attemptBlockHeight"],
+            "cause": diagnostic["cause"],
+        });
+        for (scheduler, expected) in [
+            (
+                FakeSchedulerMode::Pending,
+                serde_json::json!({"status": "pending", "recentFailure": attempt}),
+            ),
+            (FakeSchedulerMode::MempoolMiss, diagnostic.clone()),
         ] {
-            let outcome = SchedulerTransactionOutcome {
-                status,
-                error_source: Source::SchedulerTransactionErrorScheduler,
-                error_code: 3,
-                height: 42.into(),
-            };
-            let (scheduler_addr, _scheduler) =
-                start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
-            let (indexer_addr, _indexer) = start_not_found_indexer().await;
+            let (scheduler_addr, _scheduler) = start_fake_scheduler(scheduler).await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let (indexer_addr, _indexer) = start_fake_indexer(recent(), calls.clone()).await;
             let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
             let status = watchdog(native_status(&ctx, RpcRequestContext::unbounded()))
                 .await
                 .unwrap();
-            let value = serde_json::to_value(status).unwrap();
-            assert_eq!(value["status"], tag);
-            if tag == "committed" {
-                assert_eq!(
-                    value,
-                    serde_json::json!({"status": "committed", "blockHeight": "42"})
-                );
-            } else {
-                assert_eq!(
-                    value["error"],
-                    serde_json::json!({"source":"scheduler", "code":3})
-                );
-            }
+            assert_eq!(serde_json::to_value(status).unwrap(), expected);
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
     }
 
     #[tokio::test]
-    async fn scheduler_commitment_height_survives_indexer_unavailability() {
+    async fn indexer_outage_is_not_read_as_a_miss() {
         use thruput_scheduler::{
             SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
             SchedulerTransactionStatus as Status,
         };
-        let outcome = SchedulerTransactionOutcome {
-            status: Status::SchedulerTransactionSucceeded,
-            error_source: Source::SchedulerTransactionErrorNone,
-            error_code: 0,
-            height: 0.into(),
-        };
-        let (scheduler_addr, _scheduler) =
-            start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
-        let calls = Arc::new(AtomicUsize::new(0));
-        let (indexer_addr, _indexer) = start_scripted_indexer(vec![None], calls.clone()).await;
-        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-        for disconnected in [false, true] {
-            if disconnected {
-                *ctx.indexer.write().await = None;
-            }
-            let status = watchdog(native_status(&ctx, RpcRequestContext::unbounded()))
-                .await
-                .unwrap();
-            assert_eq!(
-                serde_json::to_value(status).unwrap(),
-                serde_json::json!({"status": "committed", "blockHeight": "0"})
+        // A miss would make these Unknown and Dropped; an unread indexer
+        // must surface instead.
+        for scheduler in [
+            FakeSchedulerMode::MempoolMiss,
+            FakeSchedulerMode::Outcome(SchedulerTransactionOutcome {
+                status: Status::SchedulerTransactionDropped,
+                height: 7.into(),
+                error_source: Source::SchedulerTransactionErrorAuth,
+                error_code: 1,
+            }),
+        ] {
+            let (scheduler_addr, _scheduler) = start_fake_scheduler(scheduler).await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let (indexer_addr, _indexer) = start_scripted_indexer(vec![None], calls.clone()).await;
+            let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+            let result = watchdog(native_status(&ctx, RpcRequestContext::unbounded())).await;
+            assert!(
+                matches!(result, Err(RpcServerError::BackendUnavailable(_))),
+                "{result:?}"
             );
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn scheduler_pending_keeps_the_indexer_diagnostic() {
-        let (scheduler_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::Pending).await;
-        let (indexer_addr, _indexer) = start_fake_indexer(
-            TxInfoResult::TxInfoRecentFailure {
-                recent_failure: recent_diagnostic(),
-            },
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .await;
-        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-        assert!(matches!(
-            watchdog(native_status(&ctx, RpcRequestContext::unbounded()))
-                .await
-                .unwrap(),
-            native_out::TransactionStatus::Pending {
-                recent_failure: Some(_)
-            }
-        ));
     }
 
     #[tokio::test]
@@ -1502,34 +1428,6 @@ mod tests {
                     .unwrap(),
                 native_out::TransactionStatus::Pending { .. }
             ));
-        }
-    }
-
-    #[tokio::test]
-    async fn scheduler_miss_retains_indexer_diagnostic_or_error() {
-        for result in [
-            Some(TxInfoResult::TxInfoRecentFailure {
-                recent_failure: recent_diagnostic(),
-            }),
-            None,
-        ] {
-            let has_diagnostic = result.is_some();
-            let (scheduler_addr, _scheduler) =
-                start_fake_scheduler(FakeSchedulerMode::MempoolMiss).await;
-            let calls = Arc::new(AtomicUsize::new(0));
-            let (indexer_addr, _indexer) =
-                start_scripted_indexer(vec![result], calls.clone()).await;
-            let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-            let result = watchdog(native_status(&ctx, RpcRequestContext::unbounded())).await;
-            if has_diagnostic {
-                assert!(matches!(
-                    result.unwrap(),
-                    native_out::TransactionStatus::RecentFailure { .. }
-                ));
-            } else {
-                assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
-            }
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
     }
 

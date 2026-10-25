@@ -26,6 +26,12 @@ mod view_backend;
 #[cfg(test)]
 mod test_support;
 
+/// The dataset the `fake_hogd_dev` executable serves, shared with the unit-test fakes.
+/// Declared here rather than in `test_support`, which other crates' tests include by path.
+#[cfg(test)]
+#[path = "../tests/fixtures/canned_x23.rs"]
+mod canned_x23;
+
 /// How this crate names hogd-dev's x23 services in diagnostics, so a
 /// message always says which of the child's endpoints answered.
 mod service {

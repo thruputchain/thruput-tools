@@ -18,6 +18,10 @@ use thruput_json_rpc_types::{
 use super::*;
 use crate::{
     BlockDriverConfig, BlockProductionError, HogdDevConfig, LocalAirdropConfig,
+    canned_x23::{
+        CANNED_GAS_USED_A, CANNED_HEIGHT_A, CANNED_STORAGE_HEIGHT, CANNED_STORAGE_KEY,
+        CANNED_STORAGE_VALUE, CANNED_TX_HASH_A, CANNED_TX_HASH_UNKNOWN,
+    },
     test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
 };
 
@@ -126,18 +130,11 @@ async fn start_fake_supervisor_expect_error(mode: &str) -> NodeSupervisorError {
     let pid_dir = TempDir::new().expect("bug: tempdir creates");
     let pid_path = pid_dir.path().join("hogd.pid");
 
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, mode)
-        .with_test_child_env(
-            FAKE_HOGD_DEV_PID_FILE_ENV,
-            pid_path.to_str().expect("bug: tempdir path is utf-8"),
-        )
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
+    let hogd = fake_hogd(mode).with_test_child_env(
+        FAKE_HOGD_DEV_PID_FILE_ENV,
+        pid_path.to_str().expect("bug: tempdir path is utf-8"),
+    );
+    let config = supervisor_config(hogd);
 
     let result = tokio::time::timeout(Duration::from_secs(10), NodeSupervisorHandle::start(config))
         .await
@@ -152,29 +149,34 @@ async fn start_fake_supervisor_expect_error(mode: &str) -> NodeSupervisorError {
     err
 }
 
+/// The fake hogd-dev in `mode`, with the startup and shutdown bounds every test here uses.
+fn fake_hogd(mode: &str) -> HogdDevConfig {
+    HogdDevConfig::default()
+        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, mode)
+        .with_binary_path(fake_hogd_dev_binary())
+        .with_startup_timeout(Duration::from_secs(5))
+        .with_shutdown_grace(Duration::from_secs(2))
+}
+
+/// A supervisor that serves RPC on an ephemeral loopback port and runs `hogd`.
+fn supervisor_config(hogd: HogdDevConfig) -> NodeSupervisorConfig {
+    NodeSupervisorConfig::default()
+        .with_rpc_listen_address("127.0.0.1:0")
+        .with_hogd_dev(hogd)
+}
+
+/// [`start_fake_supervisor`] for the fake in `mode`, producing blocks per `block_driver`.
 async fn start_fake_with_block_driver(
     mode: &str,
     block_driver: BlockDriverConfig,
 ) -> (NodeSupervisorHandle, jsonrpsee::http_client::HttpClient) {
-    start_fake_with_block_driver_and_env(mode, block_driver, HogdDevConfig::default()).await
+    start_fake_supervisor(supervisor_config(fake_hogd(mode)).with_block_driver(block_driver)).await
 }
 
-/// Like [`start_fake_with_block_driver`], starting from `hogd` so a test can
-/// add child environment of its own.
-async fn start_fake_with_block_driver_and_env(
-    mode: &str,
-    block_driver: BlockDriverConfig,
-    hogd: HogdDevConfig,
+/// Starts `config`, which must succeed, and connects an HTTP client to its RPC.
+async fn start_fake_supervisor(
+    config: NodeSupervisorConfig,
 ) -> (NodeSupervisorHandle, jsonrpsee::http_client::HttpClient) {
-    let hogd = hogd
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, mode)
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd)
-        .with_block_driver(block_driver);
     let handle = NodeSupervisorHandle::start(config)
         .await
         .expect("bug: supervisor should start against fake hogd-dev");
@@ -190,32 +192,17 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
     let pid_dir = TempDir::new().expect("bug: tempdir creates");
     let pid_path = pid_dir.path().join("hogd.pid");
 
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready")
-        .with_test_child_env(
-            FAKE_HOGD_DEV_PID_FILE_ENV,
-            pid_path.to_str().expect("bug: tempdir path is utf-8"),
-        )
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
+    let hogd = fake_hogd("ready").with_test_child_env(
+        FAKE_HOGD_DEV_PID_FILE_ENV,
+        pid_path.to_str().expect("bug: tempdir path is utf-8"),
+    );
     let (_manifest_directory, bundle_identity, manifest_digest) = write_matching_client_manifest();
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd)
-        .with_bundle_identity(bundle_identity);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(hogd).with_bundle_identity(bundle_identity)).await;
     assert_eq!(
         handle.backend_planes(),
         BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub)
     );
-
-    let url = format!("http://{}", handle.rpc_addr());
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
 
     let network_info = client
         .request::<out::NetworkInfo, _>("getNetworkInfo", NamedParams(serde_json::json!({})))
@@ -393,22 +380,7 @@ async fn scheduler_gateway_rejection_surfaces_tx_rejected_without_coordinator_fa
 
 #[tokio::test]
 async fn submit_wakes_hogd_dev_block_driver() {
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "automine")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev");
-
-    let url = format!("http://{}", handle.rpc_addr());
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) = start_fake_supervisor(supervisor_config(fake_hogd("automine"))).await;
 
     client
         .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
@@ -440,24 +412,11 @@ async fn concurrent_public_submissions_are_batched_for_scheduler() {
     const SUBMIT_LOG_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG";
     let directory = tempfile::tempdir().expect("bug: tempdir");
     let submit_log = directory.path().join("submit-batches.log");
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe")
-        .with_test_child_env(
-            SUBMIT_LOG_ENV,
-            submit_log.to_str().expect("bug: tempdir path is utf-8"),
-        )
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev");
-    let client = HttpClientBuilder::default()
-        .build(format!("http://{}", handle.rpc_addr()))
-        .expect("bug: jsonrpsee http client builds");
+    let hogd = fake_hogd("submit-batch-probe").with_test_child_env(
+        SUBMIT_LOG_ENV,
+        submit_log.to_str().expect("bug: tempdir path is utf-8"),
+    );
+    let (handle, client) = start_fake_supervisor(supervisor_config(hogd)).await;
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
 
     let (first, second, third, fourth, fifth) = tokio::join!(
@@ -504,25 +463,11 @@ async fn rpc_array_limit_rejects_oversized_submissions_before_dispatch() {
 
     let directory = tempfile::tempdir().unwrap();
     let submit_log = directory.path().join("submit-batches.log");
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe")
-        .with_test_child_env(
-            "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
-            submit_log.to_str().unwrap(),
-        )
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let handle = NodeSupervisorHandle::start(
-        NodeSupervisorConfig::default()
-            .with_rpc_listen_address("127.0.0.1:0")
-            .with_hogd_dev(hogd),
-    )
-    .await
-    .unwrap();
-    let client = HttpClientBuilder::default()
-        .build(format!("http://{}", handle.rpc_addr()))
-        .unwrap();
+    let hogd = fake_hogd("submit-batch-probe").with_test_child_env(
+        "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
+        submit_log.to_str().unwrap(),
+    );
+    let (handle, client) = start_fake_supervisor(supervisor_config(hogd)).await;
     let mut allowed = BatchRequestBuilder::new();
     for _ in 0..MAX_RPC_BATCH_REQUESTS {
         allowed
@@ -580,25 +525,13 @@ async fn homogeneous_rpc_array_is_batched_for_scheduler() {
     for concurrency in [1, 4, 128] {
         let directory = tempfile::tempdir().expect("bug: tempdir");
         let submit_log = directory.path().join("submit-batches.log");
-        let hogd = HogdDevConfig::default()
-            .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe")
-            .with_test_child_env(
-                "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
-                submit_log.to_str().expect("bug: tempdir path is utf-8"),
-            )
-            .with_binary_path(fake_hogd_dev_binary())
-            .with_startup_timeout(Duration::from_secs(5))
-            .with_shutdown_grace(Duration::from_secs(2));
-        let config = NodeSupervisorConfig::default()
-            .with_rpc_listen_address("127.0.0.1:0")
-            .with_rpc_batch_concurrency(concurrency.try_into().unwrap())
-            .with_hogd_dev(hogd);
-        let handle = NodeSupervisorHandle::start(config)
-            .await
-            .expect("bug: supervisor should start against fake hogd-dev");
-        let client = HttpClientBuilder::default()
-            .build(format!("http://{}", handle.rpc_addr()))
-            .expect("bug: jsonrpsee http client builds");
+        let hogd = fake_hogd("submit-batch-probe").with_test_child_env(
+            "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
+            submit_log.to_str().expect("bug: tempdir path is utf-8"),
+        );
+        let config =
+            supervisor_config(hogd).with_rpc_batch_concurrency(concurrency.try_into().unwrap());
+        let (handle, client) = start_fake_supervisor(config).await;
         let mut batch = BatchRequestBuilder::new();
         for _ in 0..35 {
             batch
@@ -633,22 +566,8 @@ async fn homogeneous_rpc_array_is_batched_for_scheduler() {
 
 #[tokio::test]
 async fn block_driver_coalesces_rapid_submit_wakes() {
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "automine-slow-commit")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev");
-
-    let url = format!("http://{}", handle.rpc_addr());
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("automine-slow-commit"))).await;
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
 
     let (first, second, third, fourth, fifth) = tokio::join!(
@@ -710,23 +629,11 @@ async fn block_driver_coalesces_rapid_submit_wakes() {
 
 #[tokio::test]
 async fn interval_block_driver_paces_submit_commit() {
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "automine")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd)
-        .with_block_driver(BlockDriverConfig::interval(Duration::from_millis(500)));
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev");
-
-    let url = format!("http://{}", handle.rpc_addr());
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) = start_fake_with_block_driver(
+        "automine",
+        BlockDriverConfig::interval(Duration::from_millis(500)),
+    )
+    .await;
 
     client
         .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
@@ -765,26 +672,14 @@ async fn interval_block_driver_paces_submit_commit() {
 
 #[tokio::test]
 async fn manual_block_driver_only_commits_on_explicit_request() {
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "automine")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd)
-        .with_block_driver(BlockDriverConfig::manual().with_interval(Duration::from_millis(25)));
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev");
+    let (handle, client) = start_fake_with_block_driver(
+        "automine",
+        BlockDriverConfig::manual().with_interval(Duration::from_millis(25)),
+    )
+    .await;
     let producer = handle
         .manual_block_producer()
         .expect("bug: manual mode should expose a producer");
-
-    let url = format!("http://{}", handle.rpc_addr());
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
     client
         .request::<out::SendTransactionResult, _>(
@@ -978,11 +873,11 @@ async fn manual_block_request_times_out_instead_of_hanging() {
 async fn shutdown_resolves_an_in_flight_manual_request() {
     let marker_dir = TempDir::new().expect("bug: tempdir creates");
     let marker_path = marker_dir.path().join("commit-entered");
-    let (handle, client) = start_fake_with_block_driver_and_env(
-        "automine-hanging-commit",
+    let hogd = fake_hogd("automine-hanging-commit")
+        .with_test_child_env(FAKE_COMMIT_ENTERED_FILE_ENV, &marker_path);
+    let (handle, client) = start_fake_supervisor(supervisor_config(hogd).with_block_driver(
         BlockDriverConfig::manual().with_manual_request_timeout(Duration::from_secs(30)),
-        HogdDevConfig::default().with_test_child_env(FAKE_COMMIT_ENTERED_FILE_ENV, &marker_path),
-    )
+    ))
     .await;
     let producer = handle
         .manual_block_producer()
@@ -1157,15 +1052,7 @@ async fn custom_network_preserves_independent_scheduler_and_gateway_checks() {
         "scheduler-network-hash-mismatch",
         "scheduler-gateway-network-hash-mismatch",
     ] {
-        let config = NodeSupervisorConfig::default()
-            .with_rpc_listen_address("127.0.0.1:0")
-            .with_hogd_dev(
-                HogdDevConfig::default()
-                    .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, mode)
-                    .with_binary_path(fake_hogd_dev_binary())
-                    .with_init_network_hash([0xab; 32].into())
-                    .with_startup_timeout(Duration::from_secs(5)),
-            );
+        let config = supervisor_config(fake_hogd(mode).with_init_network_hash([0xab; 32].into()));
         let error = NodeSupervisorHandle::start(config).await.unwrap_err();
         assert!(
             matches!(error, NodeSupervisorError::SchedulerNetworkHashMismatch { expected, .. }
@@ -1239,21 +1126,11 @@ async fn run_until_stop_signal_error_stops_hogd_dev() {
     let pid_dir = TempDir::new().expect("bug: tempdir creates");
     let pid_path = pid_dir.path().join("hogd.pid");
 
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready")
-        .with_test_child_env(
-            FAKE_HOGD_DEV_PID_FILE_ENV,
-            pid_path.to_str().expect("bug: tempdir path is utf-8"),
-        )
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev");
+    let hogd = fake_hogd("ready").with_test_child_env(
+        FAKE_HOGD_DEV_PID_FILE_ENV,
+        pid_path.to_str().expect("bug: tempdir path is utf-8"),
+    );
+    let (handle, _client) = start_fake_supervisor(supervisor_config(hogd)).await;
     let pid = read_pid_file(&pid_path).expect("bug: fake should have written pid");
 
     let err = handle
@@ -1276,20 +1153,8 @@ async fn run_until_stop_signal_error_stops_hogd_dev() {
 
 #[tokio::test]
 async fn stopped_observes_hogd_dev_exit_and_tears_down_rpc() {
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-then-exit")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev");
-
-    // Capture the bound RPC address before consuming the handle.
-    let rpc_addr = handle.rpc_addr();
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-then-exit"))).await;
 
     // The fake reports readiness then immediately exits with code 0.
     // `stopped()` should observe the child exit, tear down the RPC
@@ -1315,11 +1180,7 @@ async fn stopped_observes_hogd_dev_exit_and_tears_down_rpc() {
     }
 
     // RPC facade should be torn down: a fresh connect attempt must fail.
-    // (HttpClientBuilder::build is lazy; the call is what hits the wire.)
-    let url = format!("http://{rpc_addr}");
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    // (HttpClientBuilder::build is lazy; this call is what hits the wire.)
     let err = client
         .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
         .await
@@ -1345,18 +1206,11 @@ async fn start_rolls_back_hogd_dev_when_rpc_bind_fails() {
         .local_addr()
         .expect("bug: bound listener has local addr");
 
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready")
-        .with_test_child_env(
-            FAKE_HOGD_DEV_PID_FILE_ENV,
-            pid_path.to_str().expect("bug: tempdir path is utf-8"),
-        )
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address(occupied.to_string())
-        .with_hogd_dev(hogd);
+    let hogd = fake_hogd("ready").with_test_child_env(
+        FAKE_HOGD_DEV_PID_FILE_ENV,
+        pid_path.to_str().expect("bug: tempdir path is utf-8"),
+    );
+    let config = supervisor_config(hogd).with_rpc_listen_address(occupied.to_string());
 
     let result = tokio::time::timeout(Duration::from_secs(10), NodeSupervisorHandle::start(config))
         .await
@@ -1532,41 +1386,29 @@ fn backend_planes_hogd_dev_storage_only_serializes_correctly() {
 // Full read-plane integration tests (requires `ready-with-indexer` mode)
 // -----------------------------------------------------------------------
 
-/// Canned tx hashes from the fake indexer's committed set.
-/// Mirrors the constants in `tests/fixtures/fake_hogd_dev.rs`.
-const CANNED_HASH_A: &str = "CVDFLCAjXhVWiPXH9nTCTpCgVzmDVoiPzNJYuccr1dqB";
-const CANNED_HASH_UNKNOWN: &str = "JEKNVnkbo3jma5nREBBJCDoXFVeKkD56V3xKrvRmWxFG";
-const CANNED_HEIGHT_A: i64 = 5;
-const CANNED_GAS_USED_A: u64 = 1_500;
-const CANNED_STORAGE_KEY_HEX: &str =
-    "0x4242424242424242424242424242424242424242424242424242424242424242";
-const CANNED_STORAGE_MISSING_KEY_HEX: &str =
-    "0x4343434343434343434343434343434343434343434343434343434343434343";
-const CANNED_STORAGE_VALUE_HEX: &str = "0x6c6f63616c2d6e6f64652d73746f72616765";
-const CANNED_STORAGE_HEIGHT: i64 = 12;
+/// A contract-data key the fake `DbGateway` does not hold.
+const MISSING_STORAGE_KEY: [u8; 32] = [0x43; 32];
+
+/// A canned transaction hash as JSON-RPC carries it.
+fn hash_param(bytes: [u8; 32]) -> String {
+    Base58(thruput_xdr::types::SHA256Hash::from(bytes)).to_string()
+}
+
+/// Canned bytes as JSON-RPC's `0x`-prefixed hex.
+fn hex_param(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
 
 #[tokio::test]
 async fn start_with_indexer_reports_hogd_dev_full_backend_planes() {
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev with indexer");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-with-indexer"))).await;
 
     assert_eq!(
         handle.backend_planes(),
         BackendPlanes::hogd_dev_full(PlaneStatus::Stub),
         "supervisor with indexer should report hogd_dev_full backend planes"
     );
-    let client = HttpClientBuilder::default()
-        .build(format!("http://{}", handle.rpc_addr()))
-        .expect("bug: jsonrpsee http client builds");
 
     let response = client
         .request::<out::AirdropAttempt, _>(
@@ -1587,26 +1429,14 @@ async fn start_with_indexer_reports_hogd_dev_full_backend_planes() {
 
 #[tokio::test]
 async fn start_with_gateway_without_indexer_reports_storage_only_backend_planes() {
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-gateway")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start against fake hogd-dev with gateway");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-with-gateway"))).await;
 
     assert_eq!(
         handle.backend_planes(),
         BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub),
         "supervisor with only DbGateway should report storage-only backend planes"
     );
-    let client = HttpClientBuilder::default()
-        .build(format!("http://{}", handle.rpc_addr()))
-        .expect("bug: jsonrpsee http client builds");
     let error = client
         .request::<out::AirdropAttempt, _>(
             "faucet_requestAirdrop",
@@ -1631,28 +1461,14 @@ async fn transaction_status_committed_returns_committed_with_correct_height() {
     // Arrange: start supervisor against fake that has both scheduler + indexer.
     // The fake scheduler returns empty (no pending), the fake indexer has
     // CANNED_TX_HASH_A committed at CANNED_HEIGHT_A.
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start");
-    let url = format!("http://{}", handle.rpc_addr());
-
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-with-indexer"))).await;
 
     // Act: query status for a canned committed hash.
     let status: serde_json::Value = client
         .request(
             "getTransactionStatus",
-            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_A})),
+            NamedParams(serde_json::json!({"transactionHash": hash_param(CANNED_TX_HASH_A)})),
         )
         .await
         .expect("bug: getTransactionStatus should succeed");
@@ -1674,28 +1490,14 @@ async fn transaction_status_committed_returns_committed_with_correct_height() {
 #[tokio::test]
 async fn transaction_status_unknown_hash_returns_unknown() {
     // Arrange
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start");
-    let url = format!("http://{}", handle.rpc_addr());
-
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-with-indexer"))).await;
 
     // Act: query status for an unknown hash.
     let status: serde_json::Value = client
         .request(
             "getTransactionStatus",
-            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_UNKNOWN})),
+            NamedParams(serde_json::json!({"transactionHash": hash_param(CANNED_TX_HASH_UNKNOWN)})),
         )
         .await
         .expect("bug: getTransactionStatus should succeed for unknown hash");
@@ -1712,28 +1514,14 @@ async fn transaction_status_unknown_hash_returns_unknown() {
 #[tokio::test]
 async fn transaction_receipt_committed_returns_some() {
     // Arrange
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start");
-    let url = format!("http://{}", handle.rpc_addr());
-
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-with-indexer"))).await;
 
     // Act: request receipt for a canned committed hash.
     let receipt: serde_json::Value = client
         .request(
             "getTransactionReceipt",
-            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_A})),
+            NamedParams(serde_json::json!({"transactionHash": hash_param(CANNED_TX_HASH_A)})),
         )
         .await
         .expect("bug: getTransactionReceipt should succeed");
@@ -1749,8 +1537,8 @@ async fn transaction_receipt_committed_returns_some() {
         "receipt height should be CANNED_HEIGHT_A"
     );
     assert_eq!(
-        receipt["transactionHash"].as_str().unwrap_or(""),
-        CANNED_HASH_A,
+        receipt["transactionHash"],
+        hash_param(CANNED_TX_HASH_A),
         "receipt txHash should round-trip"
     );
     assert_eq!(
@@ -1765,22 +1553,8 @@ async fn transaction_receipt_committed_returns_some() {
 #[tokio::test]
 async fn contract_events_first_page_returns_two_events() {
     // Arrange
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start");
-    let url = format!("http://{}", handle.rpc_addr());
-
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-with-indexer"))).await;
 
     // Build a minimal EventQuery (first page, one named contract).
     // Serialization shapes:
@@ -1829,29 +1603,17 @@ async fn contract_events_first_page_returns_two_events() {
 #[tokio::test]
 async fn get_storage_existing_key_returns_item_from_hogd_dev_gateway() {
     // Arrange
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start");
-    let url = format!("http://{}", handle.rpc_addr());
-
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-with-indexer"))).await;
     let address = "1".repeat(32);
 
     // Act
     let read: serde_json::Value = client
         .request(
             "getStorage",
-            NamedParams(serde_json::json!({"address": address, "key": CANNED_STORAGE_KEY_HEX})),
+            NamedParams(
+                serde_json::json!({"address": address, "key": hex_param(&CANNED_STORAGE_KEY)}),
+            ),
         )
         .await
         .expect("bug: getStorage should succeed");
@@ -1859,7 +1621,7 @@ async fn get_storage_existing_key_returns_item_from_hogd_dev_gateway() {
     // Assert
     assert_eq!(read["stateBlockHeight"], CANNED_STORAGE_HEIGHT.to_string());
     assert_eq!(read["item"]["kind"], "bytestring");
-    assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
+    assert_eq!(read["item"]["bytes"], hex_param(CANNED_STORAGE_VALUE));
 
     handle.stop().await.expect("bug: clean shutdown");
 }
@@ -1867,29 +1629,17 @@ async fn get_storage_existing_key_returns_item_from_hogd_dev_gateway() {
 #[tokio::test]
 async fn get_storage_works_when_gateway_is_advertised_without_indexer() {
     // Arrange
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-gateway")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start");
-    let url = format!("http://{}", handle.rpc_addr());
-
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-with-gateway"))).await;
     let address = "1".repeat(32);
 
     // Act
     let read: serde_json::Value = client
         .request(
             "getStorage",
-            NamedParams(serde_json::json!({"address": address, "key": CANNED_STORAGE_KEY_HEX})),
+            NamedParams(
+                serde_json::json!({"address": address, "key": hex_param(&CANNED_STORAGE_KEY)}),
+            ),
         )
         .await
         .expect("bug: getStorage should succeed with DbGateway only");
@@ -1897,12 +1647,12 @@ async fn get_storage_works_when_gateway_is_advertised_without_indexer() {
     // Assert
     assert_eq!(read["stateBlockHeight"], CANNED_STORAGE_HEIGHT.to_string());
     assert_eq!(read["item"]["kind"], "bytestring");
-    assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
+    assert_eq!(read["item"]["bytes"], hex_param(CANNED_STORAGE_VALUE));
 
     let err = client
         .request::<serde_json::Value, _>(
             "getTransactionReceipt",
-            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_A})),
+            NamedParams(serde_json::json!({"transactionHash": hash_param(CANNED_TX_HASH_A)})),
         )
         .await
         .expect_err("bug: receipt reads should remain unavailable without indexer");
@@ -1917,22 +1667,8 @@ async fn get_storage_works_when_gateway_is_advertised_without_indexer() {
 #[tokio::test]
 async fn get_storage_missing_key_returns_null_item_with_snapshot_height() {
     // Arrange
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start");
-    let url = format!("http://{}", handle.rpc_addr());
-
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("ready-with-indexer"))).await;
     let address = "1".repeat(32);
 
     // Act
@@ -1940,7 +1676,7 @@ async fn get_storage_missing_key_returns_null_item_with_snapshot_height() {
         .request(
             "getStorage",
             NamedParams(
-                serde_json::json!({"address": address, "key": CANNED_STORAGE_MISSING_KEY_HEX}),
+                serde_json::json!({"address": address, "key": hex_param(&MISSING_STORAGE_KEY)}),
             ),
         )
         .await
@@ -1959,29 +1695,19 @@ async fn get_storage_missing_key_returns_null_item_with_snapshot_height() {
 #[tokio::test]
 async fn get_storage_without_gateway_endpoint_is_not_registered() {
     // Arrange
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer-no-gateway")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start");
-    let url = format!("http://{}", handle.rpc_addr());
-
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) = start_fake_supervisor(supervisor_config(fake_hogd(
+        "ready-with-indexer-no-gateway",
+    )))
+    .await;
     let address = "1".repeat(32);
 
     // Act
     let err = client
         .request::<serde_json::Value, _>(
             "getStorage",
-            NamedParams(serde_json::json!({"address": address, "key": CANNED_STORAGE_KEY_HEX})),
+            NamedParams(
+                serde_json::json!({"address": address, "key": hex_param(&CANNED_STORAGE_KEY)}),
+            ),
         )
         .await
         .expect_err("bug: missing DbGateway should fail");
@@ -2117,29 +1843,14 @@ async fn transaction_status_indexer_runtime_rpc_fail_surfaces_backend_unavailabl
     // The `indexer-runtime-rpc-fail` fake mode lets intro succeed but
     // returns errors for all data-plane RPCs (get_transaction_info, etc).
     // Startup should succeed; JSON-RPC calls should return a backend error.
-    let hogd = HogdDevConfig::default()
-        .with_test_child_env(FAKE_HOGD_DEV_MODE_ENV, "indexer-runtime-rpc-fail")
-        .with_binary_path(fake_hogd_dev_binary())
-        .with_startup_timeout(Duration::from_secs(5))
-        .with_shutdown_grace(Duration::from_secs(2));
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address("127.0.0.1:0")
-        .with_hogd_dev(hogd);
-
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .expect("bug: supervisor should start when indexer intro succeeds");
-
-    let url = format!("http://{}", handle.rpc_addr());
-    let client = HttpClientBuilder::default()
-        .build(&url)
-        .expect("bug: jsonrpsee http client builds");
+    let (handle, client) =
+        start_fake_supervisor(supervisor_config(fake_hogd("indexer-runtime-rpc-fail"))).await;
 
     // Act: query a tx status; the fake indexer will fail the data-plane call.
     let err = client
         .request::<serde_json::Value, _>(
             "getTransactionStatus",
-            NamedParams(serde_json::json!({"transactionHash": CANNED_HASH_A})),
+            NamedParams(serde_json::json!({"transactionHash": hash_param(CANNED_TX_HASH_A)})),
         )
         .await
         .expect_err("bug: getTransactionStatus should error when indexer data-plane fails");
