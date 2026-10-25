@@ -169,99 +169,66 @@ async fn airdrop_validates_request_then_submits() {
 }
 
 #[tokio::test]
-async fn airdrop_rejects_mismatched_genesis_hash() {
-    let mut body = airdrop_body();
-    body["genesisHash"] = serde_json::json!(identifier(0x99));
+async fn airdrop_rejects_invalid_request_fields_with_structured_error() {
+    struct Case {
+        name: &'static str,
+        field: &'static str,
+        value: serde_json::Value,
+        code: &'static str,
+    }
+    let cases = [
+        Case {
+            name: "mismatched genesis hash",
+            field: "genesisHash",
+            value: serde_json::json!(identifier(0x99)),
+            code: "airdrop_network_mismatch",
+        },
+        Case {
+            name: "mismatched network hash",
+            field: "networkHash",
+            value: serde_json::json!(identifier(0x99)),
+            code: "airdrop_network_mismatch",
+        },
+        Case {
+            name: "empty client nonce",
+            field: "clientNonce",
+            value: serde_json::json!("0x"),
+            code: "airdrop_invalid_client_nonce",
+        },
+        Case {
+            name: "client nonce over 32 bytes",
+            field: "clientNonce",
+            value: serde_json::json!(format!("0x{}", "01".repeat(33))),
+            code: "airdrop_invalid_client_nonce",
+        },
+        Case {
+            name: "odd-length client nonce",
+            field: "clientNonce",
+            value: serde_json::json!("0x1"),
+            code: "airdrop_invalid_client_nonce",
+        },
+        Case {
+            name: "non-string client nonce",
+            field: "clientNonce",
+            value: serde_json::json!(1),
+            code: "airdrop_invalid_client_nonce",
+        },
+    ];
 
-    let response = airdrop_request_with_body(&test_config(), body).await;
+    for case in cases {
+        let mut body = airdrop_body();
+        body[case.field] = case.value;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .expect("bug: airdrop body should read");
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-    assert_eq!(json["error"]["code"], "airdrop_network_mismatch");
-}
+        let response = airdrop_request_with_body(&test_config(), body).await;
 
-#[tokio::test]
-async fn airdrop_rejects_mismatched_network_hash() {
-    let mut body = airdrop_body();
-    body["networkHash"] = serde_json::json!(identifier(0x99));
-
-    let response = airdrop_request_with_body(&test_config(), body).await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .expect("bug: airdrop body should read");
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-    assert_eq!(json["error"]["code"], "airdrop_network_mismatch");
-}
-
-#[tokio::test]
-async fn airdrop_rejects_empty_client_nonce() {
-    let mut body = airdrop_body();
-    body["clientNonce"] = serde_json::json!("0x");
-
-    let response = airdrop_request_with_body(&test_config(), body).await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .expect("bug: airdrop body should read");
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-    assert_eq!(json["error"]["code"], "airdrop_invalid_client_nonce");
-}
-
-#[tokio::test]
-async fn airdrop_rejects_client_nonce_over_32_bytes() {
-    let mut body = airdrop_body();
-    body["clientNonce"] = serde_json::json!(format!("0x{}", "01".repeat(33)));
-
-    let response = airdrop_request_with_body(&test_config(), body).await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .expect("bug: airdrop body should read");
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-    assert_eq!(json["error"]["code"], "airdrop_invalid_client_nonce");
-}
-
-#[tokio::test]
-async fn airdrop_rejects_odd_length_client_nonce_with_structured_error() {
-    let mut body = airdrop_body();
-    body["clientNonce"] = serde_json::json!("0x1");
-
-    let response = airdrop_request_with_body(&test_config(), body).await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .expect("bug: airdrop body should read");
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-    assert_eq!(json["error"]["code"], "airdrop_invalid_client_nonce");
-}
-
-#[tokio::test]
-async fn airdrop_rejects_non_string_client_nonce_with_structured_error() {
-    let mut body = airdrop_body();
-    body["clientNonce"] = serde_json::json!(1);
-
-    let response = airdrop_request_with_body(&test_config(), body).await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .expect("bug: airdrop body should read");
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-    assert_eq!(json["error"]["code"], "airdrop_invalid_client_nonce");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{}", case.name);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap_or_else(|error| panic!("{}: airdrop body should read: {error}", case.name));
+        let json: serde_json::Value = serde_json::from_slice(&body)
+            .unwrap_or_else(|error| panic!("{}: airdrop body should be JSON: {error}", case.name));
+        assert_eq!(json["error"]["code"], case.code, "{}", case.name);
+    }
 }
 
 #[tokio::test]

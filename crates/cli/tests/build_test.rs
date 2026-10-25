@@ -1,14 +1,18 @@
 use serial_test::serial;
 use std::env;
-use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 mod support;
 
+#[path = "support/cwd_guard.rs"]
+mod cwd_guard;
 #[path = "support/env_guard.rs"]
 mod env_guard;
+#[path = "support/target_dir_scenarios.rs"]
+mod target_dir_scenarios;
+use cwd_guard::CurrentDirGuard;
 use env_guard::EnvGuard;
 
 /// Minimal stand-in for the `.cargo/config.toml` that `thruput new`
@@ -205,7 +209,7 @@ fn cargo_metadata_uses_explicit_target_dir() {
         fs::set_permissions(&cargo, perms).unwrap();
     }
 
-    let _path = PathGuard::set(fake_bin.as_os_str());
+    let _path = EnvGuard::set("PATH", fake_bin.as_os_str());
 
     let artifacts =
         thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
@@ -219,173 +223,24 @@ fn cargo_metadata_uses_explicit_target_dir() {
 
 #[test]
 #[serial]
-fn build_rejects_conflicting_target_dir_passthrough() {
-    let tmp = TempDir::new().unwrap();
-    fs::write(
-        tmp.path().join("Cargo.toml"),
-        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-    fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
-    fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+fn build_target_dir_passthrough_scenarios() {
+    for scenario in &target_dir_scenarios::SCENARIOS {
+        let project = scenario.setup();
+        let _cwd = CurrentDirGuard::enter(&project.cwd);
+        let _path = EnvGuard::set("PATH", &project.fake_bin);
 
-    let fake_bin = tmp.path().join("bin");
-    fs::create_dir_all(&fake_bin).unwrap();
-    let cargo = fake_bin.join("cargo");
-    let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
-        tmp.path().display(),
-        tmp.path().join("target").display(),
-        tmp.path().join("Cargo.toml").display()
-    );
-    fs::write(
-        &cargo,
-        format!("#!/bin/sh\nprintf '%s' '{metadata_json}'\n"),
-    )
-    .unwrap();
+        let result = thruput_cli::build::build_rv32_project(
+            Some("demo-contract"),
+            &project.passthrough,
+            &project.artifacts,
+            None,
+            None,
+            &[],
+            &thruput_cli::Print::quiet(),
+        );
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&cargo).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&cargo, perms).unwrap();
+        scenario.assert_outcome(result);
     }
-
-    let _cwd = CurrentDirGuard::enter(tmp.path());
-    let _path = PathGuard::set(fake_bin.as_os_str());
-
-    let artifacts =
-        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = thruput_cli::build::build_rv32_project(
-        Some("demo-contract"),
-        &["--target-dir".into(), "nested".into()],
-        &artifacts,
-        None,
-        None,
-        &[],
-        &thruput_cli::Print::quiet(),
-    )
-    .unwrap_err();
-
-    assert!(
-        matches!(err, thruput_cli::CliError::TargetDirConflict),
-        "expected TargetDirConflict, got: {err:?}"
-    );
-}
-
-#[test]
-#[serial]
-fn build_prefers_metadata_failure_over_redundant_target_dir_precheck() {
-    let tmp = TempDir::new().unwrap();
-    fs::write(
-        tmp.path().join("Cargo.toml"),
-        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-    fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
-    fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
-
-    let fake_bin = tmp.path().join("bin");
-    fs::create_dir_all(&fake_bin).unwrap();
-    let cargo = fake_bin.join("cargo");
-    fs::write(
-        &cargo,
-        "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s\n' 'synthetic metadata failure' >&2\n  exit 1\nfi\nexit 0\n",
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&cargo).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&cargo, perms).unwrap();
-    }
-
-    let _cwd = CurrentDirGuard::enter(tmp.path());
-    let _path = PathGuard::set(fake_bin.as_os_str());
-
-    let artifacts =
-        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = thruput_cli::build::build_rv32_project(
-        Some("demo-contract"),
-        &["--target-dir".into(), "nested".into()],
-        &artifacts,
-        None,
-        None,
-        &[],
-        &thruput_cli::Print::quiet(),
-    )
-    .unwrap_err();
-
-    assert!(
-        matches!(err, thruput_cli::CliError::CargoMetadataFailed(_)),
-        "expected CargoMetadataFailed, got: {err:?}"
-    );
-}
-
-#[test]
-#[serial]
-fn build_resolves_relative_config_conflicts_from_workspace_root() {
-    let tmp = TempDir::new().unwrap();
-    fs::write(
-        tmp.path().join("Cargo.toml"),
-        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-    fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
-    fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
-    fs::write(
-        tmp.path().join("target-config.toml"),
-        "[build]\ntarget-dir = \"nested\"\n",
-    )
-    .unwrap();
-    fs::create_dir_all(tmp.path().join("src/bin")).unwrap();
-
-    let fake_bin = tmp.path().join("bin");
-    fs::create_dir_all(&fake_bin).unwrap();
-    let cargo = fake_bin.join("cargo");
-    let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
-        tmp.path().display(),
-        tmp.path().join("target").display(),
-        tmp.path().join("Cargo.toml").display()
-    );
-    fs::write(
-        &cargo,
-        format!("#!/bin/sh\nprintf '%s' '{metadata_json}'\n"),
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&cargo).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&cargo, perms).unwrap();
-    }
-
-    let _cwd = CurrentDirGuard::enter(&tmp.path().join("src/bin"));
-    let _path = PathGuard::set(fake_bin.as_os_str());
-
-    let artifacts =
-        thruput_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = thruput_cli::build::build_rv32_project(
-        Some("demo-contract"),
-        &["--config".into(), "target-config.toml".into()],
-        &artifacts,
-        None,
-        None,
-        &[],
-        &thruput_cli::Print::quiet(),
-    )
-    .unwrap_err();
-
-    assert!(
-        matches!(err, thruput_cli::CliError::TargetDirConflict),
-        "expected TargetDirConflict, got: {err:?}"
-    );
 }
 
 #[test]
@@ -414,7 +269,7 @@ fn build_rejects_missing_active_profile_before_compiling() {
         &format!(": > '{}'", compile_marker.display()),
     );
     let _cwd = CurrentDirGuard::enter(tmp.path());
-    let _path = PathGuard::set(fake_bin.as_os_str());
+    let _path = EnvGuard::set("PATH", fake_bin.as_os_str());
     let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path().join("config-home"));
 
     for (config, explicit_profile, expected_code) in [
@@ -523,7 +378,7 @@ fn build_rv32_project_compiles_and_lowers_elf_without_global_setup() {
     }
 
     let _cwd = CurrentDirGuard::enter(&project_root);
-    let _path = PathGuard::set(fake_bin.as_os_str());
+    let _path = EnvGuard::set("PATH", fake_bin.as_os_str());
 
     let result = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
@@ -670,7 +525,7 @@ fn build_demo_contract_rv32(raw_spec: &[u8]) -> thruput_cli::build::BuildResult 
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
     let fake_bin = write_demo_contract_rv32(&project_root, raw_spec);
     let _cwd = CurrentDirGuard::enter(&project_root);
-    let _path = PathGuard::set(fake_bin.as_os_str());
+    let _path = EnvGuard::set("PATH", fake_bin.as_os_str());
 
     thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
@@ -801,7 +656,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
     }
 
     let _cwd = CurrentDirGuard::enter(&project_root);
-    let _path = PathGuard::set(fake_bin.as_os_str());
+    let _path = EnvGuard::set("PATH", fake_bin.as_os_str());
 
     thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
@@ -914,7 +769,7 @@ fn build_rv32_project_sizes_guest_memory_from_package_metadata() {
     let project = guest_memory_project(&tmp, r#"{"thruput":{"initial_memory_bytes":"128K"}}"#);
 
     let _cwd = CurrentDirGuard::enter(&project.project_root);
-    let _path = PathGuard::set(project.fake_bin.as_os_str());
+    let _path = EnvGuard::set("PATH", project.fake_bin.as_os_str());
 
     let result = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
@@ -974,7 +829,7 @@ fn build_rejects_an_unreadable_initial_memory_bytes_before_compiling() {
     let project = guest_memory_project(&tmp, r#"{"thruput":{"initial_memory_bytes":"12X"}}"#);
 
     let _cwd = CurrentDirGuard::enter(&project.project_root);
-    let _path = PathGuard::set(project.fake_bin.as_os_str());
+    let _path = EnvGuard::set("PATH", project.fake_bin.as_os_str());
 
     let error = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
@@ -1361,43 +1216,6 @@ fn build_rv32_refuses_a_missing_contract_toml() {
         stderr.contains("build-std") && stderr.contains("[target.*]"),
         "expected the build-std hint, got: {stderr}"
     );
-}
-
-struct CurrentDirGuard {
-    previous: PathBuf,
-}
-
-impl CurrentDirGuard {
-    fn enter(path: &Path) -> Self {
-        let previous = env::current_dir().expect("bug: current dir should be readable");
-        env::set_current_dir(path).expect("bug: current dir should be set");
-        Self { previous }
-    }
-}
-
-impl Drop for CurrentDirGuard {
-    fn drop(&mut self) {
-        env::set_current_dir(&self.previous).expect("bug: current dir should be restored");
-    }
-}
-
-struct PathGuard(Option<OsString>);
-
-impl PathGuard {
-    fn set(new: &OsStr) -> Self {
-        let previous = env::var_os("PATH");
-        unsafe { env::set_var("PATH", new) };
-        Self(previous)
-    }
-}
-
-impl Drop for PathGuard {
-    fn drop(&mut self) {
-        match &self.0 {
-            Some(path) => unsafe { env::set_var("PATH", path) },
-            None => unsafe { env::remove_var("PATH") },
-        }
-    }
 }
 
 /// `--show-cargo-commands` traces the cargo build invocation to stderr.
@@ -1903,7 +1721,7 @@ fn rv32_build_with_declared_raw_spec_format(package: &str, declared: u32) -> Str
     }
 
     let _cwd = CurrentDirGuard::enter(&project_root);
-    let _path = PathGuard::set(fake_bin.as_os_str());
+    let _path = EnvGuard::set("PATH", fake_bin.as_os_str());
 
     let error = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),
@@ -1992,7 +1810,7 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
     }
 
     let _cwd = CurrentDirGuard::enter(&project_root);
-    let _path = PathGuard::set(fake_bin.as_os_str());
+    let _path = EnvGuard::set("PATH", fake_bin.as_os_str());
 
     let error = thruput_cli::build::build_rv32_project(
         Some("demo-contract-rv32"),

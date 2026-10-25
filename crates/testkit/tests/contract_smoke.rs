@@ -39,6 +39,23 @@ fn caller_counter_artifact() -> PathBuf {
     PathBuf::from(root).join("caller_counter.rv32a")
 }
 
+/// Local-node config taken from the smoke script's environment: the devnode
+/// binary, extra contract artifact roots, and an optional hogd protocol override.
+fn local_config() -> LocalNetworkConfig {
+    let mut config = LocalNetworkConfig::default();
+    // config.log_level = Some(thruput_testkit::LogLevel::Trace);
+    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
+        config.hog_devnode_binary = Some(path.into());
+    }
+    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
+        config.contract_artifact_directories.push(path.into());
+    }
+    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
+        config.hogd_protocol = Some(protocol);
+    }
+    config
+}
+
 /// Read the caller's counter via `simulateInvocation`, decoding the CXS `u64`.
 ///
 /// `get()` keys on `msg.sender`, so the view must run with `caller` set to the
@@ -155,17 +172,7 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
 async fn caller_counter_deploy_call_read() {
     let artifact = caller_counter_artifact();
 
-    let mut config = LocalNetworkConfig::default();
-    // config.log_level = Some(thruput_testkit::LogLevel::Trace);
-    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
-        config.hog_devnode_binary = Some(path.into());
-    }
-    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
-        config.contract_artifact_directories.push(path.into());
-    }
-    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
-        config.hogd_protocol = Some(protocol);
-    }
+    let config = local_config();
 
     let scenario = Scenario::builder("caller-counter-smoke")
         .network(NetworkConfig::local(config))
@@ -237,17 +244,7 @@ async fn caller_counter_deploy_call_read() {
 async fn multiple_runs_are_possible() {
     let artifact = caller_counter_artifact();
 
-    let mut config = LocalNetworkConfig::default();
-    // config.log_level = Some(thruput_testkit::LogLevel::Trace);
-    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
-        config.hog_devnode_binary = Some(path.into());
-    }
-    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
-        config.contract_artifact_directories.push(path.into());
-    }
-    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
-        config.hogd_protocol = Some(protocol);
-    }
+    let config = local_config();
 
     let scenario = Scenario::builder("multiple-runs")
         .network(NetworkConfig::local(config))
@@ -289,17 +286,8 @@ async fn multiple_runs_are_possible() {
 async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
     let artifact = caller_counter_artifact();
 
-    let mut config = LocalNetworkConfig::default();
+    let mut config = local_config();
     config.block_driver = BlockDriverConfig::manual();
-    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
-        config.hog_devnode_binary = Some(path.into());
-    }
-    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
-        config.contract_artifact_directories.push(path.into());
-    }
-    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
-        config.hogd_protocol = Some(protocol);
-    }
 
     let scenario = Scenario::builder("registration-across-runs")
         .network(NetworkConfig::local(config))
@@ -372,17 +360,8 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
 async fn manual_block_production_stages_deploys_and_calls() {
     let artifact = caller_counter_artifact();
 
-    let mut config = LocalNetworkConfig::default();
+    let mut config = local_config();
     config.block_driver = BlockDriverConfig::manual();
-    if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
-        config.hog_devnode_binary = Some(path.into());
-    }
-    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
-        config.contract_artifact_directories.push(path.into());
-    }
-    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
-        config.hogd_protocol = Some(protocol);
-    }
 
     let scenario = Scenario::builder("manual-block-production")
         .network(NetworkConfig::local(config))

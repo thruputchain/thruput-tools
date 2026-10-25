@@ -11,9 +11,6 @@ pub(crate) use thruput_client::codec::{
     SpecMethodMetadata, TypeDefIndex, decode_return, format_contract_address, is_erc20_too_large,
 };
 
-#[cfg(test)]
-pub(crate) use thruput_client::codec::normalize_type_name;
-
 pub(crate) fn encode_args(
     args: &[String],
     metadata: Option<&CallMetadata>,
@@ -52,17 +49,6 @@ pub(crate) fn decode_spec_value(
     type_defs: &TypeDefIndex<'_>,
 ) -> Result<Value, CliError> {
     thruput_client::codec::decode_spec_value(ty, bytes, type_defs).map_err(Into::into)
-}
-
-#[cfg(test)]
-pub(crate) fn decode_spec_value_from_reader(
-    ty: &ContractType,
-    reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
-    type_defs: &TypeDefIndex<'_>,
-    path: &str,
-) -> Result<Value, CliError> {
-    thruput_client::codec::decode_spec_value_from_reader(ty, reader, type_defs, path)
-        .map_err(Into::into)
 }
 
 pub(crate) fn decode_event_spec_value_from_reader(

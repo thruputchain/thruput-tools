@@ -343,42 +343,6 @@ fn scaffold_default_has_empty_contract() {
 }
 
 #[test]
-fn scaffold_unknown_template_errors() {
-    let tmp = TempDir::new().unwrap();
-
-    let result = thruput_cli::scaffold::generate(tmp.path(), "my-project", Some("nope"));
-    assert!(result.is_err());
-}
-
-#[test]
-fn scaffold_rejects_empty_name() {
-    let tmp = TempDir::new().unwrap();
-    let result = thruput_cli::scaffold::generate(tmp.path(), "", Some("counter"));
-    assert!(result.is_err());
-}
-
-#[test]
-fn scaffold_rejects_uppercase_name() {
-    let tmp = TempDir::new().unwrap();
-    let result = thruput_cli::scaffold::generate(tmp.path(), "MyProject", Some("counter"));
-    assert!(result.is_err());
-}
-
-#[test]
-fn scaffold_rejects_name_starting_with_digit() {
-    let tmp = TempDir::new().unwrap();
-    let result = thruput_cli::scaffold::generate(tmp.path(), "1foo", Some("counter"));
-    assert!(result.is_err());
-}
-
-#[test]
-fn scaffold_rejects_name_with_underscore() {
-    let tmp = TempDir::new().unwrap();
-    let result = thruput_cli::scaffold::generate(tmp.path(), "my_project", Some("counter"));
-    assert!(result.is_err());
-}
-
-#[test]
 fn scaffold_accepts_valid_name_with_hyphens() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("my-project-2");
@@ -388,17 +352,71 @@ fn scaffold_accepts_valid_name_with_hyphens() {
 }
 
 #[test]
-fn scaffold_rejects_trailing_hyphen() {
-    let tmp = TempDir::new().unwrap();
-    let result = thruput_cli::scaffold::generate(tmp.path(), "my-project-", Some("counter"));
-    assert!(result.is_err());
-}
+fn scaffold_rejects_malformed_names_and_unknown_templates() {
+    // (case, name, template, error code, phrase the message must contain)
+    let cases = [
+        (
+            "unknown template",
+            "my-project",
+            "nope",
+            "unknown_template",
+            "unknown template: nope",
+        ),
+        (
+            "empty name",
+            "",
+            "counter",
+            "invalid_argument",
+            "cannot be empty",
+        ),
+        (
+            "uppercase name",
+            "MyProject",
+            "counter",
+            "invalid_argument",
+            "must start with a lowercase letter",
+        ),
+        (
+            "name starting with digit",
+            "1foo",
+            "counter",
+            "invalid_argument",
+            "must start with a lowercase letter",
+        ),
+        (
+            "name with underscore",
+            "my_project",
+            "counter",
+            "invalid_argument",
+            "must contain only lowercase letters, digits, and hyphens",
+        ),
+        (
+            "trailing hyphen",
+            "my-project-",
+            "counter",
+            "invalid_argument",
+            "must not end with a hyphen",
+        ),
+        (
+            "consecutive hyphens",
+            "my--project",
+            "counter",
+            "invalid_argument",
+            "contain consecutive hyphens",
+        ),
+    ];
 
-#[test]
-fn scaffold_rejects_consecutive_hyphens() {
-    let tmp = TempDir::new().unwrap();
-    let result = thruput_cli::scaffold::generate(tmp.path(), "my--project", Some("counter"));
-    assert!(result.is_err());
+    for (case, name, template, code, phrase) in cases {
+        let tmp = TempDir::new().unwrap();
+        let err = thruput_cli::scaffold::generate(tmp.path(), name, Some(template))
+            .expect_err(&format!("{case}: `{name}` must be rejected"));
+        assert_eq!(err.code(), code, "{case}");
+        let message = err.to_string();
+        assert!(
+            message.contains(phrase),
+            "{case}: expected `{phrase}` in: {message}"
+        );
+    }
 }
 
 /// Names that must be refused because the scaffold they would produce cannot
