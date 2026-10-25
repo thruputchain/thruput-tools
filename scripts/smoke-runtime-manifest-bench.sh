@@ -476,7 +476,7 @@ log "Creating explicitly seeded benchmark fixture keys"
 for ((index=0; index<fixture_count; index++)); do
     python3 - "$BENCH_ACCOUNT_SEED" "$index" <<'SEED' | "$CLI" --json keys import "bench-$index" > "$WORK/bench-$index.json"
 import hashlib, sys
-seed = hashlib.sha256(f"groundhog-bench:{sys.argv[1]}:account-{sys.argv[2]}".encode()).digest()
+seed = hashlib.sha256(f"thruput-bench:{sys.argv[1]}:account-{sys.argv[2]}".encode()).digest()
 alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 number, encoded = int.from_bytes(seed, "big"), ""
 while number:

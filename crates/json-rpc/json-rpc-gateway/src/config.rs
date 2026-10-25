@@ -909,7 +909,7 @@ network_hash = "0x1234"
         manifest.schema_version = 4;
         manifest.bootstrap_account_derivation = Some(
             serde_json::from_value(json!({
-                "scheme": "groundhog-bootstrap-account-v1", "seed": "hosted-test-fixtures"
+                "scheme": "thruput-bootstrap-account-v1", "seed": "hosted-test-fixtures"
             }))
             .expect("bug: hosted derivation fixture should parse"),
         );

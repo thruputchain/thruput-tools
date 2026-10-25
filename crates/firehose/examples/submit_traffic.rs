@@ -36,13 +36,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .bootstrap_account_derivation
             .as_ref()
             .ok_or("missing hosted derivation")?;
-        if derivation.scheme != "groundhog-bootstrap-account-v1" {
+        if derivation.scheme != "thruput-bootstrap-account-v1" {
             return Err("unsupported hosted derivation".into());
         }
         let account = parsed
             .bootstrap_accounts
             .iter()
-            .find(|a| a.role == "local_user")
+            .find(|a| a.role == "hosted_dev_account")
             .ok_or("missing hosted user account")?;
         derive_dev_account_signer(
             &derivation.seed,
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let native = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
     let wallet = native.address();
     if !parsed.bootstrap_accounts.iter().any(|a| {
-        a.role == "local_user"
+        (a.role == "local_user" || a.role == "hosted_dev_account")
             && a.wallet_address.0 == wallet
             && a.public_key.as_ref() == signer.verifying_key_bytes()
     }) {

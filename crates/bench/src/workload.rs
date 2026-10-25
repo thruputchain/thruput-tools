@@ -4,8 +4,8 @@ use std::path::Path;
 use thruput_json_rpc_types::hex::sha256_prefixed_hex;
 
 use thruput_json_rpc_types::runtime_manifest::{
-    BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, BootstrapAccount, RuntimeManifest,
-    RuntimeManifestParseError, parse_runtime_manifest,
+    BOOTSTRAP_ACCOUNT_ROLE_HOSTED_DEV_ACCOUNT, BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, BootstrapAccount,
+    RuntimeManifest, RuntimeManifestParseError, parse_runtime_manifest,
 };
 use thruput_signing::{
     LocalSigner, PubkeyAccount, SignTransactionParams, derive_dev_account_signer,
@@ -21,7 +21,7 @@ use thruput_json_rpc_types::{base58::Base58, transaction::TxHash};
 const NATIVE_TOKEN_BALANCE_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new(0x41ac_95d6_e06e_2620_u64.to_be_bytes());
 
-const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
+const SUPPORTED_DERIVATION_SCHEME: &str = "thruput-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 fn dev_signer_from_seed(seed: &str, index: usize) -> LocalSigner {
@@ -111,7 +111,7 @@ fn manifest_bench_accounts(manifest: &RuntimeManifest) -> Result<Vec<BenchAccoun
     manifest
         .bootstrap_accounts
         .iter()
-        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
+        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_HOSTED_DEV_ACCOUNT)
         .map(|account| manifest_bench_account(manifest, account))
         .collect()
 }
@@ -174,7 +174,7 @@ pub(super) fn transaction_inputs_for_method(
             ));
         }
         (0..num_accounts).map(|index| {
-            let signer = derive_dev_account_signer(&format!("groundhog-bench:{seed}"), index);
+            let signer = derive_dev_account_signer(&format!("thruput-bench:{seed}"), index);
             let wallet_address = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address();
             if !manifest.bootstrap_accounts.iter().any(|a| a.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER && a.public_key.as_ref() == signer.verifying_key_bytes().as_slice() && a.wallet_address.0 == wallet_address) {
                 return Err(BenchError::InvalidConfiguration(format!("fixture account {index} is absent from public initial allocations; start the node with matching --bootstrap-accounts")));
@@ -289,8 +289,9 @@ mod tests {
         manifest.schema_version = 4;
         manifest.bootstrap_account_derivation = None;
         for (index, account) in manifest.bootstrap_accounts.iter_mut().enumerate() {
-            let signer = derive_dev_account_signer(&format!("groundhog-bench:{seed}"), index);
+            let signer = derive_dev_account_signer(&format!("thruput-bench:{seed}"), index);
             account.index = None;
+            account.role = BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER.into();
             account.public_key = Base58(signer.verifying_key_bytes().into());
             account.wallet_address = Base58(
                 PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address(),
@@ -471,7 +472,7 @@ mod tests {
     }
 
     fn manifest() -> RuntimeManifest {
-        let seed = "groundhog-dev-accounts";
+        let seed = "thruput-dev-accounts";
         let signer = derive_dev_account_signer(seed, 0);
         let mut public_key = [0u8; 32];
         public_key.copy_from_slice(&signer.verifying_key_bytes());
@@ -495,7 +496,7 @@ mod tests {
             },
             "bootstrapAccounts": [{
                 "index": 0,
-                "role": "local_user",
+                "role": "hosted_dev_account",
                 "publicKey": Base58(XdrEd25519PublicKey::from(public_key)),
                 "walletAddress": Base58(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()),
                 "initialStorageTokens": "1000000000",

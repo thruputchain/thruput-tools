@@ -110,7 +110,7 @@ fn native_runtime_document() -> serde_json::Value {
         serde_json::from_str(include_str!("fixtures/hosted-runtime.json")).unwrap();
     document["kind"] = "hosted-devnet-runtime".into();
     for index in 0..2 {
-        let signer = derive_dev_account_signer("groundhog-dev-accounts", index);
+        let signer = derive_dev_account_signer("thruput-dev-accounts", index);
         document["bootstrapAccounts"][index]["publicKey"] =
             serde_json::to_value(thruput_json_rpc_types::Ed25519PublicKey::from(
                 thruput_xdr::types::Ed25519PublicKey::from(signer.verifying_key_bytes()),
@@ -219,7 +219,7 @@ async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_retur
     assert_eq!(
         submitted[0].tx.invocation.invoked_address.as_ref(),
         PubkeyAccount::from_public_key_bytes(
-            derive_dev_account_signer("groundhog-dev-accounts", 0).verifying_key_bytes(),
+            derive_dev_account_signer("thruput-dev-accounts", 0).verifying_key_bytes(),
             0
         )
         .address()
@@ -272,7 +272,7 @@ async fn funded_bootstrap_accounts_deploy_through_native_wallet() {
     let scenario = fixture.scenario(true).await;
     scenario
         .run_agents([Agent::new("alice", |mut ctx| async move {
-            let signer = derive_dev_account_signer("groundhog-dev-accounts", 1);
+            let signer = derive_dev_account_signer("thruput-dev-accounts", 1);
             assert_eq!(
                 ctx.address(),
                 PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()

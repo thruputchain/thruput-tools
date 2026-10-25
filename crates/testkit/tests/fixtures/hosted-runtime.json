@@ -17,8 +17,8 @@
     "viewGateway": "127.0.0.1:61004"
   },
   "bootstrapAccountDerivation": {
-    "scheme": "groundhog-bootstrap-account-v1",
-    "seed": "groundhog-dev-accounts"
+    "scheme": "thruput-bootstrap-account-v1",
+    "seed": "thruput-dev-accounts"
   },
   "bootstrapAccounts": [
     {
@@ -30,7 +30,7 @@
     },
     {
       "index": 1,
-      "role": "local_user",
+      "role": "hosted_dev_account",
       "publicKey": "7d3y2WdzxE7CfsWjkGy3WndkvZcj1EHMkzKJiFPiDecH",
       "walletAddress": "8hkhKL6AQzrpuKWrj4BkAnyxq6ywnFGUhWyoeL7JAymb",
       "initialStorageTokens": "1000000000"

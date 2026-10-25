@@ -9,16 +9,16 @@ fn default_dev_account_derivation_is_stable() {
     assert_eq!(
         public_keys,
         [
-            "591ff2bdaaf5a0cbfd31f7b0f88c1ddee39fd9e106ba46303bde718459960633",
-            "f5495b73debe0193757220005043944a3f03ff20cea7c4559db158eb1389e93f",
-            "b8c09ac34f6c3ff58ddb549b19751d4e8b52f217fe6138f47322989c55a279a5",
-            "8c8cb82ec23c847434193b00949c37d50313ef4e73e6dc4904028072a236dfbc",
-            "45e85a804e73df05e59cdbcabf2252938b3b8b87a274ef60b2eff0b79cdd76dc",
-            "178f7e68819b387699d2b5acfc8cda87de03ff92db1944f83a114a1946945d37",
-            "7ea77f21cf1e56066f95d01a5bdd42d34087bd8a02261a0cbf67b2eed93393d0",
-            "ee21e4725d8b38a54e42a0eb83782cdcfcaae89afb665b53c7a941a3835bccf0",
-            "e4788cde106e2144b3d111af4adf56170a6e25d2636616f891f304af38397174",
-            "404b21c4c455673bb0c841a55cf5f154aa646a83e0ea9722f9a87c64f1864564",
+            "29eb00af4faa4461e8f4f8ad1c8f679d10570e94fee73f8c897713e7d56281e1",
+            "11c0a466b89bb554a735ffad116151e48c5aa1c4debfc3080c8034ab0d4f0ab5",
+            "2bf5c38a719bf77ced2ddf8cbdf1539ff24980d08ed2d277890db00739daad8f",
+            "d31aba37e7542eee44e314a1569e8c7877fc67743360f056e2c33301bba32d63",
+            "4a7d23a4bd695bceb8fabcec99d1690bfccaf32747fba78f736765f5a52b7266",
+            "e5e95a72510b946e4ec9c4f921eac8149ceadca1304a619c2959df5d63900065",
+            "25bed695348618b533ba205a2751a53e8cf5fbfc6a425e1f36864a38d3e02950",
+            "78ae89c893402e6ef7acd7f85db30e95268b9b9e59f763bcf4dffb7d63aed2ad",
+            "aba443eed2ec9ac7567e4570d133d95172e83390419223fffa947b8a5535bd9c",
+            "ad2c62dff54ead3868d7729cebffebc770aa5fdb8bdb9e6e8c3e8acedb060f18",
         ]
     );
 }

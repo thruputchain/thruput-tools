@@ -1018,7 +1018,7 @@ fn write_local_runtime_manifest(path: &std::path::Path, accounts: &[(u32, &str)]
             "producer": { "binary": "hog-devnode", "version": "test" },
             "endpoints": { "scheduler": "127.0.0.1:1000" },
             "bootstrapAccountDerivation": {
-                "scheme": "groundhog-bootstrap-account-v1",
+                "scheme": "thruput-bootstrap-account-v1",
                 "seed": thruput_signing::DEFAULT_DEV_ACCOUNT_SEED
             },
             "bootstrapAccounts": accounts,
