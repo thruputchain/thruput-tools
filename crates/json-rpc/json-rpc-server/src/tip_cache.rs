@@ -344,6 +344,48 @@ mod tests {
         assert_eq!(read.state.map(|tip| tip.height), Some(7));
     }
 
+    /// The refresh task passes a zero window so every tick probes, even when
+    /// no time has elapsed since the previous attempt.
+    #[tokio::test(start_paused = true)]
+    async fn a_zero_window_always_probes() {
+        let cache = TipCache::default();
+        probe(&cache, Duration::ZERO, Ok(tip_reading(7))).await;
+
+        let read = probe(&cache, Duration::ZERO, Ok(tip_reading(8))).await;
+
+        assert!(read.probed);
+        assert_eq!(read.state.map(|tip| tip.height), Some(8));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn warm_readers_do_not_wait_on_an_in_flight_probe() {
+        let cache = TipCache::default();
+        probe(&cache, Duration::ZERO, Ok(tip_reading(7))).await;
+        let probe_cache = cache.clone();
+        let (started, observed) = tokio::sync::oneshot::channel();
+        let _slow = tokio::spawn(async move {
+            probe_cache
+                .reading(
+                    Duration::ZERO,
+                    Duration::from_mins(1),
+                    RpcRequestContext::unbounded(),
+                    |_| async {
+                        started.send(()).unwrap();
+                        std::future::pending().await
+                    },
+                )
+                .await
+        });
+        observed.await.unwrap();
+
+        let before = Instant::now();
+        let read = probe(&cache, Duration::from_mins(1), Ok(tip_reading(8))).await;
+
+        assert!(!read.probed);
+        assert_eq!(read.state.map(|tip| tip.height), Some(7));
+        assert_eq!(Instant::now(), before);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_cold_readers_share_one_probe() {
         use std::sync::atomic::{AtomicUsize, Ordering};

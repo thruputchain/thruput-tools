@@ -205,16 +205,39 @@ pub fn rpc_error_with_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thruput_json_rpc_types::{base58::Base58, hex::HexBytes, transaction::TxHash};
-    fn success(return_data: Option<HexBytes>, status: ExecStatus) -> AirdropAttemptResponse {
+    use thruput_json_rpc_types::{
+        airdrop::ClientNonce, base58::Base58, hex::HexBytes, transaction::TxHash,
+    };
+    fn succeeded(
+        raw_amount: &str,
+        height: i64,
+        return_data: Option<HexBytes>,
+        status: ExecStatus,
+    ) -> AirdropAttemptResponse {
         AirdropAttemptResponse::Succeeded {
             recipient: Base58([1; 32].into()),
             tx_hash: TxHash(Base58([2; 32].into())),
-            raw_amount: "7".into(),
-            height: 1.into(),
+            raw_amount: raw_amount.into(),
+            height: height.into(),
             status,
             return_data,
         }
+    }
+    fn success(return_data: Option<HexBytes>, status: ExecStatus) -> AirdropAttemptResponse {
+        succeeded("7", 1, return_data, status)
+    }
+    fn assert_inconsistent(error: &RpcServerError) {
+        assert!(
+            matches!(
+                error,
+                RpcServerError::BackendDataInvalid {
+                    reason: BackendDataInvalidReason::InconsistentResult,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(rpc_error(error).code(), codes::BACKEND_DATA_INVALID);
     }
     #[test]
     fn succeeded_funding_preserves_observed_output_and_rejects_missing_or_failed_evidence() {
@@ -239,6 +262,78 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn airdrop_amount_must_be_a_positive_canonical_decimal() {
+        let address = Base58([1; 32].into());
+        let result = airdrop_result(
+            address,
+            succeeded("7", 1, Some(HexBytes(vec![])), ExecStatus::Ok),
+        )
+        .unwrap();
+        assert!(matches!(
+            result,
+            out::AirdropAttempt::Succeeded { raw_amount: 7, .. }
+        ));
+        for raw_amount in ["0", "007", "+1", "-1", ""] {
+            let error = airdrop_result(
+                address,
+                succeeded(raw_amount, 1, Some(HexBytes(vec![])), ExecStatus::Ok),
+            )
+            .unwrap_err();
+            assert_inconsistent(&error);
+        }
+    }
+    #[test]
+    fn succeeded_airdrop_height_must_be_nonnegative() {
+        let address = Base58([1; 32].into());
+        let result = airdrop_result(
+            address,
+            succeeded("7", 0, Some(HexBytes(vec![])), ExecStatus::Ok),
+        )
+        .unwrap();
+        assert!(
+            matches!(result, out::AirdropAttempt::Succeeded { block_height, .. } if *block_height == 0)
+        );
+        let error = airdrop_result(
+            address,
+            succeeded("7", -1, Some(HexBytes(vec![])), ExecStatus::Ok),
+        )
+        .unwrap_err();
+        assert_inconsistent(&error);
+    }
+    #[test]
+    fn local_funding_submission_must_match_its_request() {
+        let bytes =
+            xdrs::txs::encode(&crate::tx::test_fixtures::canonical_signed_transaction()).unwrap();
+        let hash = crate::tx::validate_raw_transaction_bytes(
+            bytes.clone(),
+            &thruput_tx_validation::NetworkConfigParams::default(),
+        )
+        .unwrap()
+        .hash;
+        let request = input::FundAccountRequest {
+            recipient: Base58([1; 32].into()),
+            raw_amount: 7,
+            client_nonce: ClientNonce::new(vec![1, 2]).unwrap(),
+            faucet: Base58([4; 32].into()),
+        };
+        let response = |recipient, raw_amount: &str| {
+            FundAccountResponse::new(recipient, raw_amount.into(), hash, HexBytes(bytes.clone()))
+        };
+        let submission = submission_result(&request, response(request.recipient, "7")).unwrap();
+        assert_eq!(submission.recipient, request.recipient);
+        assert_eq!(submission.raw_amount, 7);
+        assert_eq!(submission.transaction_hash, hash);
+        assert_eq!(submission.signed_transaction.0, bytes);
+        for (recipient, raw_amount) in [
+            (Base58([3; 32].into()), "7"),
+            (request.recipient, "8"),
+            (request.recipient, "07"),
+        ] {
+            let error = submission_result(&request, response(recipient, raw_amount)).unwrap_err();
+            assert_inconsistent(&error);
+        }
     }
     fn assert_classified(method: &str, error: &ErrorObjectOwned) {
         assert!(matches!(
