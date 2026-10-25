@@ -304,9 +304,10 @@ They size the design; they do not qualify a deployment.
 - **Following.** Commit request to archive-file visibility took 11–14 ms for
   empty and 100-call blocks and 56 ms for a 1,000-call block. A fresh archive
   replayed about 110 small blocks/s, dominated by per-file sync.
-- **Fanout.** With 100-call blocks, the single process that then ingested,
-  verified, archived and fanned out used 6% of one core with one subscriber and
-  47% with fifty; p95 ingest-to-subscriber latency was 4.8 ms and 21 ms.
+- **Fanout.** With 100-call blocks at about 3.8 blocks/s, the single process
+  that then ingested, verified, archived and fanned out used 6% of one core with
+  one subscriber and 47% with fifty; p95 ingest-to-subscriber latency was 4.8 ms
+  and 21 ms.
   Subscribers add no event-service calls. A catch-up subscriber replayed a warm
   archive at about 205 blocks/s over loopback.
 
