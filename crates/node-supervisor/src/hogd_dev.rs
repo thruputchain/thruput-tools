@@ -835,6 +835,15 @@ pub fn resolve_hogd_dev_binary(config: &HogdDevConfig) -> Result<PathBuf, NodeSu
 pub fn resolve_hogd_dev_binary_before_path(
     config: &HogdDevConfig,
 ) -> Result<Option<PathBuf>, NodeSupervisorError> {
+    resolve_hogd_dev_binary_beside(config, env::current_exe)
+}
+
+/// [`resolve_hogd_dev_binary_before_path`], looking for a sibling binary next
+/// to the executable `current_exe` reports.
+fn resolve_hogd_dev_binary_beside(
+    config: &HogdDevConfig,
+    current_exe: impl FnOnce() -> std::io::Result<PathBuf>,
+) -> Result<Option<PathBuf>, NodeSupervisorError> {
     if let Some(binary_path) = &config.binary_path {
         return validate_configured_binary(binary_path).map(Some);
     }
@@ -843,8 +852,7 @@ pub fn resolve_hogd_dev_binary_before_path(
         return validate_configured_binary(Path::new(&env_path)).map(Some);
     }
 
-    let current_exe =
-        env::current_exe().map_err(|source| NodeSupervisorError::CurrentExe { source })?;
+    let current_exe = current_exe().map_err(|source| NodeSupervisorError::CurrentExe { source })?;
     if let Some(parent) = current_exe.parent() {
         for binary in [DEFAULT_HOGD_DEV_BINARY, LEGACY_HOGD_DEV_BINARY] {
             let sibling = parent.join(binary);
