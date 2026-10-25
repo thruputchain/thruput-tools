@@ -10,9 +10,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 #[cfg(unix)]
 use std::process::{ExitStatus, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Mutex, Once, OnceLock};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -6478,7 +6478,7 @@ async fn local_airdrop_interrupt_stops_preflight_or_retains_write_uncertainty() 
             "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let server = thread::spawn(move || {
+        let server = spawn_mock(move || {
             let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
             serve_balance(&listener, deadline, &faucet, "200012006", 41);
             let (mut stream, mut request) =
@@ -6562,7 +6562,7 @@ fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
         let manifest = write_runtime_manifest(&project, 0, &faucet, None);
         std::fs::write(project.join("thruput.toml"), format!(
         "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
-        let server = thread::spawn(move || {
+        let server = spawn_mock(move || {
             let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
             serve_balance(&listener, deadline, &faucet, "200012006", 41);
             let signed = serve_local_funding_transaction_with_receipt_failure(
@@ -6636,7 +6636,7 @@ fn local_airdrop_invalid_signed_evidence_is_preserved_without_journaling() {
         let manifest = write_runtime_manifest(&project, 0, &faucet, None);
         std::fs::write(project.join("thruput.toml"), format!(
         "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
-        let server = thread::spawn(move || {
+        let server = spawn_mock(move || {
             let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
             serve_balance(&listener, deadline, &faucet, "200012006", 41);
             let signed = serve_local_funding_transaction_outcome(
@@ -8582,7 +8582,7 @@ fn assert_deploy_estimate(
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
-    let server = thread::spawn(move || {
+    let server = spawn_mock(move || {
         let (stream, request) = read_jsonrpc_request(
             &listener,
             Instant::now() + CLI_ACTION_TIMEOUT,
@@ -10490,7 +10490,7 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
-    let rpc_server = thread::spawn(move || {
+    let rpc_server = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_after_network_check(&listener, deadline, "chainTip");
         assert_eq!(request["method"], "getChainTip");
@@ -14804,11 +14804,11 @@ fn native_event_fixture(event: &mut serde_json::Value) {
 fn spawn_tx_list_rpc(
     expected_query: serde_json::Value,
     response: TxListRpcResponse,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) =
             read_jsonrpc_request(&listener, deadline, "getTransactionsByAddress");
@@ -14836,11 +14836,11 @@ enum EventRpcResponse {
 fn spawn_events_rpc(
     expected_query: serde_json::Value,
     response: EventRpcResponse,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getEvents");
         assert_eq!(request["method"], "getEvents");
@@ -14868,12 +14868,12 @@ fn spawn_tx_show_rpc(
     tx_hash: &str,
     status: TxShowRpcResponse,
     receipt: Option<TxShowRpcResponse>,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let tx_hash = tx_hash.to_owned();
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionStatus");
         assert_eq!(request["method"], "getTransactionStatus");
@@ -14993,20 +14993,17 @@ fn read_jsonrpc_request(
     (stream, request)
 }
 
-fn spawn_network_descriptor(rpc_url: &str) -> (String, thread::JoinHandle<()>) {
+fn spawn_network_descriptor(rpc_url: &str) -> (String, MockServer) {
     spawn_network_descriptor_with_hash(rpc_url, TEST_NETWORK_HASH)
 }
 
-fn spawn_network_descriptor_with_hash(
-    rpc_url: &str,
-    network_hash: &str,
-) -> (String, thread::JoinHandle<()>) {
+fn spawn_network_descriptor_with_hash(rpc_url: &str, network_hash: &str) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let rpc_url = rpc_url.to_owned();
     let network_hash = network_hash.to_owned();
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, _) = loop {
             match listener.accept() {
@@ -15071,12 +15068,12 @@ fn spawn_network_descriptor_with_hash(
     (format!("http://{addr}"), handle)
 }
 
-fn spawn_network_info_rpc(network_hash: &str) -> (String, thread::JoinHandle<()>) {
+fn spawn_network_info_rpc(network_hash: &str) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let network_hash = network_hash.to_owned();
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
         assert_eq!(request["method"], "getNetworkInfo");
@@ -15142,12 +15139,12 @@ fn send_jsonrpc_error_response(
     stream.flush().unwrap();
 }
 
-fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
+fn spawn_chain_tip_rpc(height: i64) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         while request["method"] == "getNetworkInfo" {
@@ -15196,15 +15193,12 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     (format!("http://{addr}"), handle)
 }
 
-fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
+fn spawn_airdrop_rpc(recipient: &str) -> (String, MockServer) {
     spawn_airdrop_rpc_outcome(recipient, None)
 }
 
 // None is an immediate success; Some selects pending with/without a known hash.
-fn spawn_airdrop_rpc_outcome(
-    recipient: &str,
-    pending_hash: Option<bool>,
-) -> (String, thread::JoinHandle<()>) {
+fn spawn_airdrop_rpc_outcome(recipient: &str, pending_hash: Option<bool>) -> (String, MockServer) {
     spawn_airdrop_rpc_response(recipient, pending_hash, None)
 }
 
@@ -15212,12 +15206,12 @@ fn spawn_airdrop_rpc_response(
     recipient: &str,
     pending_hash: Option<bool>,
     override_response: Option<serde_json::Value>,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let recipient = recipient.to_owned();
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
         assert_eq!(request["method"], "getNetworkInfo");
@@ -15289,13 +15283,13 @@ fn spawn_airdrop_rpc_response(
     (format!("http://{addr}"), handle)
 }
 
-fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::JoinHandle<()>) {
+fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let faucet = faucet.to_owned();
     let recipient = recipient.to_owned();
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         serve_balance(&listener, deadline, &faucet, "200012006", 41);
         let signed_tx = serve_local_funding_transaction(&listener, deadline, &faucet, &recipient);
@@ -15527,13 +15521,13 @@ fn spawn_balance_then_chain_tip_rpc(
     address: &str,
     raw_balance: &str,
     height: i64,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = rpc_address_from_hex_fixture(address);
     let raw_balance = raw_balance.to_owned();
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
         assert_eq!(request["method"], "getBalance");
@@ -15553,25 +15547,11 @@ fn spawn_balance_then_chain_tip_rpc(
     (format!("http://{addr}"), handle)
 }
 
-fn spawn_no_request_rpc() -> (String, thread::JoinHandle<()>) {
+fn spawn_no_request_rpc() -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
-    let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_millis(500);
-        loop {
-            match listener.accept() {
-                Ok(_) => panic!("validation failure unexpectedly contacted RPC"),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => panic!("failed to inspect mock RPC listener: {error}"),
-            }
-        }
-    });
+    let handle = spawn_mock(move || assert_no_follow_up_rpc(&listener));
     (format!("http://{addr}"), handle)
 }
 
@@ -15769,16 +15749,12 @@ fn native_receipt_fixture(mut receipt: serde_json::Value) -> serde_json::Value {
 fn spawn_transfer_rpc(
     mock: TransferRpcMock,
     expected_sender: String,
-) -> (
-    String,
-    thread::JoinHandle<()>,
-    mpsc::Receiver<TransferSubmission>,
-) {
+) -> (String, MockServer, mpsc::Receiver<TransferSubmission>) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let (local_hash_tx, local_hash_rx) = mpsc::channel();
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         if request["method"] == "getNetworkInfo" {
@@ -16004,13 +15980,65 @@ fn a_retired_mock_listener_keeps_its_port_out_of_circulation() {
     );
 }
 
+/// A mock RPC endpoint's thread. Joining it, which tests do once the CLI has
+/// exited, ends the endpoint's watch for requests beyond its script.
+struct MockServer<T = ()> {
+    thread: Option<thread::JoinHandle<T>>,
+    client_exited: Arc<AtomicBool>,
+}
+
+impl<T> MockServer<T> {
+    fn join(mut self) -> thread::Result<T> {
+        self.client_exited.store(true, Ordering::SeqCst);
+        self.thread
+            .take()
+            .expect("bug: a mock server is joined once")
+            .join()
+    }
+}
+
+impl<T> Drop for MockServer<T> {
+    fn drop(&mut self) {
+        self.client_exited.store(true, Ordering::SeqCst);
+    }
+}
+
+thread_local! {
+    static CLIENT_EXITED: std::cell::RefCell<Option<Arc<AtomicBool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn spawn_mock<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> MockServer<T> {
+    let client_exited = Arc::new(AtomicBool::new(false));
+    let watched = Arc::clone(&client_exited);
+    let thread = thread::spawn(move || {
+        CLIENT_EXITED.set(Some(watched));
+        body()
+    });
+    MockServer {
+        thread: Some(thread),
+        client_exited,
+    }
+}
+
+/// Fail on any request after the scripted ones, for as long as the CLI runs.
+///
+/// A fixed window would pass a request that arrives after it, which the
+/// retired-listener reaper then drops silently. Instead this watches until the
+/// test joins the endpoint after the CLI exits; any request the CLI made is
+/// queued on the listener by then.
 fn assert_no_follow_up_rpc(listener: &TcpListener) {
-    let deadline = Instant::now() + Duration::from_millis(200);
+    let client_exited = CLIENT_EXITED
+        .with_borrow(Clone::clone)
+        .expect("bug: assert_no_follow_up_rpc runs on a spawn_mock thread");
     loop {
+        // Read the flag before polling, so the last poll sees every request
+        // made before the CLI exited.
+        let exited = client_exited.load(Ordering::SeqCst);
         match listener.accept() {
-            Ok(_) => panic!("unexpected follow-up RPC request"),
+            Ok(_) => panic!("unexpected RPC request beyond the mock's script"),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
+                if exited {
                     return;
                 }
                 thread::sleep(Duration::from_millis(10));
@@ -16020,7 +16048,7 @@ fn assert_no_follow_up_rpc(listener: &TcpListener) {
     }
 }
 
-fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()>) {
+fn spawn_storage_rpc(address: &str, key: &str) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -16028,7 +16056,7 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
     let expected_address = address.to_owned();
     let expected_key = key.to_owned();
 
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getStorage");
         assert_eq!(request["method"], "getStorage");
@@ -16063,7 +16091,7 @@ fn rpc_address_from_hex_fixture(address: &str) -> String {
     .to_string()
 }
 
-fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinHandle<()>) {
+fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -16071,7 +16099,7 @@ fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinH
     let expected_address = rpc_address_from_hex_fixture(address);
     let raw_balance = raw_balance.to_owned();
 
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
         assert_eq!(request["method"], "getBalance");
@@ -16091,11 +16119,7 @@ fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinH
     (format!("http://{addr}"), handle)
 }
 
-fn spawn_view_rpc(
-    address: &str,
-    entrypoint: &str,
-    calldata: &str,
-) -> (String, thread::JoinHandle<()>) {
+fn spawn_view_rpc(address: &str, entrypoint: &str, calldata: &str) -> (String, MockServer) {
     spawn_view_rpc_inner(
         address,
         entrypoint,
@@ -16113,7 +16137,7 @@ fn spawn_view_rpc_with_caller(
     entrypoint: &str,
     calldata: &str,
     caller: &str,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     spawn_view_rpc_inner(
         address,
         entrypoint,
@@ -16131,7 +16155,7 @@ fn spawn_view_rpc_with_output(
     entrypoint: &str,
     calldata: &str,
     output: serde_json::Value,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     spawn_view_rpc_inner(address, entrypoint, calldata, None, output)
 }
 
@@ -16140,7 +16164,7 @@ fn spawn_view_rpc_with_events(
     entrypoint: &str,
     calldata: &str,
     events: serde_json::Value,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     spawn_view_rpc_inner_with_events(
         address,
         entrypoint,
@@ -16160,7 +16184,7 @@ fn spawn_view_rpc_inner(
     calldata: &str,
     caller: Option<&str>,
     output: serde_json::Value,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     spawn_view_rpc_inner_with_events(
         address,
         entrypoint,
@@ -16178,7 +16202,7 @@ fn spawn_view_rpc_inner_with_events(
     caller: Option<&str>,
     output: serde_json::Value,
     mut events: serde_json::Value,
-) -> (String, thread::JoinHandle<()>) {
+) -> (String, MockServer) {
     for event in events.as_array_mut().unwrap() {
         native_event_fixture(event);
     }
@@ -16191,7 +16215,7 @@ fn spawn_view_rpc_inner_with_events(
     let expected_calldata = calldata.to_owned();
     let expected_caller = caller.map(ToOwned::to_owned);
 
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_after_network_check(&listener, deadline, "view");
         assert_eq!(request["method"], "simulateInvocation");
@@ -16482,19 +16506,16 @@ fn mock_tx_hash() -> String {
 ///
 /// Returns a 32-byte dummy address (`0xbb..bb`) as the deploy `return_data` so the live
 /// path exercises the receipt-based address extraction.
-fn spawn_deploy_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
+fn spawn_deploy_rpc(height: i64) -> (String, MockServer) {
     spawn_transaction_rpc(height, sample_deploy_receipt(height))
 }
 
-fn spawn_transaction_rpc(
-    height: i64,
-    mut receipt: serde_json::Value,
-) -> (String, thread::JoinHandle<()>) {
+fn spawn_transaction_rpc(height: i64, mut receipt: serde_json::Value) -> (String, MockServer) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
-    let handle = thread::spawn(move || {
+    let handle = spawn_mock(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
 
         serve_chain_tip(&listener, deadline, height);
