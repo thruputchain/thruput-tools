@@ -9593,7 +9593,7 @@ fn view_human_prints_event_details() {
         entrypoint,
         "0x",
         serde_json::json!([{
-            "contractAddress": address,
+            "address": address,
             "topics": [topic],
             "data": event_data,
         }]),
@@ -11667,7 +11667,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": "42",
+            "blockHeight": "42",
         })),
         Some(TxShowRpcResponse::Result(receipt.clone())),
     );
@@ -11833,7 +11833,7 @@ fn tx_show_human_output_includes_raw_committed_receipt_data() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": "43",
+            "blockHeight": "43",
         })),
         Some(TxShowRpcResponse::Result(serde_json::json!({
             "transactionHash": hash,
@@ -11914,7 +11914,7 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": "51",
+            "blockHeight": "51",
         })),
         Some(TxShowRpcResponse::Result(serde_json::Value::Null)),
     );
@@ -11949,7 +11949,7 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": "52",
+            "blockHeight": "52",
         })),
         Some(TxShowRpcResponse::Result(serde_json::json!({
             "transactionHash": hash,
@@ -11985,7 +11985,7 @@ fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
     let hash = thruput_encoding::encode(&[0xd1; 32]);
     for (status, receipt, expected, forbidden) in [
         (
-            serde_json::json!({ "status": "committed", "height": "53" }),
+            serde_json::json!({ "status": "committed", "blockHeight": "53" }),
             Some(TxShowRpcResponse::Result(serde_json::Value::Null)),
             "receipt: unavailable",
             "status: invalid",
@@ -12077,7 +12077,7 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
             &hash,
             TxShowRpcResponse::Result(serde_json::json!({
                 "status": "committed",
-                "height": "61",
+                "blockHeight": "61",
             })),
             Some(TxShowRpcResponse::Result(receipt)),
         );
@@ -12232,7 +12232,7 @@ fn tx_show_receipt_rpc_errors_remain_failures() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "committed",
-            "height": "71",
+            "blockHeight": "71",
         })),
         Some(TxShowRpcResponse::Error(-32052, "receipt unsupported")),
     );
@@ -12366,19 +12366,17 @@ fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
     let second_hash = thruput_encoding::encode(&[0x55; 32]);
     let expected_query = serde_json::json!({
         "address": wallet_address,
-        "order": "descending",
-        "anchor": { "kind": "atEnd" },
-        "cursor": "0x",
+        "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
         "limit": 50,
     });
     let page = serde_json::json!({
-        "refs": [
-            { "txHash": first_hash, "height": "90" },
-            { "txHash": second_hash, "height": "80" },
+        "transactions": [
+            { "transactionHash": first_hash, "blockHeight": "90" },
+            { "transactionHash": second_hash, "blockHeight": "80" },
         ],
-        "cursor": "0xaabb",
-        "latestBlock": "100",
-        "oldestBlock": "7",
+        "nextCursor": "0xaabb",
+        "latestIndexedBlockHeight": "100",
+        "oldestIndexedBlockHeight": "7",
     });
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(expected_query, TxListRpcResponse::Result(page));
 
@@ -12443,18 +12441,16 @@ fn tx_list_continuation_forwards_cursor_and_endpoint_owned_limit() {
     let canonical_cursor = format!("0x{}", "ab".repeat(257));
     let expected_query = serde_json::json!({
         "address": address,
-        "order": "descending",
-        "anchor": { "kind": "atEnd" },
         "cursor": canonical_cursor,
         "limit": 201,
     });
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         expected_query,
         TxListRpcResponse::Result(serde_json::json!({
-            "refs": [],
-            "cursor": "0x0102",
-            "latestBlock": "100",
-            "oldestBlock": "0",
+            "transactions": [],
+            "nextCursor": "0x0102",
+            "latestIndexedBlockHeight": "100",
+            "oldestIndexedBlockHeight": "0",
         })),
     );
 
@@ -12489,19 +12485,17 @@ fn tx_list_rejects_page_larger_than_requested_limit() {
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         serde_json::json!({
             "address": address,
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 1,
         }),
         TxListRpcResponse::Result(serde_json::json!({
-            "refs": [
-                { "txHash": thruput_encoding::encode(&[0x66; 32]), "height": "2" },
-                { "txHash": thruput_encoding::encode(&[0x67; 32]), "height": "1" },
+            "transactions": [
+                { "transactionHash": thruput_encoding::encode(&[0x66; 32]), "blockHeight": "2" },
+                { "transactionHash": thruput_encoding::encode(&[0x67; 32]), "blockHeight": "1" },
             ],
-            "cursor": "0x",
-            "latestBlock": "2",
-            "oldestBlock": "0",
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "2",
+            "oldestIndexedBlockHeight": "0",
         })),
     );
 
@@ -12540,18 +12534,16 @@ fn tx_list_accepts_empty_exhausted_page() {
     let address = thruput_encoding::encode(&[0x67; 32]);
     let expected_query = serde_json::json!({
         "address": address,
-        "order": "descending",
-        "anchor": { "kind": "atEnd" },
-        "cursor": "0x",
+        "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
         "limit": 50,
     });
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         expected_query,
         TxListRpcResponse::Result(serde_json::json!({
-            "refs": [],
-            "cursor": "0x",
-            "latestBlock": "9",
-            "oldestBlock": "2",
+            "transactions": [],
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "9",
+            "oldestIndexedBlockHeight": "2",
         })),
     );
 
@@ -12575,16 +12567,14 @@ fn tx_list_human_output_marks_exhausted_empty_page() {
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         serde_json::json!({
             "address": address,
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         TxListRpcResponse::Result(serde_json::json!({
-            "refs": [],
-            "cursor": "0x",
-            "latestBlock": "9",
-            "oldestBlock": "2",
+            "transactions": [],
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "9",
+            "oldestIndexedBlockHeight": "2",
         })),
     );
 
@@ -12618,16 +12608,14 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
         let (rpc_url, rpc_server) = spawn_tx_list_rpc(
             serde_json::json!({
                 "address": address,
-                "order": "descending",
-                "anchor": { "kind": "atEnd" },
-                "cursor": "0x",
+                "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
                 "limit": 50,
             }),
             TxListRpcResponse::Result(serde_json::json!({
-                "refs": [],
-                "cursor": "0x",
-                "latestBlock": "1",
-                "oldestBlock": "0",
+                "transactions": [],
+                "nextCursor": null,
+                "latestIndexedBlockHeight": "1",
+                "oldestIndexedBlockHeight": "0",
             })),
         );
         match target_kind {
@@ -12762,9 +12750,7 @@ fn tx_list_preserves_rpc_errors() {
     let address = thruput_encoding::encode(&[0x82; 32]);
     let query = serde_json::json!({
         "address": address,
-        "order": "descending",
-        "anchor": { "kind": "atEnd" },
-        "cursor": "0x",
+        "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
         "limit": 50,
     });
     for code in [-32601, -32052, -32050, -32051, -32053] {
@@ -12798,16 +12784,14 @@ fn tx_list_human_output_marks_sparse_page_and_reusable_cursor() {
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         serde_json::json!({
             "address": address,
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         TxListRpcResponse::Result(serde_json::json!({
-            "refs": [],
-            "cursor": "0xcafe",
-            "latestBlock": "20",
-            "oldestBlock": "3",
+            "transactions": [],
+            "nextCursor": "0xcafe",
+            "latestIndexedBlockHeight": "20",
+            "oldestIndexedBlockHeight": "3",
         })),
     );
 
@@ -12852,16 +12836,14 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(
         serde_json::json!({
             "address": address,
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         TxListRpcResponse::Result(serde_json::json!({
-            "refs": [{ "txHash": tx_hash, "height": "18" }],
-            "cursor": "0x",
-            "latestBlock": "20",
-            "oldestBlock": "3",
+            "transactions": [{ "transactionHash": tx_hash, "blockHeight": "18" }],
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "20",
+            "oldestIndexedBlockHeight": "3",
         })),
     );
 
@@ -12957,28 +12939,26 @@ fn events_spec_selected_event_injects_filter_and_decodes_payload() {
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [{
-                "contractAddresses": [contract],
+                "addresses": [contract],
                 "topics": { "topic0": [signature, signature], "topic1": [], "topic2": [] },
             }],
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [{
-                "txHash": thruput_encoding::encode(&[0x82; 32]),
+                "transactionHash": thruput_encoding::encode(&[0x82; 32]),
                 "blockHeight": "9",
                 "sequenceNumber": 1,
                 "event": {
-                    "contractAddress": contract,
+                    "address": contract,
                     "topics": [signature, tag],
                     "data": data,
                 },
             }],
-            "cursor": "0x",
-            "latestBlock": "9",
-            "oldestBlock": "1",
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "9",
+            "oldestIndexedBlockHeight": "1",
         })),
     );
 
@@ -13040,28 +13020,26 @@ fn events_spec_human_output_uses_named_topics_without_raw_duplicates() {
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [{
-                "contractAddresses": [contract],
+                "addresses": [contract],
                 "topics": { "topic0": [], "topic1": [], "topic2": [] },
             }],
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [{
-                "txHash": thruput_encoding::encode(&[0x94; 32]),
+                "transactionHash": thruput_encoding::encode(&[0x94; 32]),
                 "blockHeight": "9",
                 "sequenceNumber": 1,
                 "event": {
-                    "contractAddress": contract,
+                    "address": contract,
                     "topics": [signature, tag],
                     "data": data,
                 },
             }],
-            "cursor": "0x",
-            "latestBlock": "9",
-            "oldestBlock": "1",
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "9",
+            "oldestIndexedBlockHeight": "1",
         })),
     );
 
@@ -13195,30 +13173,28 @@ fn events_list_json_sends_default_filter_and_reports_complete_raw_schema() {
     let topic = format!("0x{}", "44".repeat(32));
     let expected_query = serde_json::json!({
         "filters": [{
-            "contractAddresses": [contract],
+            "addresses": [contract],
             "topics": { "topic0": [], "topic1": [], "topic2": [] },
         }],
-        "order": "descending",
-        "anchor": { "kind": "atEnd" },
-        "cursor": "0x",
+        "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
         "limit": 50,
     });
     let (rpc_url, rpc_server) = spawn_events_rpc(
         expected_query,
         EventRpcResponse::Result(serde_json::json!({
             "events": [{
-                "txHash": tx_hash,
+                "transactionHash": tx_hash,
                 "blockHeight": "90",
                 "sequenceNumber": 3,
                 "event": {
-                    "contractAddress": emitter,
+                    "address": emitter,
                     "topics": [topic],
                     "data": "0xdeadbeef",
                 },
             }],
-            "cursor": "0xaabb",
-            "latestBlock": "100",
-            "oldestBlock": "7",
+            "nextCursor": "0xaabb",
+            "latestIndexedBlockHeight": "100",
+            "oldestIndexedBlockHeight": "7",
         })),
     );
 
@@ -13273,33 +13249,31 @@ fn events_list_preserves_duplicate_returned_records_in_order() {
     let tmp = TempDir::new().unwrap();
     let contract = thruput_encoding::encode(&[0x45; 32]);
     let first = serde_json::json!({
-        "txHash": thruput_encoding::encode(&[0x46; 32]),
+        "transactionHash": thruput_encoding::encode(&[0x46; 32]),
         "blockHeight": "9",
         "sequenceNumber": 2,
-        "event": { "contractAddress": contract, "topics": [], "data": "0xaaaa" },
+        "event": { "address": contract, "topics": [], "data": "0xaaaa" },
     });
     let second = serde_json::json!({
-        "txHash": thruput_encoding::encode(&[0x47; 32]),
+        "transactionHash": thruput_encoding::encode(&[0x47; 32]),
         "blockHeight": "8",
         "sequenceNumber": 1,
-        "event": { "contractAddress": contract, "topics": [], "data": "0xbbbb" },
+        "event": { "address": contract, "topics": [], "data": "0xbbbb" },
     });
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [{
-                "contractAddresses": [contract],
+                "addresses": [contract],
                 "topics": { "topic0": [], "topic1": [], "topic2": [] },
             }],
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [first.clone(), second, first],
-            "cursor": "0x",
-            "latestBlock": "9",
-            "oldestBlock": "0",
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "9",
+            "oldestIndexedBlockHeight": "0",
         })),
     );
 
@@ -13335,19 +13309,17 @@ fn events_list_preserves_repeated_topic_order_and_forwards_cursor_and_limit() {
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [{
-                "contractAddresses": [contract],
+                "addresses": [contract],
                 "topics": expected_filters,
             }],
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
             "cursor": "0xabcd",
             "limit": 17,
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [],
-            "cursor": "0x",
-            "latestBlock": "8",
-            "oldestBlock": "1",
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "8",
+            "oldestIndexedBlockHeight": "1",
         })),
     );
 
@@ -13390,16 +13362,17 @@ fn events_list_uses_selected_profile_rpc_and_explicit_rpc_precedence() {
         let (rpc_url, rpc_server) = spawn_events_rpc(
             serde_json::json!({
                 "filters": [{
-                    "contractAddresses": [contract],
+                    "addresses": [contract],
                     "topics": { "topic0": [], "topic1": [], "topic2": [] },
                 }],
-                "order": "descending",
-                "anchor": { "kind": "atEnd" },
-                "cursor": "0x",
+                "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
                 "limit": 50,
             }),
             EventRpcResponse::Result(serde_json::json!({
-                "events": [], "cursor": "0x", "latestBlock": "1", "oldestBlock": "0",
+                "events": [],
+                "nextCursor": null,
+                "latestIndexedBlockHeight": "1",
+                "oldestIndexedBlockHeight": "0",
             })),
         );
         let configured_url = if explicit_override {
@@ -13446,16 +13419,17 @@ fn events_list_resolves_runtime_manifest_dev_account() {
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [{
-                "contractAddresses": [address],
+                "addresses": [address],
                 "topics": { "topic0": [], "topic1": [], "topic2": [] },
             }],
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
-            "events": [], "cursor": "0x", "latestBlock": "1", "oldestBlock": "0",
+            "events": [],
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "1",
+            "oldestIndexedBlockHeight": "0",
         })),
     );
     std::fs::write(
@@ -13497,16 +13471,17 @@ fn events_list_resolves_saved_wallet_before_contract_alias_and_alias_without_wal
         let (rpc_url, rpc_server) = spawn_events_rpc(
             serde_json::json!({
                 "filters": [{
-                    "contractAddresses": [expected_address],
+                    "addresses": [expected_address],
                     "topics": { "topic0": [], "topic1": [], "topic2": [] },
                 }],
-                "order": "descending",
-                "anchor": { "kind": "atEnd" },
-                "cursor": "0x",
+                "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
                 "limit": 50,
             }),
             EventRpcResponse::Result(serde_json::json!({
-                "events": [], "cursor": "0x", "latestBlock": "1", "oldestBlock": "0",
+                "events": [],
+                "nextCursor": null,
+                "latestIndexedBlockHeight": "1",
+                "oldestIndexedBlockHeight": "0",
             })),
         );
         let wallet = if has_wallet {
@@ -13562,16 +13537,17 @@ fn events_list_explicit_runtime_manifest_overrides_profile_manifest_for_dev_acco
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [{
-                "contractAddresses": [explicit_address],
+                "addresses": [explicit_address],
                 "topics": { "topic0": [], "topic1": [], "topic2": [] },
             }],
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
-            "events": [], "cursor": "0x", "latestBlock": "1", "oldestBlock": "0",
+            "events": [],
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "1",
+            "oldestIndexedBlockHeight": "0",
         })),
     );
     std::fs::write(
@@ -13679,27 +13655,25 @@ fn events_list_rejects_page_larger_than_requested_limit() {
     let tmp = TempDir::new().unwrap();
     let contract = thruput_encoding::encode(&[0x91; 32]);
     let event = serde_json::json!({
-        "txHash": thruput_encoding::encode(&[0x92; 32]),
+        "transactionHash": thruput_encoding::encode(&[0x92; 32]),
         "blockHeight": "2",
         "sequenceNumber": 0,
-        "event": { "contractAddress": contract, "topics": [], "data": "0x" },
+        "event": { "address": contract, "topics": [], "data": "0x" },
     });
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [{
-                "contractAddresses": [contract],
+                "addresses": [contract],
                 "topics": { "topic0": [], "topic1": [], "topic2": [] },
             }],
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 1,
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [event.clone(), event],
-            "cursor": "0x",
-            "latestBlock": "2",
-            "oldestBlock": "0",
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "2",
+            "oldestIndexedBlockHeight": "0",
         })),
     );
 
@@ -13748,24 +13722,22 @@ fn events_list_rejects_oversized_event_shapes() {
         let (rpc_url, rpc_server) = spawn_events_rpc(
             serde_json::json!({
                 "filters": [{
-                    "contractAddresses": [contract],
+                    "addresses": [contract],
                     "topics": { "topic0": [], "topic1": [], "topic2": [] },
                 }],
-                "order": "descending",
-                "anchor": { "kind": "atEnd" },
-                "cursor": "0x",
+                "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
                 "limit": 50,
             }),
             EventRpcResponse::Result(serde_json::json!({
                 "events": [{
-                    "txHash": thruput_encoding::encode(&[0xa4; 32]),
+                    "transactionHash": thruput_encoding::encode(&[0xa4; 32]),
                     "blockHeight": "12",
                     "sequenceNumber": 4,
-                    "event": { "contractAddress": contract, "topics": topics, "data": data },
+                    "event": { "address": contract, "topics": topics, "data": data },
                 }],
-                "cursor": "0x",
-                "latestBlock": "12",
-                "oldestBlock": "0",
+                "nextCursor": null,
+                "latestIndexedBlockHeight": "12",
+                "oldestIndexedBlockHeight": "0",
             })),
         );
 
@@ -13794,28 +13766,26 @@ fn events_list_enforces_exact_combined_serialized_event_bound() {
         let (rpc_url, rpc_server) = spawn_events_rpc(
             serde_json::json!({
                 "filters": [{
-                    "contractAddresses": [contract],
+                    "addresses": [contract],
                     "topics": { "topic0": [], "topic1": [], "topic2": [] },
                 }],
-                "order": "descending",
-                "anchor": { "kind": "atEnd" },
-                "cursor": "0x",
+                "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
                 "limit": 50,
             }),
             EventRpcResponse::Result(serde_json::json!({
                 "events": [{
-                    "txHash": thruput_encoding::encode(&[0xa9; 32]),
+                    "transactionHash": thruput_encoding::encode(&[0xa9; 32]),
                     "blockHeight": "12",
                     "sequenceNumber": 4,
                     "event": {
-                        "contractAddress": contract,
+                        "address": contract,
                         "topics": topics,
                         "data": format!("0x{}", "aa".repeat(data_len)),
                     },
                 }],
-                "cursor": "0x",
-                "latestBlock": "12",
-                "oldestBlock": "0",
+                "nextCursor": null,
+                "latestIndexedBlockHeight": "12",
+                "oldestIndexedBlockHeight": "0",
             })),
         );
 
@@ -13845,11 +13815,11 @@ fn events_list_nonempty_human_output_reports_complete_raw_event() {
     let tx_hash = thruput_encoding::encode(&[0xb4; 32]);
     let topics = ["b5", "b6", "b7"].map(|byte| format!("0x{}", byte.repeat(32)));
     let event = serde_json::json!({
-        "txHash": tx_hash,
+        "transactionHash": tx_hash,
         "blockHeight": "88",
         "sequenceNumber": 6,
         "event": {
-            "contractAddress": emitter,
+            "address": emitter,
             "topics": topics,
             "data": "0xdeadbeef",
         },
@@ -13857,19 +13827,17 @@ fn events_list_nonempty_human_output_reports_complete_raw_event() {
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [{
-                "contractAddresses": [queried_address],
+                "addresses": [queried_address],
                 "topics": { "topic0": [], "topic1": [], "topic2": [] },
             }],
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [event.clone(), event],
-            "cursor": "0xcafe",
-            "latestBlock": "100",
-            "oldestBlock": "7",
+            "nextCursor": "0xcafe",
+            "latestIndexedBlockHeight": "100",
+            "oldestIndexedBlockHeight": "7",
         })),
     );
     std::fs::write(
@@ -13944,35 +13912,40 @@ fn events_list_connection_error_escapes_malicious_rpc_url() {
 fn events_list_human_output_distinguishes_empty_page_states() {
     let contract = thruput_encoding::encode(&[0xb1; 32]);
     for (request_cursor, response_cursor, expected) in [
-        (None, "0x", "events: no events found; stream exhausted"),
+        (None, None, "events: no events found; stream exhausted"),
         (
             None,
-            "0xcafe",
+            Some("0xcafe"),
             "events: no displayable events in this page; continue with cursor",
         ),
         (
             Some("0xabcd"),
-            "0x",
+            None,
             "events: no events returned; no continuation cursor",
         ),
     ] {
         let tmp = TempDir::new().unwrap();
+        let mut query = serde_json::json!({
+            "filters": [{
+                "addresses": [contract],
+                "topics": { "topic0": [], "topic1": [], "topic2": [] },
+            }],
+            "limit": 50,
+        });
+        match request_cursor {
+            Some(cursor) => query["cursor"] = serde_json::json!(cursor),
+            None => {
+                query["start"] =
+                    serde_json::json!({ "order": "descending", "anchor": { "kind": "atEnd" } });
+            }
+        }
         let (rpc_url, rpc_server) = spawn_events_rpc(
-            serde_json::json!({
-                "filters": [{
-                    "contractAddresses": [contract],
-                    "topics": { "topic0": [], "topic1": [], "topic2": [] },
-                }],
-                "order": "descending",
-                "anchor": { "kind": "atEnd" },
-                "cursor": request_cursor.unwrap_or("0x"),
-                "limit": 50,
-            }),
+            query,
             EventRpcResponse::Result(serde_json::json!({
                 "events": [],
-                "cursor": response_cursor,
-                "latestBlock": "9",
-                "oldestBlock": "2",
+                "nextCursor": response_cursor,
+                "latestIndexedBlockHeight": "9",
+                "oldestIndexedBlockHeight": "2",
             })),
         );
         let mut args = vec!["events", "list", contract.as_str()];
@@ -13994,9 +13967,9 @@ fn events_list_human_output_distinguishes_empty_page_states() {
         assert!(stderr.contains(expected), "stderr: {stderr}");
         assert_eq!(
             stderr.contains("next cursor: 0xcafe"),
-            response_cursor == "0xcafe"
+            response_cursor == Some("0xcafe")
         );
-        if response_cursor == "0xcafe" {
+        if response_cursor == Some("0xcafe") {
             assert!(
                 stderr.contains("\n\n  next cursor: 0xcafe"),
                 "stderr: {stderr}"
@@ -14013,12 +13986,10 @@ fn events_list_preserves_rpc_errors() {
         let (rpc_url, rpc_server) = spawn_events_rpc(
             serde_json::json!({
                 "filters": [{
-                    "contractAddresses": [contract],
+                    "addresses": [contract],
                     "topics": { "topic0": [], "topic1": [], "topic2": [] },
                 }],
-                "order": "descending",
-                "anchor": { "kind": "atEnd" },
-                "cursor": "0x",
+                "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
                 "limit": 50,
             }),
             EventRpcResponse::Error(code, "mock event error"),
@@ -14061,7 +14032,7 @@ fn all_token_event_filters(token: &str) -> serde_json::Value {
     serde_json::json!(
         [transfer_signature(), mint_signature(), burn_signature()].map(
             |signature| serde_json::json!({
-                "contractAddresses": [token],
+                "addresses": [token],
                 "topics": { "topic0": [signature], "topic1": [], "topic2": [] },
             })
         )
@@ -14076,11 +14047,11 @@ fn token_event_json(
     let (tx_byte, block_height, sequence_number) = identity;
     let [token, signature, from, to] = addresses;
     serde_json::json!({
-        "txHash": thruput_encoding::encode(&hex::decode(tx_byte.repeat(32)).unwrap()),
+        "transactionHash": thruput_encoding::encode(&hex::decode(tx_byte.repeat(32)).unwrap()),
         "blockHeight": block_height.to_string(),
         "sequenceNumber": sequence_number,
         "event": {
-            "contractAddress": token,
+            "address": token,
             "topics": [signature, &address_topic(from), &address_topic(to)],
             "data": data,
         },
@@ -14148,9 +14119,7 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": all_token_event_filters(&token),
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
@@ -14161,9 +14130,9 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
                 token_supply_event_json(("a6", 10, 0), &token, &mint_signature(), &to, &amount_data),
                 token_supply_event_json(("a7", 9, 0), &token, &burn_signature(), &from, &amount_data),
             ],
-            "cursor": "0xcafe",
-            "latestBlock": "12",
-            "oldestBlock": "2",
+            "nextCursor": "0xcafe",
+            "latestIndexedBlockHeight": "12",
+            "oldestIndexedBlockHeight": "2",
         })),
     );
 
@@ -14232,32 +14201,30 @@ fn token_transfers_account_uses_four_server_side_filters_in_one_request() {
         serde_json::json!({
             "filters": [
                 {
-                    "contractAddresses": [token],
+                    "addresses": [token],
                     "topics": { "topic0": [signature], "topic1": [address_topic(&account)], "topic2": [] },
                 },
                 {
-                    "contractAddresses": [token],
+                    "addresses": [token],
                     "topics": { "topic0": [signature], "topic1": [], "topic2": [address_topic(&account)] },
                 },
                 {
-                    "contractAddresses": [token],
+                    "addresses": [token],
                     "topics": { "topic0": [mint_signature()], "topic1": [address_topic(&account)], "topic2": [] },
                 },
                 {
-                    "contractAddresses": [token],
+                    "addresses": [token],
                     "topics": { "topic0": [burn_signature()], "topic1": [address_topic(&account)], "topic2": [] },
                 },
             ],
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 7,
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [],
-            "cursor": "0x",
-            "latestBlock": "12",
-            "oldestBlock": "2",
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "12",
+            "oldestIndexedBlockHeight": "2",
         })),
     );
 
@@ -14309,7 +14276,7 @@ fn token_transfers_maps_directional_filters_and_cursor_to_one_query() {
         let tmp = TempDir::new().unwrap();
         let signature = transfer_signature();
         let mut filters = vec![serde_json::json!({
-            "contractAddresses": [token],
+            "addresses": [token],
             "topics": { "topic0": [signature], "topic1": topic1, "topic2": topic2 },
         })];
         if filter_kind != "fromTo" {
@@ -14319,23 +14286,21 @@ fn token_transfers_maps_directional_filters_and_cursor_to_one_query() {
                 (mint_signature(), &to)
             };
             filters.push(serde_json::json!({
-                "contractAddresses": [token],
+                "addresses": [token],
                 "topics": { "topic0": [supply_signature], "topic1": [address_topic(participant)], "topic2": [] },
             }));
         }
         let (rpc_url, rpc_server) = spawn_events_rpc(
             serde_json::json!({
                 "filters": filters,
-                "order": "descending",
-                "anchor": { "kind": "atEnd" },
                 "cursor": "0x1234",
                 "limit": 50,
             }),
             EventRpcResponse::Result(serde_json::json!({
                 "events": [],
-                "cursor": "0x",
-                "latestBlock": "12",
-                "oldestBlock": "2",
+                "nextCursor": null,
+                "latestIndexedBlockHeight": "12",
+                "oldestIndexedBlockHeight": "2",
             })),
         );
         let mut args = vec!["--json", "token", "transfers", &token];
@@ -14375,57 +14340,55 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": all_token_event_filters(&token),
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": [
                 {
-                    "txHash": thruput_encoding::encode(&[0xe4; 32]),
+                    "transactionHash": thruput_encoding::encode(&[0xe4; 32]),
                     "blockHeight": "12",
                     "sequenceNumber": 1,
                     "event": {
-                        "contractAddress": token,
+                        "address": token,
                         "topics": [signature, address_topic(&from), address_topic(&to)],
                         "data": amount_data,
                     },
                 },
                 {
-                    "txHash": thruput_encoding::encode(&[0xe5; 32]),
+                    "transactionHash": thruput_encoding::encode(&[0xe5; 32]),
                     "blockHeight": "11",
                     "sequenceNumber": 2,
                     "event": {
-                        "contractAddress": token,
+                        "address": token,
                         "topics": [mint_signature(), address_topic(&to)],
                         "data": amount_data,
                     },
                 },
                 {
-                    "txHash": thruput_encoding::encode(&[0xe6; 32]),
+                    "transactionHash": thruput_encoding::encode(&[0xe6; 32]),
                     "blockHeight": "10",
                     "sequenceNumber": 1,
                     "event": {
-                        "contractAddress": token,
+                        "address": token,
                         "topics": [burn_signature(), address_topic(&from)],
                         "data": amount_data,
                     },
                 },
                 {
-                    "txHash": thruput_encoding::encode(&[0xe7; 32]),
+                    "transactionHash": thruput_encoding::encode(&[0xe7; 32]),
                     "blockHeight": "9",
                     "sequenceNumber": 0,
                     "event": {
-                        "contractAddress": token,
+                        "address": token,
                         "topics": [signature, address_topic(&from), address_topic(&to)],
                         "data": malformed_data,
                     },
                 },
             ],
-            "cursor": "0x",
-            "latestBlock": "12",
-            "oldestBlock": "2",
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "12",
+            "oldestIndexedBlockHeight": "2",
         })),
     );
 
@@ -14469,32 +14432,37 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
 fn token_transfers_human_output_distinguishes_empty_page_states() {
     let token = thruput_encoding::encode(&[0xf1; 32]);
     for (request_cursor, response_cursor, expected) in [
-        (None, "0x", "transfers: no events found; stream exhausted"),
+        (None, None, "transfers: no events found; stream exhausted"),
         (
             None,
-            "0xcafe",
+            Some("0xcafe"),
             "transfers: no displayable events in this page; continue with cursor",
         ),
         (
             Some("0xabcd"),
-            "0x",
+            None,
             "transfers: no events returned; no continuation cursor",
         ),
     ] {
         let tmp = TempDir::new().unwrap();
+        let mut query = serde_json::json!({
+            "filters": all_token_event_filters(&token),
+            "limit": 50,
+        });
+        match request_cursor {
+            Some(cursor) => query["cursor"] = serde_json::json!(cursor),
+            None => {
+                query["start"] =
+                    serde_json::json!({ "order": "descending", "anchor": { "kind": "atEnd" } });
+            }
+        }
         let (rpc_url, rpc_server) = spawn_events_rpc(
-            serde_json::json!({
-                "filters": all_token_event_filters(&token),
-                "order": "descending",
-                "anchor": { "kind": "atEnd" },
-                "cursor": request_cursor.unwrap_or("0x"),
-                "limit": 50,
-            }),
+            query,
             EventRpcResponse::Result(serde_json::json!({
                 "events": [],
-                "cursor": response_cursor,
-                "latestBlock": "9",
-                "oldestBlock": "2",
+                "nextCursor": response_cursor,
+                "latestIndexedBlockHeight": "9",
+                "oldestIndexedBlockHeight": "2",
             })),
         );
         let mut args = vec!["token", "transfers", token.as_str()];
@@ -14516,9 +14484,9 @@ fn token_transfers_human_output_distinguishes_empty_page_states() {
         assert!(stderr.contains(expected), "stderr: {stderr}");
         assert_eq!(
             stderr.contains("next cursor: 0xcafe"),
-            response_cursor == "0xcafe"
+            response_cursor == Some("0xcafe")
         );
-        if response_cursor == "0xcafe" {
+        if response_cursor == Some("0xcafe") {
             assert!(
                 stderr.contains("\n\n  next cursor: 0xcafe"),
                 "stderr: {stderr}"
@@ -14608,69 +14576,6 @@ enum TxListRpcResponse {
     Error(i32, &'static str),
 }
 
-fn native_history_query(mut query: serde_json::Value) -> serde_json::Value {
-    let cursor = query.as_object_mut().unwrap().remove("cursor").unwrap();
-    let order = query.as_object_mut().unwrap().remove("order").unwrap();
-    let anchor = query.as_object_mut().unwrap().remove("anchor").unwrap();
-    if cursor == "0x" {
-        query["start"] = serde_json::json!({"order":order,"anchor":anchor});
-    } else {
-        query["cursor"] = cursor;
-    }
-    if let Some(filters) = query
-        .get_mut("filters")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        for filter in filters {
-            if let Some(addresses) = filter.as_object_mut().unwrap().remove("contractAddresses") {
-                filter["addresses"] = addresses;
-            }
-        }
-    }
-    query
-}
-
-fn native_history_page(mut page: serde_json::Value) -> serde_json::Value {
-    for (old, new) in [
-        ("refs", "transactions"),
-        ("latestBlock", "latestIndexedBlockHeight"),
-        ("oldestBlock", "oldestIndexedBlockHeight"),
-        ("cursor", "nextCursor"),
-    ] {
-        if let Some(value) = page.as_object_mut().unwrap().remove(old) {
-            page[new] = if old == "cursor" && value == "0x" {
-                serde_json::Value::Null
-            } else {
-                value
-            };
-        }
-    }
-    for field in ["transactions", "events"] {
-        if let Some(entries) = page
-            .get_mut(field)
-            .and_then(serde_json::Value::as_array_mut)
-        {
-            for entry in entries {
-                for (old, new) in [("txHash", "transactionHash"), ("height", "blockHeight")] {
-                    if let Some(value) = entry.as_object_mut().unwrap().remove(old) {
-                        entry[new] = value;
-                    }
-                }
-                if let Some(event) = entry.get_mut("event") {
-                    native_event_fixture(event);
-                }
-            }
-        }
-    }
-    page
-}
-
-fn native_event_fixture(event: &mut serde_json::Value) {
-    if let Some(address) = event.as_object_mut().unwrap().remove("contractAddress") {
-        event["address"] = address;
-    }
-}
-
 fn spawn_tx_list_rpc(
     expected_query: serde_json::Value,
     response: TxListRpcResponse,
@@ -14683,10 +14588,10 @@ fn spawn_tx_list_rpc(
         let (stream, request) =
             read_jsonrpc_request(&listener, deadline, "getTransactionsByAddress");
         assert_eq!(request["method"], "getTransactionsByRootAddress");
-        assert_eq!(request["params"], native_history_query(expected_query));
+        assert_eq!(request["params"], expected_query);
         match response {
             TxListRpcResponse::Result(result) => {
-                send_jsonrpc_response(stream, &request["id"], native_history_page(result));
+                send_jsonrpc_response(stream, &request["id"], result);
             }
             TxListRpcResponse::Error(code, message) => {
                 send_jsonrpc_error_response(stream, &request["id"], code, message);
@@ -14714,10 +14619,10 @@ fn spawn_events_rpc(
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getEvents");
         assert_eq!(request["method"], "getEvents");
-        assert_eq!(request["params"], native_history_query(expected_query));
+        assert_eq!(request["params"], expected_query);
         match response {
             EventRpcResponse::Result(result) => {
-                send_jsonrpc_response(stream, &request["id"], native_history_page(result));
+                send_jsonrpc_response(stream, &request["id"], result);
             }
             EventRpcResponse::Error(code, message) => {
                 send_jsonrpc_error_response(stream, &request["id"], code, message);
@@ -14751,7 +14656,14 @@ fn spawn_tx_show_rpc(
             request["params"],
             serde_json::json!({"transactionHash":tx_hash})
         );
-        send_tx_show_response(stream, &request["id"], status);
+        match status {
+            TxShowRpcResponse::Result(value) => {
+                send_jsonrpc_response(stream, &request["id"], value);
+            }
+            TxShowRpcResponse::Error(code, message) => {
+                send_jsonrpc_error_response(stream, &request["id"], code, message);
+            }
+        }
 
         {
             let receipt = receipt.unwrap_or(TxShowRpcResponse::Result(serde_json::Value::Null));
@@ -14766,37 +14678,14 @@ fn spawn_tx_show_rpc(
                 TxShowRpcResponse::Result(value) => {
                     send_jsonrpc_response(stream, &request["id"], value);
                 }
-                error @ TxShowRpcResponse::Error(..) => {
-                    send_tx_show_response(stream, &request["id"], error);
+                TxShowRpcResponse::Error(code, message) => {
+                    send_jsonrpc_error_response(stream, &request["id"], code, message);
                 }
             }
         }
         assert_no_follow_up_rpc(&listener);
     });
     (format!("http://{addr}"), handle)
-}
-
-fn send_tx_show_response(
-    stream: std::net::TcpStream,
-    request_id: &serde_json::Value,
-    response: TxShowRpcResponse,
-) {
-    match response {
-        TxShowRpcResponse::Result(mut result) => {
-            if let Some(fields) = result.as_object_mut() {
-                if let Some(height) = fields.remove("height") {
-                    fields.insert("blockHeight".into(), height);
-                }
-                if let Some(height) = fields.remove("attemptHeight") {
-                    fields.insert("attemptBlockHeight".into(), height);
-                }
-            }
-            send_jsonrpc_response(stream, request_id, result);
-        }
-        TxShowRpcResponse::Error(code, message) => {
-            send_jsonrpc_error_response(stream, request_id, code, message);
-        }
-    }
 }
 
 /// Read one HTTP POST request from a TCP stream and return the parsed JSON body.
@@ -16022,11 +15911,8 @@ fn spawn_view_rpc_inner_with_events(
     calldata: &str,
     caller: Option<&str>,
     output: serde_json::Value,
-    mut events: serde_json::Value,
+    events: serde_json::Value,
 ) -> (String, MockServer) {
-    for event in events.as_array_mut().unwrap() {
-        native_event_fixture(event);
-    }
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -16492,11 +16378,13 @@ fn library_abort_hex(case_name: &str) -> String {
 fn issuer_event_fixture() -> Vec<serde_json::Value> {
     let mut records: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/issuer-events.json")).unwrap();
-    // The captured contract fixture uses hex; only its typed emitter changes on the RPC wire.
+    // The captured fixture names the emitter `contractAddress` in hex; the RPC wire carries
+    // it as the typed base58 `address` of an `EmittedEvent`.
     for record in &mut records {
-        record["event"]["contractAddress"] = serde_json::json!(rpc_address_from_hex_fixture(
-            record["event"]["contractAddress"].as_str().unwrap()
-        ));
+        let event = record["event"].as_object_mut().unwrap();
+        let emitter = event.remove("contractAddress").unwrap();
+        let address = rpc_address_from_hex_fixture(emitter.as_str().unwrap());
+        event.insert("address".into(), address.into());
     }
     records
 }
@@ -16507,13 +16395,14 @@ fn run_issuer_event_command(
     filters: &serde_json::Value,
 ) -> serde_json::Value {
     let tmp = TempDir::new().unwrap();
-    let token = fixture[0]["event"]["contractAddress"].as_str().unwrap();
+    let token = fixture[0]["event"]["address"].as_str().unwrap();
     let events: Vec<_> = fixture
         .iter()
         .enumerate()
         .map(|(index, record)| {
+            let hash = hex::decode(format!("{:064x}", index + 1)).unwrap();
             serde_json::json!({
-                "txHash": thruput_encoding::encode(&hex::decode(format!("{:064x}", index + 1)).unwrap()),
+                "transactionHash": thruput_encoding::encode(&hash),
                 "blockHeight": (20 - index).to_string(),
                 "sequenceNumber": 0,
                 "event": record["event"],
@@ -16523,16 +16412,14 @@ fn run_issuer_event_command(
     let (rpc_url, server) = spawn_events_rpc(
         serde_json::json!({
             "filters": filters,
-            "order": "descending",
-            "anchor": { "kind": "atEnd" },
-            "cursor": "0x",
+            "start": { "order": "descending", "anchor": { "kind": "atEnd" } },
             "limit": 50,
         }),
         EventRpcResponse::Result(serde_json::json!({
             "events": events,
-            "cursor": "0x",
-            "latestBlock": "20",
-            "oldestBlock": "0",
+            "nextCursor": null,
+            "latestIndexedBlockHeight": "20",
+            "oldestIndexedBlockHeight": "0",
         })),
     );
     let output = thruput()
@@ -16554,12 +16441,12 @@ fn run_issuer_event_command(
 #[test]
 fn issuer_raw_events_survive_the_cli_http_boundary() {
     let fixture = issuer_event_fixture();
-    let token = fixture[0]["event"]["contractAddress"].as_str().unwrap();
+    let token = fixture[0]["event"]["address"].as_str().unwrap();
     let report = run_issuer_event_command(
         &fixture,
         ["events", "list"],
         &serde_json::json!([{
-            "contractAddresses": [token],
+            "addresses": [token],
             "topics": {
                 "topic0": [],
                 "topic1": [],
@@ -16571,7 +16458,8 @@ fn issuer_raw_events_survive_the_cli_http_boundary() {
     assert_eq!(fixture.len(), 9);
     assert_eq!(events.len(), fixture.len());
     for (event, original) in events.iter().zip(&fixture) {
-        for field in ["contractAddress", "topics", "data"] {
+        assert_eq!(event["contractAddress"], original["event"]["address"]);
+        for field in ["topics", "data"] {
             assert_eq!(event[field], original["event"][field]);
         }
         assert_eq!(event["decodeStatus"], "notRequested");
@@ -16588,7 +16476,7 @@ fn issuer_token_movements_count_clawback_once() {
                 .any(|signature| record["event"]["topics"][0] == *signature)
         })
         .collect();
-    let token = movements[0]["event"]["contractAddress"].as_str().unwrap();
+    let token = movements[0]["event"]["address"].as_str().unwrap();
     let report = run_issuer_event_command(
         &movements,
         ["token", "transfers"],
@@ -16600,7 +16488,8 @@ fn issuer_token_movements_count_clawback_once() {
     assert_eq!(report["data"]["schemaVersion"], 4);
     for ((record, original), amount) in records.iter().zip(&movements).zip(["100", "25", "5", "7"])
     {
-        for field in ["contractAddress", "topics", "data"] {
+        assert_eq!(record["contractAddress"], original["event"]["address"]);
+        for field in ["topics", "data"] {
             assert_eq!(record[field], original["event"][field]);
         }
         assert_eq!(record["decodeStatus"], "decoded");
