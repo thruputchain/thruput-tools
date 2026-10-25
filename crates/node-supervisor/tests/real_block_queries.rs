@@ -241,7 +241,7 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
                 .with_binary_path(binary)
                 .with_startup_timeout(Duration::from_mins(1))
                 .with_data_dir(dir.path())
-                .with_ramdb_bytes(128 * 1024 * 1024),
+                .with_ramdb_bytes(ramdb::ramdb_bytes(256 * ramdb::MIB)),
         );
     if let Ok(protocol) = std::env::var("GROUNDHOG_DEVNODE_PROTOCOL") {
         config = config.with_hogd_protocol_override(protocol);
@@ -367,6 +367,8 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
 
 #[path = "real_block_queries/history.rs"]
 mod history;
+#[path = "support/ramdb.rs"]
+mod ramdb;
 
 #[path = "real_block_queries/duplicates.rs"]
 mod duplicates;
