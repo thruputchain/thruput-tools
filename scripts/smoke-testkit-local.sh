@@ -90,7 +90,9 @@ else
     else
         log "building thruput"
         cargo build -p thruput-cli
-        THRUPUT_BINARY="$REPO_ROOT/target/debug/thruput"
+        BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+        [[ "$BUILD_TARGET_DIR" = /* ]] || BUILD_TARGET_DIR="$REPO_ROOT/$BUILD_TARGET_DIR"
+        THRUPUT_BINARY="$BUILD_TARGET_DIR/debug/thruput"
     fi
     [[ -x "$THRUPUT_BINARY" ]] || die "thruput binary is not executable: $THRUPUT_BINARY"
 

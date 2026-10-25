@@ -18,8 +18,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$REPO_ROOT/target/debug/thruput"
-GATEWAY="$REPO_ROOT/target/debug/hog-gateway"
+BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+[[ "$BUILD_TARGET_DIR" = /* ]] || BUILD_TARGET_DIR="$REPO_ROOT/$BUILD_TARGET_DIR"
+export CARGO_TARGET_DIR="$BUILD_TARGET_DIR"
+CLI="$BUILD_TARGET_DIR/debug/thruput"
+GATEWAY="$BUILD_TARGET_DIR/debug/hog-gateway"
 
 NODE_STARTUP_TIMEOUT_SECS="${NODE_STARTUP_TIMEOUT_SECS:-60}"
 NODE_BLOCK_INTERVAL_MS="${NODE_BLOCK_INTERVAL_MS:-500}"
@@ -387,6 +390,9 @@ fetch_text_status "$OBSERVABILITY_URL/health" "$WORK/health.json" 200
 post_rpc "$GATEWAY_RPC_URL" getVersionInfo "$WORK/rpc-version.json"
 post_rpc "$GATEWAY_RPC_URL" getNetworkInfo "$WORK/rpc-network-info.json"
 post_rpc "$GATEWAY_RPC_URL" getChainTip "$WORK/rpc-chain-tip.json"
+# A scrape records its own request after encoding the response, so it is
+# counted in the next scrape: prime once, then read.
+fetch_text_status "$OBSERVABILITY_URL/metrics" "$WORK/metrics-prime.txt" 200
 fetch_text_status "$OBSERVABILITY_URL/metrics" "$WORK/metrics.txt" 200
 
 assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_health_status{status=\"$READY_STATUS\"} 1"
