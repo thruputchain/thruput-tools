@@ -35,6 +35,23 @@ pub(crate) fn submit_error(
     hash: Option<TxHash>,
 ) -> ErrorObjectOwned {
     let admission = attempt.cancel();
+    if matches!(error, RpcServerError::TxRejected(_))
+        && !matches!(
+            admission,
+            AttemptAdmission::NotAttempted | AttemptAdmission::Rejected
+        )
+    {
+        // A rejection is definite only with evidence of the refusal; a sent
+        // attempt whose refusal was not recorded may still have been admitted.
+        return submit_error(
+            &RpcServerError::invalid_data(
+                BackendDataInvalidReason::InconsistentResult,
+                "rejection without a recorded refusal",
+            ),
+            attempt,
+            hash,
+        );
+    }
     let (code, data) = match error {
         RpcServerError::TxInvalid(_) | RpcServerError::TxInvalidDetailed(_) => (
             codes::TRANSACTION_INVALID,
@@ -283,6 +300,26 @@ mod tests {
             assert_eq!(raw["data"]["reason"], reason);
             assert_known(&raw);
         }
+    }
+
+    #[test]
+    fn rejection_without_a_recorded_refusal_is_inconsistent_backend_data() {
+        let attempt = SubmissionAttempt::default();
+        assert!(attempt.begin_dispatch());
+        let error = submit_error(
+            &RpcServerError::TxRejected("refused".into()),
+            &attempt,
+            None,
+        );
+        assert_eq!(error.code(), codes::BACKEND_DATA_INVALID);
+        assert_eq!(
+            error.message(),
+            "backend data invalid: rejection without a recorded refusal"
+        );
+        let raw = serde_json::to_value(error).unwrap();
+        assert_eq!(raw["data"]["admission"], "unknown");
+        assert_eq!(raw["data"]["reason"], "inconsistentResult");
+        assert_known(&raw);
     }
 
     #[test]
