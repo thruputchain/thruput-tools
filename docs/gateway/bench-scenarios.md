@@ -111,11 +111,6 @@ For transport experiments, restart the gateway with the selected
 Socket count and call admission are separate controls. Scheduler lookup
 execution width has its own setting; choose the workload that exercises it.
 
-The older [bench-read-confirmed.py](../../scripts/bench-read-confirmed.py) runner
-still passes the retired `--indexer-pool-size` option. Use the direct commands
-above for the current gateway until that runner is updated; its old pool sweeps
-are not measurements of the current multiplexed transport.
-
 ## Server observations and diagnostics
 
 `--metrics-url` samples private gateway metrics. On Linux, `--gateway-pid`
