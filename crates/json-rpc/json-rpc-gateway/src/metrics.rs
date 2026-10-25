@@ -925,11 +925,9 @@ mod tests {
         ));
     }
 
+    // Dashboards and alerts match these label values.
     #[test]
     fn reason_label_domains_are_pinned() {
-        assert_eq!(
-            INTERNAL_BATCH_REJECTION_REASONS,
-            [REASON_CLOSED, REASON_INGRESS_FULL]
-        );
+        assert_eq!(INTERNAL_BATCH_REJECTION_REASONS, ["closed", "ingress_full"]);
     }
 }

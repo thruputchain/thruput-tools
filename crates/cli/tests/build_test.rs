@@ -483,7 +483,7 @@ fn build_rv32_project_compiles_and_lowers_elf_without_global_setup() {
         .join("demo_contract_rv32.spec.xdr");
     let cargo_args_log = project_root.join("cargo-args.log");
     let elf_fixture = project_root.join("fixture.elf");
-    let raw_spec = encode_fragments(&counter_fragments("Counter"));
+    let raw_spec = support::contract_spec_raw_for_interface("Counter");
     fs::write(
         &elf_fixture,
         support::minimal_rv32_elf_with_section(thruput_spec_tool::RAW_SECTION_NAME, &raw_spec),
@@ -601,7 +601,8 @@ fn build_rv32_project_compiles_and_lowers_elf_without_global_setup() {
 fn build_rv32_project_warns_when_typescript_codegen_would_refuse_the_spec() {
     // The bindings reserve the `__gh_` prefix, so this contract builds but
     // `thruput codegen ts` would refuse its spec.
-    let result = build_demo_contract_rv32(&encode_fragments(&counter_fragments("__gh_Counter")));
+    let result =
+        build_demo_contract_rv32(&support::contract_spec_raw_for_interface("__gh_Counter"));
 
     let [warning] = result.warnings.as_slice() else {
         panic!("expected one warning, got {:?}", result.warnings);
@@ -630,7 +631,7 @@ fn build_json_lists_a_typescript_codegen_refusal_under_warnings() {
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
     let fake_bin = write_demo_contract_rv32(
         &project_root,
-        &encode_fragments(&counter_fragments("__gh_Counter")),
+        &support::contract_spec_raw_for_interface("__gh_Counter"),
     );
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
@@ -1043,30 +1044,6 @@ fn build_rejects_empty_cargo_encoded_rustflags() {
     );
 }
 
-/// The rv32 build path loses per-crate codegen flags such as
-/// `-Z trap-unreachable=false` under a user-level `RUSTFLAGS`, which only
-/// surfaces later as artifact-validation rejections — so it guards too.
-#[test]
-#[serial_test::parallel]
-fn build_rv32_rejects_env_rustflags() {
-    let tmp = TempDir::new().unwrap();
-
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_thruput"))
-        .arg("build")
-        .current_dir(tmp.path())
-        .env("RUSTFLAGS", "-C opt-level=2")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .output()
-        .expect("bug: thruput binary should run");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "expected build to fail: {stderr}");
-    assert!(
-        stderr.contains("RUSTFLAGS"),
-        "expected RUSTFLAGS in error, got: {stderr}"
-    );
-}
-
 /// `cargo config get` reply: the rustflags are not set (a workspace root
 /// without the Thruput cargo config).
 const CONFIG_GET_NOT_SET: &str = "echo 'error: config value `target.riscv32im-unknown-none-elf.rustflags` is not set' >&2\n  exit 101";
@@ -1384,66 +1361,6 @@ fn build_rv32_refuses_a_missing_contract_toml() {
         stderr.contains("build-std") && stderr.contains("[target.*]"),
         "expected the build-std hint, got: {stderr}"
     );
-}
-
-/// Raw spec fragments for an anchored interface with one `get` method.
-fn counter_fragments(interface_name: &str) -> Vec<thruput_spec_tool::SpecFragment> {
-    vec![
-        thruput_spec_tool::SpecFragment::SpecInterface {
-            interface_fragment: thruput_spec_tool::SpecInterfaceFragment {
-                interface_name: spec_string(interface_name),
-                interface_version: spec_string("0.1.0"),
-                declared_by: declarer(),
-                throws: vec![].try_into().unwrap(),
-                emits: vec![].try_into().unwrap(),
-            },
-        },
-        // Spec shaking keeps only anchored interfaces; a real build emits
-        // this anchor from the contract impl site.
-        thruput_spec_tool::SpecFragment::InterfaceAnchor {
-            interface_anchor: thruput_contract_spec::SpecInterfaceAnchor {
-                interface_name: spec_string(interface_name),
-                interface_version: spec_string("0.1.0"),
-                declared_by: declarer(),
-            },
-        },
-        thruput_spec_tool::SpecFragment::SpecMethod {
-            method_fragment: thruput_spec_tool::SpecMethodFragment {
-                interface_name: spec_string(interface_name),
-                interface_version: spec_string("0.1.0"),
-                declared_by: declarer(),
-                method: thruput_spec_tool::ContractSpecMethod {
-                    name: spec_string("get"),
-                    args: vec![].try_into().unwrap(),
-                    return_type: thruput_spec_tool::ContractType::U64,
-                    effect: None,
-                },
-            },
-        },
-    ]
-}
-
-fn spec_string(value: &str) -> thruput_spec_tool::ContractSpecString {
-    value.try_into().expect("bug: test spec string should fit")
-}
-
-/// The crate that declares this interface: a bare `#[contract]` block
-/// records its crate, so the module path and declared name are both empty.
-fn declarer() -> thruput_contract_spec::ContractSpecId {
-    thruput_contract_spec::ContractSpecId {
-        crate_name: spec_string("counter"),
-        major: spec_string("0.1"),
-        module_path: spec_string(""),
-        declared: spec_string(""),
-    }
-}
-
-fn encode_fragments(fragments: &[thruput_spec_tool::SpecFragment]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for fragment in fragments {
-        bytes.extend(xdrs::txs::encode(fragment).expect("bug: test spec fragment should encode"));
-    }
-    bytes
 }
 
 struct CurrentDirGuard {

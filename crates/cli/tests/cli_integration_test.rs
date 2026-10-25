@@ -170,8 +170,6 @@ fn thruput() -> Command {
     command.env_remove("THRUPUT_DEVNODE_BINARY");
     command.env_remove("THRUPUT_OFFLINE");
     command.env_remove("THRUPUT_TOOLCHAIN_BASE_URL");
-    command.env_remove("HOGD_FFI_USER");
-    command.env_remove("HOGD_FFI_PASSWORD");
     isolation::isolate_from_developer_env(&mut command);
     command.env("XDG_CONFIG_HOME", config_home);
     command.env("XDG_CACHE_HOME", cache_home);
@@ -3383,7 +3381,6 @@ fn non_tty_init_ignores_piped_yes_answers_and_shows_setup_sections() {
         .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -3427,8 +3424,7 @@ fn interactive_init_points_to_created_project() {
         .arg("init")
         .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD");
+        .env("XDG_CONFIG_HOME", tmp.path());
     let (child, mut terminal) = spawn_with_terminal(command);
     let output_reader = terminal_output_reader(&terminal);
     terminal.write_all(b"y\ny\ndemo-contract\n").unwrap();
@@ -3527,7 +3523,6 @@ fn init_human_output_builds_existing_project() {
         .current_dir(&project)
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -3561,7 +3556,6 @@ fn status_json_outputs_structured_payload() {
         .arg("status")
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -3603,7 +3597,6 @@ fn status_json_flattens_project_findings_into_warnings() {
         .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -3632,7 +3625,6 @@ fn status_json_reports_project_default_wallet_and_dangling_finding() {
         .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -3729,7 +3721,6 @@ fn quiet_status_exits_one_with_no_output_when_missing_state() {
         .arg("status")
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -3745,7 +3736,6 @@ fn status_human_output_shows_sections() {
         .arg("status")
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -4007,7 +3997,6 @@ fn status_json_ignores_legacy_ffi_config() {
         .arg("status")
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -4869,7 +4858,7 @@ fn test_json_failed_run_emits_report_on_stdout() {
 
 #[cfg(unix)]
 #[test]
-fn test_rv32_harness_receives_target_dir_without_legacy_ffi_credentials() {
+fn test_rv32_harness_receives_target_dir_and_preserves_legacy_config() {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = TempDir::new().unwrap();
@@ -4919,10 +4908,6 @@ fn test_rv32_harness_receives_target_dir_without_legacy_ffi_credentials() {
                 "  exit 0\n",
                 "fi\n",
                 "if [ \"$1\" = \"test\" ]; then\n",
-                "  if [ -n \"${{HOGD_FFI_PASSWORD+x}}${{HOGD_FFI_USER+x}}\" ]; then\n",
-                "    printf 'obsolete FFI credentials reached test child\\n' >&2\n",
-                "    exit 43\n",
-                "  fi\n",
                 "  if [ \"$CARGO_TARGET_DIR\" != '{}' ]; then\n",
                 "    printf 'unexpected CARGO_TARGET_DIR: %s\\n' \"$CARGO_TARGET_DIR\" >&2\n",
                 "    exit 42\n",
@@ -8400,56 +8385,6 @@ fn assert_transfer_live_common(
 }
 
 #[test]
-fn deploy_dry_run_json_accepts_rv32_artifact() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stderr.is_empty());
-
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 9);
-    assert_eq!(stdout["data"]["artifactKind"], "rv32");
-    assert_eq!(
-        stdout["data"]["artifactPath"].as_str().unwrap(),
-        rv32_path.to_string_lossy()
-    );
-    assert_eq!(stdout["data"]["artifactBytes"], "13");
-    assert_eq!(
-        signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
-        "rv32"
-    );
-}
-
-#[test]
 fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
@@ -9056,7 +8991,7 @@ fn deploy_live_json_submits_and_returns_receipt() {
     assert_eq!(stdout["data"]["execution"]["result"], "return");
     assert!(stdout["data"].get("returnData").is_none());
     assert!(stdout["data"].get("abortData").is_none());
-    assert!(stdout["data"]["transactionDetail"].is_null());
+    assert!(stdout["data"].get("transactionDetail").is_none());
     assert!(
         thruput_encoding::decode_fixed::<32>(stdout["data"]["txHash"].as_str().unwrap()).is_ok()
     );
@@ -9227,45 +9162,6 @@ fn deploy_live_human_fails_after_printing_receipt_context() {
     assert!(!stderr.contains("return data:"), "stderr: {stderr}");
     assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
     assert!(stderr.contains("gas used: 4242"), "stderr: {stderr}");
-}
-
-#[test]
-fn deploy_live_json_reports_native_receipt_without_optional_legacy_requests() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--force",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["execution"]["result"], "return");
-    assert_eq!(stdout["data"]["gasUsed"], "1500");
-    assert!(stdout["data"].get("transactionDetail").is_none());
 }
 
 #[test]

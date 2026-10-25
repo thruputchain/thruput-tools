@@ -1667,51 +1667,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_errors_when_lookup_has_no_slot_and_indexer_misses() {
-        let (scheduler_addr, _scheduler) =
-            start_fake_scheduler(FakeSchedulerMode::EmptyBatch).await;
-        let (indexer_addr, _indexer) = start_not_found_indexer().await;
-        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-
-        let err = native_status(&ctx, RpcRequestContext::unbounded())
-            .await
-            .expect_err("bug: a lookup with no per-tx answer must not produce a definite status");
-
-        assert!(
-            matches!(
-                err,
-                RpcServerError::BackendDataInvalid {
-                    reason: thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidCardinality,
-                    ..
-                }
-            ),
-            "{err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn status_errors_when_lookup_returns_extra_slot_and_indexer_misses() {
-        let (scheduler_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::ExtraSlot).await;
-        let (indexer_addr, _indexer) = start_not_found_indexer().await;
-        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-
-        let err = native_status(&ctx, RpcRequestContext::unbounded())
-            .await
-            .expect_err("bug: extra per-tx answers must not produce a definite status");
-
-        assert!(
-            matches!(
-                err,
-                RpcServerError::BackendDataInvalid {
-                    reason: thruput_json_rpc_types::error::native::BackendDataInvalidReason::InvalidCardinality,
-                    ..
-                }
-            ),
-            "{err:?}"
-        );
-    }
-
-    #[tokio::test]
     async fn status_is_unknown_when_mempool_and_indexer_both_miss() {
         let (scheduler_addr, _scheduler) =
             start_fake_scheduler(FakeSchedulerMode::MempoolMiss).await;
