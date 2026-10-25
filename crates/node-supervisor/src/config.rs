@@ -421,6 +421,10 @@ pub struct HogdDevConfig {
     pub init_network_hash: Option<NetworkHashText>,
     /// PID file used to detect and clean up orphaned hogd-dev children.
     pub pid_file: Option<PathBuf>,
+    /// Environment for the child only, so tests can steer the fake hogd-dev
+    /// without changing the test process's environment.
+    #[cfg(test)]
+    pub(crate) test_child_env: Vec<(OsString, OsString)>,
 }
 
 impl Default for HogdDevConfig {
@@ -439,11 +443,25 @@ impl Default for HogdDevConfig {
             extra_args: Vec::new(),
             init_network_hash: None,
             pid_file: None,
+            #[cfg(test)]
+            test_child_env: Vec::new(),
         }
     }
 }
 
 impl HogdDevConfig {
+    /// Return a copy that sets `key` in the child's environment.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_test_child_env(
+        mut self,
+        key: impl Into<OsString>,
+        value: impl Into<OsString>,
+    ) -> Self {
+        self.test_child_env.push((key.into(), value.into()));
+        self
+    }
+
     /// Select a new chain's signing domain. Initialized directories reject this option.
     #[must_use]
     pub fn with_init_network_hash(mut self, network_hash: NetworkHashText) -> Self {

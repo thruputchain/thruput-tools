@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     env, fs,
     io::{self, Write},
-    net::{SocketAddr, TcpListener as StdTcpListener},
+    net::SocketAddr,
     path::PathBuf,
     process::{self, Command},
     sync::{
@@ -739,14 +739,12 @@ fn write_runtime_manifest(bytes: &[u8]) -> PathBuf {
     path
 }
 
+/// A loopback address that refuses connections. Port 1 is privileged, so no
+/// test can be listening on it; a freshly closed ephemeral port is not dead,
+/// because a test running in parallel can bind it before the supervisor
+/// connects.
 fn dead_loopback_addr() -> SocketAddr {
-    let listener =
-        StdTcpListener::bind("127.0.0.1:0").expect("bug: dead scheduler port should bind");
-    let addr = listener
-        .local_addr()
-        .expect("bug: dead scheduler listener should have local addr");
-    drop(listener);
-    addr
+    SocketAddr::from(([127, 0, 0, 1], 1))
 }
 
 // ---------------------------------------------------------------------------
@@ -2134,15 +2132,7 @@ mod tests {
 
     #[tokio::test]
     async fn connect_to_dead_indexer_port_fails() {
-        // Grab an ephemeral port and immediately drop the listener so the port
-        // is closed. Connecting to it should fail.
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bug: ephemeral bind should succeed");
-        let addr = listener
-            .local_addr()
-            .expect("bug: bound listener should have local addr");
-        drop(listener);
+        let addr = super::dead_loopback_addr();
 
         // Act: try to connect
         let result =
