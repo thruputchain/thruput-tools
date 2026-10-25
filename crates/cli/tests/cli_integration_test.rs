@@ -1,34 +1,53 @@
 use std::fmt::Write as _;
+
 #[cfg(unix)]
 use std::fs::File;
+
 use std::io::{BufRead, BufReader, Read, Write};
+
 use std::net::TcpListener;
+
 #[cfg(unix)]
 use std::os::fd::FromRawFd;
+
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+
 use std::process::Command;
+
 #[cfg(unix)]
 use std::process::{ExitStatus, Stdio};
+
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
 use std::sync::mpsc;
+
 use std::sync::{Arc, Mutex, Once, OnceLock};
+
 use std::thread;
+
 use std::time::{Duration, Instant};
 
 use jsonrpsee::types::ErrorObjectOwned;
+
 use rpc_recorder::{RecordedCall, RecordingServer, RecordingServerBuilder};
+
 use tempfile::TempDir;
+
 #[cfg(unix)]
 use thruput_json_rpc_client::{HttpClientBuilder, native::NativeClient};
+
 #[cfg(unix)]
 use thruput_json_rpc_types::{requests::EmptyRequest, responses::DecodedResponse};
 
 #[path = "support/isolation.rs"]
 mod isolation;
+
 #[path = "support/rpc_recorder.rs"]
 mod rpc_recorder;
+
 mod support;
+
 #[cfg(unix)]
 #[path = "support/ui_audit.rs"]
 mod ui_audit;
@@ -44,10 +63,11 @@ static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// bounds how quickly a genuinely broken command fails. It is deliberately far
 /// above what any command needs because CI runners pause for seconds at a
 /// time: one ~5 s stall failed every `call_*` test at once while the mock
-/// endpoints gave up after 5 s, and a 2 s exit budget has failed
-/// `config_rm_force_does_not_read_stdin` more than once. Checks that the CLI
-/// does *not* do something (`assert_no_follow_up_rpc`, recorded mocks) wait for
-/// it to exit instead, so a stall cannot make them pass early either.
+/// endpoints gave up after 5 s, and a 2 s exit budget has failed the forced
+/// `config rm` in `removals_require_force_without_an_interactive_prompt` more
+/// than once. Checks that the CLI does *not* do something
+/// (`assert_no_follow_up_rpc`, recorded mocks) wait for it to exit instead, so
+/// a stall cannot make them pass early either.
 const CLI_ACTION_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Write the `.cargo/contract.toml` overlay every contract build requires at
@@ -303,23 +323,9 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     );
 }
 
-#[test]
-fn chain_restore_help_documents_force_alias() {
-    let output = thruput()
-        .args(["chain", "restore", "--help"])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    assert!(
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .contains("-f, --force")
-    );
-}
-
 #[path = "support/devnode.rs"]
 mod devnode;
+
 use devnode::binary as fake_hogd_dev_binary;
 
 #[cfg(unix)]
@@ -650,29 +656,305 @@ where
         .expect("timed out waiting for child stdout output")
 }
 
+/// What a command's `--help` must or must not say.
+enum HelpText {
+    Has(&'static str),
+    Lacks(&'static str),
+    /// No line of the command list starts with this removed command.
+    LacksCommand(&'static str),
+}
+
+/// Each command, its nested subcommands, and what their `--help` must say.
+const HELP_CASES: &[(&[&str], &[HelpText])] = {
+    use HelpText::{Has, Lacks, LacksCommand};
+    &[
+        (
+            &[],
+            &[
+                Has("new"),
+                Has("init"),
+                Has("status"),
+                Has("build"),
+                Has("test"),
+                Has("deploy"),
+                Has("call"),
+                Has("view"),
+                Has("storage"),
+                Has("keys"),
+                Has("completion"),
+                Has("skill"),
+                LacksCommand("login"),
+                LacksCommand("logout"),
+            ],
+        ),
+        (
+            &["build"],
+            &[
+                Has("--target-dir"),
+                Has("--bindings <BINDINGS>"),
+                Has("RV32"),
+                Lacks("--target <TARGET>"),
+                Lacks("--optimize"),
+            ],
+        ),
+        (
+            &["test"],
+            &[
+                Has("--target-dir"),
+                Has("rv32"),
+                Has("--watch"),
+                Has("--integration"),
+                Lacks("--target <TARGET>"),
+                Lacks("--differential"),
+                Has("--hog-devnode-version"),
+                Has("-v, --verbose"),
+                Has("RUST_LOG"),
+                Has("hog-devnode"),
+                Has("tests/integration.rs"),
+                Lacks("not wired yet"),
+            ],
+        ),
+        (
+            &["node"],
+            &[
+                Has("-v, --verbose"),
+                Has("--verbose"),
+                Has("--verbose is also honored with --json"),
+                Has("--hog-devnode-binary"),
+                Has("--contract-artifacts-dir <DIR>"),
+                Has("--hog-devnode-version"),
+                Has("--data-dir"),
+                Has("--init-network-hash <BASE58>"),
+                Has("base58 encoding of exactly 32 bytes"),
+                Has("default: all zeros for new chains"),
+                Has("persistent hog-devnode state"),
+                Has("--key <KEY>"),
+                Has("--initial-account-tokens <AMOUNT>"),
+                Has("Initial native token balance for the selected key"),
+                Has("--hogd-protocol"),
+                Has("THRUPUT_DEVNODE_BINARY"),
+                Has("THRUPUT_OFFLINE"),
+                Has("THRUPUT_TOOLCHAIN_BASE_URL"),
+                Has("RUST_LOG"),
+                Has("hogd_timestamp_ms"),
+                Has("hogd_target"),
+                Has("hogd_file"),
+                Has("hogd_line"),
+            ],
+        ),
+        (
+            &["deploy"],
+            &[
+                Has("--target-dir"),
+                Has("--dry-run"),
+                Lacks("--target <TARGET>"),
+            ],
+        ),
+        (
+            &["call"],
+            &[
+                Has("--target-dir"),
+                Has("--dry-run"),
+                Has("0x-prefixed 8-byte entrypoint ID"),
+                Has("raw hex calldata"),
+            ],
+        ),
+        (&["storage"], &[Has("getStorage"), Has("--profile")]),
+        (&["chain", "restore"], &[Has("-f, --force")]),
+        (
+            &["config"],
+            &[
+                Has("Inspect and manage persisted global and project profiles"),
+                Has("pass --global or --project"),
+                Has("omitted scope means global"),
+                Has("get"),
+                Has("profiles"),
+                Has("new"),
+                Has("rm"),
+                Has("set"),
+                Has("unset"),
+                Has("use"),
+            ],
+        ),
+        (
+            &["config", "get"],
+            &[
+                Has("merged from global and project configuration"),
+                Has("--sources"),
+                Lacks("--global"),
+                Lacks("--project"),
+            ],
+        ),
+        (
+            &["config", "new"],
+            &[
+                Has("one atomic config update"),
+                Has("omitted scope means global"),
+                Has("choose --global or --project explicitly"),
+                Has("cannot be used together"),
+                Has("--network <NETWORK>"),
+                Has("--use"),
+            ],
+        ),
+        (
+            &["config", "rm"],
+            &[
+                Has("contract aliases and wallet bindings"),
+                Has("asks for confirmation"),
+                Has("-f, --force"),
+                Has("Skip the confirmation prompt"),
+                Has("cannot be undone"),
+                Has("default profile selection is cleared"),
+                Has("--global"),
+                Has("--project"),
+            ],
+        ),
+        (
+            &["config", "set"],
+            &[Has("must already exist in that layer")],
+        ),
+        (
+            &["config", "unset"],
+            &[Has("Missing fields"), Has("inherited global value")],
+        ),
+        (
+            &["config", "use"],
+            &[Has("THRUPUT_PROFILE"), Has("either layer")],
+        ),
+        (&["keys"], &[Has("export")]),
+        (
+            &["keys", "export"],
+            &[
+                Has("written to stdout as unprefixed, case-sensitive base58"),
+                Has("Treat it as a secret"),
+                Has("logs, CI output, or committed files"),
+            ],
+        ),
+        (
+            &["keys", "rm"],
+            &[
+                Has("-f, --force"),
+                Has("Skip the confirmation prompt"),
+                Has("cannot be undone"),
+            ],
+        ),
+        (
+            &["tx"],
+            &[
+                Has("show"),
+                Has("list"),
+                Has("transactions and address history"),
+            ],
+        ),
+        (
+            &["tx", "show"],
+            &[
+                Has("one-shot public transaction lookup without waiting"),
+                Has("public status and receipt fields"),
+                Has("Raw transaction bodies"),
+                Has("deep traces are not available"),
+                Has("--profile"),
+                Has("--rpc-url"),
+                Has("--runtime-manifest"),
+            ],
+        ),
+        (
+            &["tx", "list"],
+            &[
+                Has("exactly one page"),
+                Has("root invocation"),
+                Has("Incoming wallet-wrapped transfers may not appear"),
+                Has("continuation cursor is opaque and reusable"),
+                Has("Receipts are not fetched"),
+                Has("--limit"),
+                Has("--cursor"),
+                Has("--profile"),
+                Has("--rpc-url"),
+                Has("--runtime-manifest"),
+            ],
+        ),
+        (
+            &["events", "list"],
+            &[
+                Has("exactly one newest-first page"),
+                Has("global event scan is not performed"),
+                Has("Repeat a topic option for OR within that position"),
+                Has("Raw topics and data are authoritative"),
+                Has("cursor is opaque and must be reused"),
+                Has("--topic0"),
+                Has("--topic1"),
+                Has("--topic2"),
+                Has("--limit"),
+                Has("--cursor"),
+                Has("--spec"),
+                Has("--event"),
+                Has("--profile"),
+                Has("--rpc-url"),
+                Has("--runtime-manifest"),
+            ],
+        ),
+        (
+            &["token", "transfers"],
+            &[
+                Has("exactly one newest-first page"),
+                Has("canonical ERC20 TransferEvent"),
+                Has("MintEvent"),
+                Has("BurnEvent"),
+                Has("--from"),
+                Has("--to"),
+                Has("--account"),
+                Has("--limit"),
+                Has("--cursor"),
+                Has("--profile"),
+                Has("--rpc-url"),
+                Has("--runtime-manifest"),
+            ],
+        ),
+    ]
+};
+
 #[test]
-fn help_shows_subcommands() {
-    let output = thruput().arg("--help").output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("new"));
-    assert!(stdout.contains("init"));
-    assert!(stdout.contains("status"));
-    assert!(stdout.contains("build"));
-    assert!(stdout.contains("test"));
-    assert!(stdout.contains("deploy"));
-    assert!(stdout.contains("call"));
-    assert!(stdout.contains("view"));
-    assert!(stdout.contains("storage"));
-    assert!(stdout.contains("keys"));
-    for removed_command in ["login", "logout"] {
+fn help_documents_each_command() {
+    use HelpText::{Has, Lacks, LacksCommand};
+
+    for (args, expectations) in HELP_CASES {
+        let case = ["thruput"]
+            .iter()
+            .chain(*args)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let output = thruput()
+            .args(*args)
+            .arg("--help")
+            .output()
+            .unwrap_or_else(|error| panic!("`{case} --help` did not run: {error}"));
         assert!(
-            !stdout
-                .lines()
-                .any(|line| line.trim_start().starts_with(removed_command))
+            output.status.success(),
+            "`{case} --help` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
+        let stdout = String::from_utf8(output.stdout)
+            .unwrap_or_else(|error| panic!("`{case} --help` printed invalid UTF-8: {error}"));
+        for expectation in *expectations {
+            match expectation {
+                Has(text) => assert!(
+                    stdout.contains(text),
+                    "`{case} --help` is missing `{text}`:\n{stdout}"
+                ),
+                Lacks(text) => assert!(
+                    !stdout.contains(text),
+                    "`{case} --help` still shows `{text}`:\n{stdout}"
+                ),
+                LacksCommand(command) => assert!(
+                    !stdout
+                        .lines()
+                        .any(|line| line.trim_start().starts_with(command)),
+                    "`{case} --help` still lists removed command `{command}`:\n{stdout}"
+                ),
+            }
+        }
     }
-    assert!(stdout.contains("completion"));
-    assert!(stdout.contains("skill"));
 }
 
 #[test]
@@ -875,19 +1157,7 @@ fn bundle_mismatch_does_not_corrupt_json_error_output() {
 }
 
 #[test]
-fn config_help_describes_merged_inspection() {
-    let output = thruput()
-        .args(["config", "get", "--help"])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("merged from global and project configuration"));
-    assert!(stdout.contains("--sources"));
-    assert!(!stdout.contains("--global"));
-    assert!(!stdout.contains("--project"));
-
+fn config_get_rejects_removed_scope_flags() {
     for removed_flag in ["--global", "--project"] {
         let rejected = thruput()
             .args(["config", "get", removed_flag])
@@ -896,79 +1166,6 @@ fn config_help_describes_merged_inspection() {
         assert!(!rejected.status.success());
         assert!(String::from_utf8_lossy(&rejected.stderr).contains("unexpected argument"));
     }
-}
-
-#[test]
-fn config_parent_help_describes_management_and_scope_rules() {
-    let output = thruput().args(["config", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Inspect and manage persisted global and project profiles"));
-    assert!(stdout.contains("pass --global or --project"));
-    assert!(stdout.contains("omitted scope means global"));
-    for command in ["get", "profiles", "new", "rm", "set", "unset", "use"] {
-        assert!(
-            stdout.contains(command),
-            "missing config command `{command}`"
-        );
-    }
-}
-
-#[test]
-fn config_mutation_help_describes_layer_specific_behavior() {
-    let set = thruput()
-        .args(["config", "set", "--help"])
-        .output()
-        .unwrap();
-    let unset = thruput()
-        .args(["config", "unset", "--help"])
-        .output()
-        .unwrap();
-    let use_profile = thruput()
-        .args(["config", "use", "--help"])
-        .output()
-        .unwrap();
-
-    assert!(set.status.success() && unset.status.success() && use_profile.status.success());
-    assert!(String::from_utf8_lossy(&set.stdout).contains("must already exist in that layer"));
-    assert!(String::from_utf8_lossy(&unset.stdout).contains("Missing fields"));
-    assert!(String::from_utf8_lossy(&unset.stdout).contains("inherited global value"));
-    assert!(String::from_utf8_lossy(&use_profile.stdout).contains("THRUPUT_PROFILE"));
-    assert!(String::from_utf8_lossy(&use_profile.stdout).contains("either layer"));
-}
-
-#[test]
-fn config_new_help_describes_atomic_creation_and_scope_rules() {
-    let output = thruput()
-        .args(["config", "new", "--help"])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("one atomic config update"));
-    assert!(stdout.contains("omitted scope means global"));
-    assert!(stdout.contains("choose --global or --project explicitly"));
-    assert!(stdout.contains("cannot be used together"));
-    assert!(stdout.contains("--network <NETWORK>"));
-    assert!(stdout.contains("--use"));
-}
-
-#[test]
-fn config_rm_help_describes_confirmation_and_deleted_contents() {
-    let output = thruput().args(["config", "rm", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("contract aliases and wallet bindings"));
-    assert!(stdout.contains("asks for confirmation"));
-    assert!(stdout.contains("-f, --force"));
-    assert!(stdout.contains("Skip the confirmation prompt"));
-    assert!(stdout.contains("cannot be undone"));
-    assert!(stdout.contains("default profile selection is cleared"));
-    assert!(stdout.contains("--global"));
-    assert!(stdout.contains("--project"));
 }
 
 #[test]
@@ -1741,98 +1938,6 @@ fn config_rm_force_quiet_is_non_interactive() {
     assert_eq!(
         std::fs::read_to_string(config_home.join("thruput/config.toml")).unwrap(),
         ""
-    );
-}
-
-#[test]
-fn config_rm_non_tty_input_requires_force() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let contents = "[profile.staging]\nnetwork = \"devnet\"\n";
-    write_global_config(&config_home, contents);
-
-    let mut child = thruput()
-        .args(["config", "rm", "staging"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .current_dir(tmp.path())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    offer_stdin(&mut child, b"y\n");
-    let output = child.wait_with_output().unwrap();
-
-    assert!(!output.status.success());
-    assert!(String::from_utf8(output.stderr).unwrap().contains("--yes"));
-    assert_eq!(
-        std::fs::read_to_string(config_home.join("thruput/config.toml")).unwrap(),
-        contents
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn config_rm_force_does_not_read_stdin() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    write_global_config(&config_home, "[profile.staging]\nnetwork = \"devnet\"\n");
-
-    let child = thruput()
-        .args(["config", "rm", "-f", "staging"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .current_dir(tmp.path())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    let status = wait_child(child, CLI_ACTION_TIMEOUT);
-
-    assert!(status.success());
-    assert_eq!(
-        std::fs::read_to_string(config_home.join("thruput/config.toml")).unwrap(),
-        ""
-    );
-}
-
-#[test]
-fn config_rm_non_interactive_modes_require_force() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let contents = "[profile.staging]\nnetwork = \"devnet\"\n";
-    write_global_config(&config_home, contents);
-
-    let json = thruput()
-        .args(["--json", "config", "rm", "staging"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-    assert!(!json.status.success());
-    let error: serde_json::Value = serde_json::from_slice(&json.stderr).unwrap();
-    assert_eq!(error["error"]["code"], "confirmation_required");
-    assert_eq!(
-        error["error"]["details"]["action"],
-        "remove a configuration profile"
-    );
-    assert_eq!(error["error"]["details"]["requiredFlag"], "--yes");
-    assert_eq!(
-        std::fs::read_to_string(config_home.join("thruput/config.toml")).unwrap(),
-        contents
-    );
-
-    let quiet = thruput()
-        .args(["--quiet", "config", "rm", "staging"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-    assert!(!quiet.status.success());
-    assert!(String::from_utf8(quiet.stderr).unwrap().contains("--yes"));
-    assert_eq!(
-        std::fs::read_to_string(config_home.join("thruput/config.toml")).unwrap(),
-        contents
     );
 }
 
@@ -3218,128 +3323,254 @@ fn global_non_interactive_keeps_terminal_output_plain_and_visible() {
     assert!(tmp.path().join("plain-project/thruput.toml").exists());
 }
 
+/// Parse `bytes` as a JSON report, failing with `case` in the message.
+fn case_json(case: &str, stream: &str, bytes: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(bytes).unwrap_or_else(|error| {
+        panic!(
+            "{case}: {stream} is not a JSON report ({error}): {}",
+            String::from_utf8_lossy(bytes)
+        )
+    })
+}
+
+/// Run `command` on a terminal and return its exit status and terminal output.
 #[cfg(unix)]
+fn run_on_terminal(command: Command, case: &str) -> (ExitStatus, String) {
+    let (child, terminal) = spawn_with_terminal(command);
+    let reader = terminal_output_reader(&terminal);
+    let status = wait_child(child, CLI_ACTION_TIMEOUT);
+    drop(terminal);
+    let output = reader
+        .join()
+        .unwrap_or_else(|_| panic!("{case}: terminal reader panicked"));
+    (status, output)
+}
+
+/// What a confirmation-guarded removal deletes.
+#[derive(Clone, Copy, Debug)]
+enum Removal {
+    ConfigProfile,
+    Key,
+}
+
+/// How a removal runs without someone answering its prompt. The terminal
+/// modes, and waiting on the forced removal, need Unix.
+#[derive(Clone, Copy, Debug)]
+enum RemovalMode {
+    /// A terminal is attached, but `--non-interactive` forbids prompting.
+    #[cfg(unix)]
+    NonInteractiveTerminal {
+        json: bool,
+    },
+    /// `--force` removes on a non-interactive terminal without prompting.
+    #[cfg(unix)]
+    ForcedNonInteractiveTerminal,
+    /// An answer piped to stdin is not consent.
+    PipedStdin,
+    Json,
+    Quiet,
+    /// `-f` removes without reading the stdin it was handed.
+    #[cfg(unix)]
+    ForcedWithPipedStdin,
+}
+
 #[test]
-fn global_non_interactive_terminal_key_removal_requires_force() {
-    let tmp = TempDir::new().unwrap();
-    generate_key_public_key(tmp.path(), "alice");
-    let path = tmp.path().join("thruput/keys/alice.json");
-    let before = std::fs::read(&path).unwrap();
-    for (force, json) in [(false, false), (false, true), (true, false)] {
-        let mut command = thruput();
-        command
-            .args(["keys", "rm", "alice", "--non-interactive"])
-            .current_dir(tmp.path())
-            .env("XDG_CONFIG_HOME", tmp.path());
-        if json {
-            command.arg("--json");
-        }
-        if force {
-            command.arg("--force");
-        }
-        let (child, terminal) = spawn_with_terminal(command);
-        let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, CLI_ACTION_TIMEOUT);
-        drop(terminal);
-        let output = reader.join().unwrap();
-        assert_eq!(status.success(), force);
-        if !force {
-            if json {
-                let report: serde_json::Value = serde_json::from_str(&output).unwrap();
-                assert_eq!(report["error"]["code"], "confirmation_required");
-            } else {
-                assert!(output.contains("--yes"), "{output}");
-                assert!(!output.contains("Remove key `alice`?"), "{output}");
-                assert!(!output.contains("[y/N]"), "{output}");
+fn removals_require_force_without_an_interactive_prompt() {
+    #[cfg(unix)]
+    use RemovalMode::{ForcedNonInteractiveTerminal, ForcedWithPipedStdin, NonInteractiveTerminal};
+    use RemovalMode::{Json, PipedStdin, Quiet};
+
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut modes = vec![PipedStdin, Json, Quiet];
+    #[cfg(unix)]
+    modes.extend([
+        NonInteractiveTerminal { json: false },
+        NonInteractiveTerminal { json: true },
+        ForcedNonInteractiveTerminal,
+        ForcedWithPipedStdin,
+    ]);
+    for target in [Removal::ConfigProfile, Removal::Key] {
+        for &mode in &modes {
+            let case = format!("{target:?} {mode:?}");
+            // Shown with a failing test's output, so a fixture or spawn failure
+            // in a shared helper is attributed to its row.
+            eprintln!("case: {case}");
+            let tmp = TempDir::new().unwrap();
+            let config_home = tmp.path().join("config-home");
+            let (args, path, prompt, action) = match target {
+                Removal::ConfigProfile => {
+                    write_global_config(&config_home, "[profile.staging]\nnetwork = \"devnet\"\n");
+                    (
+                        ["config", "rm", "staging"],
+                        config_home.join("thruput/config.toml"),
+                        "Remove profile `staging` from global config?",
+                        Some("remove a configuration profile"),
+                    )
+                }
+                Removal::Key => {
+                    generate_key_public_key(&config_home, "alice");
+                    (
+                        ["keys", "rm", "alice"],
+                        config_home.join("thruput/keys/alice.json"),
+                        "Remove key `alice`?",
+                        None,
+                    )
+                }
+            };
+            let before = std::fs::read(&path)
+                .unwrap_or_else(|error| panic!("{case}: fixture missing: {error}"));
+
+            let mut command = thruput();
+            command
+                .current_dir(tmp.path())
+                .env("XDG_CONFIG_HOME", &config_home);
+            match mode {
+                #[cfg(unix)]
+                NonInteractiveTerminal { json } => {
+                    command.arg("--non-interactive");
+                    if json {
+                        command.arg("--json");
+                    }
+                }
+                #[cfg(unix)]
+                ForcedNonInteractiveTerminal => {
+                    command.arg("--non-interactive");
+                }
+                Json => {
+                    command.arg("--json");
+                }
+                Quiet => {
+                    command.arg("--quiet");
+                }
+                PipedStdin => {}
+                #[cfg(unix)]
+                ForcedWithPipedStdin => {}
             }
-            assert!(
-                std::fs::read(&path).unwrap() == before,
-                "refusal must preserve the key"
+            command.args(args);
+
+            let forced = run_unprompted_removal(command, mode, &case, prompt, action);
+
+            if forced {
+                match target {
+                    Removal::ConfigProfile => assert_eq!(
+                        std::fs::read_to_string(&path)
+                            .unwrap_or_else(|error| panic!("{case}: config unreadable: {error}")),
+                        "",
+                        "{case}: profile not removed"
+                    ),
+                    Removal::Key => assert!(!path.exists(), "{case}: key not removed"),
+                }
+            } else {
+                assert_eq!(
+                    std::fs::read(&path)
+                        .unwrap_or_else(|error| panic!("{case}: target deleted: {error}")),
+                    before,
+                    "{case}: refusal must preserve the target"
+                );
+            }
+        }
+    }
+}
+
+/// Run a removal without answering a prompt, check how it reports refusing,
+/// and return whether `mode` forced the removal.
+#[cfg_attr(not(unix), allow(unused_variables))]
+fn run_unprompted_removal(
+    mut command: Command,
+    mode: RemovalMode,
+    case: &str,
+    prompt: &str,
+    action: Option<&str>,
+) -> bool {
+    #[cfg(unix)]
+    use RemovalMode::{ForcedNonInteractiveTerminal, ForcedWithPipedStdin, NonInteractiveTerminal};
+    use RemovalMode::{Json, PipedStdin, Quiet};
+
+    match mode {
+        #[cfg(unix)]
+        NonInteractiveTerminal { json } => {
+            let (status, output) = run_on_terminal(command, case);
+            assert!(!status.success(), "{case}: removed without --force");
+            if json {
+                let report = case_json(case, "terminal output", output.as_bytes());
+                assert_eq!(
+                    report["error"]["code"], "confirmation_required",
+                    "{case}: {output}"
+                );
+            } else {
+                assert!(output.contains("--yes"), "{case}: {output}");
+                assert!(!output.contains(prompt), "{case}: {output}");
+                assert!(!output.contains("[y/N]"), "{case}: {output}");
+            }
+            false
+        }
+        #[cfg(unix)]
+        ForcedNonInteractiveTerminal => {
+            command.arg("--force");
+            let (status, output) = run_on_terminal(command, case);
+            assert!(status.success(), "{case}: {output}");
+            true
+        }
+        PipedStdin => {
+            let mut child = command
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap_or_else(|error| panic!("{case}: did not start: {error}"));
+            offer_stdin(&mut child, b"y\n");
+            let output = child
+                .wait_with_output()
+                .unwrap_or_else(|error| panic!("{case}: did not finish: {error}"));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{case}: removed without --force");
+            assert!(stderr.contains("--yes"), "{case}: {stderr}");
+            false
+        }
+        Json => {
+            let output = command
+                .output()
+                .unwrap_or_else(|error| panic!("{case}: did not run: {error}"));
+            assert!(!output.status.success(), "{case}: removed without --force");
+            let error = case_json(case, "stderr", &output.stderr);
+            assert_eq!(
+                error["error"]["code"], "confirmation_required",
+                "{case}: {error}"
             );
+            assert_eq!(
+                error["error"]["details"]["requiredFlag"], "--yes",
+                "{case}: {error}"
+            );
+            if let Some(action) = action {
+                assert_eq!(
+                    error["error"]["details"]["action"], action,
+                    "{case}: {error}"
+                );
+            }
+            false
         }
-    }
-    assert!(!path.exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn key_import_refuses_terminal_input_in_non_interactive_modes() {
-    for flags in [vec!["--non-interactive"], vec!["--quiet"], vec!["--json"]] {
-        let tmp = TempDir::new().unwrap();
-        let mut command = thruput();
-        command
-            .args(["keys", "import", "alice"])
-            .args(&flags)
-            .current_dir(tmp.path())
-            .env("XDG_CONFIG_HOME", tmp.path());
-        let (child, terminal) = spawn_with_terminal(command);
-        let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, CLI_ACTION_TIMEOUT);
-        drop(terminal);
-        let output = reader.join().unwrap();
-        assert!(!status.success());
-        assert!(!output.contains("Ed25519 secret seed"));
-        assert!(!tmp.path().join("thruput/keys/alice.json").exists());
-        if flags == ["--json"] {
-            let report: serde_json::Value = serde_json::from_str(&output).unwrap();
-            assert_eq!(report["error"]["code"], "interactive_input_required");
+        Quiet => {
+            let output = command
+                .output()
+                .unwrap_or_else(|error| panic!("{case}: did not run: {error}"));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{case}: removed without --force");
+            assert!(stderr.contains("--yes"), "{case}: {stderr}");
+            false
         }
-    }
-}
-
-#[test]
-fn global_non_interactive_key_import_accepts_piped_seed() {
-    let tmp = TempDir::new().unwrap();
-    let mut child = thruput()
-        .args(["--non-interactive", "keys", "import", "alice", "--json"])
-        .current_dir(tmp.path())
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let seed = thruput_encoding::encode(&[0x42; 32]);
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(seed.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    assert!(!String::from_utf8_lossy(&output.stdout).contains(&seed));
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["command"], "keys.import");
-    assert_eq!(report["ok"], true);
-    assert_eq!(report["data"]["key"]["name"], "alice");
-    assert!(tmp.path().join("thruput/keys/alice.json").exists());
-}
-
-#[test]
-fn key_generation_stores_dev_named_keys_without_implicit_derivation() {
-    for name in ["dev-0", "dev-1", "dev-01"] {
-        let tmp = TempDir::new().unwrap();
-        let config = tmp.path().join("thruput/config.toml");
-        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-        let before = "default_key = 'existing'\n[profile.default]\n";
-        std::fs::write(&config, before).unwrap();
-        let output = thruput()
-            .args(["--json", "keys", "generate", name])
-            .current_dir(tmp.path())
-            .env("XDG_CONFIG_HOME", tmp.path())
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["data"]["key"]["name"], name);
-        assert!(
-            tmp.path()
-                .join(format!("thruput/keys/{name}.json"))
-                .exists()
-        );
-        assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+        #[cfg(unix)]
+        ForcedWithPipedStdin => {
+            let child = command
+                .arg("-f")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let status = wait_child(child, CLI_ACTION_TIMEOUT);
+            assert!(status.success(), "{case}: forced removal failed");
+            true
+        }
     }
 }
 
@@ -4076,6 +4307,7 @@ fn build_rejects_removed_target_and_optimize_flags() {
         );
     }
 }
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn build_default_json_success_reports_rv32_artifact_paths() {
@@ -4289,70 +4521,6 @@ fn build_rv32_json_reports_lowerer_failure_details() {
 }
 
 #[test]
-fn build_help_mentions_target_dir() {
-    let output = thruput().args(["build", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--target-dir"));
-    assert!(stdout.contains("--bindings <BINDINGS>"));
-    assert!(stdout.contains("RV32"));
-    assert!(!stdout.contains("--target <TARGET>"));
-    assert!(!stdout.contains("--optimize"));
-}
-
-#[test]
-fn test_help_mentions_target_dir() {
-    let output = thruput().args(["test", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--target-dir"));
-    assert!(stdout.contains("rv32"));
-    assert!(stdout.contains("--watch"));
-    assert!(stdout.contains("--integration"));
-    assert!(!stdout.contains("--target <TARGET>"));
-    assert!(!stdout.contains("--differential"));
-    assert!(stdout.contains("--hog-devnode-version"));
-    assert!(stdout.contains("-v, --verbose"));
-    assert!(stdout.contains("RUST_LOG"));
-    assert!(stdout.contains("hog-devnode"));
-    assert!(stdout.contains("tests/integration.rs"));
-    assert!(!stdout.contains("not wired yet"));
-}
-
-#[test]
-fn node_help_mentions_hogd_dev_binary_and_log_contract() {
-    let output = thruput().args(["node", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("-v, --verbose"));
-    assert!(stdout.contains("--verbose"));
-    assert!(stdout.contains("--verbose is also honored with --json"));
-    assert!(stdout.contains("--hog-devnode-binary"));
-    assert!(stdout.contains("--contract-artifacts-dir <DIR>"));
-    assert!(stdout.contains("--hog-devnode-version"));
-    assert!(stdout.contains("--data-dir"));
-    assert!(stdout.contains("--init-network-hash <BASE58>"));
-    assert!(stdout.contains("base58 encoding of exactly 32 bytes"));
-    assert!(stdout.contains("default: all zeros for new chains"));
-    assert!(stdout.contains("persistent hog-devnode state"));
-    assert!(stdout.contains("--key <KEY>"));
-    assert!(stdout.contains("--initial-account-tokens <AMOUNT>"));
-    assert!(stdout.contains("Initial native token balance for the selected key"));
-    assert!(stdout.contains("--hogd-protocol"));
-    assert!(stdout.contains("THRUPUT_DEVNODE_BINARY"));
-    assert!(stdout.contains("THRUPUT_OFFLINE"));
-    assert!(stdout.contains("THRUPUT_TOOLCHAIN_BASE_URL"));
-    assert!(stdout.contains("RUST_LOG"));
-    assert!(stdout.contains("hogd_timestamp_ms"));
-    assert!(stdout.contains("hogd_target"));
-    assert!(stdout.contains("hogd_file"));
-    assert!(stdout.contains("hogd_line"));
-}
-
-#[test]
 fn node_rejects_ramdb_size_without_a_recognized_unit() {
     let output = thruput()
         .args(["node", "--ramdb-bytes", "2.5G"])
@@ -4365,40 +4533,6 @@ fn node_rejects_ramdb_size_without_a_recognized_unit() {
         stderr.contains("K/M/G"),
         "expected unit hint in stderr, got: {stderr}"
     );
-}
-
-#[test]
-fn deploy_help_mentions_target_dir_and_dry_run() {
-    let output = thruput().args(["deploy", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--target-dir"));
-    assert!(stdout.contains("--dry-run"));
-    assert!(!stdout.contains("--target <TARGET>"));
-}
-
-#[test]
-fn deploy_rejects_removed_target_flag() {
-    let output = thruput()
-        .args(["deploy", "--target", "wasm"])
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--target'"));
-}
-
-#[test]
-fn call_help_mentions_target_dir() {
-    let output = thruput().args(["call", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--target-dir"));
-    assert!(stdout.contains("--dry-run"));
-    assert!(stdout.contains("0x-prefixed 8-byte entrypoint ID"));
-    assert!(stdout.contains("raw hex calldata"));
 }
 
 #[test]
@@ -4418,16 +4552,6 @@ fn codegen_rv32_artifact_points_to_spec_sidecar() {
         stderr.contains(&tmp.path().join("counter.spec.xdr").display().to_string()),
         "expected adjacent sidecar path, got: {stderr}"
     );
-}
-
-#[test]
-fn storage_help_mentions_read_only_storage() {
-    let output = thruput().args(["storage", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("getStorage"));
-    assert!(stdout.contains("--profile"));
 }
 
 #[test]
@@ -5040,37 +5164,81 @@ fn new_json_failure_is_structured() {
     assert_eq!(stderr["error"]["code"], "dir_exists");
 }
 
-#[test]
-fn deploy_fails_without_config() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let output = thruput()
-        .arg("deploy")
-        .current_dir(tmp.path())
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no active profile"));
+/// How a command reports that no profile is configured.
+enum NoProfileReport {
+    /// A JSON error envelope for this command.
+    Json(&'static str),
+    /// Human stderr containing any of these.
+    Human(&'static [&'static str]),
 }
 
 #[test]
-fn deploy_json_fails_without_config() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let output = thruput()
-        .arg("--json")
-        .arg("deploy")
-        .current_dir(tmp.path())
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "deploy");
-    assert_eq!(stderr["error"]["code"], "no_active_profile");
+fn commands_fail_without_an_active_profile() {
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    let key = format!("0x{}", "42".repeat(32));
+    let cases: [(&str, Vec<&str>, NoProfileReport); 6] = [
+        (
+            "deploy",
+            vec!["deploy"],
+            NoProfileReport::Human(&["no active profile"]),
+        ),
+        (
+            "deploy --json",
+            vec!["--json", "deploy"],
+            NoProfileReport::Json("deploy"),
+        ),
+        (
+            "call",
+            vec!["call", "0x1234", "transfer"],
+            NoProfileReport::Human(&["rpc_url", "profile"]),
+        ),
+        (
+            "call --json",
+            vec!["--json", "call", "0x1234", "transfer"],
+            NoProfileReport::Json("call"),
+        ),
+        (
+            "storage --json",
+            vec!["--json", "storage", &address, &key],
+            NoProfileReport::Json("storage"),
+        ),
+        (
+            "view --json",
+            vec!["--json", "view", &address, "0x0102030405060708"],
+            NoProfileReport::Json("view"),
+        ),
+    ];
+    for (case, args, report) in cases {
+        let tmp = TempDir::new().unwrap();
+        let output = thruput()
+            .args(args)
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path().join("config-home"))
+            .output()
+            .unwrap_or_else(|error| panic!("{case}: did not run: {error}"));
+        assert!(
+            !output.status.success(),
+            "{case}: succeeded without a profile"
+        );
+        match report {
+            NoProfileReport::Json(command) => {
+                let stderr = case_json(case, "stderr", &output.stderr);
+                assert_eq!(stderr["ok"], false, "{case}: {stderr}");
+                assert_eq!(stderr["command"], command, "{case}: {stderr}");
+                assert_eq!(
+                    stderr["error"]["code"], "no_active_profile",
+                    "{case}: {stderr}"
+                );
+            }
+            NoProfileReport::Human(any_of) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    any_of.iter().any(|text| stderr.contains(text)),
+                    "{case}: expected one of {any_of:?} in: {stderr}"
+                );
+            }
+        }
+    }
 }
 
 fn write_deploy_workspace(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -5571,6 +5739,729 @@ fn deploy_dry_run_uses_hosted_descriptor_entrypoint() {
     );
 }
 
+#[test]
+fn deploy_rejects_removed_target_flag() {
+    let output = thruput()
+        .args(["deploy", "--target", "wasm"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--target'"));
+}
+
+#[test]
+fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let artifact_path = project.join("target/thruput/demo_contract.rv32a");
+    std::fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
+    std::fs::write(&artifact_path, b"rv32-auto").unwrap();
+
+    let output = thruput()
+        .args(["--json", "deploy", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        thruput_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
+    );
+    assert_eq!(stdout["data"]["artifactKind"], "rv32");
+    assert_eq!(
+        stdout["data"]["artifactPath"].as_str().unwrap(),
+        std::fs::canonicalize(&artifact_path)
+            .unwrap()
+            .to_string_lossy()
+    );
+    assert_eq!(stdout["data"]["artifactBytes"], "9");
+    assert_eq!(
+        signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
+        "rv32"
+    );
+}
+
+#[test]
+fn deploy_estimate_needs_no_signer_and_checks_network_rules() {
+    for (available, code_limit, memory_limit, expected_error) in [
+        (true, Some(16), Some(4096), None),
+        (
+            false,
+            None,
+            None,
+            Some("RPC did not supply authoritative execution rules"),
+        ),
+        (
+            true,
+            Some(15),
+            Some(4096),
+            Some("RV32 code is 16 bytes; network limit is 15"),
+        ),
+        (
+            true,
+            Some(16),
+            Some(4095),
+            Some("RV32 memory is 4096 bytes; network limit is 4095"),
+        ),
+        (
+            true,
+            None,
+            Some(4096),
+            Some("runtime did not report the effective RV32 code limit"),
+        ),
+        (
+            true,
+            Some(16),
+            None,
+            Some("runtime did not report the effective RV32 memory limit"),
+        ),
+    ] {
+        assert_deploy_estimate(available, code_limit, memory_limit, expected_error);
+    }
+}
+
+fn assert_deploy_estimate(
+    available: bool,
+    code_limit: Option<u32>,
+    memory_limit: Option<u32>,
+    expected_error: Option<&str>,
+) {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("thruput.toml"),
+        "default_profile = 'default'\n[profile.default]\n",
+    )
+    .unwrap();
+    let artifact = thruput_rv32_artifact::build_artifact(&[0; 16], &[], 0, 4096).unwrap();
+    let path = tmp.path().join("estimate.rv32a");
+    std::fs::write(&path, &artifact).unwrap();
+    let mut result = if available {
+        serde_json::json!({
+            "execution": {
+                "observedTip": { "blockHeight": "7", "blockHash": thruput_json_rpc_types::NetworkHashText::from([0x11; 32]) },
+                "configHash": thruput_json_rpc_types::NetworkHashText::from([0x22; 32]),
+                "effectiveLimits": {
+                    "maxContractSizeBytes": 1_000_000,
+                    "maxRv32CodeBytes": code_limit,
+                    "maxRv32MemoryBytes": memory_limit
+                },
+                "storageCosts": {
+                    "baseDataItemCost": "100", "bytestringCostPerByte": "1",
+                    "baseContractDeploymentCost": "200", "contractDeploymentCostPerByte": "2",
+                    "authPerKeyCost": "1", "rcqCostPerEntry": "1", "replayCacheCostPerEntry": "1",
+                    "balanceCost": "30"
+                }
+            }
+        })
+    } else {
+        serde_json::json!({})
+    };
+    result["stated"] = serde_json::json!({});
+    if let Some(limits) = result
+        .pointer_mut("/execution/effectiveLimits")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        limits.retain(|_, value| !value.is_null());
+    }
+    let server = rpc_mock()
+        .method("getChainConfig", move |_| Ok(result.clone()))
+        .start();
+    let (rpc_url, server) = recorded_mock(server, |script| {
+        script.expect("getChainConfig");
+    });
+    let output = thruput()
+        .args([
+            "--json",
+            "--non-interactive",
+            "deploy",
+            "--estimate",
+            "--artifact",
+        ])
+        .arg(&path)
+        .args(["--rpc-url", &rpc_url])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .output()
+        .unwrap();
+    match expected_error {
+        None => {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(json["data"]["schemaVersion"], 2);
+            assert_eq!(json["data"]["artifactBytes"], artifact.len().to_string());
+            assert_eq!(
+                json["data"]["minimumFundingRaw"],
+                (230 + artifact.len() * 2).to_string()
+            );
+            assert_eq!(json["data"]["execution"]["observedTip"]["blockHeight"], "7");
+            assert!(json["data"].get("signedTx").is_none());
+            assert!(output.stderr.is_empty());
+        }
+        Some(message) => {
+            assert!(!output.status.success());
+            let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(json["error"]["code"], "deployment_funding");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(message),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+        }
+    }
+    server.join().unwrap();
+}
+
+/// Decode the `0x`-hex signed transaction in `value`, failing with `case`.
+fn case_signed_tx(
+    case: &str,
+    value: &serde_json::Value,
+) -> thruput_xdr::transaction::SignedTransaction {
+    let hex = value
+        .as_str()
+        .unwrap_or_else(|| panic!("{case}: no signed transaction in the report: {value}"));
+    let bytes = hex::decode(hex.strip_prefix("0x").unwrap_or(hex))
+        .unwrap_or_else(|error| panic!("{case}: signed transaction is not hex ({error}): {hex}"));
+    xdrs::txs::decode(&bytes)
+        .unwrap_or_else(|error| panic!("{case}: signed transaction does not decode: {error:?}"))
+}
+
+/// Where a deploy dry run takes its RPC URL and runtime manifest from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeployTargetSource {
+    Profile,
+    Env,
+    Cli,
+}
+
+impl DeployTargetSource {
+    /// The dev wallet this source's manifest advertises when `expected` should
+    /// win: the dev-0 wallet the signing key controls for the winner, and a
+    /// different dev wallet for each source that should lose.
+    fn wallet(self, expected: Self) -> String {
+        advertised_dev_wallet_address(if self == expected {
+            0
+        } else {
+            match self {
+                Self::Profile => 1,
+                Self::Env => 2,
+                Self::Cli => 3,
+            }
+        })
+    }
+}
+
+/// What `THRUPUT_RUNTIME_MANIFEST` holds for a deploy precedence case.
+#[derive(Clone, Copy)]
+enum RuntimeManifestEnv {
+    Unset,
+    Blank,
+    Manifest,
+}
+
+struct DeployTargetCase {
+    name: &'static str,
+    /// The profile names its manifest by absolute path instead of relative to
+    /// the project.
+    absolute_profile_manifest: bool,
+    env: RuntimeManifestEnv,
+    /// Pass `--rpc-url` and `--runtime-manifest`; the profile's RPC URL is
+    /// then unreachable.
+    cli_target: bool,
+    expected: DeployTargetSource,
+}
+
+const DEPLOY_TARGET_CASES: [DeployTargetCase; 5] = [
+    DeployTargetCase {
+        name: "profile manifest by relative path",
+        absolute_profile_manifest: false,
+        env: RuntimeManifestEnv::Unset,
+        cli_target: false,
+        expected: DeployTargetSource::Profile,
+    },
+    DeployTargetCase {
+        name: "profile manifest by absolute path",
+        absolute_profile_manifest: true,
+        env: RuntimeManifestEnv::Unset,
+        cli_target: false,
+        expected: DeployTargetSource::Profile,
+    },
+    DeployTargetCase {
+        name: "env manifest overrides profile",
+        absolute_profile_manifest: false,
+        env: RuntimeManifestEnv::Manifest,
+        cli_target: false,
+        expected: DeployTargetSource::Env,
+    },
+    DeployTargetCase {
+        name: "cli target overrides env and profile",
+        absolute_profile_manifest: false,
+        env: RuntimeManifestEnv::Manifest,
+        cli_target: true,
+        expected: DeployTargetSource::Cli,
+    },
+    DeployTargetCase {
+        name: "blank env manifest falls back to profile",
+        absolute_profile_manifest: false,
+        env: RuntimeManifestEnv::Blank,
+        cli_target: false,
+        expected: DeployTargetSource::Profile,
+    },
+];
+
+#[test]
+fn deploy_dry_run_resolves_rpc_url_and_runtime_manifest_by_precedence() {
+    for case in &DEPLOY_TARGET_CASES {
+        let name = case.name;
+        eprintln!("case: {name}");
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let profile_dir = if case.absolute_profile_manifest {
+            tmp.path().to_owned()
+        } else {
+            project.clone()
+        };
+        let profile_manifest = write_runtime_manifest(
+            &profile_dir,
+            0,
+            &DeployTargetSource::Profile.wallet(case.expected),
+            None,
+        );
+        let profile_manifest = if case.absolute_profile_manifest {
+            profile_manifest.display().to_string()
+        } else {
+            profile_manifest
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+        let profile_rpc_url = if case.cli_target {
+            "http://127.0.0.1:1"
+        } else {
+            rpc_url.as_str()
+        };
+        std::fs::write(
+            project.join("thruput.toml"),
+            format!(
+                "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{profile_rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{profile_manifest}\"\n",
+            ),
+        )
+        .unwrap();
+        let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+        let mut command = thruput();
+        command.args(["--json", "deploy", "--fund", "0", "--dry-run"]);
+        if case.cli_target {
+            let cli_dir = tmp.path().join("cli");
+            std::fs::create_dir(&cli_dir).unwrap();
+            let cli_manifest = write_runtime_manifest(
+                &cli_dir,
+                0,
+                &DeployTargetSource::Cli.wallet(case.expected),
+                None,
+            );
+            command
+                .args(["--rpc-url", &rpc_url, "--runtime-manifest"])
+                .arg(cli_manifest);
+        }
+        match case.env {
+            RuntimeManifestEnv::Unset => {}
+            RuntimeManifestEnv::Blank => {
+                command.env("THRUPUT_RUNTIME_MANIFEST", "   ");
+            }
+            RuntimeManifestEnv::Manifest => {
+                let env_dir = tmp.path().join("env");
+                std::fs::create_dir(&env_dir).unwrap();
+                let env_manifest = write_runtime_manifest(
+                    &env_dir,
+                    0,
+                    &DeployTargetSource::Env.wallet(case.expected),
+                    None,
+                );
+                command.env("THRUPUT_RUNTIME_MANIFEST", env_manifest);
+            }
+        }
+        let output = command
+            .args(["--artifact", rv32_path.to_str().unwrap()])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", profile_dir.join("fixture-config"))
+            .output()
+            .unwrap_or_else(|error| panic!("{name}: deploy did not run: {error}"));
+
+        // The endpoint reports its own mismatch first; this names the row.
+        let endpoint =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rpc_server.join().unwrap()));
+        assert!(endpoint.is_ok(), "{name}: RPC requests did not match");
+
+        assert!(
+            output.status.success(),
+            "{name}: stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = case_json(name, "stdout", &output.stdout);
+        let signed = case_signed_tx(name, &stdout["data"]["signedTx"]);
+
+        assert_eq!(stdout["data"]["rpcUrl"], rpc_url, "{name}");
+        assert_eq!(
+            thruput_encoding::encode(signed.tx.invocation.invoked_address.as_ref()),
+            case.expected.wallet(case.expected),
+            "{name}"
+        );
+        assert_eq!(
+            signed_tx_entrypoint_from_decoded(&signed),
+            "0x6be0cb0f6de0917a",
+            "{name}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_dry_run_rejects_runtime_manifest_symlink() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, None);
+    let symlink_path = tmp.path().join("runtime-manifest-link.json");
+    std::os::unix::fs::symlink(&manifest_path, &symlink_path).unwrap();
+    std::fs::write(
+        project.join("thruput.toml"),
+        format!(
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            symlink_path.display()
+        ),
+    )
+    .unwrap();
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = thruput()
+        .args([
+            "--json",
+            "deploy",
+            "--fund",
+            "0",
+            "--dry-run",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "local_runtime_unavailable");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not a symlink")
+    );
+}
+
+#[test]
+fn deploy_requires_stored_key_even_for_dev_named_selection() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    std::fs::write(
+        project.join("thruput.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\n",
+    )
+    .unwrap();
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = thruput()
+        .args([
+            "--json",
+            "deploy",
+            "--fund",
+            "0",
+            "--dry-run",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "deploy");
+    assert_eq!(stderr["error"]["code"], "key_not_found");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("dev-0")
+    );
+}
+
+#[test]
+fn deploy_live_json_submits_and_returns_receipt() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    // The deploy path treats the selected RV32 artifact as opaque bytes.
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = thruput()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    rpc_server.join().unwrap();
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "deploy");
+    assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        thruput_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
+    );
+
+    // Raw return bytes carry an address; the report renders that address as base58.
+    let expected_address = thruput_encoding::encode(&[0xbb; 32]);
+    assert_eq!(stdout["data"]["address"], expected_address);
+    assert_eq!(stdout["data"]["addressSource"], "receipt");
+    assert_eq!(stdout["data"]["gasUsed"], "1500");
+    assert_eq!(stdout["data"]["blockHeight"], "42");
+    assert_eq!(stdout["data"]["execution"]["result"], "return");
+    assert!(stdout["data"].get("returnData").is_none());
+    assert!(stdout["data"].get("abortData").is_none());
+    assert!(stdout["data"].get("transactionDetail").is_none());
+    assert!(
+        thruput_encoding::decode_fixed::<32>(stdout["data"]["txHash"].as_str().unwrap()).is_ok()
+    );
+}
+
+#[test]
+fn deploy_live_json_fails_with_receipt_context() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, sample_failed_deploy_receipt(42));
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+    let output = thruput()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["command"], "deploy");
+    assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
+    assert_eq!(stdout["data"]["blockHeight"], "42");
+    assert_eq!(stdout["data"]["execution"]["result"], "fault");
+    assert!(stdout["data"]["execution"].get("returnData").is_none());
+    assert!(stdout["data"]["execution"].get("abortData").is_none());
+    assert!(
+        thruput_encoding::decode_fixed::<32>(stdout["data"]["txHash"].as_str().unwrap()).is_ok()
+    );
+}
+
+#[test]
+fn deploy_live_json_reports_actionable_native_token_overdraft() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_insufficient_funding_deploy_receipt(42));
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+    let output = thruput()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["command"], "deploy");
+    assert_eq!(stdout["data"]["schemaVersion"], 9);
+    assert_eq!(stdout["data"]["blockHeight"], "42");
+    assert_eq!(stdout["data"]["execution"]["result"], "abort");
+    assert_eq!(stdout["error"]["code"], "transaction_insufficient_funds");
+    assert_eq!(
+        stdout["error"]["details"]["reason"],
+        "nativeTokenTransferOverdraft"
+    );
+    assert!(stdout["error"]["hint"].as_str().is_some_and(|hint| {
+        hint.contains("thruput balance --profile=default -- alice")
+            && hint.contains("thruput airdrop --profile=default -- alice")
+    }));
+    assert_ne!(stdout["error"]["code"], "transaction_reverted");
+    assert!(
+        stdout["data"]["execution"]["abortData"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("0x"))
+    );
+}
+
+#[test]
+fn deploy_live_human_reports_selected_wallet_funding_commands() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) =
+        spawn_transaction_rpc(42, sample_insufficient_funding_deploy_receipt(42));
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+    let output = thruput()
+        .args([
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("wallet `alice` has insufficient native tokens"));
+    assert!(stderr.contains("thruput balance --profile=default -- alice"));
+    assert!(stderr.contains("thruput airdrop --profile=default -- alice"));
+    assert!(stderr.contains("retry the original deploy command"));
+}
+
+#[test]
+fn deploy_live_human_fails_after_printing_receipt_context() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, sample_failed_deploy_receipt(42));
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+    let output = thruput()
+        .args([
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning: Deploy failed with a deterministic execution fault"));
+    assert!(stderr.lines().any(|line| {
+        line.trim()
+            .strip_prefix("tx: ")
+            .is_some_and(|hash| thruput_encoding::decode_fixed::<32>(hash).is_ok())
+    }));
+    assert!(stderr.contains("height: 42"));
+    assert!(!stderr.contains("return data:"), "stderr: {stderr}");
+    assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
+    assert!(stderr.contains("gas used: 4242"), "stderr: {stderr}");
+}
+
 fn empty_wallet_fixture() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -5918,39 +6809,6 @@ fn wallet_create_dry_run_only_derives_and_prefund_is_rejected() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("wallet_create_prefund_unsupported"));
     assert_eq!(std::fs::read(project.join("thruput.toml")).unwrap(), before);
-}
-
-#[test]
-fn native_wallet_airdrop_uses_saved_default_on_hosted_faucet() {
-    let (tmp, project, config) = empty_wallet_fixture();
-    let output = create_empty_wallet(&project, &config, &[]);
-    assert!(output.status.success());
-    let created: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let recipient = created["data"]["wallet"].as_str().unwrap();
-    let (rpc_url, rpc_server) = spawn_airdrop_rpc(recipient);
-    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
-    let path = project.join("thruput.toml");
-    let mut doc: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    doc["profile"]["default"]["rpc_url"] = toml::Value::String(rpc_url);
-    doc["profile"]["default"]["faucet_url"] = toml::Value::String(faucet_url);
-    std::fs::write(&path, toml::to_string(&doc).unwrap()).unwrap();
-    let output = thruput()
-        .args(["--json", "airdrop", "--force"])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config)
-        .env("XDG_CACHE_HOME", tmp.path().join("cache"))
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    descriptor_server.join().unwrap();
-    rpc_server.join().unwrap();
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["data"]["recipientWallet"], recipient);
-    assert_eq!(report["data"]["mode"], "remote");
 }
 
 #[test]
@@ -7011,6 +7869,78 @@ fn hosted_airdrop_pending_only_polls_when_a_hash_is_known() {
 }
 
 #[test]
+fn hosted_airdrop_unknown_outcomes_retain_attempt_path_and_raw_response() {
+    for nested_execution in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config_home = tmp.path().join("config-home");
+        let cache_home = tmp.path().join("cache-home");
+        std::fs::create_dir_all(&project).unwrap();
+        let recipient = thruput_encoding::encode(&[0xaa; 32]);
+        let response = if nested_execution {
+            serde_json::json!({"attemptStatus":"succeeded","recipient":recipient,"rawAmount":"25000000",
+                "transactionHash":thruput_encoding::encode(&[0x22;32]),"blockHeight":"42",
+                "execution":{"result":"futureExecution","detail":"retained"}})
+        } else {
+            serde_json::json!({"attemptStatus":"futureOutcome","detail":"retained"})
+        };
+        let (rpc_url, server) =
+            spawn_airdrop_rpc_response(&recipient, None, Some(response.clone()));
+        let (faucet_url, descriptor) = spawn_network_descriptor(&rpc_url);
+        write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+        add_faucet_to_default_profile(&project, &faucet_url);
+        let output = thruput()
+            .args(["--json", "airdrop", "alice", "--force"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_CACHE_HOME", &cache_home)
+            .output()
+            .unwrap();
+        descriptor.join().unwrap();
+        server.join().unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        let details = &report["error"]["details"];
+        assert_eq!(details["result"], response);
+        let path = details["attemptPath"].as_str().unwrap();
+        assert!(std::path::Path::new(path).is_file(), "{report}");
+    }
+}
+
+#[test]
+fn native_wallet_airdrop_uses_saved_default_on_hosted_faucet() {
+    let (tmp, project, config) = empty_wallet_fixture();
+    let output = create_empty_wallet(&project, &config, &[]);
+    assert!(output.status.success());
+    let created: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let recipient = created["data"]["wallet"].as_str().unwrap();
+    let (rpc_url, rpc_server) = spawn_airdrop_rpc(recipient);
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    let path = project.join("thruput.toml");
+    let mut doc: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    doc["profile"]["default"]["rpc_url"] = toml::Value::String(rpc_url);
+    doc["profile"]["default"]["faucet_url"] = toml::Value::String(faucet_url);
+    std::fs::write(&path, toml::to_string(&doc).unwrap()).unwrap();
+    let output = thruput()
+        .args(["--json", "airdrop", "--force"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config)
+        .env("XDG_CACHE_HOME", tmp.path().join("cache"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["data"]["recipientWallet"], recipient);
+    assert_eq!(report["data"]["mode"], "remote");
+}
+
+#[test]
 fn transaction_commands_require_force_before_submission_or_attempt_state() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -7144,6 +8074,172 @@ fn funding_commands_refuse_without_force_before_reading_the_profile() {
             "{action}: {error}"
         );
     }
+}
+
+#[test]
+fn initialized_futurenet_profile_discovers_signing_identity_for_all_transaction_commands() {
+    use std::fmt::Write as _;
+
+    for command in ["transfer", "call", "deploy"] {
+        let tmp = TempDir::new().unwrap();
+        let config_home = tmp.path().join("config-home");
+        let owner = generate_key_public_key(&config_home, "alice");
+        let init = thruput()
+            .args(["init", "--non-interactive", "--json"])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        for args in [
+            vec!["config", "use", "futurenet", "--global"],
+            vec!["new", "my-counter", "--template", "counter"],
+        ] {
+            let output = thruput()
+                .args(args)
+                .current_dir(tmp.path())
+                .env("XDG_CONFIG_HOME", &config_home)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let project = tmp.path().join("my-counter");
+        let path = config_home.join("thruput/config.toml");
+        let mut config = std::fs::read_to_string(&path)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert!(config["profile"]["futurenet"].get("network_hash").is_none());
+        let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+        let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+        config["profile"]["futurenet"]["rpc_url"] = toml_edit::value(&rpc_url);
+        config["profile"]["futurenet"]["faucet_url"] = toml_edit::value(&faucet_url);
+        std::fs::write(&path, config.to_string()).unwrap();
+        let project_path = project.join("thruput.toml");
+        let mut project_config = std::fs::read_to_string(&project_path).unwrap();
+        write!(
+            project_config,
+            "[profile.futurenet.wallets.alice]\naddress = \"{}\"\nowner_public_key = \"{owner}\"\n",
+            thruput_encoding::encode(&[0xaa; 32])
+        )
+        .unwrap();
+        std::fs::write(&project_path, project_config).unwrap();
+        let target = thruput_encoding::encode(&[0xbc; 32]);
+        let artifact = write_opaque_rv32_artifact(&project);
+        let mut invocation = thruput();
+        invocation
+            .args([command, "--json", "--dry-run"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home);
+        match command {
+            "transfer" => {
+                invocation.args([&target, "0.01"]);
+            }
+            "call" => {
+                invocation.args([&target, "0x0123456789abcdef", "0x0102"]);
+            }
+            "deploy" => {
+                invocation.arg("--artifact").arg(&artifact);
+            }
+            _ => unreachable!(),
+        }
+        let output = invocation.output().unwrap();
+        descriptor_server.join().unwrap();
+        rpc_server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["data"]["rpcUrl"], rpc_url);
+        if command == "transfer" {
+            assert_eq!(result["data"]["profile"], "futurenet");
+        }
+        let field = if command == "transfer" || command == "call" {
+            "signedTransaction"
+        } else {
+            "signedTx"
+        };
+        assert!(result["data"][field].as_str().is_some());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), config.to_string());
+    }
+}
+
+#[test]
+fn hosted_signing_without_a_pin_rejects_disagreeing_descriptor_and_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let (rpc_url, rpc_server) = spawn_network_info_rpc(&thruput_encoding::encode(&[0x42; 32]));
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    write_project_config_with_alice_wallet(tmp.path(), &rpc_url, &config_home);
+    add_faucet_to_default_profile(tmp.path(), &faucet_url);
+    let path = tmp.path().join("thruput.toml");
+    let mut config = std::fs::read_to_string(&path)
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    config["profile"]["default"]
+        .as_table_mut()
+        .unwrap()
+        .remove("network_hash");
+    std::fs::write(&path, config.to_string()).unwrap();
+    let output = thruput()
+        .args([
+            "transfer",
+            &thruput_encoding::encode(&[0xbc; 32]),
+            "1",
+            "--dry-run",
+            "--json",
+        ])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+    assert!(!output.status.success() && output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "network_descriptor_mismatch");
+    assert_eq!(error["error"]["details"]["field"], "networkHash");
+}
+
+#[test]
+fn hosted_signing_rejects_profile_network_hash_mismatch() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let live_network_hash = thruput_encoding::encode(&[0x42; 32]);
+    let (rpc_url, rpc_server) = spawn_network_info_rpc(&live_network_hash);
+    let (faucet_url, descriptor_server) =
+        spawn_network_descriptor_with_hash(&rpc_url, &live_network_hash);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    add_faucet_to_default_profile(&project, &faucet_url);
+    let recipient = thruput_encoding::encode(&[0xbc; 32]);
+
+    let output = thruput()
+        .args(["--json", "transfer", &recipient, "1", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "network_descriptor_mismatch");
+    assert_eq!(stderr["error"]["details"]["field"], "networkHash");
 }
 
 #[test]
@@ -7422,172 +8518,6 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_native_token_constants()
         thruput_encoding::encode(thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN.as_ref())
     );
     assert_eq!(entrypoint, "0x63285b3523f9dc3f");
-}
-
-#[test]
-fn initialized_futurenet_profile_discovers_signing_identity_for_all_transaction_commands() {
-    use std::fmt::Write as _;
-
-    for command in ["transfer", "call", "deploy"] {
-        let tmp = TempDir::new().unwrap();
-        let config_home = tmp.path().join("config-home");
-        let owner = generate_key_public_key(&config_home, "alice");
-        let init = thruput()
-            .args(["init", "--non-interactive", "--json"])
-            .current_dir(tmp.path())
-            .env("XDG_CONFIG_HOME", &config_home)
-            .output()
-            .unwrap();
-        assert!(
-            init.status.success(),
-            "{}",
-            String::from_utf8_lossy(&init.stderr)
-        );
-        for args in [
-            vec!["config", "use", "futurenet", "--global"],
-            vec!["new", "my-counter", "--template", "counter"],
-        ] {
-            let output = thruput()
-                .args(args)
-                .current_dir(tmp.path())
-                .env("XDG_CONFIG_HOME", &config_home)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        let project = tmp.path().join("my-counter");
-        let path = config_home.join("thruput/config.toml");
-        let mut config = std::fs::read_to_string(&path)
-            .unwrap()
-            .parse::<toml_edit::DocumentMut>()
-            .unwrap();
-        assert!(config["profile"]["futurenet"].get("network_hash").is_none());
-        let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-        let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
-        config["profile"]["futurenet"]["rpc_url"] = toml_edit::value(&rpc_url);
-        config["profile"]["futurenet"]["faucet_url"] = toml_edit::value(&faucet_url);
-        std::fs::write(&path, config.to_string()).unwrap();
-        let project_path = project.join("thruput.toml");
-        let mut project_config = std::fs::read_to_string(&project_path).unwrap();
-        write!(
-            project_config,
-            "[profile.futurenet.wallets.alice]\naddress = \"{}\"\nowner_public_key = \"{owner}\"\n",
-            thruput_encoding::encode(&[0xaa; 32])
-        )
-        .unwrap();
-        std::fs::write(&project_path, project_config).unwrap();
-        let target = thruput_encoding::encode(&[0xbc; 32]);
-        let artifact = write_opaque_rv32_artifact(&project);
-        let mut invocation = thruput();
-        invocation
-            .args([command, "--json", "--dry-run"])
-            .current_dir(&project)
-            .env("XDG_CONFIG_HOME", &config_home);
-        match command {
-            "transfer" => {
-                invocation.args([&target, "0.01"]);
-            }
-            "call" => {
-                invocation.args([&target, "0x0123456789abcdef", "0x0102"]);
-            }
-            "deploy" => {
-                invocation.arg("--artifact").arg(&artifact);
-            }
-            _ => unreachable!(),
-        }
-        let output = invocation.output().unwrap();
-        descriptor_server.join().unwrap();
-        rpc_server.join().unwrap();
-        assert!(
-            output.status.success(),
-            "{command}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(result["data"]["rpcUrl"], rpc_url);
-        if command == "transfer" {
-            assert_eq!(result["data"]["profile"], "futurenet");
-        }
-        let field = if command == "transfer" || command == "call" {
-            "signedTransaction"
-        } else {
-            "signedTx"
-        };
-        assert!(result["data"][field].as_str().is_some());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), config.to_string());
-    }
-}
-
-#[test]
-fn hosted_signing_without_a_pin_rejects_disagreeing_descriptor_and_rpc() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let (rpc_url, rpc_server) = spawn_network_info_rpc(&thruput_encoding::encode(&[0x42; 32]));
-    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
-    write_project_config_with_alice_wallet(tmp.path(), &rpc_url, &config_home);
-    add_faucet_to_default_profile(tmp.path(), &faucet_url);
-    let path = tmp.path().join("thruput.toml");
-    let mut config = std::fs::read_to_string(&path)
-        .unwrap()
-        .parse::<toml_edit::DocumentMut>()
-        .unwrap();
-    config["profile"]["default"]
-        .as_table_mut()
-        .unwrap()
-        .remove("network_hash");
-    std::fs::write(&path, config.to_string()).unwrap();
-    let output = thruput()
-        .args([
-            "transfer",
-            &thruput_encoding::encode(&[0xbc; 32]),
-            "1",
-            "--dry-run",
-            "--json",
-        ])
-        .current_dir(tmp.path())
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    descriptor_server.join().unwrap();
-    rpc_server.join().unwrap();
-    assert!(!output.status.success() && output.stdout.is_empty());
-    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(error["error"]["code"], "network_descriptor_mismatch");
-    assert_eq!(error["error"]["details"]["field"], "networkHash");
-}
-
-#[test]
-fn hosted_signing_rejects_profile_network_hash_mismatch() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    let config_home = tmp.path().join("config-home");
-    std::fs::create_dir_all(&project).unwrap();
-    let live_network_hash = thruput_encoding::encode(&[0x42; 32]);
-    let (rpc_url, rpc_server) = spawn_network_info_rpc(&live_network_hash);
-    let (faucet_url, descriptor_server) =
-        spawn_network_descriptor_with_hash(&rpc_url, &live_network_hash);
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    add_faucet_to_default_profile(&project, &faucet_url);
-    let recipient = thruput_encoding::encode(&[0xbc; 32]);
-
-    let output = thruput()
-        .args(["--json", "transfer", &recipient, "1", "--dry-run"])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    descriptor_server.join().unwrap();
-    rpc_server.join().unwrap();
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "network_descriptor_mismatch");
-    assert_eq!(stderr["error"]["details"]["field"], "networkHash");
 }
 
 #[test]
@@ -8325,6 +9255,28 @@ fn transfer_live_human_output_escapes_conclusive_backend_error() {
     assert!(!stderr.contains('\u{1b}'));
 }
 
+#[test]
+fn transfer_live_scheduler_failures_preserve_json_outcome() {
+    for tag in ["retry", "dropped"] {
+        let status =
+            serde_json::json!({ "status": tag, "error": { "source": "scheduler", "code": 1 } });
+        let run = run_transfer_live_mock_with_hash(
+            TransferRpcMock {
+                submit: TransferSubmitMock::MatchingHash,
+                poll: Some(TransferPollMock::Status(status.clone())),
+            },
+            true,
+        );
+        assert!(!run.output.status.success());
+        assert!(run.output.stderr.is_empty());
+        let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+        assert_eq!(stdout["ok"], false);
+        assert_eq!(stdout["error"]["code"], "native_rpc_failure");
+        assert_eq!(stdout["data"]["evidence"]["submission"], "acknowledged");
+        assert_eq!(stdout["data"]["evidence"]["lastStatus"], status);
+    }
+}
+
 fn assert_transfer_live_common(
     data: &serde_json::Value,
     local_hash: &str,
@@ -8361,830 +9313,6 @@ fn assert_transfer_live_common(
     assert_eq!(data["amount"], "1.5");
     assert_eq!(data["rawAmount"], "15000000");
     assert_eq!(data["txHash"], local_hash);
-}
-
-#[test]
-fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(project.join("src")).unwrap();
-    std::fs::write(project.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
-    std::fs::write(
-        project.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let artifact_path = project.join("target/thruput/demo_contract.rv32a");
-    std::fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
-    std::fs::write(&artifact_path, b"rv32-auto").unwrap();
-
-    let output = thruput()
-        .args(["--json", "deploy", "--dry-run"])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        stdout["data"]["schemaVersion"],
-        thruput_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
-    );
-    assert_eq!(stdout["data"]["artifactKind"], "rv32");
-    assert_eq!(
-        stdout["data"]["artifactPath"].as_str().unwrap(),
-        std::fs::canonicalize(&artifact_path)
-            .unwrap()
-            .to_string_lossy()
-    );
-    assert_eq!(stdout["data"]["artifactBytes"], "9");
-    assert_eq!(
-        signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
-        "rv32"
-    );
-}
-
-#[test]
-fn deploy_estimate_needs_no_signer_and_checks_network_rules() {
-    for (available, code_limit, memory_limit, expected_error) in [
-        (true, Some(16), Some(4096), None),
-        (
-            false,
-            None,
-            None,
-            Some("RPC did not supply authoritative execution rules"),
-        ),
-        (
-            true,
-            Some(15),
-            Some(4096),
-            Some("RV32 code is 16 bytes; network limit is 15"),
-        ),
-        (
-            true,
-            Some(16),
-            Some(4095),
-            Some("RV32 memory is 4096 bytes; network limit is 4095"),
-        ),
-        (
-            true,
-            None,
-            Some(4096),
-            Some("runtime did not report the effective RV32 code limit"),
-        ),
-        (
-            true,
-            Some(16),
-            None,
-            Some("runtime did not report the effective RV32 memory limit"),
-        ),
-    ] {
-        assert_deploy_estimate(available, code_limit, memory_limit, expected_error);
-    }
-}
-
-fn assert_deploy_estimate(
-    available: bool,
-    code_limit: Option<u32>,
-    memory_limit: Option<u32>,
-    expected_error: Option<&str>,
-) {
-    let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("thruput.toml"),
-        "default_profile = 'default'\n[profile.default]\n",
-    )
-    .unwrap();
-    let artifact = thruput_rv32_artifact::build_artifact(&[0; 16], &[], 0, 4096).unwrap();
-    let path = tmp.path().join("estimate.rv32a");
-    std::fs::write(&path, &artifact).unwrap();
-    let mut result = if available {
-        serde_json::json!({
-            "execution": {
-                "observedTip": { "blockHeight": "7", "blockHash": thruput_json_rpc_types::NetworkHashText::from([0x11; 32]) },
-                "configHash": thruput_json_rpc_types::NetworkHashText::from([0x22; 32]),
-                "effectiveLimits": {
-                    "maxContractSizeBytes": 1_000_000,
-                    "maxRv32CodeBytes": code_limit,
-                    "maxRv32MemoryBytes": memory_limit
-                },
-                "storageCosts": {
-                    "baseDataItemCost": "100", "bytestringCostPerByte": "1",
-                    "baseContractDeploymentCost": "200", "contractDeploymentCostPerByte": "2",
-                    "authPerKeyCost": "1", "rcqCostPerEntry": "1", "replayCacheCostPerEntry": "1",
-                    "balanceCost": "30"
-                }
-            }
-        })
-    } else {
-        serde_json::json!({})
-    };
-    result["stated"] = serde_json::json!({});
-    if let Some(limits) = result
-        .pointer_mut("/execution/effectiveLimits")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        limits.retain(|_, value| !value.is_null());
-    }
-    let server = rpc_mock()
-        .method("getChainConfig", move |_| Ok(result.clone()))
-        .start();
-    let (rpc_url, server) = recorded_mock(server, |script| {
-        script.expect("getChainConfig");
-    });
-    let output = thruput()
-        .args([
-            "--json",
-            "--non-interactive",
-            "deploy",
-            "--estimate",
-            "--artifact",
-        ])
-        .arg(&path)
-        .args(["--rpc-url", &rpc_url])
-        .current_dir(tmp.path())
-        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
-        .output()
-        .unwrap();
-    match expected_error {
-        None => {
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(json["data"]["schemaVersion"], 2);
-            assert_eq!(json["data"]["artifactBytes"], artifact.len().to_string());
-            assert_eq!(
-                json["data"]["minimumFundingRaw"],
-                (230 + artifact.len() * 2).to_string()
-            );
-            assert_eq!(json["data"]["execution"]["observedTip"]["blockHeight"], "7");
-            assert!(json["data"].get("signedTx").is_none());
-            assert!(output.stderr.is_empty());
-        }
-        Some(message) => {
-            assert!(!output.status.success());
-            let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-            assert_eq!(json["error"]["code"], "deployment_funding");
-            assert!(
-                String::from_utf8_lossy(&output.stderr).contains(message),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(output.stdout.is_empty());
-        }
-    }
-    server.join().unwrap();
-}
-
-#[test]
-fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let advertised_wallet = advertised_dev_wallet_address(0);
-    let manifest_path = write_runtime_manifest(&project, 0, &advertised_wallet, None);
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("thruput.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            manifest_path.file_name().unwrap().to_string_lossy()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signedTx"]
-        .as_str()
-        .expect("bug: dry-run output includes signed tx");
-
-    assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
-    assert_eq!(signed_tx_entrypoint(signed_tx), "0x6be0cb0f6de0917a");
-}
-
-#[test]
-fn deploy_dry_run_uses_profile_rpc_and_manifest() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let advertised_wallet = advertised_dev_wallet_address(0);
-    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, None);
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("thruput.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            manifest_path.display()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signedTx"]
-        .as_str()
-        .expect("bug: dry-run output includes signed tx");
-
-    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
-}
-
-#[test]
-fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let profile_wallet = advertised_dev_wallet_address(1);
-    let env_wallet = advertised_dev_wallet_address(0);
-    let profile_manifest = write_runtime_manifest(&project, 0, &profile_wallet, None);
-    let env_manifest = write_runtime_manifest(tmp.path(), 0, &env_wallet, None);
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("thruput.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            profile_manifest.file_name().unwrap().to_string_lossy()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
-        .env("THRUPUT_RUNTIME_MANIFEST", &env_manifest)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signedTx"]
-        .as_str()
-        .expect("bug: dry-run output includes signed tx");
-
-    assert_eq!(signed_tx_invoked_address(signed_tx), env_wallet);
-}
-
-#[test]
-fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let profile_wallet = advertised_dev_wallet_address(1);
-    let cli_wallet = advertised_dev_wallet_address(0);
-    let env_wallet = advertised_dev_wallet_address(2);
-    let profile_manifest = write_runtime_manifest(&project, 0, &profile_wallet, None);
-    let cli_manifest = write_runtime_manifest(tmp.path(), 0, &cli_wallet, None);
-    let env_dir = tmp.path().join("env");
-    std::fs::create_dir(&env_dir).unwrap();
-    let env_manifest = write_runtime_manifest(&env_dir, 0, &env_wallet, None);
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("thruput.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            profile_manifest.file_name().unwrap().to_string_lossy()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--rpc-url",
-            &rpc_url,
-            "--runtime-manifest",
-            cli_manifest.to_str().unwrap(),
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
-        .env("THRUPUT_RUNTIME_MANIFEST", &env_manifest)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signedTx"]
-        .as_str()
-        .expect("bug: dry-run output includes signed tx");
-
-    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(signed_tx_invoked_address(signed_tx), cli_wallet);
-}
-
-#[test]
-fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let profile_wallet = advertised_dev_wallet_address(0);
-    let profile_manifest = write_runtime_manifest(&project, 0, &profile_wallet, None);
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("thruput.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            profile_manifest.file_name().unwrap().to_string_lossy()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
-        .env("THRUPUT_RUNTIME_MANIFEST", "   ")
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signedTx"]
-        .as_str()
-        .expect("bug: dry-run output includes signed tx");
-
-    assert_eq!(signed_tx_invoked_address(signed_tx), profile_wallet);
-}
-
-#[cfg(unix)]
-#[test]
-fn deploy_dry_run_rejects_runtime_manifest_symlink() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let advertised_wallet = advertised_dev_wallet_address(0);
-    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, None);
-    let symlink_path = tmp.path().join("runtime-manifest-link.json");
-    std::os::unix::fs::symlink(&manifest_path, &symlink_path).unwrap();
-    std::fs::write(
-        project.join("thruput.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            symlink_path.display()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "local_runtime_unavailable");
-    assert!(
-        stderr["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("not a symlink")
-    );
-}
-
-#[test]
-fn deploy_requires_stored_key_even_for_dev_named_selection() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    std::fs::write(
-        project.join("thruput.toml"),
-        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\n",
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "deploy");
-    assert_eq!(stderr["error"]["code"], "key_not_found");
-    assert!(
-        stderr["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("dev-0")
-    );
-}
-
-#[test]
-fn deploy_live_json_submits_and_returns_receipt() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    // The deploy path treats the selected RV32 artifact as opaque bytes.
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--force",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    rpc_server.join().unwrap();
-    assert!(output.stderr.is_empty());
-
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(
-        stdout["data"]["schemaVersion"],
-        thruput_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
-    );
-
-    // Raw return bytes carry an address; the report renders that address as base58.
-    let expected_address = thruput_encoding::encode(&[0xbb; 32]);
-    assert_eq!(stdout["data"]["address"], expected_address);
-    assert_eq!(stdout["data"]["addressSource"], "receipt");
-    assert_eq!(stdout["data"]["gasUsed"], "1500");
-    assert_eq!(stdout["data"]["blockHeight"], "42");
-    assert_eq!(stdout["data"]["execution"]["result"], "return");
-    assert!(stdout["data"].get("returnData").is_none());
-    assert!(stdout["data"].get("abortData").is_none());
-    assert!(stdout["data"].get("transactionDetail").is_none());
-    assert!(
-        thruput_encoding::decode_fixed::<32>(stdout["data"]["txHash"].as_str().unwrap()).is_ok()
-    );
-}
-
-#[test]
-fn deploy_live_json_fails_with_receipt_context() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, sample_failed_deploy_receipt(42));
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--force",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stderr.is_empty());
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], false);
-    assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
-    assert_eq!(stdout["data"]["blockHeight"], "42");
-    assert_eq!(stdout["data"]["execution"]["result"], "fault");
-    assert!(stdout["data"]["execution"].get("returnData").is_none());
-    assert!(stdout["data"]["execution"].get("abortData").is_none());
-    assert!(
-        thruput_encoding::decode_fixed::<32>(stdout["data"]["txHash"].as_str().unwrap()).is_ok()
-    );
-}
-
-#[test]
-fn deploy_live_json_reports_actionable_native_token_overdraft() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) =
-        spawn_transaction_rpc(42, sample_insufficient_funding_deploy_receipt(42));
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-    let output = thruput()
-        .args([
-            "--json",
-            "deploy",
-            "--force",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stderr.is_empty());
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], false);
-    assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 9);
-    assert_eq!(stdout["data"]["blockHeight"], "42");
-    assert_eq!(stdout["data"]["execution"]["result"], "abort");
-    assert_eq!(stdout["error"]["code"], "transaction_insufficient_funds");
-    assert_eq!(
-        stdout["error"]["details"]["reason"],
-        "nativeTokenTransferOverdraft"
-    );
-    assert!(stdout["error"]["hint"].as_str().is_some_and(|hint| {
-        hint.contains("thruput balance --profile=default -- alice")
-            && hint.contains("thruput airdrop --profile=default -- alice")
-    }));
-    assert_ne!(stdout["error"]["code"], "transaction_reverted");
-    assert!(
-        stdout["data"]["execution"]["abortData"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("0x"))
-    );
-}
-
-#[test]
-fn deploy_live_human_reports_selected_wallet_funding_commands() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) =
-        spawn_transaction_rpc(42, sample_insufficient_funding_deploy_receipt(42));
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-    let output = thruput()
-        .args([
-            "deploy",
-            "--force",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("wallet `alice` has insufficient native tokens"));
-    assert!(stderr.contains("thruput balance --profile=default -- alice"));
-    assert!(stderr.contains("thruput airdrop --profile=default -- alice"));
-    assert!(stderr.contains("retry the original deploy command"));
-}
-
-#[test]
-fn deploy_live_human_fails_after_printing_receipt_context() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, sample_failed_deploy_receipt(42));
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-    let output = thruput()
-        .args([
-            "deploy",
-            "--force",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("warning: Deploy failed with a deterministic execution fault"));
-    assert!(stderr.lines().any(|line| {
-        line.trim()
-            .strip_prefix("tx: ")
-            .is_some_and(|hash| thruput_encoding::decode_fixed::<32>(hash).is_ok())
-    }));
-    assert!(stderr.contains("height: 42"));
-    assert!(!stderr.contains("return data:"), "stderr: {stderr}");
-    assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
-    assert!(stderr.contains("gas used: 4242"), "stderr: {stderr}");
-}
-
-#[test]
-fn call_json_fails_without_config() {
-    let tmp = TempDir::new().unwrap();
-    let output = thruput()
-        .args(["--json", "call", "0x1234", "transfer"])
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "call");
-    assert_eq!(stderr["error"]["code"], "no_active_profile");
-}
-
-#[test]
-fn storage_json_fails_without_config() {
-    let tmp = TempDir::new().unwrap();
-    let address = thruput_encoding::encode(&[0x11; 32]);
-    let key = format!("0x{}", "42".repeat(32));
-    let output = thruput()
-        .args(["--json", "storage", &address, &key])
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "storage");
-    assert_eq!(stderr["error"]["code"], "no_active_profile");
-}
-
-#[test]
-fn view_json_fails_without_config() {
-    let tmp = TempDir::new().unwrap();
-    let address = thruput_encoding::encode(&[0x11; 32]);
-    let output = thruput()
-        .args(["--json", "view", &address, "0x0102030405060708"])
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "view");
-    assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
 #[test]
@@ -10730,34 +10858,36 @@ fn call_native_decodes_forwarded_aborts_and_preserves_unknown_bytes() {
     }
 }
 
-#[test]
-fn call_live_json_decodes_library_abort() {
+/// Run `thruput call` with the alice wallet against a node that commits the
+/// call with `receipt`, and return the CLI's output once the endpoint has
+/// checked the submission flow.
+fn run_live_call(receipt: serde_json::Value, json: bool) -> std::process::Output {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
-
-    let abort_hex = library_abort_hex("NonNegativeIntUnderflow");
-    let (rpc_url, rpc_server) =
-        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, &abort_hex));
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, receipt);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = thruput_encoding::encode(&[0x11; 32]);
-    let output = thruput()
-        .args([
-            "--json",
-            "call",
-            &contract,
-            "0x0123456789abcdef",
-            "0x0102",
-            "--force",
-        ])
+    let mut command = thruput();
+    if json {
+        command.arg("--json");
+    }
+    let output = command
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
-
     rpc_server.join().unwrap();
+    output
+}
+
+#[test]
+fn call_live_json_decodes_library_abort() {
+    let abort_hex = library_abort_hex("NonNegativeIntUnderflow");
+    let output = run_live_call(sample_reverted_call_receipt(42, &abort_hex), true);
 
     assert!(!output.status.success());
     assert!(output.stderr.is_empty());
@@ -10780,11 +10910,6 @@ fn call_live_json_decodes_library_abort() {
 
 #[test]
 fn call_live_json_decodes_erc20_permit_abort() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
     // No local metadata declares the exception, so it resolves through the
     // same standard-exception registry an ERC20 abort does.
     let abort_data = xdrs::cxs::encode(&(
@@ -10793,26 +10918,7 @@ fn call_live_json_decodes_erc20_permit_abort() {
     ))
     .expect("bug: ERC20 permit exception should encode");
     let abort_hex = format!("0x{}", hex::encode(&abort_data));
-    let (rpc_url, rpc_server) =
-        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, &abort_hex));
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let contract = thruput_encoding::encode(&[0x11; 32]);
-    let output = thruput()
-        .args([
-            "--json",
-            "call",
-            &contract,
-            "0x0123456789abcdef",
-            "0x0102",
-            "--force",
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
+    let output = run_live_call(sample_reverted_call_receipt(42, &abort_hex), true);
 
     assert!(!output.status.success());
     assert!(output.stderr.is_empty());
@@ -10834,25 +10940,8 @@ fn call_live_json_decodes_erc20_permit_abort() {
 
 #[test]
 fn call_live_human_prints_decoded_abort() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
     let abort_hex = library_abort_hex("NonNegativeIntUnderflow");
-    let (rpc_url, rpc_server) =
-        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, &abort_hex));
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let contract = thruput_encoding::encode(&[0x11; 32]);
-    let output = thruput()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
+    let output = run_live_call(sample_reverted_call_receipt(42, &abort_hex), false);
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
@@ -10869,35 +10958,12 @@ fn call_live_human_prints_decoded_abort() {
 
 #[test]
 fn call_live_json_omits_abort_fields_on_success() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) = spawn_transaction_rpc(42, sample_call_receipt(42));
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let contract = thruput_encoding::encode(&[0x11; 32]);
-    let output = thruput()
-        .args([
-            "--json",
-            "call",
-            &contract,
-            "0x0123456789abcdef",
-            "0x0102",
-            "--force",
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
+    let output = run_live_call(sample_call_receipt(42), true);
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    rpc_server.join().unwrap();
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["data"]["execution"]["result"], "return");
@@ -10908,33 +10974,9 @@ fn call_live_json_omits_abort_fields_on_success() {
 
 #[test]
 fn call_live_json_reports_abort_decode_error() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
     // Selector 0 is reserved and matches no exception; the payload byte
     // is parsed off after the selector and reported separately.
-    let (rpc_url, rpc_server) =
-        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, "0x00ab"));
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let contract = thruput_encoding::encode(&[0x11; 32]);
-    let output = thruput()
-        .args([
-            "--json",
-            "call",
-            &contract,
-            "0x0123456789abcdef",
-            "0x0102",
-            "--force",
-        ])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
+    let output = run_live_call(sample_reverted_call_receipt(42, "0x00ab"), true);
 
     assert!(!output.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -10952,24 +10994,7 @@ fn call_live_json_reports_abort_decode_error() {
 
 #[test]
 fn call_live_human_reports_abort_decode_error() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let (rpc_url, rpc_server) =
-        spawn_transaction_rpc(42, sample_reverted_call_receipt(42, "0x00ab"));
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-
-    let contract = thruput_encoding::encode(&[0x11; 32]);
-    let output = thruput()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
-        .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-
-    rpc_server.join().unwrap();
+    let output = run_live_call(sample_reverted_call_receipt(42, "0x00ab"), false);
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -10978,21 +11003,6 @@ fn call_live_human_reports_abort_decode_error() {
         stderr.contains("abort selector 0x0000000000000000"),
         "stderr: {stderr}"
     );
-}
-
-#[test]
-fn call_fails_without_config() {
-    let tmp = TempDir::new().unwrap();
-    let output = thruput()
-        .arg("call")
-        .arg("0x1234")
-        .arg("transfer")
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("rpc_url") || stderr.contains("profile"));
 }
 
 #[test]
@@ -11361,38 +11371,6 @@ fn keys_export_requires_confirmation_before_loading_secret_material() {
     assert_eq!(error["error"]["details"]["requiredFlag"], "--yes");
 }
 
-#[test]
-fn keys_export_help_warns_that_output_is_secret() {
-    let keys_help = thruput().args(["keys", "--help"]).output().unwrap();
-    assert!(keys_help.status.success());
-    assert!(
-        String::from_utf8(keys_help.stdout)
-            .unwrap()
-            .contains("export")
-    );
-
-    let export_help = thruput()
-        .args(["keys", "export", "--help"])
-        .output()
-        .unwrap();
-    assert!(export_help.status.success());
-    let stdout = String::from_utf8(export_help.stdout).unwrap();
-    assert!(stdout.contains("written to stdout as unprefixed, case-sensitive base58"));
-    assert!(stdout.contains("Treat it as a secret"));
-    assert!(stdout.contains("logs, CI output, or committed files"));
-}
-
-#[test]
-fn keys_rm_help_documents_force() {
-    let output = thruput().args(["keys", "rm", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("-f, --force"));
-    assert!(stdout.contains("Skip the confirmation prompt"));
-    assert!(stdout.contains("cannot be undone"));
-}
-
 #[cfg(unix)]
 #[test]
 fn keys_rm_confirmation_accepts_yes_and_preserves_on_no_or_empty() {
@@ -11432,93 +11410,6 @@ fn keys_rm_confirmation_accepts_yes_and_preserves_on_no_or_empty() {
                 .exists()
         );
     }
-}
-
-#[test]
-fn keys_rm_non_tty_input_requires_force() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let generated = thruput()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(generated.status.success());
-    let key_path = config_home.join("thruput/keys/alice.json");
-
-    let mut child = thruput()
-        .args(["keys", "rm", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    offer_stdin(&mut child, b"y\n");
-    let output = child.wait_with_output().unwrap();
-
-    assert!(!output.status.success());
-    assert!(String::from_utf8(output.stderr).unwrap().contains("--yes"));
-    assert!(key_path.exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn keys_rm_force_does_not_read_stdin() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let generated = thruput()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(generated.status.success());
-
-    let child = thruput()
-        .args(["keys", "rm", "-f", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    let status = wait_child(child, CLI_ACTION_TIMEOUT);
-
-    assert!(status.success());
-    assert!(!config_home.join("thruput/keys/alice.json").exists());
-}
-
-#[test]
-fn keys_rm_non_interactive_modes_require_force() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let generated = thruput()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(generated.status.success());
-    let key_path = config_home.join("thruput/keys/alice.json");
-
-    let json = thruput()
-        .args(["--json", "keys", "rm", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(!json.status.success());
-    let error: serde_json::Value = serde_json::from_slice(&json.stderr).unwrap();
-    assert_eq!(error["error"]["code"], "confirmation_required");
-    assert_eq!(error["error"]["details"]["requiredFlag"], "--yes");
-    assert!(key_path.exists());
-
-    let quiet = thruput()
-        .args(["--quiet", "keys", "rm", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(!quiet.status.success());
-    assert!(String::from_utf8(quiet.stderr).unwrap().contains("--yes"));
-    assert!(key_path.exists());
 }
 
 #[test]
@@ -11600,6 +11491,88 @@ fn keys_rm_nonexistent_fails() {
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "keys.rm");
     assert_eq!(stderr["error"]["code"], "key_not_found");
+}
+
+#[cfg(unix)]
+#[test]
+fn key_import_refuses_terminal_input_in_non_interactive_modes() {
+    for flags in [vec!["--non-interactive"], vec!["--quiet"], vec!["--json"]] {
+        let tmp = TempDir::new().unwrap();
+        let mut command = thruput();
+        command
+            .args(["keys", "import", "alice"])
+            .args(&flags)
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path());
+        let (child, terminal) = spawn_with_terminal(command);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert!(!status.success());
+        assert!(!output.contains("Ed25519 secret seed"));
+        assert!(!tmp.path().join("thruput/keys/alice.json").exists());
+        if flags == ["--json"] {
+            let report: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(report["error"]["code"], "interactive_input_required");
+        }
+    }
+}
+
+#[test]
+fn global_non_interactive_key_import_accepts_piped_seed() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = thruput()
+        .args(["--non-interactive", "keys", "import", "alice", "--json"])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let seed = thruput_encoding::encode(&[0x42; 32]);
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(seed.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&seed));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"], "keys.import");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["data"]["key"]["name"], "alice");
+    assert!(tmp.path().join("thruput/keys/alice.json").exists());
+}
+
+#[test]
+fn key_generation_stores_dev_named_keys_without_implicit_derivation() {
+    for name in ["dev-0", "dev-1", "dev-01"] {
+        let tmp = TempDir::new().unwrap();
+        let config = tmp.path().join("thruput/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let before = "default_key = 'existing'\n[profile.default]\n";
+        std::fs::write(&config, before).unwrap();
+        let output = thruput()
+            .args(["--json", "keys", "generate", name])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["data"]["key"]["name"], name);
+        assert!(
+            tmp.path()
+                .join(format!("thruput/keys/{name}.json"))
+                .exists()
+        );
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+    }
 }
 
 #[test]
@@ -11750,32 +11723,6 @@ fn tx_show_binary_preserves_case_sensitive_base58_hashes() {
         let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(stdout["data"]["txHash"], canonical);
     }
-}
-
-#[test]
-fn tx_namespace_help_advertises_show_and_list() {
-    let output = thruput().args(["tx", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("show"));
-    assert!(stdout.contains("list"));
-    assert!(stdout.contains("transactions and address history"));
-}
-
-#[test]
-fn tx_show_help_describes_one_shot_public_lookup() {
-    let output = thruput().args(["tx", "show", "--help"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("one-shot public transaction lookup without waiting"));
-    assert!(stdout.contains("public status and receipt fields"));
-    assert!(stdout.contains("Raw transaction bodies"));
-    assert!(stdout.contains("deep traces are not available"));
-    assert!(stdout.contains("--profile"));
-    assert!(stdout.contains("--rpc-url"));
-    assert!(stdout.contains("--runtime-manifest"));
 }
 
 #[test]
@@ -12276,24 +12223,213 @@ fn tx_show_human_output_escapes_untrusted_status_text() {
 }
 
 #[test]
-fn tx_list_help_describes_one_page_root_invocation_history() {
-    let output = thruput().args(["tx", "list", "--help"]).output().unwrap();
+fn tx_show_scheduler_failures_preserve_diagnostics_without_recovery_advice() {
+    let hash = thruput_encoding::encode(&[0xbc; 32]);
+    for tag in ["retry", "dropped"] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+            &hash,
+            RpcReply::Result(serde_json::json!({
+                "status":tag, "error":{"source":"scheduler", "code":3}
+            })),
+            None,
+        );
+        let output = thruput()
+            .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+        assert!(output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains(&format!("\"status\":\"{tag}\"")),
+            "{stderr}"
+        );
+        assert!(stderr.contains(r#""source":"scheduler""#), "{stderr}");
+        assert!(stderr.contains(r#""code":3"#), "{stderr}");
+        assert!(!stderr.contains("resubmit"), "{stderr}");
+    }
+}
 
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("exactly one page"));
-    assert!(stdout.contains("root invocation"));
-    assert!(stdout.contains("Incoming wallet-wrapped transfers may not appear"));
-    assert!(stdout.contains("continuation cursor is opaque and reusable"));
-    assert!(stdout.contains("Receipts are not fetched"));
-    for option in [
-        "--limit",
-        "--cursor",
-        "--profile",
-        "--rpc-url",
-        "--runtime-manifest",
+#[test]
+fn tx_show_receipt_survives_failed_or_unsupported_status_lookup() {
+    for (status, expected_evidence) in [
+        (
+            RpcReply::Error(-32050, "scheduler offline"),
+            serde_json::json!({"rpcError":{"code":-32050,"message":"scheduler offline"}}),
+        ),
+        (
+            RpcReply::Result(serde_json::json!({"status":"futureStatus","detail":"retained"})),
+            serde_json::json!({"method":"getTransactionStatus","result":{"status":"futureStatus","detail":"retained"}}),
+        ),
     ] {
-        assert!(stdout.contains(option));
+        let tmp = TempDir::new().unwrap();
+        let hash = thruput_encoding::encode(&[0xab; 32]);
+        let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","events":[],"execution":{"result":"return","returnData":"0x0102"}});
+        let (rpc_url, server) =
+            spawn_tx_show_rpc(&hash, status, Some(RpcReply::Result(receipt.clone())));
+        let output = thruput()
+            .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report["data"]["status"],
+            serde_json::json!({"status":"committed","blockHeight":"42"})
+        );
+        assert_eq!(report["data"]["receipt"], receipt);
+        assert_eq!(report["data"]["statusError"]["evidence"], expected_evidence);
+    }
+}
+
+#[test]
+fn tx_show_receipt_failure_preserves_known_commitment_and_original_error() {
+    let hash = thruput_encoding::encode(&[0xab; 32]);
+    let invalid = serde_json::json!({"transactionHash":hash,"blockHeight":42});
+    for receipt in [
+        RpcReply::Error(-32050, "indexer offline"),
+        RpcReply::Result(invalid.clone()),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, server) = spawn_tx_show_rpc(
+            &hash,
+            RpcReply::Result(serde_json::json!({"status":"committed","blockHeight":"42"})),
+            Some(receipt),
+        );
+        let output = thruput()
+            .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        let evidence = &report["error"]["details"];
+        assert_eq!(
+            evidence["status"],
+            serde_json::json!({"status":"committed","blockHeight":"42"})
+        );
+        if evidence.get("rpcError").is_some() {
+            assert_eq!(evidence["rpcError"]["code"], -32050);
+            assert_eq!(evidence["rpcError"]["message"], "indexer offline");
+        } else {
+            assert_eq!(evidence["result"], invalid);
+            assert!(evidence["decodeError"].is_string());
+        }
+    }
+}
+
+#[test]
+fn tx_show_keeps_observed_advisory_status_with_an_authoritative_receipt() {
+    for status in [
+        serde_json::json!({"status":"pending"}),
+        serde_json::json!({"status":"unknown"}),
+        serde_json::json!({"status":"dropped","error":{"source":"scheduler","code":1}}),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let hash = thruput_encoding::encode(&[0xab; 32]);
+        let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","events":[],"execution":{"result":"return","returnData":"0x"}});
+        let (url, server) = spawn_tx_show_rpc(
+            &hash,
+            RpcReply::Result(status.clone()),
+            Some(RpcReply::Result(receipt.clone())),
+        );
+        let output = thruput()
+            .args(["--json", "tx", "show", &hash, "--rpc-url", &url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["data"]["status"], status);
+        assert_eq!(report["data"]["receipt"], receipt);
+        assert!(report["data"].get("statusError").is_none());
+    }
+}
+
+#[test]
+fn tx_show_human_discloses_receipt_derived_status_after_lookup_failure() {
+    let tmp = TempDir::new().unwrap();
+    let hash = thruput_encoding::encode(&[0xab; 32]);
+    let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","events":[],"execution":{"result":"return","returnData":"0x"}});
+    let (url, server) = spawn_tx_show_rpc(
+        &hash,
+        RpcReply::Error(-32050, "scheduler offline"),
+        Some(RpcReply::Result(receipt)),
+    );
+    let output = thruput()
+        .args(["tx", "show", &hash, "--rpc-url", &url])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stderr).unwrap();
+    assert!(text.contains("status (from receipt)"), "{text}");
+    assert!(text.contains("scheduler offline"), "{text}");
+    assert!(text.contains("receipt block height: 42"), "{text}");
+}
+
+#[test]
+fn tx_show_preserves_recent_attempt_diagnostics_in_json_and_terminal_output() {
+    let hash = thruput_encoding::encode(&[0xab; 32]);
+    let address = thruput_encoding::encode(&[0xcd; 32]);
+    let status = serde_json::json!({
+        "status":"retry", "error":{"source":"executor", "code":3},
+        "recentFailure":{"attemptBlockHeight":"41", "cause":{
+            "kind":"dbConflict", "conflict":{"address":address,"key":"0x0102","code":"insufficientFunds"}
+        }}
+    });
+    for json_output in [true, false] {
+        let tmp = TempDir::new().unwrap();
+        let (url, server) = spawn_tx_show_rpc(
+            &hash,
+            RpcReply::Result(status.clone()),
+            Some(RpcReply::Result(serde_json::Value::Null)),
+        );
+        let mut command = thruput();
+        if json_output {
+            command.arg("--json");
+        }
+        let output = command
+            .args(["tx", "show", &hash, "--rpc-url", &url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if json_output {
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["data"]["status"], status);
+            assert!(report["data"]["receipt"].is_null());
+        } else {
+            let text = String::from_utf8(output.stderr).unwrap();
+            let observed = text
+                .lines()
+                .find_map(|line| line.split_once("status: ").map(|(_, value)| value))
+                .expect("human status line");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(observed).unwrap(),
+                status
+            );
+        }
     }
 }
 
@@ -12844,36 +12980,6 @@ fn write_event_spec(tmp: &TempDir) -> std::path::PathBuf {
     let path = tmp.path().join("counter.spec.xdr");
     std::fs::write(&path, xdrs::txs::encode(&spec).unwrap()).unwrap();
     path
-}
-
-#[test]
-fn events_list_help_describes_raw_filtered_single_page_query() {
-    let output = thruput()
-        .args(["events", "list", "--help"])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("exactly one newest-first page"));
-    assert!(stdout.contains("global event scan is not performed"));
-    assert!(stdout.contains("Repeat a topic option for OR within that position"));
-    assert!(stdout.contains("Raw topics and data are authoritative"));
-    assert!(stdout.contains("cursor is opaque and must be reused"));
-    for option in [
-        "--topic0",
-        "--topic1",
-        "--topic2",
-        "--limit",
-        "--cursor",
-        "--spec",
-        "--event",
-        "--profile",
-        "--rpc-url",
-        "--runtime-manifest",
-    ] {
-        assert!(stdout.contains(option));
-    }
 }
 
 #[test]
@@ -14023,36 +14129,6 @@ fn address_topic(address: &str) -> String {
         "0x{}",
         hex::encode(thruput_encoding::decode_fixed::<32>(address).unwrap())
     )
-}
-
-#[test]
-fn token_transfers_help_describes_canonical_filtered_history() {
-    let output = thruput()
-        .args(["token", "transfers", "--help"])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    for expected in [
-        "exactly one newest-first page",
-        "canonical ERC20 TransferEvent",
-        "MintEvent",
-        "BurnEvent",
-        "--from",
-        "--to",
-        "--account",
-        "--limit",
-        "--cursor",
-        "--profile",
-        "--rpc-url",
-        "--runtime-manifest",
-    ] {
-        assert!(
-            stdout.contains(expected),
-            "missing `{expected}` in: {stdout}"
-        );
-    }
 }
 
 #[test]
@@ -16420,276 +16496,4 @@ fn issuer_token_movements_count_clawback_once() {
     let alice = thruput_encoding::encode(&[0x13; 32]);
     assert_eq!(clawback_burn["transfer"]["from"], alice);
     assert!(clawback_burn["transfer"]["to"].is_null());
-}
-
-#[test]
-fn transfer_live_scheduler_failures_preserve_json_outcome() {
-    for tag in ["retry", "dropped"] {
-        let status =
-            serde_json::json!({ "status": tag, "error": { "source": "scheduler", "code": 1 } });
-        let run = run_transfer_live_mock_with_hash(
-            TransferRpcMock {
-                submit: TransferSubmitMock::MatchingHash,
-                poll: Some(TransferPollMock::Status(status.clone())),
-            },
-            true,
-        );
-        assert!(!run.output.status.success());
-        assert!(run.output.stderr.is_empty());
-        let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
-        assert_eq!(stdout["ok"], false);
-        assert_eq!(stdout["error"]["code"], "native_rpc_failure");
-        assert_eq!(stdout["data"]["evidence"]["submission"], "acknowledged");
-        assert_eq!(stdout["data"]["evidence"]["lastStatus"], status);
-    }
-}
-
-#[test]
-fn tx_show_scheduler_failures_preserve_diagnostics_without_recovery_advice() {
-    let hash = thruput_encoding::encode(&[0xbc; 32]);
-    for tag in ["retry", "dropped"] {
-        let tmp = TempDir::new().unwrap();
-        let (rpc_url, rpc_server) = spawn_tx_show_rpc(
-            &hash,
-            RpcReply::Result(serde_json::json!({
-                "status":tag, "error":{"source":"scheduler", "code":3}
-            })),
-            None,
-        );
-        let output = thruput()
-            .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        rpc_server.join().unwrap();
-        assert!(output.status.success());
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(
-            stderr.contains(&format!("\"status\":\"{tag}\"")),
-            "{stderr}"
-        );
-        assert!(stderr.contains(r#""source":"scheduler""#), "{stderr}");
-        assert!(stderr.contains(r#""code":3"#), "{stderr}");
-        assert!(!stderr.contains("resubmit"), "{stderr}");
-    }
-}
-
-#[test]
-fn tx_show_receipt_survives_failed_or_unsupported_status_lookup() {
-    for (status, expected_evidence) in [
-        (
-            RpcReply::Error(-32050, "scheduler offline"),
-            serde_json::json!({"rpcError":{"code":-32050,"message":"scheduler offline"}}),
-        ),
-        (
-            RpcReply::Result(serde_json::json!({"status":"futureStatus","detail":"retained"})),
-            serde_json::json!({"method":"getTransactionStatus","result":{"status":"futureStatus","detail":"retained"}}),
-        ),
-    ] {
-        let tmp = TempDir::new().unwrap();
-        let hash = thruput_encoding::encode(&[0xab; 32]);
-        let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","events":[],"execution":{"result":"return","returnData":"0x0102"}});
-        let (rpc_url, server) =
-            spawn_tx_show_rpc(&hash, status, Some(RpcReply::Result(receipt.clone())));
-        let output = thruput()
-            .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        server.join().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(
-            report["data"]["status"],
-            serde_json::json!({"status":"committed","blockHeight":"42"})
-        );
-        assert_eq!(report["data"]["receipt"], receipt);
-        assert_eq!(report["data"]["statusError"]["evidence"], expected_evidence);
-    }
-}
-
-#[test]
-fn hosted_airdrop_unknown_outcomes_retain_attempt_path_and_raw_response() {
-    for nested_execution in [false, true] {
-        let tmp = TempDir::new().unwrap();
-        let project = tmp.path().join("project");
-        let config_home = tmp.path().join("config-home");
-        let cache_home = tmp.path().join("cache-home");
-        std::fs::create_dir_all(&project).unwrap();
-        let recipient = thruput_encoding::encode(&[0xaa; 32]);
-        let response = if nested_execution {
-            serde_json::json!({"attemptStatus":"succeeded","recipient":recipient,"rawAmount":"25000000",
-                "transactionHash":thruput_encoding::encode(&[0x22;32]),"blockHeight":"42",
-                "execution":{"result":"futureExecution","detail":"retained"}})
-        } else {
-            serde_json::json!({"attemptStatus":"futureOutcome","detail":"retained"})
-        };
-        let (rpc_url, server) =
-            spawn_airdrop_rpc_response(&recipient, None, Some(response.clone()));
-        let (faucet_url, descriptor) = spawn_network_descriptor(&rpc_url);
-        write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-        add_faucet_to_default_profile(&project, &faucet_url);
-        let output = thruput()
-            .args(["--json", "airdrop", "alice", "--force"])
-            .current_dir(&project)
-            .env("XDG_CONFIG_HOME", &config_home)
-            .env("XDG_CACHE_HOME", &cache_home)
-            .output()
-            .unwrap();
-        descriptor.join().unwrap();
-        server.join().unwrap();
-        assert!(!output.status.success());
-        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        let details = &report["error"]["details"];
-        assert_eq!(details["result"], response);
-        let path = details["attemptPath"].as_str().unwrap();
-        assert!(std::path::Path::new(path).is_file(), "{report}");
-    }
-}
-
-#[test]
-fn tx_show_receipt_failure_preserves_known_commitment_and_original_error() {
-    let hash = thruput_encoding::encode(&[0xab; 32]);
-    let invalid = serde_json::json!({"transactionHash":hash,"blockHeight":42});
-    for receipt in [
-        RpcReply::Error(-32050, "indexer offline"),
-        RpcReply::Result(invalid.clone()),
-    ] {
-        let tmp = TempDir::new().unwrap();
-        let (rpc_url, server) = spawn_tx_show_rpc(
-            &hash,
-            RpcReply::Result(serde_json::json!({"status":"committed","blockHeight":"42"})),
-            Some(receipt),
-        );
-        let output = thruput()
-            .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        server.join().unwrap();
-        assert!(!output.status.success());
-        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        let evidence = &report["error"]["details"];
-        assert_eq!(
-            evidence["status"],
-            serde_json::json!({"status":"committed","blockHeight":"42"})
-        );
-        if evidence.get("rpcError").is_some() {
-            assert_eq!(evidence["rpcError"]["code"], -32050);
-            assert_eq!(evidence["rpcError"]["message"], "indexer offline");
-        } else {
-            assert_eq!(evidence["result"], invalid);
-            assert!(evidence["decodeError"].is_string());
-        }
-    }
-}
-
-#[test]
-fn tx_show_keeps_observed_advisory_status_with_an_authoritative_receipt() {
-    for status in [
-        serde_json::json!({"status":"pending"}),
-        serde_json::json!({"status":"unknown"}),
-        serde_json::json!({"status":"dropped","error":{"source":"scheduler","code":1}}),
-    ] {
-        let tmp = TempDir::new().unwrap();
-        let hash = thruput_encoding::encode(&[0xab; 32]);
-        let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","events":[],"execution":{"result":"return","returnData":"0x"}});
-        let (url, server) = spawn_tx_show_rpc(
-            &hash,
-            RpcReply::Result(status.clone()),
-            Some(RpcReply::Result(receipt.clone())),
-        );
-        let output = thruput()
-            .args(["--json", "tx", "show", &hash, "--rpc-url", &url])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        server.join().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["data"]["status"], status);
-        assert_eq!(report["data"]["receipt"], receipt);
-        assert!(report["data"].get("statusError").is_none());
-    }
-}
-
-#[test]
-fn tx_show_human_discloses_receipt_derived_status_after_lookup_failure() {
-    let tmp = TempDir::new().unwrap();
-    let hash = thruput_encoding::encode(&[0xab; 32]);
-    let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","events":[],"execution":{"result":"return","returnData":"0x"}});
-    let (url, server) = spawn_tx_show_rpc(
-        &hash,
-        RpcReply::Error(-32050, "scheduler offline"),
-        Some(RpcReply::Result(receipt)),
-    );
-    let output = thruput()
-        .args(["tx", "show", &hash, "--rpc-url", &url])
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-    server.join().unwrap();
-    assert!(output.status.success());
-    let text = String::from_utf8(output.stderr).unwrap();
-    assert!(text.contains("status (from receipt)"), "{text}");
-    assert!(text.contains("scheduler offline"), "{text}");
-    assert!(text.contains("receipt block height: 42"), "{text}");
-}
-
-#[test]
-fn tx_show_preserves_recent_attempt_diagnostics_in_json_and_terminal_output() {
-    let hash = thruput_encoding::encode(&[0xab; 32]);
-    let address = thruput_encoding::encode(&[0xcd; 32]);
-    let status = serde_json::json!({
-        "status":"retry", "error":{"source":"executor", "code":3},
-        "recentFailure":{"attemptBlockHeight":"41", "cause":{
-            "kind":"dbConflict", "conflict":{"address":address,"key":"0x0102","code":"insufficientFunds"}
-        }}
-    });
-    for json_output in [true, false] {
-        let tmp = TempDir::new().unwrap();
-        let (url, server) = spawn_tx_show_rpc(
-            &hash,
-            RpcReply::Result(status.clone()),
-            Some(RpcReply::Result(serde_json::Value::Null)),
-        );
-        let mut command = thruput();
-        if json_output {
-            command.arg("--json");
-        }
-        let output = command
-            .args(["tx", "show", &hash, "--rpc-url", &url])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        server.join().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        if json_output {
-            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(report["data"]["status"], status);
-            assert!(report["data"]["receipt"].is_null());
-        } else {
-            let text = String::from_utf8(output.stderr).unwrap();
-            let observed = text
-                .lines()
-                .find_map(|line| line.split_once("status: ").map(|(_, value)| value))
-                .expect("human status line");
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(observed).unwrap(),
-                status
-            );
-        }
-    }
 }
