@@ -22,6 +22,8 @@ use thruput_json_rpc_client::{HttpClientBuilder, native::NativeClient};
 #[cfg(unix)]
 use thruput_json_rpc_types::{requests::EmptyRequest, responses::DecodedResponse};
 
+#[path = "support/isolation.rs"]
+mod isolation;
 mod support;
 #[cfg(unix)]
 #[path = "support/ui_audit.rs"]
@@ -85,19 +87,77 @@ fn embedded_source_commit() -> Option<&'static str> {
     commit
 }
 
+/// Directory holding the per-invocation config and cache homes `thruput()`
+/// hands the CLI.
+///
+/// Each test process gets a uniquely named directory under cargo's target
+/// tmpdir, with a sibling `<name>.lock` it holds locked until it exits. The
+/// lock file is locked before it is renamed into place, so a lock that can be
+/// acquired always belongs to an exited process: the first call removes those
+/// homes, so repeated runs do not accumulate them.
+fn test_homes_root() -> &'static std::path::Path {
+    static ROOT: OnceLock<(std::path::PathBuf, std::fs::File)> = OnceLock::new();
+    let (root, _lock) = ROOT.get_or_init(|| {
+        let parent =
+            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-integration-homes");
+        std::fs::create_dir_all(&parent).expect("bug: test homes parent should be creatable");
+        remove_exited_test_homes(&parent);
+        let root = tempfile::Builder::new()
+            .prefix("homes-")
+            .tempdir_in(&parent)
+            .expect("bug: test homes directory should be creatable")
+            .keep();
+        let lock = tempfile::NamedTempFile::new_in(&parent)
+            .expect("bug: test homes lock should be creatable");
+        lock.as_file()
+            .try_lock()
+            .expect("bug: a fresh test homes lock should be free");
+        let mut lock_path = root.clone().into_os_string();
+        lock_path.push(".lock");
+        let lock = lock
+            .persist(lock_path)
+            .expect("bug: test homes lock should be renamable");
+        (root, lock)
+    });
+    root
+}
+
+fn remove_exited_test_homes(parent: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let lock_path = entry.path();
+        let Some(home) = lock_path
+            .to_str()
+            .and_then(|path| path.strip_suffix(".lock"))
+            .map(std::path::PathBuf::from)
+        else {
+            continue;
+        };
+        let Ok(lock) = std::fs::File::options().write(true).open(&lock_path) else {
+            continue;
+        };
+        if lock.try_lock().is_err() {
+            continue;
+        }
+        // Keep the lock while the home remains so a later sweep retries it.
+        let removed = match std::fs::remove_dir_all(&home) {
+            Ok(()) => true,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        };
+        if removed {
+            let _ = std::fs::remove_file(&lock_path);
+        }
+    }
+}
+
 fn thruput() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_thruput"));
     command.env_remove("THRUPUT_BUNDLE_MANIFEST");
-    let config_home = std::env::temp_dir().join(format!(
-        "groundhog-cli-test-config-{}-{}",
-        std::process::id(),
-        CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    let cache_home = config_home.with_file_name(format!(
-        "groundhog-cli-test-cache-{}-{}",
-        std::process::id(),
-        CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
+    let home = CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let config_home = test_homes_root().join(format!("config-{home}"));
+    let cache_home = test_homes_root().join(format!("cache-{home}"));
     let groundhog_config = config_home.join("thruput");
     std::fs::create_dir_all(&groundhog_config).expect("bug: test config directory should exist");
     std::fs::write(
@@ -112,6 +172,7 @@ fn thruput() -> Command {
     command.env_remove("THRUPUT_TOOLCHAIN_BASE_URL");
     command.env_remove("HOGD_FFI_USER");
     command.env_remove("HOGD_FFI_PASSWORD");
+    isolation::isolate_from_developer_env(&mut command);
     command.env("XDG_CONFIG_HOME", config_home);
     command.env("XDG_CACHE_HOME", cache_home);
     command
@@ -4628,12 +4689,6 @@ fn integration_managed_startup_cancellation_reports_test_schema() {
             .current_dir(tmp.path())
             .env("PATH", &fake_bin)
             .env("THRUPUT_TEST_METADATA_JSON", metadata_json)
-            .env_remove("HTTP_PROXY")
-            .env_remove("HTTPS_PROXY")
-            .env_remove("ALL_PROXY")
-            .env_remove("http_proxy")
-            .env_remove("https_proxy")
-            .env_remove("all_proxy")
             .env("THRUPUT_TOOLCHAIN_BASE_URL", origin)
             .env("XDG_CACHE_HOME", cache.path())
             .stdout(Stdio::piped())
@@ -12331,7 +12386,8 @@ fn proxy_errors_never_print_credentials() {
             let output = command
                 .args(["tx", "show", &hash, "--rpc-url", "http://127.0.0.1:1"])
                 .env("HTTP_PROXY", &proxy)
-                .env("NO_PROXY", "")
+                .env_remove("NO_PROXY")
+                .env_remove("no_proxy")
                 .output()
                 .unwrap();
 

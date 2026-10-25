@@ -1,5 +1,8 @@
 //! Native call preflight and ambiguous-submission evidence through the CLI binary.
 
+#[path = "support/isolation.rs"]
+mod isolation;
+
 use std::{
     process::{Command, Output},
     sync::{Arc, Mutex},
@@ -60,20 +63,9 @@ impl Fixture {
             .args(["--json", "--non-interactive"])
             .current_dir(self.dir.path())
             .env("XDG_CONFIG_HOME", self.dir.path().join("config"))
-            .env("NO_PROXY", "*")
-            .env("no_proxy", "*")
             .env_remove("THRUPUT_PROFILE")
             .env_remove("THRUPUT_RUNTIME_MANIFEST");
-        for name in [
-            "HTTP_PROXY",
-            "http_proxy",
-            "HTTPS_PROXY",
-            "https_proxy",
-            "ALL_PROXY",
-            "all_proxy",
-        ] {
-            command.env_remove(name);
-        }
+        isolation::isolate_from_developer_env(&mut command);
         command
     }
 

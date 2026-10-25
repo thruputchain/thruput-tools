@@ -1,6 +1,9 @@
 //! Default discovery must preserve explicit intent and work without a writable cache.
 #![cfg(unix)]
 
+#[path = "support/isolation.rs"]
+mod isolation;
+
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -22,6 +25,7 @@ fn isolated_cli(root: &std::path::Path) -> Command {
         .env_remove("THRUPUT_OFFLINE")
         .env_remove("THRUPUT_TOOLCHAIN_BASE_URL")
         .env("PATH", root.join("bin"));
+    isolation::isolate_from_developer_env(&mut command);
     command
 }
 
@@ -153,9 +157,6 @@ fn interrupted_acquisition_reports_json_failure_and_nonzero_exit() {
             "THRUPUT_TOOLCHAIN_BASE_URL",
             format!("http://{}/", listener.local_addr().unwrap()),
         )
-        .env_remove("HTTPS_PROXY")
-        .env_remove("HTTP_PROXY")
-        .env_remove("ALL_PROXY")
         .args(["--json", "node", "--data-dir"])
         .arg(root.path().join("node-data"))
         .stdout(Stdio::piped())
