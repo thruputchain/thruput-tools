@@ -85,6 +85,12 @@ a decimal string on the wire); unit variants such as `Fault` become empty struct
 variants (`Fault {}`); the native enums add an `Unsupported` variant; and there
 is no `From` conversion from the hogd wire storage item.
 
+`thruput-json-rpc-client` drops its `receipt` module: the report-model
+`ReceiptSource` adapter, `poll_receipt`, `ReceiptPollConfig::within`/`attempts`
+and the `DEFAULT_RECEIPT_POLL_*` constants. Wait for receipts with
+`native::receipt::poll_receipt` (re-exported at the crate root), which keeps
+commitment evidence and is configured by a timeout and interval.
+
 The published `thruput-json-rpc-api` crate no longer defines the legacy
 `AirdropApi` and `LocalFundingApi` jsonrpsee traits or their generated
 `*Client`, `*Server` and `*OpenRpc` items. No binary registered them after the
