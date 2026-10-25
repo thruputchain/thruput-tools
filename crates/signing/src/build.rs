@@ -204,60 +204,6 @@ pub fn derive_deploy_address(
     Ok(ContractAddress::from(addr))
 }
 
-/// Message signed by a wallet owner to authorize hosted faucet wallet creation.
-pub fn wallet_create_proof_message(
-    genesis_hash: SHA256Hash,
-    faucet_wallet_address: ContractAddress,
-    wallet_contract_hash: SHA256Hash,
-    owner_public_key: thruput_xdr::types::Ed25519PublicKey,
-    deploy_nonce: SHA256Hash,
-) -> Result<Vec<u8>, SigningError> {
-    const DOMAIN: &str = "groundhog-faucet-create-wallet-v1";
-    xdrs::cxs::encode(&(
-        DOMAIN,
-        genesis_hash,
-        faucet_wallet_address,
-        wallet_contract_hash,
-        owner_public_key,
-        deploy_nonce,
-    ))
-    .map(|bytes| Sha256::digest(bytes).to_vec())
-    .map_err(|error| SigningError::XdrEncode(error.to_string()))
-}
-
-/// Parameters for the hardened hosted faucet wallet-create owner proof.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WalletCreateProofV2<'a> {
-    pub network_id: &'a str,
-    pub genesis_hash: SHA256Hash,
-    pub faucet_wallet_address: ContractAddress,
-    pub wallet_contract_hash: SHA256Hash,
-    pub owner_public_key: thruput_xdr::types::Ed25519PublicKey,
-    pub deploy_nonce: SHA256Hash,
-    pub wallet_address: ContractAddress,
-    pub client_nonce: &'a [u8],
-}
-
-/// Message signed by a wallet owner to authorize hardened hosted faucet wallet creation.
-pub fn wallet_create_proof_message_v2(
-    proof: &WalletCreateProofV2<'_>,
-) -> Result<Vec<u8>, SigningError> {
-    const DOMAIN: &str = "groundhog-faucet-create-wallet-v2";
-    xdrs::cxs::encode(&(
-        DOMAIN,
-        proof.network_id,
-        proof.genesis_hash,
-        proof.faucet_wallet_address,
-        proof.wallet_contract_hash,
-        proof.owner_public_key,
-        proof.deploy_nonce,
-        proof.wallet_address,
-        BytesM::<{ u32::MAX }>(proof.client_nonce.to_vec()),
-    ))
-    .map(|bytes| Sha256::digest(bytes).to_vec())
-    .map_err(|error| SigningError::XdrEncode(error.to_string()))
-}
-
 /// Signs a transaction and returns the canonical signed transaction.
 ///
 /// `network_hash` identifies the network the transaction is for. It is part of

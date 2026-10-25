@@ -51,6 +51,17 @@ transaction, or `None` for simulations without a transaction hash.
 `tx_lookup` takes the requested `TxHash` as its second argument. The hash type
 is `thruput_json_rpc_types::transaction::TxHash`.
 
+The published `thruput-signing` crate drops helpers with no remaining caller:
+`wallet_create_proof_message`, `wallet_create_proof_message_v2` and
+`WalletCreateProofV2` (hosted faucet wallet creation is retired),
+`create_wallet_calldata`, `dev_wallet_contract` with the
+`SigningError::UnsupportedDevWalletArtifact` variant it returned, and
+`build_signed_dev_wallet_native_token_transfer` with
+`BuildSignedDevWalletNativeTokenTransfer` and
+`SignedDevWalletNativeTokenTransfer`. To send native tokens through a dev
+wallet, build the transfer with `native_token_transfer_calldata` and
+`build_dev_wallet_do_action_transaction`, then sign it with `sign_transaction`.
+
 The published `thruput-json-rpc-api` crate no longer defines the legacy
 `AirdropApi` and `LocalFundingApi` jsonrpsee traits or their generated
 `*Client`, `*Server` and `*OpenRpc` items. No binary registered them after the
