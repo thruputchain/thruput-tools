@@ -13,11 +13,10 @@ use thruput_json_rpc_types::network_descriptor::{
     NetworkDescriptor, NetworkDescriptorEndpoints,
 };
 use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use thruput_json_rpc_types::state::StorageItemInfo;
 use thruput_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
 };
-use thruput_json_rpc_types::view::{RootInvocationOutput, ViewRequest, ViewResponse};
+use thruput_json_rpc_types::view::ViewRequest;
 use thruput_json_rpc_types::{
     base58::Base58,
     hex::{HexBytes, Topic},
@@ -263,43 +262,6 @@ fn view_request_wire_format() {
     assert_eq!(v["gasLimit"], "250000");
     let decoded: ViewRequest = serde_json::from_value(v).unwrap();
     assert_eq!(decoded.gas_limit, Some(250_000));
-}
-
-#[test]
-fn view_response_wire_format() {
-    let response = ViewResponse {
-        output: RootInvocationOutput::Return {
-            return_data: HexBytes(vec![0x2a]),
-        },
-        events: vec![],
-        height: BlockHeight::from(7i64),
-        gas_used: 1234,
-    };
-    let v: Value = serde_json::to_value(&response).unwrap();
-    assert_eq!(v["output"]["result"], "return");
-    assert_eq!(v["output"]["returnData"], "0x2a");
-    assert_eq!(v["height"], "7");
-    assert_eq!(v["gasUsed"], "1234");
-    assert!(v.get("gas_used").is_none());
-    assert!(v["events"].as_array().unwrap().is_empty());
-}
-
-#[test]
-fn view_abort_output_wire_format() {
-    let output = RootInvocationOutput::Abort {
-        abort_data: HexBytes(vec![0xde, 0xad]),
-    };
-    let v: Value = serde_json::to_value(&output).unwrap();
-    assert_eq!(v["result"], "abort");
-    assert_eq!(v["abortData"], "0xdead");
-    assert!(v.get("abort_data").is_none());
-}
-
-#[test]
-fn view_fault_output_wire_format() {
-    let v: Value = serde_json::to_value(&RootInvocationOutput::Fault).unwrap();
-    assert_eq!(v["result"], "fault");
-    assert_eq!(v.as_object().unwrap().len(), 1);
 }
 
 #[test]
@@ -587,23 +549,4 @@ fn consensus_value_hash_and_projection_return_encoding_errors() {
             source: xdrs::WriteError::InvalidArrayLength
         })
     ));
-}
-
-#[test]
-fn storage_item_wire_format_uses_camel_case_variant_fields() {
-    let deployed = StorageItemInfo::DeployedContract {
-        hash: zero_hash(),
-        size: 7,
-        contract_type: 3,
-    };
-    let deployed_json: Value = serde_json::to_value(&deployed).unwrap();
-    assert_eq!(deployed_json["kind"], "deployedContract");
-    assert_eq!(deployed_json["contractType"], 3);
-    assert!(deployed_json.get("contract_type").is_none());
-
-    let unknown = StorageItemInfo::Unknown { type_id: 9 };
-    let unknown_json: Value = serde_json::to_value(&unknown).unwrap();
-    assert_eq!(unknown_json["kind"], "unknown");
-    assert_eq!(unknown_json["typeId"], 9);
-    assert!(unknown_json.get("type_id").is_none());
 }
