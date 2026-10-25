@@ -1,12 +1,20 @@
+use std::path::PathBuf;
+
+use serde_json::json;
+use thruput_contract_spec::ContractArrayType;
+use thruput_contract_spec::ContractEnumDef;
+use thruput_contract_spec::ContractEnumVariant;
 use thruput_contract_spec::ContractField;
 use thruput_contract_spec::ContractSpecId;
 use thruput_contract_spec::ContractSpecMethod;
 use thruput_contract_spec::ContractSpecString;
+use thruput_contract_spec::ContractStructDef;
 use thruput_contract_spec::ContractType;
 use thruput_contract_spec::ContractTypeDef;
 use thruput_contract_spec::ContractUnionCase;
 use thruput_contract_spec::ContractUnionCaseType;
 use thruput_contract_spec::ContractUnionDef;
+use thruput_contract_spec::ContractVectorType;
 
 use thruput_client::codec::*;
 
@@ -206,31 +214,19 @@ fn spec_string_text_accepts_valid_identifiers() {
 }
 
 #[test]
-fn spec_string_text_rejects_quotes() {
-    let s = spec_string("bad\"name");
-    let err = spec_string_text(&s).unwrap_err();
-    assert!(err.to_string().contains("invalid character"), "{err}");
-}
-
-#[test]
-fn spec_string_text_rejects_backslash() {
-    let s = spec_string("bad\\name");
-    let err = spec_string_text(&s).unwrap_err();
-    assert!(err.to_string().contains("invalid character"), "{err}");
-}
-
-#[test]
-fn spec_string_text_rejects_whitespace() {
-    let s = spec_string("bad name");
-    let err = spec_string_text(&s).unwrap_err();
-    assert!(err.to_string().contains("invalid character"), "{err}");
-}
-
-#[test]
-fn spec_string_text_rejects_tab() {
-    let s = spec_string("bad\tname");
-    let err = spec_string_text(&s).unwrap_err();
-    assert!(err.to_string().contains("invalid character"), "{err}");
+fn spec_string_text_rejects_invalid_characters() {
+    for (case, text) in [
+        ("double quote", "bad\"name"),
+        ("backslash", "bad\\name"),
+        ("space", "bad name"),
+        ("tab", "bad\tname"),
+    ] {
+        let err = spec_string_text(&spec_string(text)).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid character"),
+            "{case}: {err}"
+        );
+    }
 }
 
 const COUNTER_ERROR_SELECTOR: u64 = 0xb199_47ac_b2fa_14ff;
@@ -553,4 +549,679 @@ fn strkey_spec_address_arguments_match_base58_and_reject_wrong_type() {
         encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).unwrap()
     );
     assert!(encode_args(&[public_key_strkey], Some(&metadata)).is_err());
+}
+
+#[test]
+fn encodes_single_typed_argument_from_local_metadata() {
+    let metadata = ContractMetadata {
+        interface_name: "Counter".into(),
+        version: "0.1.0".into(),
+        source: PathBuf::from("/tmp/implementation.rs"),
+        method: MethodMetadata {
+            arg_types: vec!["u64".into()],
+            return_type: None,
+        },
+    };
+    let encoded = encode_args(&["5".into()], Some(&CallMetadata::Local(metadata)))
+        .expect("bug: typed calldata should encode");
+    let decoded: u64 =
+        xdrs::cxs::decode(&encoded).expect("bug: encoded calldata should decode as u64");
+    assert_eq!(decoded, 5);
+}
+
+#[test]
+fn decodes_simple_return_value() {
+    let metadata = ContractMetadata {
+        interface_name: "Counter".into(),
+        version: "0.1.0".into(),
+        source: PathBuf::from("/tmp/implementation.rs"),
+        method: MethodMetadata {
+            arg_types: vec![],
+            return_type: Some("u64".into()),
+        },
+    };
+    let bytes = xdrs::cxs::encode(&7_u64).expect("bug: u64 should encode");
+    let decoded = decode_return(&bytes, Some(&CallMetadata::Local(metadata)))
+        .expect("bug: simple return value should decode");
+    assert_eq!(decoded, serde_json::json!("7"));
+}
+
+#[test]
+fn encodes_and_decodes_local_str_values() {
+    let metadata = ContractMetadata {
+        interface_name: "Counter".into(),
+        version: "0.1.0".into(),
+        source: PathBuf::from("/tmp/implementation.rs"),
+        method: MethodMetadata {
+            arg_types: vec!["&str".into()],
+            return_type: Some("&str".into()),
+        },
+    };
+    let encoded = encode_args(
+        &["hello".into()],
+        Some(&CallMetadata::Local(metadata.clone())),
+    )
+    .expect("bug: local string calldata should encode");
+    let decoded = decode_return(&encoded, Some(&CallMetadata::Local(metadata)))
+        .expect("bug: local string return should decode");
+    assert_eq!(decoded, serde_json::json!("hello"));
+}
+
+#[test]
+fn encodes_and_decodes_local_native_256_values() {
+    for (ty, value) in [
+        ("U256", thruput_u256::U256::MAX.to_string()),
+        ("thruput_sdk::U256", thruput_u256::U256::MAX.to_string()),
+        ("sdk::U256", thruput_u256::U256::MAX.to_string()),
+        ("groundhog_sdk::U256", thruput_u256::U256::MAX.to_string()),
+        ("I256", thruput_u256::I256::MIN.to_string()),
+        ("thruput_sdk::I256", thruput_u256::I256::MIN.to_string()),
+        ("sdk::I256", thruput_u256::I256::MIN.to_string()),
+        ("groundhog_sdk::I256", thruput_u256::I256::MIN.to_string()),
+    ] {
+        let metadata = ContractMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            source: PathBuf::from("/tmp/implementation.rs"),
+            method: MethodMetadata {
+                arg_types: vec![ty.into()],
+                return_type: Some(ty.into()),
+            },
+        };
+
+        let encoded = encode_args(
+            std::slice::from_ref(&value),
+            Some(&CallMetadata::Local(metadata.clone())),
+        )
+        .expect("bug: local native 256-bit calldata should encode");
+        let decoded = decode_return(&encoded, Some(&CallMetadata::Local(metadata)))
+            .expect("bug: local native 256-bit return should decode");
+
+        assert_eq!(decoded, json!(value));
+    }
+}
+
+#[test]
+fn encodes_and_decodes_embedded_spec_structured_arguments() {
+    let metadata = sample_structured_spec_metadata(
+        vec![
+            contract_field("payload", named_type("Payload")),
+            contract_field("mode", named_type("Mode")),
+            contract_field(
+                "maybe_count",
+                ContractType::Option {
+                    option_inner: Box::new(ContractType::U32),
+                },
+            ),
+            contract_field(
+                "digest",
+                ContractType::Array {
+                    array: ContractArrayType {
+                        element: Box::new(ContractType::U8),
+                        len: 4,
+                    },
+                },
+            ),
+            contract_field(
+                "flags",
+                ContractType::Vector {
+                    vector: ContractVectorType {
+                        element: Box::new(ContractType::Bool),
+                        max_len: 8,
+                    },
+                },
+            ),
+            contract_field(
+                "pair",
+                ContractType::Tuple {
+                    tuple: vec![ContractType::U32, ContractType::String]
+                        .try_into()
+                        .unwrap(),
+                },
+            ),
+        ],
+        ContractType::Void,
+    );
+
+    let encoded = encode_args(
+        &[
+            r#"{"count":7,"bytes":"hi"}"#.into(),
+            "Ready".into(),
+            "5".into(),
+            "0x01020304".into(),
+            "[true,false,true]".into(),
+            r#"[7,"ok"]"#.into(),
+        ],
+        Some(&CallMetadata::Spec(metadata.clone())),
+    )
+    .expect("bug: embedded spec calldata should encode");
+
+    assert_eq!(
+        decode_spec_arguments(&metadata, &encoded),
+        vec![
+            json!({"count": 7, "bytes": "0x6869"}),
+            json!("Ready"),
+            json!(5),
+            json!("0x01020304"),
+            json!([true, false, true]),
+            json!([7, "ok"]),
+        ]
+    );
+}
+
+#[test]
+fn encodes_and_decodes_embedded_spec_unions() {
+    let metadata = sample_structured_spec_metadata(
+        vec![contract_field("envelope", named_type("Envelope"))],
+        named_type("Envelope"),
+    );
+
+    let full_case = json!({
+        "case": "Full",
+        "value": {
+            "payload": {
+                "count": 9,
+                "bytes": "0xaabb"
+            },
+            "enabled": true
+        }
+    });
+    let encoded = encode_args(
+        &[full_case.to_string()],
+        Some(&CallMetadata::Spec(metadata.clone())),
+    )
+    .expect("bug: union calldata should encode");
+
+    let type_defs =
+        build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+    let mut reader = xdrs::cxs::buf_reader::BufReader::new(&encoded);
+    let decoded =
+        decode_spec_value_from_reader(&metadata.method.args[0].ty, &mut reader, &type_defs, "arg0")
+            .expect("bug: union arg should decode");
+    assert_eq!(decoded, full_case);
+    assert_eq!(reader.remaining(), 0);
+
+    let pair_case = json!({
+        "case": "Pair",
+        "value": ["Busy", 9]
+    });
+    let pair_bytes = encode_args(
+        &[pair_case.to_string()],
+        Some(&CallMetadata::Spec(metadata.clone())),
+    )
+    .expect("bug: tuple union case should encode");
+    let decoded_pair = decode_return(&pair_bytes, Some(&CallMetadata::Spec(metadata.clone())))
+        .expect("bug: union return should decode");
+    assert_eq!(decoded_pair, pair_case);
+
+    let empty_bytes = encode_args(
+        &["Empty".into()],
+        Some(&CallMetadata::Spec(metadata.clone())),
+    )
+    .expect("bug: void union shorthand should encode");
+    let decoded_empty = decode_return(&empty_bytes, Some(&CallMetadata::Spec(metadata)))
+        .expect("bug: void union return should decode");
+    assert_eq!(decoded_empty, json!({"case": "Empty"}));
+}
+
+#[test]
+fn encodes_and_decodes_embedded_spec_large_integers() {
+    let u128_value = u128::MAX.to_string();
+    let u128_metadata = sample_single_arg_spec_metadata(ContractType::U128);
+    let u128_bytes = encode_args(
+        std::slice::from_ref(&u128_value),
+        Some(&CallMetadata::Spec(u128_metadata.clone())),
+    )
+    .expect("bug: embedded spec u128 should encode");
+    assert_eq!(
+        decode_spec_arguments(&u128_metadata, &u128_bytes),
+        vec![json!(u128_value.clone())]
+    );
+    assert_eq!(
+        decode_return(&u128_bytes, Some(&CallMetadata::Spec(u128_metadata)))
+            .expect("bug: embedded spec u128 return should decode"),
+        json!(u128_value)
+    );
+
+    let i128_value = i128::MIN.to_string();
+    let i128_metadata = sample_single_arg_spec_metadata(ContractType::I128);
+    let i128_bytes = encode_args(
+        std::slice::from_ref(&i128_value),
+        Some(&CallMetadata::Spec(i128_metadata.clone())),
+    )
+    .expect("bug: embedded spec i128 should encode");
+    assert_eq!(
+        decode_spec_arguments(&i128_metadata, &i128_bytes),
+        vec![json!(i128_value.clone())]
+    );
+    assert_eq!(
+        decode_return(&i128_bytes, Some(&CallMetadata::Spec(i128_metadata)))
+            .expect("bug: embedded spec i128 return should decode"),
+        json!(i128_value)
+    );
+
+    let u256_value = thruput_u256::U256::MAX.to_string();
+    let i256_value = thruput_u256::I256::MIN.to_string();
+    let metadata = sample_single_arg_spec_metadata(ContractType::Tuple {
+        tuple: vec![ContractType::U256, ContractType::I256]
+            .try_into()
+            .unwrap(),
+    });
+    let argument = json!([u256_value, i256_value]).to_string();
+    let bytes = encode_args(&[argument], Some(&CallMetadata::Spec(metadata.clone())))
+        .expect("bug: embedded spec native 256-bit integers should encode");
+
+    assert_eq!(
+        decode_spec_arguments(&metadata, &bytes),
+        vec![json!([
+            thruput_u256::U256::MAX.to_string(),
+            thruput_u256::I256::MIN.to_string()
+        ])]
+    );
+}
+
+#[test]
+fn typed_native_256_arguments_enforce_ranges() {
+    const U256_OVERFLOW: &str =
+        "115792089237316195423570985008687907853269984665640564039457584007913129639936";
+    const I256_OVERFLOW: &str =
+        "57896044618658097711785492504343953926634992332820282019728792003956564819968";
+    const I256_UNDERFLOW: &str =
+        "-57896044618658097711785492504343953926634992332820282019728792003956564819969";
+
+    for (ty, value, expected) in [
+        (ContractType::U256, U256_OVERFLOW, "U256"),
+        (ContractType::I256, I256_OVERFLOW, "I256"),
+        (ContractType::I256, I256_UNDERFLOW, "I256"),
+    ] {
+        let error = encode_args(
+            &[value.to_owned()],
+            Some(&CallMetadata::Spec(sample_single_arg_spec_metadata(ty))),
+        )
+        .expect_err("bug: out-of-range native 256-bit argument must fail");
+
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(error.to_string().contains("does not fit"), "{error}");
+    }
+}
+
+#[test]
+fn encodes_and_decodes_embedded_spec_addresses() {
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    let metadata = sample_single_arg_spec_metadata(ContractType::Address);
+    let encoded = encode_args(
+        std::slice::from_ref(&address),
+        Some(&CallMetadata::Spec(metadata.clone())),
+    )
+    .expect("bug: embedded spec address should encode");
+
+    assert_eq!(
+        decode_spec_arguments(&metadata, &encoded),
+        vec![json!(address.clone())]
+    );
+    assert_eq!(
+        decode_return(&encoded, Some(&CallMetadata::Spec(metadata)))
+            .expect("bug: embedded spec address return should decode"),
+        json!(address)
+    );
+}
+
+#[test]
+fn spec_encode_rejects_arguments_that_do_not_fit_the_declared_type() {
+    let payload_arg = || {
+        sample_structured_spec_metadata(
+            vec![contract_field("payload", named_type("Payload"))],
+            ContractType::Void,
+        )
+    };
+    // (case, metadata, argument, error path, error message)
+    let cases = [
+        (
+            "byte vector over max length",
+            sample_single_arg_spec_metadata(ContractType::Vector {
+                vector: ContractVectorType {
+                    element: Box::new(ContractType::U8),
+                    max_len: 2,
+                },
+            }),
+            "0x010203",
+            "argument 1 (`value`)",
+            "byte vector exceeds max length 2 (got 3)",
+        ),
+        (
+            "array length mismatch",
+            sample_single_arg_spec_metadata(ContractType::Array {
+                array: ContractArrayType {
+                    element: Box::new(ContractType::Bool),
+                    len: 2,
+                },
+            }),
+            "[true]",
+            "argument 1 (`value`)",
+            "array expects length 2 but got 1",
+        ),
+        (
+            "struct given as array with wrong field count",
+            payload_arg(),
+            "[7]",
+            "argument 1 (`payload`)",
+            "expected 2 field value(s) but got 1",
+        ),
+        (
+            "unexpected struct field",
+            payload_arg(),
+            r#"{"count":7,"bytes":"hi","extra":1}"#,
+            "argument 1 (`payload`)",
+            "unexpected field `extra`",
+        ),
+        (
+            "missing struct field",
+            payload_arg(),
+            r#"{"count":7}"#,
+            "argument 1 (`payload`)",
+            "missing field `bytes`",
+        ),
+        (
+            "payload for void union case",
+            sample_structured_spec_metadata(
+                vec![contract_field("envelope", named_type("Envelope"))],
+                ContractType::Void,
+            ),
+            r#"{"case":"Empty","value":true}"#,
+            "argument 1 (`envelope`)",
+            "union case `Empty` does not take a payload",
+        ),
+    ];
+
+    for (case, metadata, argument, path, message) in cases {
+        let err =
+            encode_args(&[argument.into()], Some(&CallMetadata::Spec(metadata))).expect_err(case);
+        assert_encode_error(case, err, path, message);
+    }
+}
+
+#[test]
+fn rejects_decoded_vectors_exceeding_max_length() {
+    let metadata = sample_single_arg_spec_metadata(ContractType::Vector {
+        vector: ContractVectorType {
+            element: Box::new(ContractType::Bool),
+            max_len: 1,
+        },
+    });
+    let type_defs =
+        build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+    let bytes = xdrs::cxs::encode(&2_u32).expect("bug: vector length should encode");
+
+    let err = decode_spec_value(&metadata.method.return_type, &bytes, &type_defs)
+        .expect_err("bug: oversized decoded vectors should fail");
+    assert_decode_error(err, "return value", "decoded vector length 2 exceeds max 1");
+}
+
+#[test]
+fn prefers_named_enum_variants_over_numeric_string_discriminants() {
+    let metadata = sample_numeric_name_spec_metadata(named_type("NumericEnum"));
+    let encoded = encode_args(
+        &[r#""1""#.into()],
+        Some(&CallMetadata::Spec(metadata.clone())),
+    )
+    .expect("bug: numeric-string enum variant should encode by name");
+
+    let decoded = decode_return(&encoded, Some(&CallMetadata::Spec(metadata)))
+        .expect("bug: numeric-string enum variant should decode");
+    assert_eq!(decoded, json!("1"));
+}
+
+#[test]
+fn prefers_named_union_cases_over_numeric_string_discriminants() {
+    let metadata = sample_numeric_name_spec_metadata(named_type("NumericUnion"));
+    let encoded = encode_args(
+        &[r#""1""#.into()],
+        Some(&CallMetadata::Spec(metadata.clone())),
+    )
+    .expect("bug: numeric-string union case should encode by name");
+
+    let decoded = decode_return(&encoded, Some(&CallMetadata::Spec(metadata)))
+        .expect("bug: numeric-string union case should decode");
+    assert_eq!(decoded, json!({"case": "1"}));
+}
+
+#[test]
+fn normalize_type_name_strips_references_without_clobbering_prefixes() {
+    assert_eq!(normalize_type_name("&str"), "str");
+    assert_eq!(normalize_type_name("&mut str"), "str");
+    assert_eq!(normalize_type_name("&'a str"), "str");
+    assert_eq!(normalize_type_name("&String"), "String");
+    assert_eq!(normalize_type_name("&strange"), "strange");
+}
+
+#[test]
+fn normalize_type_name_recognizes_qualified_native_256_types() {
+    assert_eq!(normalize_type_name("sdk::U256"), "U256");
+    assert_eq!(normalize_type_name("&sdk::I256"), "I256");
+    assert_eq!(normalize_type_name("groundhog_sdk::U256"), "U256");
+    assert_eq!(normalize_type_name("&'a groundhog_sdk::I256"), "I256");
+    assert_eq!(normalize_type_name("other::U256"), "other::U256");
+}
+
+fn sample_structured_spec_metadata(
+    args: Vec<ContractField>,
+    return_type: ContractType,
+) -> SpecMethodMetadata {
+    SpecMethodMetadata {
+        interface_name: "Counter".into(),
+        version: "0.1.0".into(),
+        method: ContractSpecMethod {
+            name: spec_string("call"),
+            args: args.try_into().unwrap(),
+            return_type,
+            effect: None,
+        },
+        type_defs: vec![
+            ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_id("Payload"),
+                    fields: vec![
+                        contract_field("count", ContractType::U32),
+                        contract_field(
+                            "bytes",
+                            ContractType::Vector {
+                                vector: ContractVectorType {
+                                    element: Box::new(ContractType::U8),
+                                    max_len: u32::MAX,
+                                },
+                            },
+                        ),
+                    ]
+                    .try_into()
+                    .unwrap(),
+                },
+            },
+            ContractTypeDef::TypeDefEnum {
+                enum_def: ContractEnumDef {
+                    name: spec_id("Mode"),
+                    variants: vec![
+                        ContractEnumVariant {
+                            name: spec_string("Ready"),
+                            value: 1,
+                        },
+                        ContractEnumVariant {
+                            name: spec_string("Busy"),
+                            value: 2,
+                        },
+                    ]
+                    .try_into()
+                    .unwrap(),
+                },
+            },
+            ContractTypeDef::TypeDefUnion {
+                union_def: ContractUnionDef {
+                    name: spec_id("Envelope"),
+                    cases: vec![
+                        ContractUnionCase {
+                            name: spec_string("Empty"),
+                            discriminant: 0,
+                            case_type: ContractUnionCaseType::UnionCaseVoid,
+                        },
+                        ContractUnionCase {
+                            name: spec_string("Full"),
+                            discriminant: 1,
+                            case_type: ContractUnionCaseType::UnionCaseStruct {
+                                struct_fields: vec![
+                                    contract_field("payload", named_type("Payload")),
+                                    contract_field("enabled", ContractType::Bool),
+                                ]
+                                .try_into()
+                                .unwrap(),
+                            },
+                        },
+                        ContractUnionCase {
+                            name: spec_string("Pair"),
+                            discriminant: 2,
+                            case_type: ContractUnionCaseType::UnionCaseTuple {
+                                tuple: vec![named_type("Mode"), ContractType::U32]
+                                    .try_into()
+                                    .unwrap(),
+                            },
+                        },
+                    ]
+                    .try_into()
+                    .unwrap(),
+                },
+            },
+        ],
+        throws: vec![],
+    }
+}
+
+fn sample_numeric_name_spec_metadata(return_type: ContractType) -> SpecMethodMetadata {
+    SpecMethodMetadata {
+        interface_name: "Counter".into(),
+        version: "0.1.0".into(),
+        method: ContractSpecMethod {
+            name: spec_string("call"),
+            args: vec![contract_field("value", return_type.clone())]
+                .try_into()
+                .unwrap(),
+            return_type,
+            effect: None,
+        },
+        type_defs: vec![
+            ContractTypeDef::TypeDefEnum {
+                enum_def: ContractEnumDef {
+                    name: spec_id("NumericEnum"),
+                    variants: vec![
+                        ContractEnumVariant {
+                            name: spec_string("1"),
+                            value: 7,
+                        },
+                        ContractEnumVariant {
+                            name: spec_string("2"),
+                            value: 8,
+                        },
+                    ]
+                    .try_into()
+                    .unwrap(),
+                },
+            },
+            ContractTypeDef::TypeDefUnion {
+                union_def: ContractUnionDef {
+                    name: spec_id("NumericUnion"),
+                    cases: vec![
+                        ContractUnionCase {
+                            name: spec_string("1"),
+                            discriminant: 7,
+                            case_type: ContractUnionCaseType::UnionCaseVoid,
+                        },
+                        ContractUnionCase {
+                            name: spec_string("2"),
+                            discriminant: 8,
+                            case_type: ContractUnionCaseType::UnionCaseVoid,
+                        },
+                    ]
+                    .try_into()
+                    .unwrap(),
+                },
+            },
+        ],
+        throws: vec![],
+    }
+}
+
+fn sample_single_arg_spec_metadata(arg_type: ContractType) -> SpecMethodMetadata {
+    SpecMethodMetadata {
+        interface_name: "Counter".into(),
+        version: "0.1.0".into(),
+        method: ContractSpecMethod {
+            name: spec_string("call"),
+            args: vec![contract_field("value", arg_type.clone())]
+                .try_into()
+                .unwrap(),
+            return_type: arg_type,
+            effect: None,
+        },
+        type_defs: vec![],
+        throws: vec![],
+    }
+}
+
+fn contract_field(name: &str, ty: ContractType) -> ContractField {
+    ContractField {
+        name: spec_string(name),
+        ty,
+    }
+}
+
+fn decode_spec_arguments(metadata: &SpecMethodMetadata, encoded: &[u8]) -> Vec<serde_json::Value> {
+    let type_defs =
+        build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+    let mut reader = xdrs::cxs::buf_reader::BufReader::new(encoded);
+    let values = metadata
+        .method
+        .args
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            decode_spec_value_from_reader(
+                &field.ty,
+                &mut reader,
+                &type_defs,
+                &format!("arg{index}"),
+            )
+            .expect("bug: spec argument should decode")
+        })
+        .collect();
+    assert_eq!(reader.remaining(), 0);
+    values
+}
+
+fn named_type(name: &str) -> ContractType {
+    ContractType::Named {
+        named: spec_id(name),
+    }
+}
+
+fn assert_encode_error(case: &str, err: Error, path: &str, expected_message: &str) {
+    match err {
+        Error::CallEncode {
+            path: actual_path,
+            message,
+        } => {
+            assert_eq!(actual_path, path, "{case}");
+            assert_eq!(message, expected_message, "{case}");
+        }
+        other => panic!("bug: {case}: expected Error::CallEncode, got {other:?}"),
+    }
+}
+
+fn assert_decode_error(err: Error, path: &str, expected_message: &str) {
+    match err {
+        Error::CallDecode {
+            path: actual_path,
+            message,
+        } => {
+            assert_eq!(actual_path, path);
+            assert_eq!(message, expected_message);
+        }
+        other => panic!("bug: expected Error::CallDecode, got {other:?}"),
+    }
 }

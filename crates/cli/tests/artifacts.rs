@@ -108,166 +108,119 @@ fn normalizes_relative_target_dir_against_invocation_cwd() {
     );
 }
 
-#[test]
-fn detects_cli_target_dir_conflict_in_passthrough_args() {
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let base_dir = PathBuf::from("/tmp");
-    let err = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        &base_dir,
-        &["--target-dir".into(), "nested".into()],
-    )
-    .unwrap_err();
-
-    assert!(matches!(err, CliError::TargetDirConflict));
+struct PassthroughCase {
+    name: &'static str,
+    /// CLI-selected target dir; `None` disables the check.
+    target_dir: Option<&'static str>,
+    /// Passthrough args; `<base>` expands to the config base directory.
+    args: &'static [&'static str],
+    conflicts: bool,
 }
 
+const PASSTHROUGH_CASES: &[PassthroughCase] = &[
+    PassthroughCase {
+        name: "--target-dir passthrough arg",
+        target_dir: Some("out"),
+        args: &["--target-dir", "nested"],
+        conflicts: true,
+    },
+    PassthroughCase {
+        name: "--target-dir ignored when target dir option is disabled",
+        target_dir: None,
+        args: &["--target-dir", "nested"],
+        conflicts: false,
+    },
+    PassthroughCase {
+        name: "absolute config file setting build.target-dir",
+        target_dir: Some("out"),
+        args: &["--config", "<base>/config.toml"],
+        conflicts: true,
+    },
+    PassthroughCase {
+        name: "relative config file resolved against explicit base directory",
+        target_dir: Some("out"),
+        args: &["--config", "nested/config.toml"],
+        conflicts: true,
+    },
+    PassthroughCase {
+        name: "missing config file neither errors nor conflicts",
+        target_dir: Some("out"),
+        args: &["--config", "missing.toml"],
+        conflicts: false,
+    },
+    PassthroughCase {
+        name: "invalid TOML config file neither errors nor conflicts",
+        target_dir: Some("out"),
+        args: &["--config", "invalid.toml"],
+        conflicts: false,
+    },
+    PassthroughCase {
+        name: "inline config target dir as separate arg",
+        target_dir: Some("out"),
+        args: &["--config", "build.target-dir=\"nested\""],
+        conflicts: true,
+    },
+    PassthroughCase {
+        name: "inline config target dir in --config= form",
+        target_dir: Some("out"),
+        args: &["--config=build.target-dir=\"nested\""],
+        conflicts: true,
+    },
+    PassthroughCase {
+        name: "spaced inline config target dir",
+        target_dir: Some("out"),
+        args: &["--config", "build.target-dir = \"nested\""],
+        conflicts: true,
+    },
+    PassthroughCase {
+        name: "inline config without target dir",
+        target_dir: Some("out"),
+        args: &["--config", "term.color=always"],
+        conflicts: false,
+    },
+    PassthroughCase {
+        name: "spaced inline config without target dir",
+        target_dir: Some("out"),
+        args: &["--config", "term.color = \"always\""],
+        conflicts: false,
+    },
+];
+
 #[test]
-fn detects_config_file_target_dir_conflict() {
+fn target_dir_passthrough_conflicts() {
     let tmp = TempDir::new().expect("bug: temp dir should be created");
-    let config_path = tmp.path().join("config.toml");
-    std::fs::write(&config_path, "[build]\ntarget-dir = \"nested\"\n")
-        .expect("bug: config file should be written");
-
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let err = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        tmp.path(),
-        &["--config".into(), config_path.display().to_string()],
+    let base = tmp.path();
+    std::fs::create_dir_all(base.join("nested")).expect("bug: config dir should be created");
+    for config in ["config.toml", "nested/config.toml"] {
+        std::fs::write(base.join(config), "[build]\ntarget-dir = \"nested\"\n")
+            .expect("bug: config file should be written");
+    }
+    std::fs::write(
+        base.join("invalid.toml"),
+        "[build\n target-dir = \"nested\"\n",
     )
-    .unwrap_err();
+    .expect("bug: config file should be written");
 
-    assert!(matches!(err, CliError::TargetDirConflict));
-}
+    for case in PASSTHROUGH_CASES {
+        let options = ArtifactOptions::new(case.target_dir.map(PathBuf::from));
+        let args = case
+            .args
+            .iter()
+            .map(|arg| arg.replace("<base>", &base.display().to_string()))
+            .collect::<Vec<_>>();
 
-#[test]
-fn detects_inline_config_target_dir_conflict_with_separate_arg() {
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let base_dir = PathBuf::from("/tmp");
-    let err = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        &base_dir,
-        &["--config".into(), "build.target-dir=\"nested\"".into()],
-    )
-    .unwrap_err();
+        let result = ensure_no_target_dir_passthrough_conflicts(&options, base, &args);
 
-    assert!(matches!(err, CliError::TargetDirConflict));
-}
-
-#[test]
-fn detects_inline_config_target_dir_conflict_with_equals_form() {
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let base_dir = PathBuf::from("/tmp");
-    let err = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        &base_dir,
-        &["--config=build.target-dir=\"nested\"".into()],
-    )
-    .unwrap_err();
-
-    assert!(matches!(err, CliError::TargetDirConflict));
-}
-
-#[test]
-fn allows_inline_config_without_target_dir() {
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let base_dir = PathBuf::from("/tmp");
-    let result = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        &base_dir,
-        &["--config".into(), "term.color=always".into()],
-    );
-
-    assert!(result.is_ok());
-}
-
-#[test]
-fn detects_spaced_inline_config_target_dir_conflict() {
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let base_dir = PathBuf::from("/tmp");
-    let err = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        &base_dir,
-        &["--config".into(), "build.target-dir = \"nested\"".into()],
-    )
-    .unwrap_err();
-
-    assert!(matches!(err, CliError::TargetDirConflict));
-}
-
-#[test]
-fn allows_spaced_inline_config_without_target_dir() {
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let base_dir = PathBuf::from("/tmp");
-    let result = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        &base_dir,
-        &["--config".into(), "term.color = \"always\"".into()],
-    );
-
-    assert!(result.is_ok());
-}
-
-#[test]
-fn returns_ok_when_target_dir_option_is_disabled() {
-    let options = ArtifactOptions::new(None);
-    let base_dir = PathBuf::from("/tmp");
-    let result = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        &base_dir,
-        &["--target-dir".into(), "nested".into()],
-    );
-
-    assert!(result.is_ok());
-}
-
-#[test]
-fn resolves_relative_config_path_against_explicit_base_directory() {
-    let tmp = TempDir::new().expect("bug: temp dir should be created");
-    let config_path = tmp.path().join("nested/config.toml");
-    std::fs::create_dir_all(config_path.parent().expect("bug: parent should exist"))
-        .expect("bug: config dir should be created");
-    std::fs::write(&config_path, "[build]\ntarget-dir = \"nested\"\n")
-        .expect("bug: config file should be written");
-
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let result = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        tmp.path(),
-        &["--config".into(), "nested/config.toml".into()],
-    );
-
-    assert!(matches!(result, Err(CliError::TargetDirConflict)));
-}
-
-#[test]
-fn missing_config_file_does_not_error_or_conflict() {
-    let tmp = TempDir::new().expect("bug: temp dir should be created");
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let result = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        tmp.path(),
-        &["--config".into(), "missing.toml".into()],
-    );
-
-    assert!(result.is_ok());
-}
-
-#[test]
-fn invalid_toml_config_file_does_not_error_or_conflict() {
-    let tmp = TempDir::new().expect("bug: temp dir should be created");
-    let config_path = tmp.path().join("invalid.toml");
-    std::fs::write(&config_path, "[build\n target-dir = \"nested\"\n")
-        .expect("bug: config file should be written");
-
-    let options = ArtifactOptions::new(Some(PathBuf::from("out")));
-    let result = ensure_no_target_dir_passthrough_conflicts(
-        &options,
-        tmp.path(),
-        &["--config".into(), "invalid.toml".into()],
-    );
-
-    assert!(result.is_ok());
+        if case.conflicts {
+            assert!(
+                matches!(result, Err(CliError::TargetDirConflict)),
+                "{}: expected TargetDirConflict, got {result:?}",
+                case.name
+            );
+        } else {
+            assert!(result.is_ok(), "{}: expected Ok, got {result:?}", case.name);
+        }
+    }
 }
 
 #[test]
