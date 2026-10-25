@@ -1135,11 +1135,14 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn native_poll_timeout_does_not_resubmit() {
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
+        // Requests go to a loopback mock; a proxy in the environment would intercept them.
+        let _proxy = crate::http_client::proxy_env::ProxyEnvGuard::clear();
         let submissions = Arc::new(AtomicUsize::new(0));
         let server = jsonrpsee::server::ServerBuilder::default()
             .build("127.0.0.1:0")

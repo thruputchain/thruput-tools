@@ -42,6 +42,7 @@ fn write_active_profile(project_root: &Path) {
 }
 
 #[test]
+#[serial_test::parallel]
 fn resolve_package_with_explicit_name() {
     let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/ws"),
@@ -69,6 +70,7 @@ fn resolve_package_with_explicit_name() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn resolve_package_explicit_name_not_found() {
     let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/ws"),
@@ -87,6 +89,7 @@ fn resolve_package_explicit_name_not_found() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn resolve_package_from_member_dir() {
     let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/ws"),
@@ -114,6 +117,7 @@ fn resolve_package_from_member_dir() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn resolve_package_from_workspace_root_errors() {
     let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/ws"),
@@ -140,6 +144,7 @@ fn resolve_package_from_workspace_root_errors() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn resolve_package_standalone_project() {
     let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/proj"),
@@ -158,6 +163,7 @@ fn resolve_package_standalone_project() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn resolve_package_standalone_from_root() {
     let meta = thruput_cli::build::CargoMetadata {
         workspace_root: PathBuf::from("/proj"),
@@ -990,6 +996,7 @@ fn build_rejects_an_unreadable_initial_memory_bytes_before_compiling() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn build_rejects_env_rustflags_before_running_cargo() {
     let tmp = TempDir::new().unwrap();
 
@@ -1016,6 +1023,7 @@ fn build_rejects_env_rustflags_before_running_cargo() {
 /// Cargo treats a set-but-empty `CARGO_ENCODED_RUSTFLAGS` as a full override
 /// of config rustflags, so even an empty value must be rejected.
 #[test]
+#[serial_test::parallel]
 fn build_rejects_empty_cargo_encoded_rustflags() {
     let tmp = TempDir::new().unwrap();
 
@@ -1039,6 +1047,7 @@ fn build_rejects_empty_cargo_encoded_rustflags() {
 /// `-Z trap-unreachable=false` under a user-level `RUSTFLAGS`, which only
 /// surfaces later as artifact-validation rejections — so it guards too.
 #[test]
+#[serial_test::parallel]
 fn build_rv32_rejects_env_rustflags() {
     let tmp = TempDir::new().unwrap();
 
@@ -1158,6 +1167,7 @@ fn run_groundhog_with_fake_cargo(
 }
 
 #[test]
+#[serial_test::parallel]
 fn build_rv32_refuses_missing_linker_script_naming_member_leftover() {
     let tmp = TempDir::new().unwrap();
     let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
@@ -1197,6 +1207,7 @@ fn build_rv32_refuses_missing_linker_script_naming_member_leftover() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn build_rv32_warns_on_custom_linker_script_and_proceeds() {
     let tmp = TempDir::new().unwrap();
     let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
@@ -1230,6 +1241,7 @@ fn build_rv32_warns_on_custom_linker_script_and_proceeds() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn build_rv32_warns_on_non_nightly_toolchain_and_proceeds() {
     let tmp = TempDir::new().unwrap();
     let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
@@ -1263,6 +1275,7 @@ fn build_rv32_warns_on_non_nightly_toolchain_and_proceeds() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn build_rv32_link_failure_mentioning_script_gets_search_path_hint() {
     let tmp = TempDir::new().unwrap();
     let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
@@ -1301,6 +1314,7 @@ fn build_rv32_link_failure_mentioning_script_gets_search_path_hint() {
 /// `.cargo/contract.toml` overlay, and only when `--config` precedes the
 /// subcommand.
 #[test]
+#[serial_test::parallel]
 fn build_rv32_passes_the_contract_toml_overlay_to_cargo() {
     let tmp = TempDir::new().unwrap();
     let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
@@ -1340,6 +1354,7 @@ fn build_rv32_passes_the_contract_toml_overlay_to_cargo() {
 /// The overlay is not optional: without it the rv32 compile fails deep in
 /// cargo on the panic strategy, so it is refused up front instead.
 #[test]
+#[serial_test::parallel]
 fn build_rv32_refuses_a_missing_contract_toml() {
     let tmp = TempDir::new().unwrap();
     let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
@@ -1474,6 +1489,7 @@ impl Drop for PathGuard {
 /// wiring through `run_cargo` is exercised end to end. Env/cwd are set on the
 /// child so no process-global state is mutated.
 #[test]
+#[serial_test::parallel]
 fn build_show_cargo_commands_traces_invocation_to_stderr() {
     let tmp = TempDir::new().unwrap();
     let project_root =
@@ -1564,6 +1580,7 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
 /// a `cargo` that reports registry work the way cargo does, and asserts that
 /// report lands on the build's own stderr.
 #[test]
+#[serial_test::parallel]
 fn build_relays_what_cargo_reports_while_it_reads_the_registry() {
     let tmp = TempDir::new().unwrap();
     let project_root =
@@ -1676,6 +1693,7 @@ fn build_relays_what_cargo_reports_while_it_reads_the_registry() {
 /// having finished only if it was left to run.
 #[cfg(unix)]
 #[test]
+#[serial_test::parallel]
 fn build_stops_cargo_when_the_relay_loses_its_reader() {
     use std::io::BufRead;
 
@@ -1824,6 +1842,7 @@ fn finalize_rv32_spec_err(elf_bytes: &[u8]) -> String {
 }
 
 #[test]
+#[serial_test::parallel]
 fn rv32_raw_spec_section_newer_than_this_build_reports_skew() {
     let supported = thruput_spec_tool::RAW_SPEC_FORMAT;
     let message = finalize_rv32_spec_err(&rv32_elf_with_raw_spec_format(supported + 1));
@@ -1839,6 +1858,7 @@ fn rv32_raw_spec_section_newer_than_this_build_reports_skew() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn rv32_raw_spec_section_older_than_this_build_reports_skew() {
     let supported = thruput_spec_tool::RAW_SPEC_FORMAT;
     let message = finalize_rv32_spec_err(&rv32_elf_with_raw_spec_format(supported - 1));
@@ -1854,6 +1874,7 @@ fn rv32_raw_spec_section_older_than_this_build_reports_skew() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn rv32_pre_rename_raw_spec_section_reports_skew() {
     // An ELF linked against an SDK before 0.56 names the section
     // `groundhogspecrawv4`; it must read as an old format, not as "no spec".

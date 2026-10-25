@@ -20,6 +20,7 @@ fn global_config_path(tmp: &TempDir) -> PathBuf {
 }
 
 #[test]
+#[serial_test::parallel]
 fn project_discovery_uses_only_the_thruput_name() {
     let tmp = TempDir::new().unwrap();
     let nested = tmp.path().join("member/src");
@@ -116,6 +117,7 @@ fn roundtrip_default_key() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn project_profile_default_wallet_roundtrips() {
     let profile = thruput_cli::config::ProjectProfile {
         default_wallet: Some("alice-wallet".into()),
@@ -1607,6 +1609,7 @@ fn concurrent_global_writers_preserve_independent_updates() {
 }
 
 #[test]
+#[serial_test::parallel]
 #[cfg(unix)]
 fn concurrent_project_writers_preserve_independent_updates() {
     let tmp = TempDir::new().unwrap();
@@ -1814,6 +1817,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
 }
 
 #[test]
+#[serial_test::parallel]
 fn config_field_validation_accepts_typed_values_and_rejects_invalid_values() {
     use std::str::FromStr as _;
 
@@ -1910,6 +1914,7 @@ fn config_new_rejects_existing_target_layer_profile_without_changes() {
 }
 
 #[test]
+#[serial_test::parallel]
 #[cfg(unix)]
 fn config_new_validates_all_values_before_waiting_for_lock() {
     let tmp = TempDir::new().unwrap();
@@ -2208,6 +2213,7 @@ fn config_set_reports_unchanged_for_existing_value() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn config_set_network_hash_parses_its_field_name_and_persists() {
     let tmp = TempDir::new().unwrap();
     fs::write(
@@ -2233,6 +2239,7 @@ fn config_set_network_hash_parses_its_field_name_and_persists() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn saved_strkey_identifiers_are_persisted_as_base58() {
     let tmp = TempDir::new().unwrap();
     fs::write(
@@ -2275,6 +2282,7 @@ fn saved_strkey_identifiers_are_persisted_as_base58() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn config_set_network_hash_rejects_legacy_hex_without_writing() {
     let tmp = TempDir::new().unwrap();
     fs::write(
@@ -2304,6 +2312,7 @@ fn config_set_network_hash_rejects_legacy_hex_without_writing() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn config_set_network_hash_rejects_a_non_canonical_value() {
     let tmp = TempDir::new().unwrap();
     fs::write(
@@ -2872,6 +2881,7 @@ fn profile_network_config_rejects_unknown_names_and_bad_values() {
 }
 
 #[test]
+#[serial_test::parallel]
 fn profile_network_config_roundtrips_full_u64_values_through_toml() {
     use thruput_cli::config::ProjectProfile;
     use thruput_node_supervisor::ConfigParamName;

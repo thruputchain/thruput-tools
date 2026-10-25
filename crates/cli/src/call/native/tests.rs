@@ -123,7 +123,10 @@ fn profile(url: &str) -> crate::config::ResolvedProfile {
 }
 
 #[test]
+#[serial_test::serial]
 fn preparation_checks_native_discovery_identity_and_expiry() {
+    // Requests go to a loopback mock; a proxy in the environment would intercept them.
+    let _proxy = crate::http_client::proxy_env::ProxyEnvGuard::clear();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let (_, url, handle, calls) = rt.block_on(endpoint(vec![
         ("getVersionInfo", Ok(discovery())),
@@ -643,7 +646,10 @@ fn human_failure_observations_include_safe_commitment_and_status() {
 }
 
 #[test]
+#[serial_test::serial]
 fn native_rpc_accepts_contract_wallets_without_reinterpreting_their_address() {
+    // Requests go to a loopback mock; a proxy in the environment would intercept them.
+    let _proxy = crate::http_client::proxy_env::ProxyEnvGuard::clear();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let (_, url, handle, calls) = rt.block_on(endpoint(vec![
         ("getVersionInfo", Ok(discovery())),

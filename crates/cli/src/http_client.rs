@@ -194,19 +194,10 @@ fn request_error_message(error: &reqwest::Error) -> &'static str {
     }
 }
 
+/// Proxy variables for tests that send requests through the CLI's clients.
 #[cfg(test)]
-mod tests {
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    use std::sync::mpsc::{self, Receiver};
-    use std::thread;
-    use std::time::Instant;
-
-    use jsonrpsee::core::client::ClientT as _;
-    use jsonrpsee::rpc_params;
-    use serial_test::serial;
-
-    use super::*;
+pub(crate) mod proxy_env {
+    use std::ffi::OsString;
 
     const PROXY_ENV: [&str; 8] = [
         "HTTP_PROXY",
@@ -219,10 +210,10 @@ mod tests {
         "no_proxy",
     ];
 
-    struct ProxyEnvGuard(Vec<(&'static str, Option<OsString>)>);
+    pub(crate) struct ProxyEnvGuard(Vec<(&'static str, Option<OsString>)>);
 
     impl ProxyEnvGuard {
-        fn clear() -> Self {
+        pub(crate) fn clear() -> Self {
             let saved = PROXY_ENV
                 .iter()
                 .map(|name| (*name, std::env::var_os(name)))
@@ -235,7 +226,7 @@ mod tests {
             Self(saved)
         }
 
-        fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) {
+        pub(crate) fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) {
             // SAFETY: see `clear`; the guard owns this test's serialized environment changes.
             unsafe { std::env::set_var(name, value) };
         }
@@ -254,6 +245,22 @@ mod tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc::{self, Receiver};
+    use std::thread;
+    use std::time::Instant;
+
+    use jsonrpsee::core::client::ClientT as _;
+    use jsonrpsee::rpc_params;
+    use serial_test::serial;
+
+    use super::proxy_env::ProxyEnvGuard;
+    use super::*;
 
     #[test]
     #[serial]
