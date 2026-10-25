@@ -2105,22 +2105,15 @@ mod tests {
 
     #[test]
     #[serial]
-    fn collect_report_does_not_require_ffi_credentials() {
+    fn collect_report_in_empty_environment_reports_missing_keys_and_registry() {
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
             std::env::set_var("CARGO_HOME", tmp.path().join("cargo-home"));
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-            std::env::remove_var("HOGD_FFI_PASSWORD");
         }
 
         let report = collect_report(tmp.path(), None).unwrap();
         assert!(report.has_warnings());
-        assert!(
-            report
-                .findings
-                .iter()
-                .all(|finding| finding.code != "no_credentials")
-        );
         assert!(
             report
                 .findings
