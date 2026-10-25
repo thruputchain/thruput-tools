@@ -147,8 +147,8 @@ impl Query {
             .env("LC_ALL", "C.UTF-8")
             .env_remove("THRUPUT_PROFILE")
             .env_remove("THRUPUT_BUNDLE_MANIFEST")
-            .env_remove("NO_COLOR")
-            .env_remove("CARGO_TARGET_DIR");
+            .env_remove("NO_COLOR");
+        crate::isolation::isolate_from_developer_env(&mut command);
         command
     }
 

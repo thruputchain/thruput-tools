@@ -1,5 +1,8 @@
 //! Executable CLI coverage for the explicit native simulation path.
 
+#[path = "support/isolation.rs"]
+mod isolation;
+
 use std::{
     process::Command,
     sync::{Arc, Mutex},
@@ -45,20 +48,9 @@ impl Fixture {
             ])
             .current_dir(self.dir.path())
             .env("XDG_CONFIG_HOME", self.dir.path().join("config"))
-            .env("NO_PROXY", "*")
-            .env("no_proxy", "*")
             .env_remove("THRUPUT_PROFILE")
             .env_remove("THRUPUT_RUNTIME_MANIFEST");
-        for name in [
-            "HTTP_PROXY",
-            "http_proxy",
-            "HTTPS_PROXY",
-            "https_proxy",
-            "ALL_PROXY",
-            "all_proxy",
-        ] {
-            command.env_remove(name);
-        }
+        isolation::isolate_from_developer_env(&mut command);
         let output = command.output().unwrap();
         assert_eq!(
             output.status.success(),

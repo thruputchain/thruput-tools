@@ -1277,11 +1277,19 @@ fn configure_probe_process(
     // captured integer before `exec` in the child process.
     unsafe {
         command.pre_exec(move || {
-            let limit = libc::rlimit {
+            let output = libc::rlimit {
                 rlim_cur: output_limit,
                 rlim_max: output_limit,
             };
-            if libc::setrlimit(libc::RLIMIT_FSIZE, &raw const limit) == 0 {
+            // Exceeding the file-size limit raises SIGXFSZ, whose default
+            // action dumps core into the caller's working directory.
+            let no_core = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &raw const output) == 0
+                && libc::setrlimit(libc::RLIMIT_CORE, &raw const no_core) == 0
+            {
                 Ok(())
             } else {
                 Err(std::io::Error::last_os_error())
@@ -1829,6 +1837,19 @@ mod tests {
 
         assert_eq!(error, "could not inspect devnode stdout");
         assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn devnode_probe_process_cannot_dump_core() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "ulimit -c"]);
+        configure_probe_process(&mut command, 64 * 1024).unwrap();
+
+        let output = command.output().unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "0");
     }
 
     #[cfg(unix)]

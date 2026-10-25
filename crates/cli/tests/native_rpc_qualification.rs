@@ -1,6 +1,9 @@
 //! Native CLI flow against the production endpoint of a real local runtime.
 #![cfg(unix)]
 
+#[path = "support/isolation.rs"]
+mod isolation;
+
 use std::{error::Error, os::unix::fs::PermissionsExt, path::PathBuf, time::Duration};
 
 use jsonrpsee::http_client::HttpClientBuilder;
@@ -71,6 +74,7 @@ impl Fixture {
             .env_remove("THRUPUT_PROFILE")
             .env_remove("THRUPUT_RUNTIME_MANIFEST")
             .kill_on_drop(true);
+        isolation::isolate_from_developer_env(command.as_std_mut());
         let output = tokio::time::timeout(Duration::from_mins(1), command.output()).await??;
         if !output.status.success() {
             return Err(std::io::Error::other(format!(

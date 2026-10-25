@@ -18,6 +18,8 @@ use std::{
 };
 use tempfile::TempDir;
 
+#[path = "support/isolation.rs"]
+mod isolation;
 #[path = "support/query_ui.rs"]
 mod queries;
 mod support;
@@ -189,8 +191,8 @@ fi
             .env_remove("RUSTFLAGS")
             .env_remove("CARGO_ENCODED_RUSTFLAGS")
             .env_remove("CARGO_TERM_COLOR")
-            .env_remove("CARGO_TARGET_DIR")
             .env_remove("NO_COLOR");
+        isolation::isolate_from_developer_env(&mut command);
         let mut paths = vec![self.root.join("bin")];
         paths.extend(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),

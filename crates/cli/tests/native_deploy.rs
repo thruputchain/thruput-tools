@@ -1,4 +1,8 @@
 //! Process-level native deployment contract and failure-recovery tests.
+
+#[path = "support/isolation.rs"]
+mod isolation;
+
 use jsonrpsee::{
     RpcModule,
     server::{ServerBuilder, ServerHandle},
@@ -57,6 +61,7 @@ impl Fixture {
             .env("XDG_CONFIG_HOME", self.dir.path().join("config"))
             .env_remove("THRUPUT_PROFILE")
             .env_remove("THRUPUT_RUNTIME_MANIFEST");
+        isolation::isolate_from_developer_env(&mut cmd);
         cmd
     }
     fn deploy(&self, args: &[&str]) -> Output {
