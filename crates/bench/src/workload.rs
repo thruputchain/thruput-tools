@@ -21,7 +21,7 @@ use thruput_json_rpc_types::{base58::Base58, transaction::TxHash};
 const NATIVE_TOKEN_BALANCE_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new(0x41ac_95d6_e06e_2620_u64.to_be_bytes());
 
-const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
+const SUPPORTED_DERIVATION_SCHEME: &str = "thruput-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 fn dev_signer_from_seed(seed: &str, index: usize) -> LocalSigner {
@@ -174,7 +174,7 @@ pub(super) fn transaction_inputs_for_method(
             ));
         }
         (0..num_accounts).map(|index| {
-            let signer = derive_dev_account_signer(&format!("groundhog-bench:{seed}"), index);
+            let signer = derive_dev_account_signer(&format!("thruput-bench:{seed}"), index);
             let wallet_address = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address();
             if !manifest.bootstrap_accounts.iter().any(|a| a.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER && a.public_key.as_ref() == signer.verifying_key_bytes().as_slice() && a.wallet_address.0 == wallet_address) {
                 return Err(BenchError::InvalidConfiguration(format!("fixture account {index} is absent from public initial allocations; start the node with matching --bootstrap-accounts")));
@@ -289,7 +289,7 @@ mod tests {
         manifest.schema_version = 4;
         manifest.bootstrap_account_derivation = None;
         for (index, account) in manifest.bootstrap_accounts.iter_mut().enumerate() {
-            let signer = derive_dev_account_signer(&format!("groundhog-bench:{seed}"), index);
+            let signer = derive_dev_account_signer(&format!("thruput-bench:{seed}"), index);
             account.index = None;
             account.public_key = Base58(signer.verifying_key_bytes().into());
             account.wallet_address = Base58(
@@ -471,7 +471,7 @@ mod tests {
     }
 
     fn manifest() -> RuntimeManifest {
-        let seed = "groundhog-dev-accounts";
+        let seed = "thruput-dev-accounts";
         let signer = derive_dev_account_signer(seed, 0);
         let mut public_key = [0u8; 32];
         public_key.copy_from_slice(&signer.verifying_key_bytes());

@@ -62,7 +62,7 @@ pub const MAX_LOG_LINE_BYTES: usize = 64 * 1024;
 pub const MAX_RUNTIME_MANIFEST_BYTES: usize = 1024 * 1024;
 
 /// Bootstrap-account derivation contract supported by the Rust dev tooling.
-pub const SUPPORTED_BOOTSTRAP_ACCOUNT_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
+pub const SUPPORTED_BOOTSTRAP_ACCOUNT_DERIVATION_SCHEME: &str = "thruput-bootstrap-account-v1";
 
 const BOOTSTRAP_MANIFEST_FILE_NAME: &str = "bootstrap-manifest.json";
 const PERSISTENT_PID_FILE_NAME: &str = "hog-devnode.pid";

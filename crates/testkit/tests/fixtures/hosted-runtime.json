@@ -17,8 +17,8 @@
     "viewGateway": "127.0.0.1:61004"
   },
   "bootstrapAccountDerivation": {
-    "scheme": "groundhog-bootstrap-account-v1",
-    "seed": "groundhog-dev-accounts"
+    "scheme": "thruput-bootstrap-account-v1",
+    "seed": "thruput-dev-accounts"
   },
   "bootstrapAccounts": [
     {

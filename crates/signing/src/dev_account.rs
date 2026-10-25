@@ -9,9 +9,9 @@ use sha2::{Digest, Sha256};
 use crate::LocalSigner;
 
 /// Default seed for deterministic local-dev account signers.
-pub const DEFAULT_DEV_ACCOUNT_SEED: &str = "groundhog-dev-accounts";
+pub const DEFAULT_DEV_ACCOUNT_SEED: &str = "thruput-dev-accounts";
 
-/// Default number of local-dev accounts started by `groundhog node`.
+/// Default number of local-dev accounts started by `thruput node`.
 pub const DEFAULT_DEV_ACCOUNT_COUNT: usize = 10;
 
 /// Default storage-token funding target per local-dev account.

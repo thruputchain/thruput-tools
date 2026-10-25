@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .bootstrap_account_derivation
             .as_ref()
             .ok_or("missing hosted derivation")?;
-        if derivation.scheme != "groundhog-bootstrap-account-v1" {
+        if derivation.scheme != "thruput-bootstrap-account-v1" {
             return Err("unsupported hosted derivation".into());
         }
         let account = parsed

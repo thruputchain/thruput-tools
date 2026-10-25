@@ -424,7 +424,7 @@ mod tests {
         assert!(super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
         value["kind"] = json!(super::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND);
         value["bootstrapAccountDerivation"] =
-            json!({"scheme":"groundhog-bootstrap-account-v1","seed":"hosted-fixture"});
+            json!({"scheme":"thruput-bootstrap-account-v1","seed":"hosted-fixture"});
         value["bootstrapAccounts"][0]["index"] = json!(0);
         assert!(super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()).is_ok());
         value["schemaVersion"] = json!(5);

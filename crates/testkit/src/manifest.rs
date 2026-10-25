@@ -14,7 +14,7 @@ use thruput_xdr::types::{ContractAddress, NetworkHash};
 use crate::error::{Result, TestkitError};
 
 /// Derivation scheme this harness understands.
-const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
+const SUPPORTED_DERIVATION_SCHEME: &str = "thruput-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: usize = 1024 * 1024;
 
 /// A signer paired with its nonce-zero native address.
