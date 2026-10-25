@@ -7,11 +7,10 @@ use thruput_json_rpc_types::events::{
 };
 use thruput_json_rpc_types::network_descriptor::NetworkDescriptor;
 use thruput_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use thruput_json_rpc_types::state::{StorageItemInfo, StorageItemRead};
 use thruput_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
 };
-use thruput_json_rpc_types::view::{RootInvocationOutput, ViewRequest, ViewResponse};
+use thruput_json_rpc_types::view::ViewRequest;
 
 #[test]
 fn schema_generation_succeeds() {
@@ -23,8 +22,6 @@ fn schema_generation_succeeds() {
     let _ = schema_for!(TransactionReceipt);
     let _ = schema_for!(ExecStatus);
     let _ = schema_for!(ViewRequest);
-    let _ = schema_for!(ViewResponse);
-    let _ = schema_for!(RootInvocationOutput);
 
     // Transaction history types
     let _ = schema_for!(AddressTransactionQuery);
@@ -40,8 +37,6 @@ fn schema_generation_succeeds() {
     let _ = schema_for!(EventQuery);
 
     // State types
-    let _ = schema_for!(StorageItemInfo);
-    let _ = schema_for!(StorageItemRead);
 
     // Manifest types
     let _ = schema_for!(BootstrapManifest);

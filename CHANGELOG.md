@@ -68,6 +68,22 @@ error codes. The native modules map their errors; for funding errors use
 `native::funding::rpc_error`.
 `thruput-json-rpc-types` drops the unused `version::VersionInfo`; the
 `getVersionInfo` result is `responses::VersionInfo`.
+It also drops the pre-wire-14 storage and view result types; use the native
+results instead:
+
+| Removed | Replacement |
+| --- | --- |
+| `state::StorageItemRead` | `responses::StorageResult` (`getStorage`) |
+| `state::StorageItemInfo` | `responses::StorageItem` |
+| `view::ViewResponse` | `responses::SimulationResult` (`simulateInvocation`) |
+| `view::RootInvocationOutput` | `responses::InvocationOutput` |
+
+The native results are not drop-in: `blockHeight` and `height` become
+`stateBlockHeight`; simulation events are `responses::EmittedEvent`, whose
+`address` replaces `contractAddress`; `NonnegativeInt.value` is an `i128` (still
+a decimal string on the wire); unit variants such as `Fault` become empty struct
+variants (`Fault {}`); the native enums add an `Unsupported` variant; and there
+is no `From` conversion from the hogd wire storage item.
 
 The published `thruput-json-rpc-api` crate no longer defines the legacy
 `AirdropApi` and `LocalFundingApi` jsonrpsee traits or their generated

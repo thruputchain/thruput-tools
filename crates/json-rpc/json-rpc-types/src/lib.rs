@@ -15,7 +15,6 @@ pub mod receipt;
 pub mod requests;
 pub mod responses;
 pub mod runtime_manifest;
-pub mod state;
 pub mod transaction;
 pub mod view;
 

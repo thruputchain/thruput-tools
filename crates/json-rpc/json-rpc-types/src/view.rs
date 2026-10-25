@@ -1,7 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::events::EmittedEvent;
 use crate::hex::HexBytes;
 use crate::{BlockHeight, ContractAddress};
 
@@ -160,51 +159,4 @@ impl From<ViewCall> for ViewRequest {
             min_height: None,
         }
     }
-}
-
-/// Result of sandboxed contract simulation.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ViewResponse {
-    /// Root invocation output.
-    pub output: RootInvocationOutput,
-
-    /// Events emitted during view execution.
-    ///
-    /// Hogd captures emitted events from the simulated frame; wallet-preview
-    /// callers see what events a real submit would produce.
-    pub events: Vec<EmittedEvent>,
-
-    /// Block height of the committed snapshot used for the view.
-    #[serde(with = "crate::decimal")]
-    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
-    pub height: BlockHeight,
-
-    /// Gas the invocation consumed: the root frame and every frame it
-    /// invoked. On an out-of-gas fault it equals the gas limit the view ran
-    /// with. Matches the `gasUsed` a transaction with no attached contracts
-    /// making the same invocation would report; out-of-gas is checked
-    /// strictly, so size a transaction's limit above this figure.
-    #[serde(with = "crate::decimal")]
-    #[schemars(with = "crate::decimal::Decimal<u64>")]
-    pub gas_used: u64,
-}
-
-/// Root invocation output with raw buffers preserved as hex.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-#[serde(
-    tag = "result",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum RootInvocationOutput {
-    /// Contract returned normally.
-    Return { return_data: HexBytes },
-
-    /// Contract aborted/reverted deterministically.
-    Abort { abort_data: HexBytes },
-
-    /// Execution faulted before a return or abort payload was produced.
-    Fault,
 }
