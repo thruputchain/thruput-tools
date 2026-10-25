@@ -1,4 +1,3 @@
-use jsonrpsee::types::ErrorObjectOwned;
 use thruput_json_rpc_types::airdrop::LocalFundingErrorData;
 use thruput_json_rpc_types::error::{TxInvalidDetail, codes};
 
@@ -110,21 +109,5 @@ impl RpcServerError {
             Self::Overloaded(_) => codes::OVERLOADED,
             Self::NotImplemented(_) => codes::NOT_IMPLEMENTED,
         }
-    }
-}
-
-impl From<RpcServerError> for ErrorObjectOwned {
-    fn from(err: RpcServerError) -> Self {
-        let code = err.code();
-        if let RpcServerError::LocalFundingUnresolved { evidence, .. } = &err {
-            return ErrorObjectOwned::owned(code, err.to_string(), Some(evidence));
-        }
-        if let RpcServerError::ViewHeightUnavailable(detail) = &err {
-            return ErrorObjectOwned::owned(code, err.to_string(), Some(detail));
-        }
-        if let RpcServerError::TxInvalidDetailed(detail) = &err {
-            return ErrorObjectOwned::owned(code, err.to_string(), Some(detail));
-        }
-        ErrorObjectOwned::owned(code, err.to_string(), None::<()>)
     }
 }

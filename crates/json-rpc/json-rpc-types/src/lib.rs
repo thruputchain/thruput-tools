@@ -17,7 +17,6 @@ pub mod responses;
 pub mod runtime_manifest;
 pub mod state;
 pub mod transaction;
-pub mod version;
 pub mod view;
 
 use base58::Base58;

@@ -978,11 +978,9 @@ async fn retained_dropped_funding_never_resubmits() {
     let error = restarted.fund(request).await.unwrap_err();
 
     assert!(error.to_string().contains("Executor code -7"));
-    let object: jsonrpsee::types::ErrorObjectOwned = error.into();
-    let evidence: LocalFundingErrorData =
-        serde_json::from_str(object.data().unwrap().get()).unwrap();
-    assert_eq!(evidence.tx_hash, original.tx_hash);
-    assert_eq!(evidence.signed_transaction, original.signed_transaction);
+    let (tx_hash, signed_transaction) = unresolved_funding_evidence(&error);
+    assert_eq!(tx_hash, original.tx_hash);
+    assert_eq!(signed_transaction, original.signed_transaction);
     assert!(backend.submissions.lock().unwrap().is_empty());
 }
 
@@ -1160,14 +1158,8 @@ async fn expired_retained_funding_without_outcome_never_creates_another_transfer
         let restarted = durable_rpc(dir.path(), false, backend.clone());
         let error = restarted.fund(request).await.unwrap_err();
         assert!(error.to_string().contains("expired"));
-        let object: jsonrpsee::types::ErrorObjectOwned = error.into();
-        assert_eq!(
-            object.code(),
-            thruput_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
-        );
-        let evidence: LocalFundingErrorData =
-            serde_json::from_str(object.data().unwrap().get()).unwrap();
-        assert_eq!(evidence.tx_hash, signed.tx_hash);
+        let (tx_hash, signed_transaction) = unresolved_funding_evidence(&error);
+        assert_eq!(tx_hash, signed.tx_hash);
         let original = FundingJournal::open(
             dir.path(),
             None,
@@ -1177,7 +1169,7 @@ async fn expired_retained_funding_without_outcome_never_creates_another_transfer
         )
         .unwrap();
         assert_eq!(
-            evidence.signed_transaction,
+            signed_transaction,
             original.records()[0]
                 .signed
                 .as_ref()
@@ -1684,5 +1676,20 @@ async fn native_faucet_does_not_cache_a_contradictory_execution_as_terminal() {
             thruput_json_rpc_types::responses::AirdropAttempt::Succeeded { .. }
         ));
         assert_eq!(backend.submissions.lock().unwrap().len(), 1);
+    }
+}
+
+/// The retained evidence an unresolved funding error carries on the wire.
+fn unresolved_funding_evidence(error: &RpcServerError) -> (TxHash, HexBytes) {
+    use thruput_json_rpc_types::error::native::{ErrorData, codes};
+    let object = thruput_json_rpc_server::native::funding::rpc_error(error);
+    assert_eq!(object.code(), codes::LOCAL_FUNDING_UNRESOLVED);
+    match serde_json::from_str(object.data().expect("bug: evidence is attached").get()) {
+        Ok(ErrorData::LocalFundingUnresolved {
+            transaction_hash,
+            signed_transaction,
+            ..
+        }) => (transaction_hash, signed_transaction),
+        other => panic!("expected unresolved funding evidence, got {other:?}"),
     }
 }
