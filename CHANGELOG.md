@@ -62,6 +62,13 @@ The published `thruput-signing` crate drops helpers with no remaining caller:
 wallet, build the transfer with `native_token_transfer_calldata` and
 `build_dev_wallet_do_action_transaction`, then sign it with `sign_transaction`.
 
+`thruput-json-rpc-server` no longer implements
+`From<RpcServerError> for ErrorObjectOwned`, which produced the pre-wire-14
+error codes. The native modules map their errors; for funding errors use
+`native::funding::rpc_error`.
+`thruput-json-rpc-types` drops the unused `version::VersionInfo`; the
+`getVersionInfo` result is `responses::VersionInfo`.
+
 The published `thruput-json-rpc-api` crate no longer defines the legacy
 `AirdropApi` and `LocalFundingApi` jsonrpsee traits or their generated
 `*Client`, `*Server` and `*OpenRpc` items. No binary registered them after the

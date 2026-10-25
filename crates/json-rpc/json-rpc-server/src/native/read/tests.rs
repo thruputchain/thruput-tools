@@ -289,15 +289,8 @@ async fn read_deadlines_do_not_add_admission_claims() {
     assert!(data.get("admission").is_none());
 }
 #[test]
-fn native_invalid_data_has_evidence_while_wire13_error_is_unchanged() {
+fn native_invalid_data_has_evidence() {
     let error = invalid("bad result");
-    let legacy = ErrorObjectOwned::from(error.clone());
-    assert_eq!(
-        legacy.code(),
-        thruput_json_rpc_types::error::codes::BACKEND_UNAVAILABLE
-    );
-    assert_eq!(legacy.message(), "backend unavailable: bad result");
-    assert!(legacy.data().is_none());
     let native = rpc_error(&error);
     assert_eq!(native.code(), codes::BACKEND_DATA_INVALID);
     let data: serde_json::Value = serde_json::from_str(native.data().unwrap().get()).unwrap();
@@ -990,7 +983,7 @@ impl NativeHistoryPlane for Backend {
 }
 
 #[test]
-fn history_errors_preserve_native_cause_without_changing_legacy_codes() {
+fn history_errors_preserve_native_cause() {
     for (error, code, kind) in [
         (
             RpcServerError::InvalidCursor("bad token".into()),
@@ -1003,11 +996,6 @@ fn history_errors_preserve_native_cause_without_changing_legacy_codes() {
             "historyUnavailable",
         ),
     ] {
-        let legacy: ErrorObjectOwned = error.clone().into();
-        assert_eq!(
-            legacy.code(),
-            thruput_json_rpc_types::error::codes::BACKEND_UNAVAILABLE
-        );
         let native = rpc_error(&error);
         assert_eq!(native.code(), code);
         let data: serde_json::Value = serde_json::from_str(native.data().unwrap().get()).unwrap();

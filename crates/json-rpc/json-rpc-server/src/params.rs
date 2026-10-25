@@ -10,7 +10,12 @@ use crate::RpcServerError;
 /// positional struct fields. The request type must reject unknown properties.
 pub fn parse_named<T: DeserializeOwned>(params: &Params<'_>) -> Result<T, ErrorObjectOwned> {
     if !params.is_object() {
-        return Err(RpcServerError::InvalidParam("expected named params object".into()).into());
+        let error = RpcServerError::InvalidParam("expected named params object".into());
+        return Err(ErrorObjectOwned::owned(
+            error.code(),
+            error.to_string(),
+            None::<()>,
+        ));
     }
     params.parse()
 }
@@ -60,6 +65,12 @@ mod tests {
                 -32602
             );
         }
+        let error = parse_named::<BlockQuery>(&Params::new(Some("[]"))).unwrap_err();
+        assert_eq!(
+            error.message(),
+            "invalid params: expected named params object"
+        );
+        assert!(error.data().is_none());
         assert_eq!(
             *parse_named::<BlockQuery>(&Params::new(Some("{\"blockHeight\":\"812\"}")))
                 .unwrap()
