@@ -316,7 +316,13 @@ async fn native_local_simulation_preserves_snapshot_and_deadline() {
             gas_limit: Some(100),
             min_state_block_height: Some(42.into()),
         };
-        let context = RpcRequestContext::new(Some(Duration::from_millis(50)));
+        // Only the slow gateway gets a short deadline; a tight one would also
+        // cut off a healthy reply on a loaded machine.
+        let context = if mode == FakeViewGatewayMode::ViewSlow {
+            RpcRequestContext::new(Some(Duration::from_millis(50)))
+        } else {
+            RpcRequestContext::unbounded()
+        };
         let result = backend.simulate(context, request, 100).await;
         if mode == FakeViewGatewayMode::ViewSlow {
             assert!(matches!(result, Err(RpcServerError::BackendTimeout)));

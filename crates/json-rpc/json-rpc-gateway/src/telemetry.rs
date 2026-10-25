@@ -751,17 +751,33 @@ mod tests {
         assert!(!logs.contains(" ERROR "), "{logs}");
     }
 
+    // A child process, like the other subscriber tests: tracing caches each
+    // callsite's interest process-wide, so a subscriber another test installs
+    // concurrently can leave `ordinary` enabled here.
     #[test]
     fn disabled_subscriber_respects_filter() {
-        tracing::subscriber::with_default(
-            subscriber(
-                "test",
-                EnvFilter::new("warn"),
-                tracing_subscriber::fmt::format::FmtSpan::NONE,
-                None,
-            ),
-            assert_disabled_tracing,
-        );
+        if std::env::var_os("GROUNDHOG_TEST_FILTER").is_some() {
+            tracing::subscriber::with_default(
+                subscriber(
+                    "test",
+                    EnvFilter::new("warn"),
+                    tracing_subscriber::fmt::format::FmtSpan::NONE,
+                    None,
+                ),
+                assert_disabled_tracing,
+            );
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "telemetry::tests::disabled_subscriber_respects_filter",
+                "--nocapture",
+            ])
+            .env("GROUNDHOG_TEST_FILTER", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
     }
 
     #[tokio::test]
