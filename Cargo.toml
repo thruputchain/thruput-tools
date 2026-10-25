@@ -26,7 +26,6 @@ members = [
     "crates/node-supervisor",
     "crates/faucet",
     "crates/firehose",
-    "crates/e2e-tests",
     "crates/bench",
     "crates/testkit",
 ]

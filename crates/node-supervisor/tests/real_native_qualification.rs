@@ -74,6 +74,7 @@ async fn real_native_submit_receipt_balance_and_simulation() {
     );
     assert!(binary.is_absolute() && binary.is_file());
     let artifacts = binary.parent().unwrap().join("contracts");
+    let artifacts_for_devnode = artifacts.clone();
     let sender = random_signer().unwrap();
     let node = NodeSupervisorHandle::start(
         NodeSupervisorConfig::default()
@@ -84,8 +85,8 @@ async fn real_native_submit_receipt_balance_and_simulation() {
                 HogdDevConfig::default()
                     .with_binary_path(binary)
                     .with_startup_timeout(Duration::from_mins(1))
-                    .with_ramdb_bytes(128 * 1024 * 1024)
-                    .with_contract_artifact_directories([artifacts])
+                    .with_ramdb_bytes(ramdb_bytes())
+                    .with_contract_artifact_directories([artifacts_for_devnode])
                     .with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(
                         Base58(sender.verifying_key_bytes().into()),
                         "1000000000000",
@@ -96,12 +97,29 @@ async fn real_native_submit_receipt_balance_and_simulation() {
     .unwrap();
     // The helper returns errors instead of panicking, so the listener and the
     // runtime are stopped before the test reports a failed assertion.
-    let outcome = exercise(&node, &sender).await;
+    let deployable = artifacts.join("genesis_root.rv32a");
+    let outcome = exercise(&node, &sender, &deployable).await;
     node.stop().await.unwrap();
     outcome.unwrap();
 }
 
-async fn exercise(node: &NodeSupervisorHandle, sender: &LocalSigner) -> TestResult {
+/// hog-devnode divides its RAM database between the cores it may run on, so a
+/// fixed size that suffices on a small runner runs out on a larger host,
+/// failing genesis or a later commit with a system error.
+fn ramdb_bytes() -> u64 {
+    const MIB: u64 = 1024 * 1024;
+    let cores = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
+    u64::try_from(cores)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(16 * MIB)
+        .max(256 * MIB)
+}
+
+async fn exercise(
+    node: &NodeSupervisorHandle,
+    sender: &LocalSigner,
+    deployable: &std::path::Path,
+) -> TestResult {
     let native = NativeClient::new(transport(node.rpc_addr())?);
     check_discovery(&native).await?;
     let network = known(native.get_network_info(input::EmptyRequest {}).await?)?.network_hash;
@@ -173,8 +191,361 @@ async fn exercise(node: &NodeSupervisorHandle, sender: &LocalSigner) -> TestResu
         [&receipt, &second],
     )
     .await?;
-    check_block_continuations(node, &native, sender, recipient, signing_network).await?;
+    check_block_continuations(node, &native, sender, recipient, signing_network.clone()).await?;
+    check_invalid_signature_rejected(&native, sender, recipient, signing_network.clone()).await?;
+    check_unfunded_deployment_conflict(node, &native, sender, signing_network.clone(), deployable)
+        .await?;
+    for (atomic, salt, nonce) in [(false, 2, 3_000), (true, 3, 3_100)] {
+        check_deployment_accounting(
+            node,
+            &native,
+            sender,
+            signing_network.clone(),
+            deployable,
+            Deployment {
+                atomic,
+                salt,
+                nonce,
+            },
+        )
+        .await?;
+    }
     Ok(())
+}
+
+/// How [`check_deployment_accounting`] funds the new address.
+struct Deployment {
+    /// Fund within the deployment, rather than by an earlier transfer.
+    atomic: bool,
+    salt: u8,
+    nonce: u64,
+}
+
+/// Deployment lands at its derived address, and free balances move by exactly
+/// the transferred amount and the storage collateral each step reserves. A
+/// fresh owner's first transaction creates its replay item, so the first debit
+/// includes that item's collateral as well as the replay entry's.
+async fn check_deployment_accounting(
+    node: &NodeSupervisorHandle,
+    native: &NativeClient<HttpClient>,
+    sender: &LocalSigner,
+    signing_network: thruput_xdr::types::NetworkHash,
+    deployable: &std::path::Path,
+    deployment: Deployment,
+) -> TestResult {
+    use thruput_signing::{
+        default_wallet::{
+            BuildDefaultWalletDeployTransaction, DeploymentCode,
+            build_default_wallet_deploy_transaction,
+        },
+        derive_deploy_address, wallet_contract_hash,
+    };
+    use thruput_xdr::contract::{Contract, ContractBlob};
+
+    let code = std::fs::read(deployable)?;
+    let code_size = i128::try_from(code.len())?;
+    let contract = Contract::kRv32 {
+        rv32_contract: ContractBlob {
+            data: xdr_common::BytesM(code),
+        },
+    };
+    let owner = random_signer()?;
+    let account = PubkeyAccount::from_public_key_bytes(owner.verifying_key_bytes(), 0);
+    for nonce in [deployment.nonce, deployment.nonce + 1] {
+        send_transfer(
+            node,
+            native,
+            sender,
+            Base58(account.address()),
+            signing_network.clone(),
+            nonce,
+        )
+        .await?;
+    }
+    let salt = thruput_xdr::types::SHA256Hash::from([deployment.salt; 32]);
+    let target =
+        derive_deploy_address(&account.address(), &salt, &wallet_contract_hash(&contract)?)?;
+    let costs = known(native.get_chain_config(input::EmptyRequest {}).await?)?
+        .execution
+        .ok_or_else(|| std::io::Error::other("authoritative execution config missing"))?
+        .storage_costs;
+    let replay_cost =
+        i128::from(costs.base_data_item_cost) + i128::from(costs.replay_cache_cost_per_entry);
+    let balance_cost = i128::from(costs.balance_cost);
+    let deployment_cost = i128::from(costs.base_contract_deployment_cost)
+        + code_size * i128::from(costs.contract_deployment_cost_per_byte);
+    let amount = i128::try_from(AMOUNT)?;
+    let before = free_balance(native, Base58(account.address())).await?;
+    if !deployment.atomic {
+        send_transfer(
+            node,
+            native,
+            &owner,
+            Base58(target),
+            signing_network.clone(),
+            1,
+        )
+        .await?;
+        let after = free_balance(native, Base58(account.address())).await?;
+        require(
+            after == before - amount - replay_cost,
+            &format!(
+                "prefunding transfer debited {} (amount {amount}, replay collateral {replay_cost})",
+                before - after
+            ),
+        )?;
+        require(
+            free_balance(native, Base58(target)).await? == amount - balance_cost,
+            "prefunded target holds the wrong free balance",
+        )?;
+    }
+    let tip = known(native.get_chain_tip(input::EmptyRequest {}).await?)?;
+    let deploy = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
+        account: &account,
+        deployment_nonce: salt,
+        code: DeploymentCode::Attached(contract),
+        amount: if deployment.atomic { AMOUNT } else { 0 },
+        initializer: None,
+        gas_limit: GAS,
+        block_expiry_height: *tip.block_height + 100,
+        nonce: 2,
+    })?;
+    let receipt = commit_transaction(node, native, &owner, signing_network, deploy).await?;
+    let output::ReceiptExecution::Return { return_data } = &receipt.execution else {
+        return Err(format!("deployment did not return: {receipt:?}").into());
+    };
+    let deployed: thruput_xdr::types::ContractAddress = xdrs::cxs::decode(&return_data.0)?;
+    require(
+        deployed == target,
+        "deployment landed at an unexpected address",
+    )?;
+    if deployment.atomic {
+        require(
+            free_balance(native, Base58(account.address())).await? == before - amount - replay_cost,
+            "atomic deployment debited the wrong amount",
+        )?;
+        require(
+            free_balance(native, Base58(target)).await? == amount - balance_cost - deployment_cost,
+            "atomic deployment left the wrong free balance at its target",
+        )?;
+    }
+    Ok(())
+}
+
+async fn free_balance(
+    native: &NativeClient<HttpClient>,
+    address: ContractAddress,
+) -> TestResult<i128> {
+    Ok(known(native.get_balance(input::AddressQuery { address }).await?)?.raw_balance)
+}
+
+/// Sign, admit and commit `tx`, then wait for its receipt.
+async fn commit_transaction(
+    node: &NodeSupervisorHandle,
+    native: &NativeClient<HttpClient>,
+    sender: &LocalSigner,
+    signing_network: thruput_xdr::types::NetworkHash,
+    tx: thruput_xdr::transaction::Transaction,
+) -> TestResult<output::TransactionReceipt> {
+    let expected_hash = TxHash(Base58(transaction_hash(&tx)?));
+    let signed = sign_transaction(
+        tx,
+        sender,
+        SignTransactionParams::default(),
+        &signing_network,
+    )?;
+    let admitted = known(
+        native
+            .send_transaction(input::SendTransactionRequest {
+                signed_transaction: HexBytes(encode_signed_transaction_xdr(&signed)?),
+            })
+            .await?,
+    )?;
+    require(
+        admitted.transaction_hash == expected_hash,
+        "admission hash mismatch",
+    )?;
+    node.manual_block_producer()
+        .ok_or_else(|| std::io::Error::other("manual block producer missing"))?
+        .produce_block()
+        .await?;
+    wait_for_receipt(native, signing_network, expected_hash).await
+}
+
+/// A deployment that moves no funds to its new address cannot pay for that
+/// address's storage. The scheduler keeps it for retry, and the indexed
+/// failure names the deployment target as the conflicting storage.
+async fn check_unfunded_deployment_conflict(
+    node: &NodeSupervisorHandle,
+    native: &NativeClient<HttpClient>,
+    sender: &LocalSigner,
+    signing_network: thruput_xdr::types::NetworkHash,
+    deployable: &std::path::Path,
+) -> TestResult {
+    use thruput_signing::{
+        default_wallet::{
+            BuildDefaultWalletDeployTransaction, DeploymentCode,
+            build_default_wallet_deploy_transaction,
+        },
+        derive_deploy_address, wallet_contract_hash,
+    };
+    use thruput_xdr::contract::{Contract, ContractBlob};
+
+    let account = PubkeyAccount::from_public_key_bytes(sender.verifying_key_bytes(), 0);
+    let contract = Contract::kRv32 {
+        rv32_contract: ContractBlob {
+            data: xdr_common::BytesM(std::fs::read(deployable)?),
+        },
+    };
+    let salt = thruput_xdr::types::SHA256Hash::from([1; 32]);
+    let target =
+        derive_deploy_address(&account.address(), &salt, &wallet_contract_hash(&contract)?)?;
+    let tip = known(native.get_chain_tip(input::EmptyRequest {}).await?)?;
+    let tx = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
+        account: &account,
+        deployment_nonce: salt,
+        code: DeploymentCode::Attached(contract),
+        amount: 0,
+        initializer: None,
+        gas_limit: GAS,
+        block_expiry_height: *tip.block_height + 100,
+        nonce: 2_000,
+    })?;
+    let expected_hash = TxHash(Base58(transaction_hash(&tx)?));
+    let signed = sign_transaction(
+        tx,
+        sender,
+        SignTransactionParams::default(),
+        &signing_network,
+    )?;
+    let admitted = known(
+        native
+            .send_transaction(input::SendTransactionRequest {
+                signed_transaction: HexBytes(encode_signed_transaction_xdr(&signed)?),
+            })
+            .await?,
+    )?;
+    require(
+        admitted.transaction_hash == expected_hash,
+        "admission hash mismatch",
+    )?;
+    let producer = node
+        .manual_block_producer()
+        .ok_or_else(|| std::io::Error::other("manual block producer missing"))?;
+    let mut last_status = None;
+    for _ in 0..20 {
+        producer.produce_block().await?;
+        let status = known(
+            native
+                .get_transaction_status(input::TransactionQuery {
+                    transaction_hash: expected_hash,
+                })
+                .await?,
+        )?;
+        match &status {
+            output::TransactionStatus::Retry {
+                error,
+                recent_failure:
+                    Some(output::RecentAttemptFailure {
+                        cause: output::FailureCause::DbConflict { conflict },
+                        ..
+                    }),
+            } if conflict.address.0 == target
+                && matches!(
+                    conflict.code,
+                    output::ConflictCode::BoundsExceeded | output::ConflictCode::InsufficientFunds
+                ) =>
+            {
+                return require(
+                    matches!(error.source, output::SchedulerErrorSource::Executor)
+                        && error.code
+                            == thruput_xdr::exec_result::ExecResult::ExecResultTxNonDeterministicError
+                                .0,
+                    &format!("unexpected retry error: {status:?}"),
+                );
+            }
+            output::TransactionStatus::Committed { .. }
+            | output::TransactionStatus::Dropped { .. } => {
+                return Err(format!("unfunded deployment ended as {status:?}").into());
+            }
+            _ => last_status = Some(status),
+        }
+    }
+    Err(format!("no target storage conflict reported; last status: {last_status:?}").into())
+}
+
+/// A funded sender's transfer with a corrupted signature is refused at
+/// admission as a typed rejection, never acknowledged with a hash.
+async fn check_invalid_signature_rejected(
+    native: &NativeClient<HttpClient>,
+    sender: &LocalSigner,
+    recipient: ContractAddress,
+    signing_network: thruput_xdr::types::NetworkHash,
+) -> TestResult {
+    use thruput_json_rpc_types::error::native::{
+        AttemptAdmission, Reason, TransactionRejectedReason, codes,
+    };
+
+    let account = PubkeyAccount::from_public_key_bytes(sender.verifying_key_bytes(), 0);
+    let calldata = native_token_transfer_calldata(&recipient.0, AMOUNT)?;
+    let tip = known(native.get_chain_tip(input::EmptyRequest {}).await?)?;
+    let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
+        account: &account,
+        target_address: ADDRESS_NATIVE_TOKEN,
+        target_entrypoint: NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
+        target_calldata: &calldata,
+        target_gas_limit: GAS,
+        gas_limit: GAS,
+        block_expiry_height: *tip.block_height + 100,
+        nonce: 1_000,
+    })?;
+    let expected_hash = TxHash(Base58(transaction_hash(&tx)?));
+    let mut signed = sign_transaction(
+        tx,
+        sender,
+        SignTransactionParams::default(),
+        &signing_network,
+    )?;
+    signed.signatures.0[0].signature = thruput_xdr::types::Signature::Ed25519 {
+        ed25519: [0; 64].into(),
+    };
+    let Err(NativeClientError::Application { source, data }) = native
+        .send_transaction(input::SendTransactionRequest {
+            signed_transaction: HexBytes(encode_signed_transaction_xdr(&signed)?),
+        })
+        .await
+    else {
+        return Err("an invalid signature must be refused with a typed error".into());
+    };
+    require(
+        source.code() == codes::TRANSACTION_REJECTED,
+        &format!("invalid signature returned {source:?}"),
+    )?;
+    let DecodedError::Known { data, raw } = *data else {
+        return Err(format!("unclassified rejection: {data:?}").into());
+    };
+    let ErrorData::TransactionRejected {
+        admission: AttemptAdmission::Rejected,
+        reason,
+        transaction_hash,
+        ..
+    } = *data
+    else {
+        return Err(format!("unexpected rejection evidence: {raw}").into());
+    };
+    require(
+        matches!(
+            reason,
+            None | Some(Reason::Known(
+                TransactionRejectedReason::AuthenticationRejected
+            ))
+        ),
+        &format!("unexpected rejection reason: {raw}"),
+    )?;
+    require(
+        transaction_hash.is_none_or(|hash| hash == expected_hash),
+        &format!("rejection names another transaction: {raw}"),
+    )
 }
 
 async fn send_transfer(
