@@ -689,6 +689,25 @@ pub enum CliError {
         /// Value advertised by the public descriptor.
         actual: String,
     },
+    // A schema mismatch means the CLI and the hosted faucet are on different
+    // releases, not that the profile points at the wrong network. It keeps the
+    // descriptor-mismatch code and details so `--json` consumers see no change.
+    #[error(
+        "hosted network descriptor schema `{actual}` does not match this CLI's schema `{expected}`"
+    )]
+    #[code("network_descriptor_mismatch")]
+    #[hint(
+        "this CLI and the network's faucet are on different releases; install the CLI release that matches the network, or retry after the network upgrades"
+    )]
+    #[details]
+    NetworkDescriptorSchemaMismatch {
+        /// Always `schemaVersion`.
+        field: &'static str,
+        /// Descriptor schema this CLI reads.
+        expected: String,
+        /// Descriptor schema the faucet served.
+        actual: String,
+    },
     #[error("failed to derive wallet address for key `{key_name}`: {message}")]
     #[hint("check the stored public key material, or regenerate the key")]
     WalletAddressDerivationFailed {

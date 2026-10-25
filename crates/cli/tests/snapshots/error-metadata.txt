@@ -440,6 +440,11 @@ NetworkDescriptorMismatch
   hint text: check that the selected profile's RPC and faucet URLs refer to the same hosted network, then retry
   details: field, expected, actual
 
+NetworkDescriptorSchemaMismatch
+  code: network_descriptor_mismatch
+  hint text: this CLI and the network's faucet are on different releases; install the CLI release that matches the network, or retry after the network upgrades
+  details: field, expected, actual
+
 WalletAddressDerivationFailed
   code: wallet_address_derivation_failed
   hint text: check the stored public key material, or regenerate the key

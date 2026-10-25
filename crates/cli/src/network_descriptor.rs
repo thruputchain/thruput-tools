@@ -285,6 +285,13 @@ fn matches_expected(field: &'static str, expected: &str, actual: &str) -> Result
     if expected == actual {
         return Ok(());
     }
+    if field == "schemaVersion" {
+        return Err(CliError::NetworkDescriptorSchemaMismatch {
+            field,
+            expected: expected.to_owned(),
+            actual: actual.to_owned(),
+        });
+    }
     Err(CliError::NetworkDescriptorMismatch {
         field,
         expected: expected.to_owned(),
@@ -357,7 +364,25 @@ mod tests {
         let error = parse_descriptor_value(value)
             .expect_err("bug: old descriptor schema should fail before deserialization");
 
-        assert_mismatch_field(error, "schemaVersion");
+        // Same stable code as other mismatches, but the hint names the release gap.
+        assert_eq!(error.code(), "network_descriptor_mismatch");
+        assert!(
+            error
+                .hint()
+                .is_some_and(|hint| hint.contains("different releases"))
+        );
+        match error {
+            CliError::NetworkDescriptorSchemaMismatch {
+                field,
+                expected,
+                actual,
+            } => {
+                assert_eq!(field, "schemaVersion");
+                assert_eq!(expected, NETWORK_DESCRIPTOR_SCHEMA_VERSION.to_string());
+                assert_eq!(actual, "1");
+            }
+            other => panic!("bug: expected descriptor schema mismatch, got {other}"),
+        }
     }
 
     #[test]
