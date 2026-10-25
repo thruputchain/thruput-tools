@@ -3,7 +3,6 @@
 //! [`NativeClient`] sends named parameters and preserves unsupported response values
 //! through [`DecodedResponse`]. For transaction observation use
 //! [`poll_receipt`]; it retains commitment and never submits again.
-//! The separate [`receipt`] module polls explicit adapters into stable report models.
 //!
 //! ```no_run
 //! use thruput_json_rpc_client::{DecodedResponse, HttpClientBuilder, NativeClient, NativeClientError};
@@ -22,7 +21,6 @@ pub use thruput_json_rpc_types::error::native::DecodedError;
 pub use thruput_json_rpc_types::responses::DecodedResponse;
 
 pub mod native;
-pub mod receipt;
 
 pub use native::receipt::{
     KnownCommitment, ReceiptEvidence, ReceiptPollCause, ReceiptPollConfig, ReceiptPollError,

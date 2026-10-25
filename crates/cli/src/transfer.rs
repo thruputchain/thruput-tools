@@ -314,9 +314,18 @@ fn submit_and_confirm(prepared: &PreparedTransfer) -> Result<TransactionReceipt,
     })
 }
 
+/// Receipt lookups before a transfer stops waiting: with
+/// [`RECEIPT_POLL_INTERVAL`], a window of roughly 30 seconds.
+const RECEIPT_POLL_ATTEMPTS: usize = 300;
+
+/// Pause between receipt lookups. Frequent enough to observe indexer failure
+/// diagnostics, which expire after a few blocks, on fast local networks that
+/// can advance several blocks in a second.
+const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 fn receipt_poll_config() -> (usize, Duration) {
-    let mut attempts = thruput_json_rpc_client::receipt::DEFAULT_RECEIPT_POLL_ATTEMPTS;
-    let mut interval = thruput_json_rpc_client::receipt::DEFAULT_RECEIPT_POLL_INTERVAL;
+    let mut attempts = RECEIPT_POLL_ATTEMPTS;
+    let mut interval = RECEIPT_POLL_INTERVAL;
     if cfg!(debug_assertions) {
         if let Ok(value) = std::env::var("THRUPUT_TEST_RECEIPT_POLL_ATTEMPTS")
             && let Ok(value) = value.parse::<usize>()
