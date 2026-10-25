@@ -96,6 +96,39 @@ fn native_query_preserves_address_caller_auth_and_budget() {
     assert_ne!(query.auth_claim, crate::view::public_view_auth_claim());
 }
 #[test]
+fn assumed_auth_maps_to_the_matching_view_claim() {
+    let pubkey_hash =
+        thruput_json_rpc_types::base58::Base58(thruput_xdr::types::PublicKeyHash::from([6; 32]));
+    for (auth, claim) in [
+        (
+            input::AssumedAuth::PubkeySignature {
+                pubkey_hash,
+                account_nonce: 9,
+            },
+            legacy::ViewAuthClaim::PubkeySignature {
+                pubkey_hash,
+                nonce: 9,
+            },
+        ),
+        (
+            input::AssumedAuth::SourceAddress {
+                allowed_keys: 5,
+                required_weight: 2,
+            },
+            legacy::ViewAuthClaim::SourceAddress {
+                allowed_keys: 5,
+                required_weight: 2,
+            },
+        ),
+    ] {
+        let request = input::SimulateInvocationRequest {
+            assumed_auth: Some(auth),
+            ..request()
+        };
+        assert_eq!(simulation_request(request).unwrap().auth_claim, Some(claim));
+    }
+}
+#[test]
 fn malformed_events_fail_atomically() {
     invalid_reason(simulation(single(42, true), None), Reason::InvalidEncoding);
     invalid_reason(

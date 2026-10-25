@@ -1873,7 +1873,22 @@ mod tests {
             panic!("expected fixture configuration");
         };
         config.tip.value.proposal_header.block_height = (-1).into();
-        assert!(tip_reading("test", DbGatewayConfigResult::kRPCNone { config }, None).is_err());
+        assert!(matches!(
+            tip_reading(
+                "test",
+                DbGatewayConfigResult::kRPCNone {
+                    config: config.clone()
+                },
+                None
+            ),
+            Err(RpcServerError::BackendUnavailable(_))
+        ));
+        // Below the pre-genesis -1 is not "uncommitted" but inconsistent data.
+        config.tip.value.proposal_header.block_height = (-2).into();
+        assert!(matches!(
+            tip_reading("test", DbGatewayConfigResult::kRPCNone { config }, None),
+            Err(RpcServerError::BackendDataInvalid { .. })
+        ));
     }
 
     #[test]
