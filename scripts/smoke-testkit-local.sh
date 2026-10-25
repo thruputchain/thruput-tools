@@ -89,9 +89,12 @@ else
         log "using thruput binary: $THRUPUT_BINARY"
     else
         log "building thruput"
-        cargo build -p thruput-cli
+        # Export an absolute target dir before building, so cargo and the
+        # lookup below agree wherever the script is run from.
         BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
         [[ "$BUILD_TARGET_DIR" = /* ]] || BUILD_TARGET_DIR="$REPO_ROOT/$BUILD_TARGET_DIR"
+        export CARGO_TARGET_DIR="$BUILD_TARGET_DIR"
+        cargo build -p thruput-cli
         THRUPUT_BINARY="$BUILD_TARGET_DIR/debug/thruput"
     fi
     [[ -x "$THRUPUT_BINARY" ]] || die "thruput binary is not executable: $THRUPUT_BINARY"
