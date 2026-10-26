@@ -444,6 +444,13 @@ fn strkey_contract_arguments_match_base58_and_reject_wrong_type() {
         encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).unwrap()
     );
     assert!(encode_args(&[public_key_strkey], Some(&metadata)).is_err());
+    assert!(
+        encode_args(
+            &["CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4".into()],
+            Some(&metadata)
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -549,6 +556,13 @@ fn strkey_spec_address_arguments_match_base58_and_reject_wrong_type() {
         encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).unwrap()
     );
     assert!(encode_args(&[public_key_strkey], Some(&metadata)).is_err());
+    assert!(
+        encode_args(
+            &["CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4".into()],
+            Some(&metadata)
+        )
+        .is_err()
+    );
 }
 
 #[test]

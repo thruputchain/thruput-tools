@@ -36,6 +36,7 @@ fn machine_identifiers_reject_hex_strkeys_and_wrong_decoded_lengths() {
         format!("0x{}", "00".repeat(32)),
         "ab".repeat(32),
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4".into(),
+        "ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ4L".into(),
         "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".into(),
         "1".repeat(31),
         "1".repeat(33),

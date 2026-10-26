@@ -442,6 +442,12 @@ secret. Do not expose it in logs or CI output, or commit it to a file.
 `keys import` accepts Ed25519 seeds as base58 or S StrKeys through stdin or a
 hidden terminal prompt.
 
+Address inputs accept base58 or a checksummed Thruput Z StrKey. This applies to
+native wallet addresses and deployed contracts. Stellar C addresses are rejected.
+Z does not distinguish local, test, and production networks; select the intended
+profile. CLI reports, saved public configuration, and JSON-RPC identifiers use
+base58. G public keys identify signers, not Thruput wallet addresses.
+
 #### ML-DSA-65 accounts
 
 ML-DSA-65 keys sign pure ML-DSA (empty context) over the same network-bound

@@ -325,7 +325,7 @@ pub fn decode_abort_payload(
     })
 }
 
-/// Parse a C `StrKey` or base58 contract address, including in typed calldata.
+/// Parse a Z `StrKey` or base58 contract address, including in typed calldata.
 pub fn parse_contract_address(value: &str) -> Result<ContractAddress, Error> {
     thruput_signing::strkey::parse_contract_address(value).map_err(|error| Error::InvalidArgument {
         argument: "contract address".into(),

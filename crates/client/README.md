@@ -73,17 +73,18 @@ Adding a node adapter to another CLI should not expand this crate's dependencies
 
 `thruput_client::strkey` re-exports the encoding helpers from
 `thruput-signing`. Use `parse_contract_address` / `format_contract_address`
-for C StrKeys, `parse_public_key` / `format_public_key` for G public keys, and
+for Z StrKeys, `parse_public_key` / `format_public_key` for G public keys, and
 `parse_secret_seed` / `format_secret_seed` for explicit S seed import/export.
 Parsing accepts base58 values of exactly 32 bytes as well as the corresponding
-typed StrKey. Legacy hex identifiers are rejected. Invalid checksum, length or type is
+typed StrKey. Stellar C addresses and legacy hex identifiers are rejected. Invalid checksum, length or type is
 rejected; errors never include the supplied input. Secret results use
 `Zeroizing`; applications remain responsible for their own input buffers.
 
 These helpers preserve bytes. G public keys do not become Groundhog account or
-wallet addresses, and none of the encodings identify a network. The spec codec
-accepts base58 and C addresses, including nested typed arguments. Its decoded
+wallet addresses. Z identifies Thruput but does not distinguish local, test, and
+production networks. The spec codec
+accepts base58 and Z addresses, including nested typed arguments. Its decoded
 addresses, public keys and hashes and public RPC identifiers use base58. Raw
 bytes, event topics, storage keys and entrypoint selectors retain hex.
-A host that wants C output can
+A host that wants Z output can
 call the formatter explicitly. Neither CLI needs its own StrKey conversion.

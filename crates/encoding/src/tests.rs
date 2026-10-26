@@ -17,7 +17,7 @@ fn shared_protocol_vectors() {
         assert_eq!(decode(text, bytes.len()).unwrap(), bytes);
         if let Some(keys) = vector.get("strkey") {
             let fixed: [u8; 32] = bytes.try_into().unwrap();
-            assert_eq!(address_strkey(&fixed), keys["contract"].as_str().unwrap());
+            assert!(parse_address(keys["contract"].as_str().unwrap()).is_err());
             assert_eq!(
                 public_key_strkey(&fixed),
                 keys["publicKey"].as_str().unwrap()
@@ -77,29 +77,76 @@ fn checks_limits_before_and_after_conversion() {
 #[test]
 fn typed_strkeys_preserve_bytes_and_reject_wrong_types() {
     let bytes = [0; 32];
+    let z = "ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ4L";
     let c = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
     let g = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
     let s = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSU2";
-    assert_eq!(address_strkey(&bytes), c);
+    assert_eq!(address_strkey(&bytes), z);
     assert_eq!(public_key_strkey(&bytes), g);
     assert_eq!(secret_seed_strkey(&bytes).as_str(), s);
-    assert_eq!(parse_address(c).unwrap(), bytes);
+    assert_eq!(parse_address(z).unwrap(), bytes);
+    assert!(parse_address(c).is_err());
     assert_eq!(parse_public_key(g).unwrap(), bytes);
     assert_eq!(*parse_secret_seed(s).unwrap(), bytes);
     assert!(parse_address(g).is_err());
     assert!(parse_address(s).is_err());
-    assert!(parse_public_key(c).is_err());
+    assert!(parse_public_key(z).is_err());
     assert!(parse_secret_seed(g).is_err());
-    assert!(parse_secret_seed(c).is_err());
-    for text in [c, g, s] {
+    assert!(parse_secret_seed(z).is_err());
+    for text in [z, c, g, s] {
         assert!(decode_fixed::<32>(text).is_err());
     }
     assert!(parse_public_key(&g.to_lowercase()).is_err());
-    assert!(parse_address(&format!("{c}=")).is_err());
+    assert!(parse_address(&format!("{z}=")).is_err());
     assert!(parse_secret_seed(&"ab".repeat(32)).is_err());
     let invalid_secret = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAASECRET";
     let error = parse_secret_seed(invalid_secret).unwrap_err();
     assert!(!format!("{error:?} {error}").contains(invalid_secret));
+}
+
+#[test]
+fn z_address_vectors_preserve_bytes_and_checksum_the_version() {
+    // Independently encoded with RFC 4648 base32 and CRC16-XModem.
+    for (bytes, expected) in [
+        (
+            [0; 32],
+            "ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ4L",
+        ),
+        (
+            [1; 32],
+            "ZAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQDWEJ",
+        ),
+        (
+            [255; 32],
+            "ZD777777777777777777777777777777777777777777777777777UYP",
+        ),
+        (
+            std::array::from_fn(|index| u8::try_from(index).unwrap()),
+            "ZAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB7GCZ",
+        ),
+    ] {
+        assert_eq!(address_strkey(&bytes), expected);
+        assert_eq!(parse_address(expected).unwrap(), bytes);
+    }
+    let valid = address_strkey(&[0; 32]);
+    let wrong_version = stellar_strkey::convert::encode::<32, 35, 56>(201, &[0; 32]);
+    let short = stellar_strkey::convert::encode::<31, 34, 55>(200, &[0; 31]);
+    let long = stellar_strkey::convert::encode::<33, 36, 58>(200, &[0; 33]);
+    for text in [
+        valid.to_lowercase(),
+        format!(" {valid}"),
+        format!("{valid}\n"),
+        format!("{}A", &valid[..55]),
+        format!(
+            "Z{}",
+            &"CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4"[1..]
+        ),
+        wrong_version.to_string(),
+        short.to_string(),
+        long.to_string(),
+    ] {
+        assert!(parse_address(&text).is_err(), "accepted {text}");
+    }
 }
 
 #[test]

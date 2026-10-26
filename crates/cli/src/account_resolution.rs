@@ -323,9 +323,10 @@ fn saved_wallet_owner_public_key_invalid(key_name: &str, message: impl Into<Stri
     }
 }
 
-/// Recognize base58 addresses and explicitly typed contract addresses.
+/// Recognize valid addresses and address-shaped `StrKeys` for format errors.
 pub(crate) fn looks_like_address_literal(value: &str) -> bool {
-    value.starts_with('C') || codec::parse_contract_address(value).is_ok()
+    (value.len() == 56 && value.starts_with(['Z', 'C']))
+        || codec::parse_contract_address(value).is_ok()
 }
 
 /// Resolve a saved wallet, contract alias, direct address, or named key account.
@@ -538,6 +539,9 @@ mod tests {
             [42; 32].into()
         );
         assert!(resolve_contract_target(&profile, &public).is_err());
+        let stellar = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+        assert!(resolve_address_target(&profile, stellar).is_err());
+        assert!(resolve_contract_target(&profile, stellar).is_err());
         assert_eq!(
             parse_owner_public_key("alice", &public).unwrap(),
             vec![42; 32]
@@ -597,20 +601,24 @@ mod tests {
 
     #[test]
     fn address_target_rejects_malformed_prefixed_address() {
-        let error =
-            resolve_address_target(&test_profile("alice", None, BTreeMap::new()), "Cinvalid")
-                .expect_err("bug: malformed direct address should fail");
+        let error = resolve_address_target(
+            &test_profile("alice", None, BTreeMap::new()),
+            "ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ4A",
+        )
+        .expect_err("bug: malformed direct address should fail");
 
         assert_eq!(error.code(), "invalid_address_target");
     }
 
     #[test]
     fn address_target_rejects_unknown_name() {
-        let error =
-            resolve_address_target(&test_profile("alice", None, BTreeMap::new()), "missing")
+        let profile = test_profile("alice", None, BTreeMap::new());
+        for target in ["missing", "Zara", "Zcounter", "Charlie", "Cinvalid"] {
+            assert!(!looks_like_address_literal(target), "{target}");
+            let error = resolve_address_target_with_keys(&profile, target, false)
                 .expect_err("bug: unknown target should fail");
-
-        assert_eq!(error.code(), "unknown_address_target");
+            assert_eq!(error.code(), "unknown_address_target", "{target}");
+        }
     }
 
     #[test]
@@ -626,38 +634,42 @@ mod tests {
             .contracts
             .insert("alpha".into(), encode(&[0x22; 32]));
 
-        let error = resolve_contract_target(&profile, "counter")
-            .expect_err("bug: unknown contract alias should fail");
-
-        assert_eq!(error.code(), "unknown_contract_alias");
-        assert_eq!(
-            error.details_json().expect("details expected"),
-            serde_json::json!({
-                "alias": "counter",
-                "profile": "local",
-                "configSource": source,
-                "availableAliases": ["alpha", "zebra"],
-            })
-        );
-        assert!(
-            error
-                .hint()
-                .expect("hint expected")
-                .contains("thruput config get local --sources")
-        );
+        for target in ["counter", "Zcounter", "Counter"] {
+            let error = resolve_contract_target(&profile, target)
+                .expect_err("bug: unknown contract alias should fail");
+            assert_eq!(error.code(), "unknown_contract_alias");
+            assert_eq!(
+                error.details_json().expect("details expected"),
+                serde_json::json!({
+                    "alias": target,
+                    "profile": "local",
+                    "configSource": source,
+                    "availableAliases": ["alpha", "zebra"],
+                })
+            );
+            assert!(
+                error
+                    .hint()
+                    .expect("hint expected")
+                    .contains("thruput config get local --sources")
+            );
+        }
     }
 
     #[test]
     fn contract_target_preserves_direct_address_validation() {
         let profile = test_profile("alice", None, BTreeMap::new());
 
-        let error = resolve_contract_target(&profile, "Cinvalid")
-            .expect_err("bug: malformed direct address should fail");
+        let error = resolve_contract_target(
+            &profile,
+            "ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ4A",
+        )
+        .expect_err("bug: malformed direct address should fail");
 
         assert_eq!(error.code(), "invalid_address_target");
         assert_eq!(
             error.details_json().expect("details expected")["target"],
-            "Cinvalid"
+            "ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ4A"
         );
     }
 

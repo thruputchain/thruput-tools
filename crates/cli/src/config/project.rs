@@ -382,7 +382,7 @@ pub fn save_profile_contract_alias(
     let address =
         thruput_signing::strkey::parse_contract_address(address.trim()).map_err(|_| {
             CliError::Other(
-                "contract address must be a C StrKey or base58 encoding of exactly 32 bytes".into(),
+                "contract address must be a Z StrKey or base58 encoding of exactly 32 bytes".into(),
             )
         })?;
     let address = crate::codec::format_contract_address(&address);
@@ -451,7 +451,7 @@ pub fn save_profile_wallet_address_with_default(
     let address =
         thruput_signing::strkey::parse_contract_address(address.trim()).map_err(|_| {
             CliError::Other(
-                "wallet address must be a C StrKey or base58 encoding of exactly 32 bytes".into(),
+                "wallet address must be a Z StrKey or base58 encoding of exactly 32 bytes".into(),
             )
         })?;
     let address = crate::codec::format_contract_address(&address);
