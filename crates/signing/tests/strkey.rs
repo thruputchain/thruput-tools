@@ -6,22 +6,26 @@ fn corrupt_checksum(value: &mut String) {
 }
 
 #[test]
-fn stellar_zero_vectors_round_trip_without_deriving_addresses() {
+fn typed_zero_vectors_round_trip_without_deriving_addresses() {
+    let z = "ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ4L";
     let c = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
     let g = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
     let s = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSU2";
-    assert_eq!(format_contract_address(&[0; 32].into()), c);
+    assert_eq!(format_contract_address(&[0; 32].into()), z);
     assert_eq!(format_public_key(&[0; 32]), g);
     assert_eq!(format_secret_seed(&[0; 32]).as_str(), s);
-    assert_eq!(parse_contract_address(c).unwrap(), [0; 32].into());
+    assert_eq!(parse_contract_address(z).unwrap(), [0; 32].into());
+    assert!(parse_contract_address(c).is_err());
     assert_eq!(parse_public_key(g).unwrap(), [0; 32]);
     assert_eq!(*parse_secret_seed(s).unwrap(), [0; 32]);
     assert!(parse_contract_address(g).is_err());
     assert!(parse_contract_address(s).is_err());
     assert!(parse_public_key(c).is_err());
+    assert!(parse_public_key(z).is_err());
     assert!(parse_public_key(s).is_err());
     assert!(parse_secret_seed(g).is_err());
     assert!(parse_secret_seed(c).is_err());
+    assert!(parse_secret_seed(z).is_err());
 }
 
 #[test]

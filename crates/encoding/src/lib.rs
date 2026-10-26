@@ -1,12 +1,16 @@
 //! Byte-preserving text codecs. Network identity and account derivation are separate.
 //!
 //! Machine interfaces use base58 only. The typed human-input helpers also accept
-//! Stellar `StrKeys`. No function guesses that an arbitrary byte array is an address.
+//! Thruput Z addresses and Stellar G/S `StrKeys`. No function guesses that an
+//! arbitrary byte array is an address. Z identifies Thruput, not a specific network.
 
 use thruput_xdr::base58;
 use zeroize::Zeroizing;
 
 pub use base58::max_encoded_len;
+
+// Top five bits select Z in RFC 4648 base32; the low three bits are zero.
+const ADDRESS_STRKEY_VERSION: u8 = 25 << 3;
 
 /// Invalid text or a violated byte-length limit. Never contains the supplied text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -89,12 +93,19 @@ fn decode_fixed_into(text: &str, output: &mut [u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// Parse a Thruput address from base58 or C `StrKey`, without deriving an account.
+/// Parse a Thruput address from base58 or Z `StrKey`, without deriving an account.
+///
+/// Stellar C addresses are rejected, even when they encode the same bytes.
 pub fn parse_address(text: &str) -> Result<[u8; 32], Error> {
-    if let Ok(key) = text.parse::<stellar_strkey::Contract>() {
-        return Ok(key.0);
+    if text.len() == 56
+        && let Ok((version, payload)) = stellar_strkey::convert::decode::<32, 35>(text.as_bytes())
+        && version == ADDRESS_STRKEY_VERSION
+        && let Ok(bytes) = <[u8; 32]>::try_from(payload.as_slice())
+        && address_strkey(&bytes) == text
+    {
+        return Ok(bytes);
     }
-    decode_fixed(text).map_err(|_| Error::InvalidTypedValue { prefix: 'C' })
+    decode_fixed(text).map_err(|_| Error::InvalidTypedValue { prefix: 'Z' })
 }
 
 /// Parse an Ed25519 public key from base58 or G `StrKey`, never a wallet address.
@@ -118,12 +129,11 @@ pub fn parse_secret_seed(text: &str) -> Result<Zeroizing<[u8; 32]>, Error> {
     Ok(output)
 }
 
-/// Format the same address bytes as a C `StrKey`. No network is encoded.
+/// Format the same address bytes as a Thruput Z `StrKey`.
+///
+/// The prefix does not distinguish local, test, and production networks.
 pub fn address_strkey(bytes: &[u8; 32]) -> String {
-    stellar_strkey::Contract(*bytes)
-        .to_string()
-        .as_str()
-        .to_owned()
+    stellar_strkey::convert::encode::<32, 35, 56>(ADDRESS_STRKEY_VERSION, bytes).to_string()
 }
 
 /// Format an Ed25519 key as a G `StrKey`. No wallet derivation is performed.

@@ -140,6 +140,7 @@ fn import_rejects_invalid_secret_types_and_reserved_names_without_echoing_input(
         String::new(),
         strkey::format_public_key(&[42; 32]),
         strkey::format_contract_address(&[42; 32].into()),
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4".to_owned(),
         "ab".repeat(64),
         "ab".repeat(32),
         format!("0x{}", "ab".repeat(32)),
@@ -168,6 +169,58 @@ fn import_rejects_invalid_secret_types_and_reserved_names_without_echoing_input(
         Some(&thruput_encoding::encode(&[0xab; 32])),
     );
     assert!(good.status.success());
+}
+
+#[test]
+fn address_errors_distinguish_names_from_invalid_strkeys_before_rpc() {
+    let home = TempDir::new().unwrap();
+    let profile = run(
+        &home,
+        &[
+            "config",
+            "new",
+            "local",
+            "--network",
+            "local",
+            "--rpc-url",
+            "http://127.0.0.1:1",
+            "--global",
+            "--use",
+        ],
+        None,
+    );
+    assert!(
+        profile.status.success(),
+        "{}",
+        String::from_utf8_lossy(&profile.stderr)
+    );
+    for (target, expected) in [
+        ("Zara", "unknown_address_target"),
+        ("Zcounter", "unknown_address_target"),
+        ("Charlie", "unknown_address_target"),
+        ("Cinvalid", "unknown_address_target"),
+        (
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+            "invalid_address_target",
+        ),
+        (
+            "ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ4A",
+            "invalid_address_target",
+        ),
+    ] {
+        let output = run(&home, &["--json", "balance", target], None);
+        assert!(!output.status.success());
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], expected, "{target}");
+        if expected == "invalid_address_target" {
+            assert!(
+                error["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Z StrKey")
+            );
+        }
+    }
 }
 
 #[test]

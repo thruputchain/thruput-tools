@@ -1108,10 +1108,10 @@ fn resolve_airdrop_recipient(
     match resolve_address_target(profile, recipient) {
         Ok(address) => Ok(format_contract_address(&address)),
         Err(CliError::InvalidAddressTarget { .. }) => Err(CliError::Other(
-            "wallet address must be a C StrKey or base58 encoding of exactly 32 bytes".into(),
+            "wallet address must be a Z StrKey or base58 encoding of exactly 32 bytes".into(),
         )),
         Err(CliError::UnknownAddressTarget { .. }) => Err(CliError::Other(format!(
-            "unknown wallet `{}`; run `thruput wallet create --key={}` or pass a C StrKey or base58 wallet address",
+            "unknown wallet `{}`; run `thruput wallet create --key={}` or pass a Z StrKey or base58 wallet address",
             crate::terminal::terminal_safe(recipient),
             crate::terminal::render_shell_arg(recipient),
         ))),
@@ -1462,12 +1462,15 @@ mod tests {
     fn malformed_direct_recipient_reports_address_format() {
         let profile = test_profile(BTreeMap::new());
 
-        let err = resolve_airdrop_recipient(&profile, "Cinvalid")
-            .expect_err("bug: malformed direct address should fail");
+        let err = resolve_airdrop_recipient(
+            &profile,
+            "ZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZ4A",
+        )
+        .expect_err("bug: malformed direct address should fail");
 
         assert!(
             err.to_string()
-                .contains("C StrKey or base58 encoding of exactly 32 bytes")
+                .contains("Z StrKey or base58 encoding of exactly 32 bytes")
         );
     }
 

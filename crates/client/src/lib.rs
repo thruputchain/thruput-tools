@@ -23,7 +23,7 @@ pub use thruput_contract_spec as spec;
 pub use thruput_json_rpc_client as rpc;
 pub use thruput_json_rpc_types as types;
 pub use thruput_signing as signing;
-/// Shared C/G/S text encodings; independent of either CLI.
+/// Shared Z/G/S text encodings; independent of either CLI.
 pub use thruput_signing::strkey;
 pub use thruput_xdr as xdr;
 

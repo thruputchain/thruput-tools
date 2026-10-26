@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// Expected a contract address, never an Ed25519 public key.
-    #[error("contract address must be a C StrKey or base58 encoding of exactly 32 bytes")]
+    #[error("contract address must be a Z StrKey or base58 encoding of exactly 32 bytes")]
     ContractAddress,
     /// Expected an Ed25519 public key, never a contract address.
     #[error("Ed25519 public key must be a G StrKey or base58 encoding of exactly 32 bytes")]
@@ -18,14 +18,14 @@ pub enum Error {
     SecretSeed,
 }
 
-/// Parse a checksummed C `StrKey` or base58 address of exactly 32 bytes.
+/// Parse a checksummed Z `StrKey` or base58 address of exactly 32 bytes.
 pub fn parse_contract_address(value: &str) -> Result<ContractAddress, Error> {
     thruput_encoding::parse_address(value)
         .map(Into::into)
         .map_err(|_| Error::ContractAddress)
 }
 
-/// Encode the same contract address bytes as a C `StrKey`; no address derivation is performed.
+/// Encode the same contract address bytes as a Z `StrKey`; no address derivation is performed.
 pub fn format_contract_address(address: &ContractAddress) -> String {
     let mut bytes = [0; 32];
     bytes.copy_from_slice(address.as_ref());

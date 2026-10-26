@@ -857,7 +857,7 @@ impl DeployArgs {
 
 #[derive(Args)]
 struct CallArgs {
-    /// Contract alias, C StrKey, or direct base58 address
+    /// Contract alias, Z StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     contract: String,
     /// Method name or 0x-prefixed 8-byte entrypoint ID
@@ -1007,7 +1007,7 @@ impl BalanceArgs {
 
 #[derive(Args)]
 struct ViewArgs {
-    /// Contract alias, C StrKey, or direct base58 address
+    /// Contract alias, Z StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     contract: String,
     /// Method name or 0x-prefixed 8-byte entrypoint ID
@@ -1055,7 +1055,7 @@ impl ViewArgs {
 
 #[derive(Args)]
 struct StorageArgs {
-    /// Contract alias, C StrKey, or direct base58 address
+    /// Contract alias, Z StrKey, or direct base58 address
     #[allow(clippy::doc_markdown)]
     address: String,
     /// 32-byte storage key as 0x-prefixed hex

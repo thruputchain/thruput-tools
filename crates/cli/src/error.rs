@@ -19,7 +19,7 @@ const KEY_NAME_HINT: &str = "key names may only contain letters, digits, \
 
 /// Accepted spellings of an account or contract the command acts on.
 const ADDRESS_TARGET_HINT: &str =
-    "use a saved wallet, contract alias, stored key, base58 address, or C StrKey";
+    "use a saved wallet, contract alias, stored key, base58 address, or Z StrKey";
 
 /// Accepted spelling of any 32-byte value passed on the command line.
 const HASH_32_BYTES_HINT: &str =
@@ -499,7 +499,7 @@ pub enum CliError {
     UnknownAddressTarget { target: String },
     #[error("unknown contract alias `{alias}` in profile `{profile}`")]
     #[hint(
-        "use a configured contract alias, base58 address, or C StrKey; inspect aliases \
+        "use a configured contract alias, base58 address, or Z StrKey; inspect aliases \
          with `thruput config get {} --sources`",
         render_shell_arg(profile)
     )]
