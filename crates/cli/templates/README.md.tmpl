@@ -1,0 +1,45 @@
+# {{PROJECT_NAME}}
+
+A Rust contract for Thruput's RV32 runtime. Start in
+[src/implementation.rs](src/implementation.rs) and
+[tests/common/mod.rs](tests/common/mod.rs).
+
+## Setup
+
+Install the Thruput CLI and Rust with rustup. Cargo uses the toolchain in
+`rust-toolchain.toml` and needs access to the Thruput registry. Native tests
+download the test executor on supported platforms. See the
+[getting started guide](https://docs.thruput.network/start/getting-started/)
+for installation and registry access.
+
+## Test and build
+
+```sh
+cargo test
+thruput build
+thruput test
+```
+
+`cargo test` runs the shared behavior checks with the native executor.
+`thruput test` builds the RV32 artifact and runs the same checks through
+`tests/test_rv32.rs`. Add behavior checks in `tests/common/mod.rs` and call them
+from both test entry points. Native success does not establish guest execution.
+
+The default lowered artifact is `target/thruput/{{PROJECT_NAME_SNAKE}}.rv32a`.
+Use the reported path if build output is configured elsewhere. The adjacent
+`.spec.json` describes its public interface and declared events.
+Building and testing locally does not deploy to a network.
+
+For node-backed RPC tests, run `thruput test --integration`. This requires a
+compatible local runtime; see `tests/integration.rs` and `thruput test --help`.
+
+## Project layout
+
+- `src/implementation.rs`: contract state, methods, errors, and events.
+- `src/lib.rs`: mock registration and public exports.
+- `src/main.rs`: RV32 entrypoint wrapper.
+- `Cargo.toml` and `.cargo/`: native/guest features and build configuration.
+- `thruput.toml`: project network profiles and build settings.
+
+Keep the generated build configuration and dependency pins unless your change
+requires an update. Comments in the manifest explain the feature contracts.

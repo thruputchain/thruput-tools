@@ -36,6 +36,8 @@ fn assert_integration_scaffold(dir: &std::path::Path) {
 }
 
 fn assert_rv32_only_test_scaffold(dir: &std::path::Path) {
+    assert!(dir.join("README.md").exists());
+    assert!(dir.join("tests/common/mod.rs").exists());
     assert!(dir.join("tests/test.rs").exists());
     assert!(dir.join("tests/test_rv32.rs").exists());
     assert!(dir.join("tests/integration.rs").exists());
@@ -83,36 +85,21 @@ fn assert_scaffold_cargo_config(dir: &std::path::Path) {
     );
 }
 
-/// Assert the scaffolded agent guide states the load-bearing toolchain
-/// contracts a coding agent must not refactor away.
+/// The guide routes to generated files and optional CLI help.
 fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
     let agents = fs::read_to_string(dir.join("AGENTS.md")).unwrap();
     assert_contains_all(
         &agents,
         &[
-            "thruput skill show contracts",
-            "thruput skill show cli",
-            "thruput skill show typescript",
-            "thruput docs export --output <new-directory>",
-            "temporary directory outside the project",
-            "thruput build",
-            "bare Cargo RV32 build misses that configuration",
-            "`entrypoints`",
-            "Run both host and RV32",
-            "release builds wrap on integer overflow",
+            "README.md",
+            "src/implementation.rs",
+            "tests/common/mod.rs",
             "tests/test_rv32.rs",
-            "Do not make `dev` a default feature",
-            "thruput-integration-test",
-            "unification",
-            "self-referential dev-dependency",
-            "resolved SDK version",
-            ".cargo/contract.toml",
-            "rust-toolchain.toml",
-            "without overwriting unrelated settings",
-            "region 'CODE' already defined",
-            "thruput_sdk::declare_mock_contract!()",
-            "Keep contract logic in `implementation.rs`",
-            "`extern crate` identifier",
+            "cargo test",
+            "thruput test",
+            "thruput skill --help",
+            "thruput docs --help",
+            "project's resolved SDK",
         ],
     );
     assert!(agents.contains(snake_name));
@@ -121,10 +108,8 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
         env!("CARGO_PKG_VERSION")
     )));
     assert!(!agents.contains("thruput --skill"));
-    assert!(
-        !agents.contains("npm run"),
-        "contract-only guides must not invent a frontend"
-    );
+    assert!(!agents.contains("Install the maintained skill"));
+    assert!(!agents.contains("npm run"));
     assert!(!agents.contains("{{"), "unsubstituted template placeholder");
 }
 
@@ -294,12 +279,12 @@ fn scaffold_counter_creates_expected_files() {
 
     let test = fs::read_to_string(dir.join("tests/test.rs")).unwrap();
     assert!(test.contains("register_mock_contract"));
-    assert!(test.contains("CounterClient"));
     assert!(test.contains("fn setup()"));
-    assert!(test.contains("*test_contract.as_hash()"));
-    assert!(test.contains("env.transact(|tx|"));
-    assert!(test.contains("tx.call(&caller).run(move ||"));
-    assert!(test.contains("MY_COUNTER_NONCE"));
+    assert!(test.contains("*contract.as_hash()"));
+    let common = fs::read_to_string(dir.join("tests/common/mod.rs")).unwrap();
+    assert!(common.contains("MY_COUNTER_NONCE"));
+    assert!(common.contains("env.advance_block()"));
+    assert!(common.contains("filter_events::<PingEvent>"));
 
     let test_rv32 = fs::read_to_string(dir.join("tests/test_rv32.rs")).unwrap();
     assert!(test_rv32.contains("load_rv32_contract"));
@@ -327,10 +312,9 @@ fn scaffold_default_has_empty_contract() {
     assert!(!imp.contains("#[contract_exception]"));
 
     assert_rv32_only_test_scaffold(&dir);
-    // The stub renders its own tests/test.rs; keep it on the same
-    // clippy-clean shape as the counter's.
+    // The minimal template shares its deployment assertion across backends.
     let test = fs::read_to_string(dir.join("tests/test.rs")).unwrap();
-    assert!(test.contains("*test_contract.as_hash()"));
+    assert!(test.contains("common::initializes(&env, contract.as_hash())"));
     assert!(!test.contains(".clone()"));
     let test_rv32 = fs::read_to_string(dir.join("tests/test_rv32.rs")).unwrap();
     assert!(test_rv32.contains("load_rv32_contract"));
@@ -545,4 +529,30 @@ fn assert_reserved_dependency(name: &str) {
         "{project_name}: {error}"
     );
     assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn every_shared_behavior_is_exercised_by_both_executors() {
+    for template in [None, Some("counter"), Some("counter-app")] {
+        let temp = TempDir::new().unwrap();
+        thruput_cli::scaffold::generate(temp.path(), "shared-checks", template).unwrap();
+        let common = fs::read_to_string(temp.path().join("tests/common/mod.rs")).unwrap();
+        let native = fs::read_to_string(temp.path().join("tests/test.rs")).unwrap();
+        let rv32 = fs::read_to_string(temp.path().join("tests/test_rv32.rs")).unwrap();
+        let mut checks = 0;
+        for line in common
+            .lines()
+            .filter_map(|line| line.strip_prefix("pub fn "))
+        {
+            let name = line.split_once('(').unwrap().0;
+            for test in [&native, &rv32] {
+                assert!(
+                    test.contains(&format!("common::{name}(")),
+                    "missing {name} in {template:?}"
+                );
+            }
+            checks += 1;
+        }
+        assert!(checks > 0);
+    }
 }

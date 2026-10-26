@@ -1,8 +1,7 @@
-use thruput_sdk::*;
-use std::path::PathBuf;
-use {{PROJECT_NAME_SNAKE}}::ContractClient;
+mod common;
 
-static NONCE: SHA256Hash = thruput_sdk::sha256_static!("{{PROJECT_NAME_UPPER_SNAKE}}_RV32_NONCE");
+use std::path::PathBuf;
+use thruput_sdk::*;
 
 fn thruput_artifact(file_name: &str) -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR")
@@ -17,15 +16,6 @@ fn thruput_artifact(file_name: &str) -> PathBuf {
 fn test_deploy_rv32() {
     let contract = load_rv32_contract(thruput_artifact("{{PROJECT_NAME_SNAKE}}.rv32a"));
     let env = TestEnvironment::no_cost();
-    let contract_hash = env.setup_create_contract(&contract);
-    let call_addr = ContractAddress::named("{{PROJECT_NAME_SNAKE}}_rv32");
-
-    let result = env.transact(|tx| {
-        tx.call(&call_addr).run(|| {
-            let address = deploy_contract(&NONCE, &contract_hash);
-            ContractClient::new(&address).initialize();
-        })
-    });
-
-    result.assert_success();
+    let hash = env.setup_create_contract(&contract);
+    common::initializes(&env, &hash);
 }

@@ -183,14 +183,13 @@ Report checks actually run and any environment blockers.
 
 ## Agent guidance and releases
 
-For Groundhog programming-model or developer-workflow changes, load the
-installed guidance with `cargo run -p thruput-cli -- skill show`, then read
-the relevant reference with `skill show <topic>`. Install it first with
-`thruput skill install` if absent. If building is unavailable, read the files
-under `.agents/skills/thruput` in the project or home directory.
+For programming-model or developer-workflow changes, start with the affected
+source and tests. If they leave a question unanswered, optional guidance is
+available through `thruput skill --help` and `thruput docs --help`. Install or
+load only what the task needs.
 Maintain skill content in `thruputchain/agent-skills`; do not copy it into
 this repository or release artifacts. Skill updates are independent of CLI
-releases. Verify guidance against current APIs and installed dependencies.
+releases. Verify guidance against current APIs and resolved dependencies.
 
 Keep the selected developer-site documentation snapshot explicit; follow
 [bundled documentation maintenance](docs/bundled-documentation.md).

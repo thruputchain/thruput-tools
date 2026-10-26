@@ -1,79 +1,29 @@
 # {{PROJECT_NAME}} agent guide
 
 Scaffolded with Thruput {{CLI_VERSION}}, template `{{TEMPLATE_NAME}}`.
-This project contains a `no_std` Rust contract compiled to RV32.
+Start with [README.md](README.md), the manifests, and nearby tests. Use the
+project's resolved SDK and toolchain; change pins only when the task requires it.
 
-## Start here
+## Where to work
 
-Read `README.md` if present, the project manifests and lockfiles, and any
-`AGENTS.md` in the directory you will edit. Those files describe this project's
-current dependencies and workflow; the scaffold version above is historical.
-Preserve dependency and toolchain pins unless the task includes a migration.
+- `src/implementation.rs`: contract state, methods, errors, and declared events.
+- `src/lib.rs` and `src/main.rs`: crate setup and the RV32 entrypoint wrapper.
+- `tests/common/mod.rs`: behavior checks shared by native and RV32 tests.
+- `tests/test.rs`: native executor setup.
+- `tests/test_rv32.rs`: compiled guest setup.
+- `tests/integration.rs`: RPC tests against a node.
 
-Install the maintained skill with `thruput skill install` if it is absent,
-then read its entry point:
+## Validate
 
-```console
-thruput skill show
-```
+Run `cargo test` and `thruput test` for contract changes. The latter builds and
+executes the guest artifact, by default
+`target/thruput/{{PROJECT_NAME_SNAKE}}.rv32a`; use the reported path if configured
+elsewhere. Follow README for setup and other checks. Report native tests, guest
+builds, and guest execution separately.
 
-Then load only the guidance needed for the task:
+Check the existing manifest and tests before changing features, entrypoints,
+or build configuration. Use resolved SDK source for API and storage semantics.
 
-- Contract logic, storage, or Rust tests: `thruput skill show contracts`.
-- Profiles, keys, deployment, or local nodes: `thruput skill show cli`.
-- Generated bindings or client calls: `thruput skill show typescript`.
-
-These commands read the installed files offline; they do not install or update skills.
-Use APIs supported by the project's resolved SDK version. If an instruction
-does not match the CLI, check `thruput --version` and the command's `--help`.
-
-For more detail, use `thruput docs export --output <new-directory>` with a new
-temporary directory outside the project. Start at its `index.md`, then read the
-relevant pages or section bundle. Reading these files does not need a server.
-
-## Contract layout
-
-- `src/implementation.rs`: contract state, errors, and `#[contract]` logic.
-- `src/lib.rs`: the `no_std` gate, `thruput_sdk::declare_mock_contract!()`, and re-exports.
-- `src/main.rs`: the RV32 bin wrapper. Keep contract logic in `implementation.rs`.
-- `tests/test.rs`: host mock-executor tests.
-- `tests/test_rv32.rs`: RV32-executor tests.
-- `tests/integration.rs`: RPC integration tests.
-
-## Verify contract changes
-
-- `cargo test`: run the host tests.
-- `thruput build`: build the artifact, by default at
-  `target/thruput/{{PROJECT_NAME_SNAKE}}.rv32a`. Use the reported path when
-  build output is configured elsewhere.
-- `thruput test`: build and test the RV32 artifact. Run both host and RV32
-  tests for contract changes: release builds wrap on integer overflow where
-  host builds panic.
-- `thruput test --integration`: run RPC tests against a managed, ephemeral
-  local node. This also requires a compatible `hog-devnode` runtime.
-
-Builds and tests need the pinned Rust toolchain and Thruput registry access.
-Report missing prerequisites or failed checks rather than reporting an unrun
-check as successful. Use the project's selected network for deployment.
-
-## Preserve the build setup
-
-- Keep features `entrypoints`, `dev`, and `thruput-integration-test`; the
-  compiler macros, CLI, and test harness use those names.
-- Do not make `dev` a default feature: feature unification would pull `thruput-sdk/dev`
-  and `std` into guest builds.
-- Keep the self-referential dev-dependency
-  `{{PROJECT_NAME}} = { path = ".", features = ["dev"] }` for host tests.
-  A contract that depends on this one must forward its `dev` feature too.
-- Keep the RV32 `[[bin]]` name `{{PROJECT_NAME_SNAKE}}`. If renaming the package,
-  update both that name and the `extern crate` identifier in `src/main.rs`.
-- Use `thruput build` for RV32 builds. It supplies the `build-std` overlay
-  from `.cargo/contract.toml`; a bare Cargo RV32 build misses that configuration.
-
-Keep `.cargo/config.toml`, `.cargo/contract.toml`, `rust-toolchain.toml`, and
-`thruput.toml` at the Cargo workspace root. Build reads project profiles from
-that root, not from a member's `thruput.toml`.
-
-When joining an existing workspace, merge the required settings into its root
-files without overwriting unrelated settings. Keep target rustflags in one
-place: duplicate `-Tthruput-rv32.ld` flags cause `region 'CODE' already defined`.
+If local source and tests do not answer a question, additional guidance is
+optional: start with `thruput skill --help` or `thruput docs --help`. Install
+or load only what the task needs. Check the command's `--help` when uncertain.

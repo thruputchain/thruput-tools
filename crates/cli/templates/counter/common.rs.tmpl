@@ -1,0 +1,88 @@
+use std::{
+    cell::Cell,
+    panic::{AssertUnwindSafe, UnwindSafe},
+};
+
+use {{PROJECT_NAME_SNAKE}}::{CounterClient, PingEvent};
+use thruput_sdk::*;
+
+static NONCE: SHA256Hash = thruput_sdk::sha256_static!("{{PROJECT_NAME_UPPER_SNAKE}}_NONCE");
+
+fn deploy(env: &TestEnvironmentHandle, hash: &SHA256Hash, initial: u64) -> ContractAddress {
+    let address = Cell::new(ContractAddress::default());
+    env.transact(|tx| {
+        tx.call(&ContractAddress::named("deployer"))
+            .run(AssertUnwindSafe(|| {
+                let deployed = deploy_contract(&NONCE, hash);
+                let client = CounterClient::new(&deployed);
+                assert_eq!(client.get(), 0);
+                client.initialize(initial);
+                address.set(deployed);
+            }))
+    })
+    .assert_success();
+    env.advance_block();
+    address.get()
+}
+
+fn call(
+    env: &TestEnvironmentHandle,
+    address: &ContractAddress,
+    operation: impl FnOnce(&CounterClient) + UnwindSafe,
+) -> TransactResult {
+    let result = env.transact(|tx| {
+        tx.call(&ContractAddress::named("caller"))
+            .run(|| operation(&CounterClient::new(address)))
+    });
+    // Transactions in one block share a committed snapshot. Advance the block
+    // so the next transaction reads this transaction's committed changes.
+    env.advance_block();
+    result
+}
+
+pub fn counter_updates(env: &TestEnvironmentHandle, hash: &SHA256Hash) {
+    let address = deploy(env, hash, 10);
+    call(env, &address, |client| {
+        assert_eq!(client.get(), 10);
+        client.increment(5);
+    })
+    .assert_success();
+    call(env, &address, |client| {
+        assert_eq!(client.get(), 15);
+        client.decrement(3);
+    })
+    .assert_success();
+    call(env, &address, |client| assert_eq!(client.get(), 12)).assert_success();
+}
+
+pub fn counter_rejects_underflow(env: &TestEnvironmentHandle, hash: &SHA256Hash) {
+    let address = deploy(env, hash, 5);
+    let rejected = call(env, &address, |client| {
+        let err = client.try_decrement(10).expect_err("decrease must fail");
+        match_exn!(err, {
+            LibraryExn::NonNegativeIntUnderflow => {}
+            _ => panic!("expected underflow, got: {err:?}"),
+        });
+    });
+    rejected.assert_success();
+    rejected.assert_no_events();
+    // Check after the failed call's block, not only inside its transaction.
+    call(env, &address, |client| {
+        assert_eq!(client.get(), 5);
+        client.decrement(5);
+    })
+    .assert_success();
+    call(env, &address, |client| assert_eq!(client.get(), 0)).assert_success();
+}
+
+pub fn counter_emits_ping(env: &TestEnvironmentHandle, hash: &SHA256Hash) {
+    let address = deploy(env, hash, 0);
+    let tag = 42u64;
+    let result = call(env, &address, |client| client.ping(tag));
+    result.assert_success();
+    result.assert_event_count(1);
+    let events = result.filter_events::<PingEvent>(&address);
+    assert_eq!(events.len(), 1);
+    let expected: Topic = tag.into_topic().into();
+    assert_eq!(events[0].topic(1), Some(&expected));
+}
