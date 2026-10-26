@@ -24,6 +24,21 @@ crates = [
 ]
 min-publish-age = "0"
 
+# Security fix for RUSTSEC-2026-0391
+[[allow.exact]]
+crate = "zstd"
+version = "0.14.3"
+
+# Security fix for RUSTSEC-2026-0410
+[[allow.exact]]
+crate = "zstd-sys"
+version = "2.1.2+zstd.1.5.7"
+
+# Security fix for RUSTSEC-2026-0406
+[[allow.exact]]
+crate = "zstd-safe"
+version = "8.2.0"
+
 [[allow.exact]]
 crate = "rustls"
 version = "0.23.46"

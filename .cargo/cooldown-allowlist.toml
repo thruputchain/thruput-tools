@@ -1,5 +1,44 @@
 # Keep in sync with the [[allow.exact]] entries in ../cooldown.toml.
 
+[[allow.package]]
+crate = "thruput-xdrs"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-rpc-driver"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-rpc-api"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-xdr-derive"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-xdr-repr"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-xdr-common"
+minutes = 0
+
+# Security fix for RUSTSEC-2026-0391
+[[allow.exact]]
+crate = "zstd"
+version = "0.14.3"
+
+# Security fix for RUSTSEC-2026-0410
+[[allow.exact]]
+crate = "zstd-sys"
+version = "2.1.2+zstd.1.5.7"
+
+# Security fix for RUSTSEC-2026-0406
+[[allow.exact]]
+crate = "zstd-safe"
+version = "8.2.0"
+
 [[allow.exact]]
 crate = "rustls"
 version = "0.23.46"

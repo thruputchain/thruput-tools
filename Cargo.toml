@@ -54,7 +54,7 @@ reqwest = "0.12"
 fs2 = "0.4"
 flate2 = "1"
 tar = { version = "0.4.46", default-features = false }
-zstd = "0.13"
+zstd = "0.14.3"
 # --- Workspace crates ---
 # The version must be duplicated here despite workspace.package.version
 # above.  Cargo requires explicit versions for dependencies when
