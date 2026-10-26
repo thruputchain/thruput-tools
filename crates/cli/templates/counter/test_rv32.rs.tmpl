@@ -1,9 +1,7 @@
-use thruput_sdk::*;
+mod common;
+
 use std::path::PathBuf;
-
-use {{PROJECT_NAME_SNAKE}}::CounterClient;
-
-static NONCE: SHA256Hash = thruput_sdk::sha256_static!("{{PROJECT_NAME_UPPER_SNAKE}}_RV32_NONCE");
+use thruput_sdk::*;
 
 fn thruput_artifact(file_name: &str) -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR")
@@ -13,30 +11,30 @@ fn thruput_artifact(file_name: &str) -> PathBuf {
         .join(file_name)
 }
 
+fn setup() -> (TestEnvironmentHandle, SHA256Hash) {
+    let contract = load_rv32_contract(thruput_artifact("{{PROJECT_NAME_SNAKE}}.rv32a"));
+    let env = TestEnvironment::no_cost();
+    let hash = env.setup_create_contract(&contract);
+    (env, hash)
+}
+
 #[test]
 #[ignore = "requires RV32 build — run via `thruput test`"]
 fn test_counter_rv32() {
-    let contract = load_rv32_contract(thruput_artifact("{{PROJECT_NAME_SNAKE}}.rv32a"));
-    let env = TestEnvironment::no_cost();
-    let contract_hash = env.setup_create_contract(&contract);
-    let call_addr = ContractAddress::named("{{PROJECT_NAME_SNAKE}}_rv32");
+    let (env, hash) = setup();
+    common::counter_updates(&env, &hash);
+}
 
-    let result = env.transact(|tx| {
-        tx.call(&call_addr).run(|| {
-            let addr = deploy_contract(&NONCE, &contract_hash);
-            let client = CounterClient::new(&addr);
+#[test]
+#[ignore = "requires RV32 build — run via `thruput test`"]
+fn test_counter_underflow_rv32() {
+    let (env, hash) = setup();
+    common::counter_rejects_underflow(&env, &hash);
+}
 
-            assert_eq!(client.get(), 0);
-            client.initialize(10);
-            assert_eq!(client.get(), 10);
-
-            client.increment(5);
-            assert_eq!(client.get(), 15);
-
-            client.decrement(3);
-            assert_eq!(client.get(), 12);
-        })
-    });
-
-    result.assert_success();
+#[test]
+#[ignore = "requires RV32 build — run via `thruput test`"]
+fn test_counter_event_rv32() {
+    let (env, hash) = setup();
+    common::counter_emits_ping(&env, &hash);
 }

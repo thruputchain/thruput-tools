@@ -1,0 +1,16 @@
+use {{PROJECT_NAME_SNAKE}}::ContractClient;
+use thruput_sdk::*;
+
+static NONCE: SHA256Hash = thruput_sdk::sha256_static!("{{PROJECT_NAME_UPPER_SNAKE}}_NONCE");
+
+// Both test entry points call this function with their registered contract.
+pub fn initializes(env: &TestEnvironmentHandle, contract_hash: &SHA256Hash) {
+    let result = env.transact(|tx| {
+        tx.call(&ContractAddress::named("test_deploy")).run(|| {
+            let address = deploy_contract(&NONCE, contract_hash);
+            ContractClient::new(&address).initialize();
+        })
+    });
+    result.assert_success();
+    result.assert_no_events();
+}

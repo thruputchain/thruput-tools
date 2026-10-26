@@ -54,7 +54,14 @@ pub(crate) const BASE: &[File] = &[
     ("src/main.rs", include_str!("../templates/main.rs.tmpl")),
 ];
 
+const CONTRACT_README: &[File] = &[("README.md", include_str!("../templates/README.md.tmpl"))];
+
 pub(crate) const MINIMAL: &[File] = &[
+    ("README.md", include_str!("../templates/README.md.tmpl")),
+    (
+        "tests/common/mod.rs",
+        include_str!("../templates/stub/common.rs.tmpl"),
+    ),
     ("src/lib.rs", include_str!("../templates/stub/lib.rs.tmpl")),
     (
         "src/implementation.rs",
@@ -71,6 +78,10 @@ pub(crate) const MINIMAL: &[File] = &[
 ];
 
 const COUNTER: &[File] = &[
+    (
+        "tests/common/mod.rs",
+        include_str!("../templates/counter/common.rs.tmpl"),
+    ),
     (
         "src/lib.rs",
         include_str!("../templates/counter/lib.rs.tmpl"),
@@ -169,7 +180,7 @@ pub const CATALOG: &[Template] = &[
         ],
         prerequisites: &["Rust with rustup", "Thruput Cargo registry credentials"],
         next_steps: &["cargo test", "thruput build", "thruput test"],
-        files: &[COUNTER],
+        files: &[COUNTER, CONTRACT_README],
         agent_notes: None,
     },
     Template {

@@ -13,7 +13,7 @@ fn thruput(home: &Path, directory: &Path) -> Command {
 }
 
 #[test]
-fn generated_guides_identify_their_template_and_supply_working_offline_context_commands() {
+fn generated_guides_route_to_project_files_and_optional_offline_guidance() {
     let temp = tempfile::tempdir().unwrap();
     for template in [None, Some("counter"), Some("counter-app")] {
         let template_name = template.unwrap_or("minimal");
@@ -31,7 +31,32 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
         );
         let project = temp.path().join(&name);
         let guide = fs::read_to_string(project.join("AGENTS.md")).unwrap();
-        assert!(guide.contains("thruput skill install"));
+        assert!(guide.contains("guidance is\noptional"));
+        for path in [
+            "README.md",
+            "src/implementation.rs",
+            "tests/common/mod.rs",
+            "tests/test_rv32.rs",
+        ] {
+            assert!(guide.contains(path));
+            assert!(
+                project.join(path).is_file(),
+                "missing guide destination {path}"
+            );
+        }
+        for group in ["skill", "docs"] {
+            assert!(guide.contains(&format!("thruput {group} --help")));
+            let help = thruput(temp.path(), &project)
+                .env("PATH", "")
+                .args([group, "--help"])
+                .output()
+                .unwrap();
+            assert!(
+                help.status.success(),
+                "{}",
+                String::from_utf8_lossy(&help.stderr)
+            );
+        }
         let missing = thruput(temp.path(), &project)
             .env("PATH", "")
             .args(["skill", "show", "--offline"])
@@ -53,20 +78,11 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
             "Scaffolded with Thruput {}, template `{template_name}`",
             env!("CARGO_PKG_VERSION")
         )));
-        let manifest: toml::Value =
-            toml::from_str(&fs::read_to_string(project.join("Cargo.toml")).unwrap()).unwrap();
-        for feature in manifest["features"].as_table().unwrap().keys() {
-            assert!(
-                guide.contains(&format!("`{feature}`")),
-                "missing scaffold feature {feature}"
-            );
-        }
         for topic in [None, Some("contracts"), Some("cli"), Some("typescript")] {
             let mut args = vec!["skill", "show"];
             if let Some(topic) = topic {
                 args.push(topic);
             }
-            assert!(guide.contains(&format!("thruput {}", args.join(" "))));
             // Reading an installed skill needs no Node, Git, Cargo, or network.
             let output = thruput(temp.path(), &project)
                 .env("PATH", "")
@@ -94,13 +110,13 @@ fn generated_guides_identify_their_template_and_supply_working_offline_context_c
 }
 
 #[test]
-fn the_documented_docs_export_works_outside_the_generated_project() {
+fn optional_docs_export_works_outside_the_generated_project() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     fs::create_dir(&project).unwrap();
     thruput_cli::scaffold::generate(&project, "project", Some("counter")).unwrap();
     let guide = fs::read_to_string(project.join("AGENTS.md")).unwrap();
-    assert!(guide.contains("thruput docs export --output <new-directory>"));
+    assert!(guide.contains("thruput docs --help"));
     let destination = temp.path().join("docs");
     let exported = thruput(temp.path(), &project)
         .args(["docs", "export", "--output"])

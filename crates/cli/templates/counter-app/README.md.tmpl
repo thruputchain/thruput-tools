@@ -83,6 +83,11 @@ thruput test --integration
 npm run build
 ```
 
+`cargo test` and `thruput test` run the same behavior checks in
+`tests/common/mod.rs` with the native and RV32 executors. Add checks there and
+call them from both test entry points. The adjacent generated `.spec.json`
+describes the artifact's public interface and declared events.
+
 `npm run build` rebuilds the bindings, checks TypeScript, and bundles the frontend.
 The example runs locally through `npm run dev`, which supplies `/deployment.json`
 and proxies `/rpc` to the node. Hosting the bundle elsewhere requires providing

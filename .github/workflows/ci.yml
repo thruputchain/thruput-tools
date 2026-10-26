@@ -218,6 +218,20 @@ jobs:
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: thruput test
 
+      - name: Check declared event metadata
+        if: matrix.template == 'counter'
+        working-directory: ${{ runner.temp }}/my-counter
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+          spec = json.loads(Path("target/thruput/my_counter.spec.json").read_text())
+          events = [event for event in spec["events"] if event["name"]["declared"] == "PingEvent"]
+          assert len(events) == 1, "runtime PingEvent must also be declared in the contract spec"
+          assert [topic["name"] for topic in events[0]["topics"]] == ["tag"]
+          assert events[0]["fields"] == []
+          PYTHON
+
       # Starts an ephemeral hog-devnode from the embedded catalog, deploys the
       # contract with a native local-user account, and runs tests/integration.rs.
       # Nothing else exercises the integration deploy end to end.
