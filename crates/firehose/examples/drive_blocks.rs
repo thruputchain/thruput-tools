@@ -2,7 +2,7 @@
 //! node-supervisor's manual block driver. Never run against a production node.
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
-use thruput_scheduler::{
+use thruput_node_rpc::{
     ConsensusValue, ParallelBatch, ProposalTxs, ProposalTxsHash, SchedulerCommitOutcome,
     SchedulerGetTipResult, SchedulerProposalResult,
     sched_coord::SchedulerCoord_SchedulerCoord1_Client,

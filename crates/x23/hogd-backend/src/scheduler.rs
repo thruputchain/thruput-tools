@@ -3,7 +3,7 @@
 
 use thruput_json_rpc_server::{RpcServerError, TipReading};
 use thruput_json_rpc_types::block::{ChainTip, consensus_value_hash};
-use thruput_scheduler::{
+use thruput_node_rpc::{
     DbTip, ExpectedDBTip, RPCError, SchedGatewaySubmitOutcome, consensus::ConsensusValue,
 };
 
@@ -48,12 +48,12 @@ pub fn submit_result(outcome: SchedGatewaySubmitOutcome) -> Result<(), RpcServer
 /// unknown protocol values are backend failures, never an absent transaction.
 pub fn transaction_outcome(
     service: &str,
-    results: &thruput_scheduler::SchedulerTransactionOutcomeBatch,
+    results: &thruput_node_rpc::SchedulerTransactionOutcomeBatch,
 ) -> Result<Option<thruput_json_rpc_types::transaction::TransactionStatus>, RpcServerError> {
     use thruput_json_rpc_types::transaction::{
         SchedulerTransactionError, SchedulerTransactionErrorSource, TransactionStatus,
     };
-    use thruput_scheduler::{
+    use thruput_node_rpc::{
         SchedulerTransactionErrorSource as Source, SchedulerTransactionStatus as Status,
     };
     let [outcome] = results.0.as_slice() else {

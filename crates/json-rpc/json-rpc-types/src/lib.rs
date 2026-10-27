@@ -30,7 +30,7 @@ use base58::Base58;
 pub use base58::NetworkHashText;
 
 // Re-export non-byte XDR types.
-pub use thruput_scheduler::consensus::ConsensusValue;
+pub use thruput_node_rpc::consensus::ConsensusValue;
 pub use thruput_xdr::types::{BlockHeight, Protocol, TimePoint};
 
 // Typed identifiers use unprefixed base58 at the API boundary.

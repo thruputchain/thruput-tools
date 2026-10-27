@@ -9,7 +9,7 @@ use thruput_json_rpc_types::{
     responses as out,
     transaction::TxHash,
 };
-use thruput_scheduler::{
+use thruput_node_rpc::{
     SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcomeBatch,
     SchedulerTransactionStatus as Status,
 };

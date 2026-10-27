@@ -12,7 +12,7 @@ use std::{
 };
 
 use sha2::{Digest, Sha256};
-use thruput_scheduler::{
+use thruput_node_rpc::{
     BlockID, ConsensusValue, ProposalTxsHash, SchedulerCommitOutcome, SchedulerGetTipResult,
     SchedulerProposalResult, SchedulerProposedBlock,
     sched_coord::SchedulerCoord_SchedulerCoord1_Client,
@@ -562,7 +562,7 @@ async fn commit_proposed_block(
 fn consensus_value(
     parent: &ConsensusValue,
     proposal_header: ProposalHeader,
-    proposal_txs: &thruput_scheduler::ProposalTxs,
+    proposal_txs: &thruput_node_rpc::ProposalTxs,
 ) -> Result<ConsensusValue, BlockProductionError> {
     Ok(ConsensusValue {
         protocol: Protocol::new(0),
@@ -577,7 +577,7 @@ fn consensus_value(
 // Matches hogd's temporary compatibility hash until the protocol moves to
 // canonical XDR hashing for ProposalTxs.
 fn proposal_txs_compatibility_hash(
-    proposal_txs: &thruput_scheduler::ProposalTxs,
+    proposal_txs: &thruput_node_rpc::ProposalTxs,
 ) -> Result<ProposalTxsHash, BlockProductionError> {
     let mut base = proposal_txs.clone();
     base.signed_hash.segment_tokens.0.clear();
@@ -609,7 +609,7 @@ fn proposal_txs_compatibility_hash(
 
 fn hash_parallel_batch_compatibility(
     batch_name: &'static str,
-    batch: &thruput_scheduler::ParallelBatch,
+    batch: &thruput_node_rpc::ParallelBatch,
 ) -> Result<[u8; 32], BlockProductionError> {
     batch
         .validate()
@@ -751,7 +751,7 @@ mod timepoint_tests {
 
 #[cfg(test)]
 mod hash_tests {
-    use thruput_scheduler::{
+    use thruput_node_rpc::{
         ParallelBatch, ParallelNondeterministicProposalDataBatch,
         ParallelSignedTransactionHashBatch, ProposalTxs,
     };

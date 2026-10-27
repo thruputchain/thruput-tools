@@ -25,7 +25,7 @@ use thruput_json_rpc_types::{
     ContractAddress,
     transaction::{TransactionStatus, TxHash},
 };
-use thruput_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client;
+use thruput_node_rpc::sched_gateway::SchedGateway_SchedGateway1_Client;
 use thruput_x23_transport::{connect, connect_with_config, hogd_large_message_config};
 use thruput_xdr::types::{AddressAndKey, StorageKey};
 

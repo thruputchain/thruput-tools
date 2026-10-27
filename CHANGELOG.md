@@ -22,6 +22,22 @@ the JSON-RPC wire format.
   `json_unsupported`, `not_implemented`, `manifest_entrypoint_invalid` and
   `wallet_address_derivation_failed`.
 
+## 0.41.0
+
+- Move to protocol `a67b703` through protocol-rs `0.63.0`, now taken from
+  crates.io instead of the thruput registry. Tools now interoperates only with
+  hogd and chuckd built from the same protocol (platform `0.1.31`). The node
+  RPC bindings are now the `thruput-node-rpc` crate, which replaces
+  `thruput-scheduler`.
+- Default to hog-devnode `0.1.31`, the first managed devnode on protocol
+  `a67b703`. Earlier versions remain selectable. Its macOS archive is not
+  Developer ID-signed or notarized.
+- Update the Rust SDK to `0.57.2` and standard interfaces to `0.1.70`.
+  Newly generated projects pin SDK `0.57.2`.
+- Bundle the documentation snapshot from `thruput-docs` commit `245ae77`,
+  which adds a guide to porting Soroban contracts.
+- Use the SDK's generated contract proxies as testkit clients.
+
 ## 0.40.2
 
 - Update the Rust SDK to `0.57.1` and standard interfaces to `0.1.69`.

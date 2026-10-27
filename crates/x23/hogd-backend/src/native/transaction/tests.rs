@@ -1,7 +1,7 @@
 use super::*;
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::base58::Base58;
-use thruput_scheduler::SchedulerTransactionOutcome;
+use thruput_node_rpc::SchedulerTransactionOutcome;
 use thruput_trace::{
     ContractRejectCode, ContractRejectDiagnostic, DbConflictCode, DbConflictDiagnostic,
     TxFailureCause, TxFailureDiagnostic,

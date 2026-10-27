@@ -4,7 +4,7 @@ use serde::Serialize;
 use thruput_build_info::BuildVersion;
 use thruput_hogd_backend::{IntroOutcome, intro, scheduler as shared_scheduler};
 use thruput_json_rpc_types::{BlockHeight, NetworkHashText};
-use thruput_scheduler::{DbTip, ExpectedDBTip};
+use thruput_node_rpc::{DbTip, ExpectedDBTip};
 use thruput_scp::network::ProtocolCommit as Protocol;
 use thruput_x23_transport::ConnectError;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -1552,7 +1552,7 @@ mod tests {
         responses::{InvocationOutput, TransactionStatus as NativeTransactionStatus},
         transaction::TxHash,
     };
-    use thruput_scheduler::{
+    use thruput_node_rpc::{
         ConsensusValue, DbTip, ParallelSignedTransactionBatch, PendingTxCount, ProposalTxsHash,
         RPCError, SchedGatewayIntroOutcome, SchedGatewaySubmitOutcomeBatch,
         SchedulerTransactionOutcomeBatch,
@@ -1936,7 +1936,7 @@ mod tests {
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-            use thruput_scheduler::{
+            use thruput_node_rpc::{
                 SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
                 SchedulerTransactionStatus,
             };

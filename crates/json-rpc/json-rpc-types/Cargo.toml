@@ -24,7 +24,7 @@ thruput-encoding = { workspace = true }
 thruput-trace = { workspace = true }
 thruput-xdr = { workspace = true }
 thruput-indexer = { workspace = true }
-thruput-scheduler = { workspace = true }
+thruput-node-rpc = { workspace = true }
 schemars = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }

@@ -17,8 +17,8 @@ importers:
         specifier: 4.3.1
         version: 4.3.1(vite@7.3.6(jiti@2.7.0)(lightningcss@1.32.0))
       "@thruputchain/client":
-        specifier: 0.23.0
-        version: 0.23.0
+        specifier: 0.25.0
+        version: 0.25.0
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
@@ -1052,35 +1052,35 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  "@thruputchain/client@0.23.0":
+  "@thruputchain/client@0.25.0":
     resolution:
       {
-        integrity: sha512-sqmBiOmoJyc8am1g8TUh6KNOMChTSjKxRVA/NKLw/7t14/uRh9TyPLQIfm7ZszAyYl3fDqs45FRIyabx2Ia7nQ==,
-        tarball: https://npm.pkg.github.com/download/@thruputchain/client/0.23.0/db93b9d1e6fbdc499f6d41fd21295d29564215a0,
+        integrity: sha512-PpmuwznBHC3bwYFgFGOr8DSNhNudPQFAEuD4dwTZjRIym23pfF62Mzv/Lhq8eexAJ9bKk2DeNEEhBVs2KV9jLA==,
+        tarball: https://npm.pkg.github.com/download/@thruputchain/client/0.25.0/a3d7ba82310d6a8f14099a9185eaf9da87e611e0,
       }
     engines: { node: ">=22.12.0" }
 
-  "@thruputchain/contract-spec@0.18.0":
+  "@thruputchain/contract-spec@0.19.1":
     resolution:
       {
-        integrity: sha512-tnfrH6E89d+VmrEYpaPwpijjDDGKrqCEEG1n3kruSpeH5UNON9RxeRrlesRv9bCuXJFifFF3jYUdcAvepFzTLA==,
-        tarball: https://npm.pkg.github.com/download/@thruputchain/contract-spec/0.18.0/df0bd406f92c7d0892bcb1e4e45b8a4385a2941f,
+        integrity: sha512-ZJVIbXORdplhSUNdqRqdj7wlJ3jAGwh7HQO5uAmDcZxKx+4FXgeCv1emc/Vn2K6Z0Nijba46WZHfvZduehzZwA==,
+        tarball: https://npm.pkg.github.com/download/@thruputchain/contract-spec/0.19.1/6d9d9c6515ab1b925737f416918ec08941efc134,
       }
     engines: { node: ">=22.12.0" }
 
-  "@thruputchain/protocol@0.18.0":
+  "@thruputchain/protocol@0.19.1":
     resolution:
       {
-        integrity: sha512-EzH8erwQlULsM5JaDjj++hmokiNzbgBOvXRxFO7eA0qtbx9442wYxF77Z5DAzXliNYQqvr0NJrpiFbOyHRthlg==,
-        tarball: https://npm.pkg.github.com/download/@thruputchain/protocol/0.18.0/8c155de27b2b8842d2a8fc61a0ce9f04d12efe46,
+        integrity: sha512-gdVnoZrOSRpN4ItEi24umWdoDrqWK9onkxZ+Mx0xeLLV9M4s9VMtZY/cWX+wg0Y101RV4R/0t4GLwre6evdwyA==,
+        tarball: https://npm.pkg.github.com/download/@thruputchain/protocol/0.19.1/384b194aede808c77e78bf433c92105d4a890257,
       }
     engines: { node: ">=22.12.0" }
 
-  "@thruputchain/xdr@0.18.0":
+  "@thruputchain/xdr@0.19.1":
     resolution:
       {
-        integrity: sha512-dnqqP9+ByRyIahQdipxqri0+GM+MK6HMQFHEMtaqIUEKO8uKohB0Khuqd5iT7r1ScN7cpRe+UFsvSBfkmInklQ==,
-        tarball: https://npm.pkg.github.com/download/@thruputchain/xdr/0.18.0/20434cb9d01fbad218561008bc6b823c31ae8b3d,
+        integrity: sha512-NSzd+QINvMt9eLVaB3edPuZpGQxeSMDflwlj8pGvHBkN8Jp0jqnG6QSVYw3lj662TwDpyMM0yFLGy5UvbWgGKA==,
+        tarball: https://npm.pkg.github.com/download/@thruputchain/xdr/0.19.1/c7dda7d5163bc40cbba7703608cdce22b8a73aa0,
       }
     engines: { node: ">=22.12.0" }
 
@@ -3880,28 +3880,28 @@ snapshots:
       tailwindcss: 4.3.1
       vite: 7.3.6(jiti@2.7.0)(lightningcss@1.32.0)
 
-  "@thruputchain/client@0.23.0":
+  "@thruputchain/client@0.25.0":
     dependencies:
       "@noble/ed25519": 3.2.0
       "@noble/hashes": 2.4.0
       "@noble/post-quantum": 0.7.1
       "@scure/base": 2.0.0
-      "@thruputchain/contract-spec": 0.18.0
-      "@thruputchain/protocol": 0.18.0
-      "@thruputchain/xdr": 0.18.0
+      "@thruputchain/contract-spec": 0.19.1
+      "@thruputchain/protocol": 0.19.1
+      "@thruputchain/xdr": 0.19.1
 
-  "@thruputchain/contract-spec@0.18.0":
+  "@thruputchain/contract-spec@0.19.1":
     dependencies:
-      "@thruputchain/protocol": 0.18.0
-      "@thruputchain/xdr": 0.18.0
+      "@thruputchain/protocol": 0.19.1
+      "@thruputchain/xdr": 0.19.1
 
-  "@thruputchain/protocol@0.18.0":
+  "@thruputchain/protocol@0.19.1":
     dependencies:
       "@noble/hashes": 2.2.0
       "@scure/base": 2.0.0
-      "@thruputchain/xdr": 0.18.0
+      "@thruputchain/xdr": 0.19.1
 
-  "@thruputchain/xdr@0.18.0": {}
+  "@thruputchain/xdr@0.19.1": {}
 
   "@ts-morph/common@0.27.0":
     dependencies:
