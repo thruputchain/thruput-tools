@@ -13,7 +13,7 @@ categories.workspace = true
 description = "Thruput smart contract development tools"
 
 exclude = [
-    "/docs/",
+    "fixtures/",
     "tests/",
 ]
 

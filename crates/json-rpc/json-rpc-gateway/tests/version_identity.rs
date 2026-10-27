@@ -149,8 +149,8 @@ fn startup_logs_validated_release_identity() {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(
-            stdout.contains("Groundhog release identity")
-                || stderr.contains("Groundhog release identity"),
+            stdout.contains("Thruput release identity")
+                || stderr.contains("Thruput release identity"),
             "gateway output did not contain the startup identity log with RUST_LOG={rust_log:?}; stdout: {stdout}; stderr: {stderr}"
         );
         let combined = format!("{stdout}\n{stderr}");

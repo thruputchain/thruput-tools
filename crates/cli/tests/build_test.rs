@@ -973,7 +973,7 @@ fn write_bootstrapped_workspace(root: &Path, pkg_name: &str) -> (PathBuf, String
 /// Run the real `thruput` binary with a fake cargo on `PATH` and an
 /// isolated `CARGO_HOME`, so the workspace-config warning is deterministic
 /// regardless of the developer's global cargo config.
-fn run_groundhog_with_fake_cargo(
+fn run_thruput_with_fake_cargo(
     cwd: &Path,
     fake_bin: &Path,
     cargo_home: &Path,
@@ -1009,7 +1009,7 @@ fn build_rv32_refuses_missing_linker_script_naming_member_leftover() {
     let cargo_home = root.join("cargo-home");
     fs::create_dir_all(&cargo_home).unwrap();
 
-    let output = run_groundhog_with_fake_cargo(
+    let output = run_thruput_with_fake_cargo(
         &member,
         &fake_bin,
         &cargo_home,
@@ -1051,7 +1051,7 @@ fn build_rv32_warns_on_custom_linker_script_and_proceeds() {
     let cargo_home = root.join("cargo-home");
     fs::create_dir_all(&cargo_home).unwrap();
 
-    let output = run_groundhog_with_fake_cargo(
+    let output = run_thruput_with_fake_cargo(
         &member,
         &fake_bin,
         &cargo_home,
@@ -1085,7 +1085,7 @@ fn build_rv32_warns_on_non_nightly_toolchain_and_proceeds() {
     let cargo_home = root.join("cargo-home");
     fs::create_dir_all(&cargo_home).unwrap();
 
-    let output = run_groundhog_with_fake_cargo(
+    let output = run_thruput_with_fake_cargo(
         &member,
         &fake_bin,
         &cargo_home,
@@ -1126,7 +1126,7 @@ fn build_rv32_link_failure_mentioning_script_gets_search_path_hint() {
     let cargo_home = root.join("cargo-home");
     fs::create_dir_all(&cargo_home).unwrap();
 
-    let output = run_groundhog_with_fake_cargo(
+    let output = run_thruput_with_fake_cargo(
         &member,
         &fake_bin,
         &cargo_home,
@@ -1166,7 +1166,7 @@ fn build_rv32_passes_the_contract_toml_overlay_to_cargo() {
 
     // The compile fails downstream on the ELF the fake cargo never produces;
     // the recorded argv is what this test is about.
-    run_groundhog_with_fake_cargo(
+    run_thruput_with_fake_cargo(
         &member,
         &fake_bin,
         &cargo_home,
@@ -1197,7 +1197,7 @@ fn build_rv32_refuses_a_missing_contract_toml() {
     let cargo_home = root.join("cargo-home");
     fs::create_dir_all(&cargo_home).unwrap();
 
-    let output = run_groundhog_with_fake_cargo(
+    let output = run_thruput_with_fake_cargo(
         &member,
         &fake_bin,
         &cargo_home,

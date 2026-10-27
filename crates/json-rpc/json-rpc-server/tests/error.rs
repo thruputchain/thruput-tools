@@ -15,8 +15,6 @@ fn every_variant_maps_to_its_documented_code() {
             codes::TX_INVALID,
         ),
         (RpcServerError::TxRejected("x".into()), codes::TX_REJECTED),
-        (RpcServerError::TxNotFound, codes::TX_NOT_FOUND),
-        (RpcServerError::BlockNotFound, codes::BLOCK_NOT_FOUND),
         (
             RpcServerError::InvalidParam("x".into()),
             codes::INVALID_PARAMS,

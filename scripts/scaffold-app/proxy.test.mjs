@@ -15,7 +15,7 @@ const template = await readFile(
 
 for (const endpoint of ["/", "/thruput", "/tenant/rpc?token=a%2Fb&network=local"]) {
   test(`dev proxy preserves RPC endpoint ${endpoint}`, { timeout: 10_000 }, async (t) => {
-    const root = await mkdtemp(join(tmpdir(), "groundhog-proxy-"));
+    const root = await mkdtemp(join(tmpdir(), "thruput-proxy-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     const upstream = createHttpServer(async (request, response) => {
       let body = "";

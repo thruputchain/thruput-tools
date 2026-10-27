@@ -1,4 +1,4 @@
-//! `OpenRPC` document generation for the Groundhog JSON-RPC API.
+//! `OpenRPC` document generation for the Thruput JSON-RPC API.
 //!
 //! Provides types and helpers that the `thruput-open-rpc-macros` proc
 //! macro expands into. Application code aggregates methods from
@@ -63,6 +63,10 @@ enum ParamStructure {
 /// Cross-field constraints remain in `x-params-schema`; descriptors alone cannot
 /// express them. Non-object request types are a definition error.
 /// Required descriptors precede optional ones, with names sorted in each group.
+///
+/// # Panics
+///
+/// Panics when `T`'s schema is not an object schema.
 pub fn named_params<T: JsonSchema>(
     generator: &mut SchemaGenerator,
 ) -> (Vec<ContentDescriptor>, NamedParamsDoc) {

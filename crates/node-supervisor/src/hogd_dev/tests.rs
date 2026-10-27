@@ -430,7 +430,6 @@ fn readiness_line_parses_endpoint_addresses() {
                 .expect("bug: address should parse")
         )
     );
-    assert_eq!(readiness.endpoints.dev_control, None);
     assert_eq!(
         readiness.endpoints.db_gateway,
         Some(
@@ -591,7 +590,6 @@ fn readiness_line_accepts_scheduler_endpoints_without_optional_read_endpoints() 
     );
     assert_eq!(readiness.endpoints.db_gateway, None);
     assert_eq!(readiness.endpoints.view_gateway, None);
-    assert_eq!(readiness.endpoints.dev_control, None);
 }
 
 #[test]
@@ -899,7 +897,7 @@ fn legacy_readiness_without_manifest_is_rejected_by_supervisor_validation() {
 fn non_ready_status_is_rejected() {
     let err = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"starting","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","dev_control":"127.0.0.1:12347"}}"#,
+            r#"{"status":"starting","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346"}}"#,
         )
         .expect_err("bug: non-ready status should fail");
 

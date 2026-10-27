@@ -1,4 +1,4 @@
-//! Native request field validation. Legacy wire readers retain their own policy.
+//! Native request field validation.
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer};

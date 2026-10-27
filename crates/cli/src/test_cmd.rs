@@ -2576,13 +2576,13 @@ mod tests {
 
     #[test]
     fn local_test_environment_sets_cargo_target_dir() {
-        let env = super::local_test_environment(std::path::Path::new("/tmp/groundhog-target"));
+        let env = super::local_test_environment(std::path::Path::new("/tmp/thruput-target"));
 
         assert_eq!(
             env,
             vec![(
                 OsString::from("CARGO_TARGET_DIR"),
-                OsString::from("/tmp/groundhog-target")
+                OsString::from("/tmp/thruput-target")
             )]
         );
     }

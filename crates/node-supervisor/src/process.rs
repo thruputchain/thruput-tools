@@ -381,10 +381,10 @@ impl SupervisedChild {
             })
     }
 
-    /// Force-stop the child and wait for it to exit.
+    /// Force-stop the child process itself and wait for it to exit.
     ///
-    /// PR 2 should replace this direct-child kill with the agreed process-group
-    /// shutdown contract once hogd-dev process semantics are settled.
+    /// This kills only the direct child; use the process-group shutdown path
+    /// when the child may have spawned its own descendants.
     #[tracing::instrument(skip_all, fields(program = %self.program))]
     pub async fn kill_and_wait(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
         if let Some(status) = self.try_wait()? {

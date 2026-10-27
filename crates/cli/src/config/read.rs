@@ -38,7 +38,7 @@ impl ConfigField {
                 Ok(ConfigFieldValue::String(value.to_owned()))
             }
             Self::NetworkHash => {
-                // Accept the `0x` spelling `groundhog_networkInfo` and the
+                // Accept the `0x` spelling `getNetworkInfo` and the
                 // faucet descriptor emit, and store the unprefixed form the
                 // runtime manifest uses. Reuse the wire type's validation so a
                 // profile cannot hold a hash the signing path would later

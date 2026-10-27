@@ -57,7 +57,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Clippy (heap-profiling feature)
-        run: cargo clippy --locked -p groundhog-heap-profiling -p thruput-json-rpc-gateway -p thruput-faucet --all-targets --features groundhog-heap-profiling/jemalloc,thruput-json-rpc-gateway/heap-profiling,thruput-faucet/heap-profiling -- -D warnings
+        run: cargo clippy --locked -p thruput-heap-profiling -p thruput-json-rpc-gateway -p thruput-faucet --all-targets --features thruput-heap-profiling/jemalloc,thruput-json-rpc-gateway/heap-profiling,thruput-faucet/heap-profiling -- -D warnings
 
       # Outside the workspace (see its Cargo.toml), so the steps above skip it.
       # --locked fails if its Cargo.lock no longer matches its manifest.
@@ -98,8 +98,8 @@ jobs:
 
       - name: Test (heap-profiling feature)
         run: |
-          cargo test --locked -p groundhog-heap-profiling --features jemalloc
-          cargo test --locked -p groundhog-heap-profiling --features jemalloc --release
+          cargo test --locked -p thruput-heap-profiling --features jemalloc
+          cargo test --locked -p thruput-heap-profiling --features jemalloc --release
 
       - name: Verify component version and source reporting
         run: |

@@ -504,7 +504,7 @@ mod linux {
                 let mut bytes = [0; 16];
                 random.read_exact(&mut bytes)?;
                 let suffix = u128::from_ne_bytes(bytes);
-                let path = std::env::temp_dir().join(format!("groundhog-heap-{suffix:032x}"));
+                let path = std::env::temp_dir().join(format!("thruput-heap-{suffix:032x}"));
                 match OpenOptions::new()
                     .write(true)
                     .create_new(true)

@@ -72,7 +72,7 @@ thruput-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.41.0", reg
 thruput-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.41.0", registry = "thruput" }
 thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.41.0", registry = "thruput" }
 thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.41.0", registry = "thruput" }
-groundhog-heap-profiling = { path = "crates/heap-profiling", version = "=0.41.0" }
+thruput-heap-profiling = { path = "crates/heap-profiling", version = "=0.41.0" }
 thruput-signing = { path = "crates/signing", version = "=0.41.0", registry = "thruput" }
 thruput-tx-validation = { path = "crates/tx-validation", version = "=0.41.0", registry = "thruput" }
 thruput-node-supervisor = { path = "crates/node-supervisor", version = "=0.41.0", registry = "thruput" }
@@ -198,7 +198,7 @@ proc-macro-crate = "3"
 # 0.11 selects the aarch64 and x86 SHA-256 hardware backends at runtime through
 # cpufeatures, so the 0.10 "asm" feature (and its sha2-asm C build) is no longer
 # needed to get sha256h on ARM; see `make check-native`. 0.11 is also the line the
-# groundhog registry crates and aws-sigv4 use.
+# thruput registry crates and aws-sigv4 use.
 sha2 = "0.11"
 ed25519-compact = { version = "2.2", default-features = false, features = ["opt_size"] }
 ed25519-dalek = { version = "3", features = ["zeroize"] }

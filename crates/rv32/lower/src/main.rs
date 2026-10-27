@@ -19,7 +19,7 @@ use thruput_rv32_lower::{
 
 const BUILD_VERSION: thruput_build_info::BuildVersion = thruput_build_info::build_version!();
 
-/// Lower a RISC-V rv32im contract ELF to a Groundhog v5 RV32 artifact.
+/// Lower a RISC-V rv32im contract ELF to a Thruput v5 RV32 artifact.
 #[derive(Parser)]
 #[command(name = "rv32-lower", version = BUILD_VERSION.to_string(), about)]
 struct Cli {

@@ -9,7 +9,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::{Artifact, CatalogError};
 
-/// Default public-read root provisioned for immutable Groundhog release artifacts.
+/// Default public-read root provisioned for immutable Thruput release artifacts.
 pub const DEFAULT_PUBLIC_ARTIFACT_BASE_URL: &str =
     "https://groundhog-public-release-artifacts-017820684264.s3.us-west-2.amazonaws.com";
 

@@ -25,5 +25,7 @@ proc-macro2 = { workspace = true }
 proc-macro-crate = { workspace = true }
 
 [dev-dependencies]
-gh_open_rpc = { package = "thruput-open-rpc", path = "../open-rpc" }
+# Renamed on purpose: the test exercises the macro's renamed-dependency
+# path resolution (`FoundCrate::Name`).
+rpc_docs = { package = "thruput-open-rpc", path = "../open-rpc" }
 jsonrpsee = { workspace = true }

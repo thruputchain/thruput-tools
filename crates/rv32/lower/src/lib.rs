@@ -1,12 +1,12 @@
 //! `thruput-rv32-lower` — turn a freestanding `riscv32im-unknown-none-elf`
-//! contract binary into a Groundhog **v5 RV32 artifact** (`.rv32a`).
+//! contract binary into a Thruput **v5 RV32 artifact** (`.rv32a`).
 //!
 //! This focused lowerer validates the contract ELF and emits the canonical RV32
 //! artifact format. It has two entrypoints: a standalone `rv32-lower` binary
-//! for scripts and interop checks, and a library API used by `groundhog build`.
+//! for scripts and interop checks, and a library API used by `thruput build`.
 //! The artifact format has exactly one Rust implementation.
 //!
-//! Pipeline ([`lower`]):
+//! Pipeline ([`lower()`]):
 //!   1. [`elf`] — parse the ELF32 section table.
 //!   2. [`lower::lower`] — validate the layout and materialize the code plus
 //!      the minimal nonzero initial-memory span and its load base. Dispatch

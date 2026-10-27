@@ -481,13 +481,6 @@ pub enum NodeSupervisorError {
         error: String,
     },
 
-    /// The indexer rejected the intro handshake with a non-success outcome.
-    #[error("hogd-dev indexer intro rejected with outcome {outcome}")]
-    IndexerIntroRejected {
-        /// Raw outcome discriminant from the indexer.
-        outcome: i32,
-    },
-
     /// The supervisor could not connect to hogd-dev's `DbGateway` x23 endpoint.
     #[error("failed to connect hogd-dev DbGateway endpoint {endpoint}: {source}")]
     DbGatewayConnect {
@@ -507,13 +500,6 @@ pub enum NodeSupervisorError {
         error: String,
     },
 
-    /// The `DbGateway` rejected the intro handshake with a non-success outcome.
-    #[error("hogd-dev DbGateway intro rejected with outcome {outcome}")]
-    DbGatewayIntroRejected {
-        /// Raw outcome discriminant from `DbGateway`.
-        outcome: i32,
-    },
-
     /// The supervisor could not connect to hogd-dev's `ViewGateway` x23 endpoint.
     #[error("failed to connect hogd-dev ViewGateway endpoint {endpoint}: {source}")]
     ViewGatewayConnect {
@@ -531,13 +517,6 @@ pub enum NodeSupervisorError {
         op: &'static str,
         /// x23 RPC error message.
         error: String,
-    },
-
-    /// The `ViewGateway` rejected the intro handshake with a non-success outcome.
-    #[error("hogd-dev ViewGateway intro rejected with outcome {outcome}")]
-    ViewGatewayIntroRejected {
-        /// Raw outcome discriminant from `ViewGateway`.
-        outcome: i32,
     },
 
     /// An x23 service rejected the intro handshake with protocol details.

@@ -32,7 +32,7 @@ def snapshot(directory):
             for p in directory.rglob('*') if p.is_file()}
 
 
-root = Path(tempfile.mkdtemp(prefix='groundhog-managed-smoke-'))
+root = Path(tempfile.mkdtemp(prefix='thruput-managed-smoke-'))
 session = None
 
 

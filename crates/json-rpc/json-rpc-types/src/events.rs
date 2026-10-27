@@ -254,15 +254,14 @@ pub struct EventQuery {
 /// `topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.
 /// `num_topics` (0–3) determines the split point. Max total 1024 bytes.
 ///
-/// See `docs/gateway/system-design.md` "Event Parsing" for details.
+/// See "Event Parsing" in the [gateway system design](https://github.com/thruputchain/thruput-tools/blob/main/docs/gateway/system-design.md) for details.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EmittedEvent {
     /// Contract that emitted this event.
     pub contract_address: ContractAddress,
 
-    /// Up to 3 topics per event, each exactly 32 bytes
-    /// (indexed, filterable in Phase 4).
+    /// Up to 3 topics per event, each exactly 32 bytes (indexed and filterable).
     pub topics: Vec<Topic>,
 
     /// Opaque event data (up to 1KB, contract-defined encoding).
@@ -293,7 +292,7 @@ pub struct IdentifiedEvent {
 ///
 /// Opaque cursors continue one historical walk; an empty cursor ends it.
 /// For restart rules, see the
-/// [pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).
+/// [pagination contract](https://docs.thruput.network/reference/json-rpc-api/#pagination).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EventPage {

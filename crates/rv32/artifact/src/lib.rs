@@ -1,4 +1,4 @@
-//! `thruput-rv32-artifact` — the Groundhog v5 RV32 artifact format.
+//! `thruput-rv32-artifact` — the Thruput v5 RV32 artifact format.
 //!
 //! This crate is the single Rust source of truth for the on-disk `.rv32a`
 //! format the hogd runtime parses: constants, field offsets, the format

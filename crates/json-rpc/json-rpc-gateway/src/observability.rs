@@ -34,7 +34,7 @@ pub async fn spawn_observability_server(
     health: GatewayHealth,
     metrics: GatewayMetrics,
     shutdown: oneshot::Receiver<()>,
-    heap_dump: Option<groundhog_heap_profiling::Dump>,
+    heap_dump: Option<thruput_heap_profiling::Dump>,
     allow_remote: bool,
 ) -> Result<ObservabilityServer, std::io::Error> {
     let listener = TcpListener::bind(listen_address).await?;

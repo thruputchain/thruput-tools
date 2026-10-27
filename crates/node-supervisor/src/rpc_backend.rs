@@ -4,8 +4,7 @@
 //! The internal `SchedulerCoord` endpoint remains available only for
 //! genesis and local block driving. The read plane is implemented in
 //! [`crate::read_backend`] and backed by hogd-dev's `IndexerBlockExplorer` /
-//! `DbGateway` endpoints. Dev-control remains stubbed pending a hogd-dev stable
-//! x23 surface.
+//! `DbGateway` endpoints.
 
 use async_trait::async_trait;
 use std::{fmt, net::SocketAddr};

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Rust API changes
+
+Removed public items that nothing constructs or reads. None of them changes
+the JSON-RPC wire format.
+
+- `thruput-signing`: `AuthClaimIndex` and `DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS`.
+- `thruput-json-rpc-types`: the `balance` module (`BalanceResponse`), the
+  `DbHash` alias, and `hex::{Hex0x, TryFromSlice, FixedHexLength}`. Use
+  `HexBytes` or `Base58` for byte fields.
+- `thruput-json-rpc-server`: `RpcServerError::{TxNotFound, BlockNotFound}`.
+  Read backends report a missing transaction or block through their result
+  types instead.
+- `thruput-node-supervisor`: `NodeSupervisorError::{IndexerIntroRejected,
+  DbGatewayIntroRejected, ViewGatewayIntroRejected}`, which intro failures
+  never produced (they report `ProtocolIntroRejected`), and
+  `HogdDevEndpoints::dev_control`, which was always `None`.
+- `thruput-cli`: the never-raised error codes `credentials_empty`,
+  `json_unsupported`, `not_implemented`, `manifest_entrypoint_invalid` and
+  `wallet_address_derivation_failed`.
+
 ## 0.41.0
 
 - Move to protocol `a67b703` through protocol-rs `0.63.0`, now taken from

@@ -1,5 +1,5 @@
 //! Canonical off-chain signing and transaction construction helpers for
-//! Groundhog.
+//! Thruput.
 
 pub mod account;
 pub mod build;
@@ -25,8 +25,8 @@ pub use build::{
     source_address_auth_claim,
 };
 pub use dev_account::{
-    DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
-    derive_default_dev_account_signer, derive_dev_account_signer,
+    DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, derive_default_dev_account_signer,
+    derive_dev_account_signer,
 };
 pub use dev_wallet::{
     NATIVE_TOKEN_DECIMALS, NATIVE_TOKEN_SCALE, NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
@@ -35,7 +35,7 @@ pub use dev_wallet::{
 pub use encode::{encode_signed_transaction_xdr, encode_transaction_xdr};
 pub use error::SigningError;
 pub use hash::transaction_hash;
-pub use indices::{AuthClaimIndex, PublicKeyId};
+pub use indices::PublicKeyId;
 pub use local::{LocalSigner, SchemeSigner};
 pub use mldsa::{
     MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SEED_LEN, MLDSA65_SIGNATURE_LEN, MlDsa65Signer, verify_mldsa65,

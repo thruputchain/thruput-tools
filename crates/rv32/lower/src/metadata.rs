@@ -40,8 +40,7 @@ fn optional(value: Option<&String>) -> Value {
 /// Render the metadata JSON document (with a trailing newline).
 #[must_use]
 pub fn render_metadata(input: &MetadataInput) -> String {
-    // BTreeMap guarantees sorted keys independent of serde_json feature flags,
-    // matching Python's `json.dumps(sort_keys=True)`.
+    // BTreeMap guarantees sorted keys independent of serde_json feature flags.
     let mut doc: BTreeMap<&str, Value> = BTreeMap::new();
     doc.insert("elf_sha256", Value::String(sha256_hex(input.elf)));
     doc.insert("artifact_sha256", Value::String(sha256_hex(input.artifact)));

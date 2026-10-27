@@ -1,4 +1,4 @@
-//! Shared build-version metadata for Groundhog binaries.
+//! Shared build-version metadata for Thruput binaries.
 
 use std::fmt;
 

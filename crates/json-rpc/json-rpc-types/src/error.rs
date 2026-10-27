@@ -4,13 +4,12 @@ pub mod native;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Groundhog-specific JSON-RPC error codes.
-/// Standard JSON-RPC reserves -32000 to -32099 for server errors.
-/// We follow Substrate's pattern of per-module ranges.
+/// Thruput-specific JSON-RPC error codes.
+/// Standard JSON-RPC reserves -32000 to -32099 for server errors; this
+/// catalogue assigns a range per area.
 ///
 /// -32000 to -32009: Transaction errors
 /// -32010 to -32019: Query errors
-/// -32020 to -32029: Subscription errors (Phase 2)
 pub mod codes {
     /// Standard JSON-RPC: invalid method parameter(s).
     pub const INVALID_PARAMS: i32 = -32602;
@@ -49,7 +48,7 @@ pub mod codes {
     /// "the request never reached the backend, retrying is safe."
     pub const OVERLOADED: i32 = -32053;
 
-    /// All documented Groundhog JSON-RPC error codes.
+    /// All documented Thruput JSON-RPC error codes.
     pub const ALL: &[i32] = &[
         INVALID_PARAMS,
         TX_INVALID,
@@ -78,7 +77,7 @@ pub struct RpcErrorInfo {
     pub description: &'static str,
 }
 
-/// Public JSON-RPC error codes known to the Groundhog API surface.
+/// Public JSON-RPC error codes known to the Thruput API surface.
 pub const ERROR_INFOS: &[RpcErrorInfo] = &[
     RpcErrorInfo {
         name: "LocalFundingUnresolved",
@@ -279,7 +278,7 @@ pub enum TxInvalidDetail {
 /// Bounded Prometheus outcome label for a JSON-RPC error code.
 ///
 /// This intentionally accepts any `i32`, because gateway RPC middleware also
-/// observes jsonrpsee protocol errors outside Groundhog's application catalog.
+/// observes jsonrpsee protocol errors outside Thruput's application catalog.
 pub const fn outcome_for_code(code: i32) -> &'static str {
     match code {
         codes::INVALID_PARAMS | -32700 | -32600 | -32005 | -32007 => "invalid_params",

@@ -5,8 +5,9 @@ pub mod params;
 
 /// Wire-format `SemVer` for the JSON-RPC surface.
 ///
-/// See the "`OpenRPC` Wire Version" section in `crates/json-rpc/AGENTS.md`
-/// for bump rules.
+/// It is versioned independently of the Cargo workspace. Bump major for
+/// breaking method, parameter, result, or error changes; minor for
+/// additions; patch for documentation or example refinements.
 pub const WIRE_FORMAT_VERSION: &str = "14.1.1";
 
 pub mod native;

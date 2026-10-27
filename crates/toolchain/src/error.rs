@@ -7,7 +7,7 @@ pub enum CatalogError {
     #[error("invalid toolchain catalog JSON: {0}")]
     CatalogJson(#[from] serde_json::Error),
 
-    /// The catalog uses a schema this CLI does not understand.
+    /// The catalog uses a schema this crate does not understand.
     #[error("unsupported toolchain catalog schema {found}; expected {expected}")]
     UnsupportedSchema { expected: u32, found: u32 },
 

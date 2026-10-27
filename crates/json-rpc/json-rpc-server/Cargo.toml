@@ -22,11 +22,9 @@ thruput-json-rpc-api = { workspace = true }
 thruput-json-rpc-types = { workspace = true }
 thruput-tx-validation = { workspace = true }
 thruput-xdr = { workspace = true }
-xdr-common = { workspace = true }
 xdrs = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
-hex = { workspace = true }
 jsonrpsee = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
@@ -35,7 +33,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+hex = { workspace = true }
 serde_json = { workspace = true }
+xdr-common = { workspace = true }
 # `test-util` is not part of tokio's `full`; it backs the paused clock the
 # tip-refresh tests use to assert reuse windows without real sleeps.
 tokio = { workspace = true, features = ["test-util"] }

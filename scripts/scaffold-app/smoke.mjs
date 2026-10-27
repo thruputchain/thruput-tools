@@ -13,7 +13,7 @@ const repo = fileURLToPath(new URL("../../", import.meta.url));
 const cli = resolve(
   process.env.THRUPUT_CLI ?? join(repo, "target/debug/thruput"),
 );
-const work = await mkdtemp(join(tmpdir(), "groundhog-counter-app-"));
+const work = await mkdtemp(join(tmpdir(), "thruput-counter-app-"));
 const project = join(work, "app");
 const env = {
   ...process.env,
@@ -123,7 +123,7 @@ try {
   assert.match(missingDeployment.stderr, /npm run contract:deploy/);
   console.log("Checking missing CLI and initialization diagnostics");
   const missingCli = start(process.execPath, ["scripts/deploy.mjs"], project, {
-    THRUPUT_CLI: join(work, "missing-groundhog"),
+    THRUPUT_CLI: join(work, "missing-thruput"),
   });
   assert.notEqual(await missingCli.closed, 0);
   assert.match(missingCli.stderr, /Install the Thruput CLI/);
@@ -208,7 +208,7 @@ try {
   async function startFrontend() {
     app = start("npm", ["run", "dev"], project, {
       // Frontend startup must not invoke the CLI, even when it is unavailable.
-      THRUPUT_CLI: join(work, "missing-groundhog"),
+      THRUPUT_CLI: join(work, "missing-thruput"),
       PORT: String(port),
     });
     await waitFor(

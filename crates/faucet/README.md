@@ -1,4 +1,4 @@
-# Groundhog Faucet
+# Thruput Faucet
 
 `thruput-faucet` serves the hosted Devnet network descriptor and airdrops.
 The signing key is loaded once at startup and never belongs in TOML config, process arguments, or logs.

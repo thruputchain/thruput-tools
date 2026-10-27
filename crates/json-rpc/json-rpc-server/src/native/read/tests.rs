@@ -414,8 +414,6 @@ fn unmapped_errors_are_internal_errors_without_data() {
     for error in [
         RpcServerError::TxInvalid("bad".into()),
         RpcServerError::TxRejected("refused".into()),
-        RpcServerError::TxNotFound,
-        RpcServerError::BlockNotFound,
     ] {
         let object = rpc_error(&error);
         assert_eq!(object.code(), -32603, "{error}");

@@ -53,7 +53,7 @@ fn address_derivation_known_answers_at_two_nonces() {
 #[test]
 fn local_signer_signatures_verify_and_are_deterministic() {
     let signer = test_signer();
-    let message = b"groundhog signing roundtrip";
+    let message = b"thruput signing roundtrip";
 
     let Signature::Ed25519 { ed25519: signature } =
         signer.sign(message).expect("bug: local signer should sign")

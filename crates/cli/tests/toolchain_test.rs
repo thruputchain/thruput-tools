@@ -167,7 +167,7 @@ fn toolchain_use_rejects_a_version_outside_the_embedded_catalog() {
 }
 
 #[test]
-fn groundhog_offline_environment_blocks_a_missing_install() {
+fn offline_environment_blocks_a_missing_install() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
     let output = thruput(&root.path().join("config"), &root.path().join("cache"))
         .env("THRUPUT_OFFLINE", "1")

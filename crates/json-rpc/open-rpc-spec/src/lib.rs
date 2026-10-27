@@ -1,3 +1,6 @@
+//! Builds the Thruput `OpenRPC` document from the Rust API declarations. The
+//! `thruput-open-rpc-spec` binary prints it to stdout.
+
 pub mod native;
 
 /// Build the canonical public JSON-RPC contract from its Rust declarations.

@@ -1,7 +1,7 @@
 # thruput-rv32-lower
 
 Turn a freestanding `riscv32im-unknown-none-elf` contract binary into a
-Groundhog **v5 RV32 artifact** (`.rv32a`).
+Thruput **v5 RV32 artifact** (`.rv32a`).
 
 This focused lowerer validates the contract ELF and emits the canonical RV32
 artifact format. It has two entrypoints: a standalone `rv32-lower` binary for

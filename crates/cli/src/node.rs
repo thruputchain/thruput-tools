@@ -18,7 +18,7 @@ pub(crate) const GENESIS_ROOT_ARTIFACT_FILENAME: &str = "genesis_root.rv32a";
 
 #[cfg(test)]
 fn test_local_runtime_state_result() -> PathBuf {
-    PathBuf::from("/tmp/groundhog-config.toml")
+    PathBuf::from("/tmp/thruput-config.toml")
 }
 
 /// Block production mode for the supervised local node.
@@ -759,9 +759,6 @@ fn print_started_local_node(
         if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
             print.detail("view gateway", view_gateway);
         }
-        if let Some(dev_control) = started.readiness().endpoints.dev_control {
-            print.detail("dev control", dev_control);
-        }
         if let Some(path) = &started.readiness().manifest_path {
             print.detail("runtime manifest", path.display());
             match local_runtime_state_result {
@@ -1432,12 +1429,6 @@ fn hogd_dev_endpoints_payload(
             serde_json::Value::String(view_gateway.to_string()),
         );
     }
-    if let Some(dev_control) = readiness.endpoints.dev_control {
-        endpoints.insert(
-            "devControl".into(),
-            serde_json::Value::String(dev_control.to_string()),
-        );
-    }
     serde_json::Value::Object(endpoints)
 }
 
@@ -1952,11 +1943,6 @@ mod tests {
 
     #[test]
     fn protocol_intro_rejection_maps_to_protocol_hint() {
-        let err = NodeSupervisorError::ViewGatewayIntroRejected { outcome: 1 };
-        let cli_error = map_node_supervisor_error(&err);
-
-        assert!(matches!(cli_error, CliError::NodeSupervisor(_)));
-
         let err = NodeSupervisorError::ProtocolIntroRejected {
             service: "ViewGateway",
             outcome: 1,
@@ -1998,7 +1984,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348","dev_control":"127.0.0.1:12349"}}"#,
+            r#"{"status":"ready","network_hash":"11111111111111111111111111111111","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348"}}"#,
         )
         .expect("bug: readiness should parse");
 
@@ -2035,16 +2021,12 @@ mod tests {
             payload["backend"]["endpoints"]["viewGateway"],
             "127.0.0.1:12348"
         );
-        assert_eq!(
-            payload["backend"]["endpoints"]["devControl"],
-            "127.0.0.1:12349"
-        );
         assert!(payload["runtimeManifest"].is_null());
         assert_eq!(payload["localRuntimeState"]["ok"], true);
         assert_eq!(payload["dataDir"], "/tmp/hog-devnode-data");
         assert_eq!(
             payload["localRuntimeState"]["path"],
-            "/tmp/groundhog-config.toml"
+            "/tmp/thruput-config.toml"
         );
         assert!(payload.get("accounts").is_none());
     }
@@ -2163,7 +2145,6 @@ mod tests {
                 .get("view_gateway")
                 .is_none()
         );
-        assert!(payload["backend"]["endpoints"].get("dev_control").is_none());
     }
 
     #[test]

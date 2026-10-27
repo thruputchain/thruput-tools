@@ -1,13 +1,13 @@
 # RV32 artifact design
 
 The compiler and linker produce an ELF; the lowerer turns it into the bounded,
-self-verifying artifact that Groundhog executes. The artifact crate owns the
+self-verifying artifact that Thruput executes. The artifact crate owns the
 Rust format implementation, and the lowerer uses it rather than maintaining
 another writer or validator.
 
 ## Code and data have different address spaces
 
-Groundhog's RV32 execution model separates instruction fetch from data memory.
+Thruput's RV32 execution model separates instruction fetch from data memory.
 A data virtual address can numerically overlap an instruction address without
 overlapping the same memory. The lowerer must validate each address space on
 its own terms. Treating the ELF as one flat code-and-data image would reject

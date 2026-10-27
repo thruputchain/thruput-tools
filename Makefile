@@ -90,7 +90,7 @@ help:
 	@echo ""
 	@echo "Variables: PROFILE BINS PREFIX BINDIR DESTDIR DEVNODE_BINARY NODE_ARGS"
 
-# The SDK and several workspace crates come from the private Groundhog registry,
+# The SDK and several workspace crates come from the private Thruput registry,
 # so this fails without a token in ~/.cargo/credentials.toml. That token needs
 # the "Bearer " prefix, and ~/.cargo/config.toml must set
 # global-credential-providers = ["cargo:token"].

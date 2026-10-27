@@ -183,8 +183,8 @@ mod tests {
         let _guard = tracing::subscriber::set_default(subscriber);
         let mut service = HttpMetricsService {
             inner: service_fn(|_: Request<Body>| async {
-                let _first = crate::telemetry::rpc_span("groundhog_chainTip");
-                let _second = crate::telemetry::rpc_span("groundhog_chainTip");
+                let _first = crate::telemetry::rpc_span("getChainTip");
+                let _second = crate::telemetry::rpc_span("getChainTip");
                 Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
             }),
             metrics: GatewayMetrics::for_tests(),
@@ -212,8 +212,8 @@ mod tests {
         let _guard = tracing::subscriber::set_default(subscriber);
         let mut service = HttpMetricsService {
             inner: service_fn(|_: Request<Body>| async {
-                let _first = crate::telemetry::rpc_span("groundhog_chainTip");
-                let _second = crate::telemetry::rpc_span("groundhog_chainTip");
+                let _first = crate::telemetry::rpc_span("getChainTip");
+                let _second = crate::telemetry::rpc_span("getChainTip");
                 Err::<Response<Body>, _>(std::io::Error::other("test service failure"))
             }),
             metrics: GatewayMetrics::for_tests(),

@@ -1,4 +1,4 @@
-//! The Groundhog RV32 **v5 artifact format**: constants, writer, and
+//! The Thruput RV32 **v5 artifact format**: constants, writer, and
 //! self-verifier.
 //!
 //! This is the single Rust source of truth for the on-disk format the hogd
@@ -396,7 +396,7 @@ pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Lowercase-hex SHA-256 of `bytes` (matches Python `hashlib.hexdigest()`).
+/// Lowercase-hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = sha256(bytes);
     let mut out = String::with_capacity(64);

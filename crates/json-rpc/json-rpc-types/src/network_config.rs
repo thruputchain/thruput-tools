@@ -119,7 +119,7 @@ impl ChainConfig {
 }
 
 /// The execution parameters a chain's network config states, flattened
-/// from the list that carries them. Returned by `chainConfig`.
+/// from the list that carries them. Backs the `getChainConfig` response.
 ///
 /// A field is `None`, and absent from the JSON, when the config does not
 /// state that parameter; the node alone decides what is then in force.
