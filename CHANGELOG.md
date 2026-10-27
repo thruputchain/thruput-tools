@@ -7,6 +7,9 @@
   hogd and chuckd built from the same protocol (platform `0.1.31`). The node
   RPC bindings are now the `thruput-node-rpc` crate, which replaces
   `thruput-scheduler`.
+- Default to hog-devnode `0.1.31`, the first managed devnode on protocol
+  `a67b703`. Earlier versions remain selectable. Its macOS archive is not
+  Developer ID-signed or notarized.
 - Update the Rust SDK to `0.57.2` and standard interfaces to `0.1.70`.
   Newly generated projects pin SDK `0.57.2`.
 - Bundle the documentation snapshot from `thruput-docs` commit `245ae77`,
