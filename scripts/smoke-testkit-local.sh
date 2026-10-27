@@ -31,9 +31,6 @@ fi
 EXAMPLES_ROOT="$(realpath "$REPO_ROOT/../thruput-examples")"
 [ -d "$EXAMPLES_ROOT" ] || die "Couldn't find thruput-examples"
 
-if [ -z "${WORKDIR:-}" ]; then
-    WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/thruput-testkit-local.XXXXXX")"
-fi
 cleanup() {
     if [[ "${KEEP_WORKDIR:-0}" != "1" ]]; then
         log "removing workdir"
@@ -42,7 +39,10 @@ cleanup() {
         log "kept workdir: $WORKDIR"
     fi
 }
-trap cleanup EXIT
+if [ -z "${WORKDIR:-}" ]; then
+    WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/thruput-testkit-local.XXXXXX")"
+    trap cleanup EXIT
+fi
 
 TARGET_DIR="$WORKDIR"
 export THRUPUT_TESTKIT_ARTIFACT_ROOT="${TARGET_DIR}/thruput"
