@@ -4491,7 +4491,6 @@ dependencies = [
  "thiserror 2.0.21",
  "thruput-build-info",
  "thruput-bundle-identity",
- "thruput-coordinator",
  "thruput-db-gateway",
  "thruput-hogd-backend",
  "thruput-indexer",
