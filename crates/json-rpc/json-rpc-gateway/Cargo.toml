@@ -67,7 +67,6 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 thruput-trace = { workspace = true }
-thruput-coordinator = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }

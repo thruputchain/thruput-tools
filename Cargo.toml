@@ -92,7 +92,6 @@ thruput-scheduler = { version = "=0.61.0", registry = "thruput" }
 thruput-db-gateway = { version = "=0.61.0", registry = "thruput" }
 thruput-view = { version = "=0.61.0", registry = "thruput" }
 thruput-scp = { version = "=0.61.0", registry = "thruput" }
-thruput-coordinator = { version = "=0.61.0", registry = "thruput" }
 thruput-trace = { version = "=0.61.0", registry = "thruput" }
 # from the sdk crate:
 thruput-spec-tool = { version = "=0.57.1", registry = "thruput" }
