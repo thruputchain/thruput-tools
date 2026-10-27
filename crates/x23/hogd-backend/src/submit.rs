@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use thruput_json_rpc_server::RpcServerError;
-use thruput_scheduler::parallel::ParallelSignedTransactionBatch;
+use thruput_node_rpc::parallel::ParallelSignedTransactionBatch;
 use xdr_common::VecM;
 use xdrs::{ChunkedBytes, EncodesAs, WriteXDR};
 

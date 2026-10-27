@@ -9,7 +9,7 @@ use thruput_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, indexer
 use thruput_json_rpc_server::{RpcRequestContext, native::transaction::NativeReadError};
 use thruput_json_rpc_types::responses as native_out;
 use thruput_json_rpc_types::transaction::TxHash;
-use thruput_scheduler::SchedulerTransactionOutcomeBatch;
+use thruput_node_rpc::SchedulerTransactionOutcomeBatch;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 
@@ -291,7 +291,7 @@ mod tests {
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
         TransactionPageResult, TransactionQuery, TransactionRefPageResult, TxInfoOutcome,
     };
-    use thruput_scheduler::{
+    use thruput_node_rpc::{
         ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount, SchedGatewayIntroOutcome,
         SchedGatewaySubmitOutcomeBatch, SchedulerTransactionOutcomeBatch,
         sched_gateway::{
@@ -385,7 +385,7 @@ mod tests {
         GatedMiss(Arc<LookupGate>),
         Pending,
         /// Mempool lookup reports this retained scheduler outcome.
-        Outcome(thruput_scheduler::SchedulerTransactionOutcome),
+        Outcome(thruput_node_rpc::SchedulerTransactionOutcome),
         /// Mempool lookup succeeds and reports the transaction absent.
         MempoolMiss,
         /// Mempool lookup fails at the RPC layer.
@@ -471,7 +471,7 @@ mod tests {
 
         async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
             Ok(ExpectedDBTip::Default {
-                error: thruput_scheduler::RPCError::kRPCNotFound.0,
+                error: thruput_node_rpc::RPCError::kRPCNotFound.0,
             })
         }
 
@@ -527,7 +527,7 @@ mod tests {
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-            use thruput_scheduler::{
+            use thruput_node_rpc::{
                 SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
                 SchedulerTransactionStatus,
             };
@@ -1092,7 +1092,7 @@ mod tests {
         assert!(matches!(
             watchdog(scheduler.schedgateway_get_tip()).await.unwrap(),
             ExpectedDBTip::Default { error }
-                if error == thruput_scheduler::RPCError::kRPCNotFound.0
+                if error == thruput_node_rpc::RPCError::kRPCNotFound.0
         ));
 
         // The backend may finish the canceled call later; the replacement lane remains usable.
@@ -1377,7 +1377,7 @@ mod tests {
 
     #[tokio::test]
     async fn indexer_outage_is_not_read_as_a_miss() {
-        use thruput_scheduler::{
+        use thruput_node_rpc::{
             SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
             SchedulerTransactionStatus as Status,
         };

@@ -27,7 +27,7 @@ use thruput_hogd_backend::submit::{self as shared_submit, SubmitBatch};
 use thruput_json_rpc_server::{RpcRequestContext, native::transaction::SubmissionAttempt};
 use thruput_json_rpc_types::error::outcome_for_code;
 use thruput_json_rpc_types::transaction::TxHash;
-use thruput_scheduler::SchedGatewaySubmitOutcomeBatch;
+use thruput_node_rpc::SchedGatewaySubmitOutcomeBatch;
 use tokio::sync::{RwLock, oneshot};
 use tracing::Instrument;
 
@@ -451,7 +451,7 @@ fn outcome_for_submit_error(err: &RpcServerError) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use thruput_scheduler::SchedGatewaySubmitOutcome;
+    use thruput_node_rpc::SchedGatewaySubmitOutcome;
     use xdr_common::VecM;
 
     use super::*;

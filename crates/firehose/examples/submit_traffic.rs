@@ -1,5 +1,5 @@
 //! Native native-token-balance traffic, submitted directly to `SchedGateway`.
-use thruput_scheduler::{
+use thruput_node_rpc::{
     ParallelBatch, ParallelSignedTransactionBatch, sched_gateway::SchedGateway_SchedGateway1_Client,
 };
 use thruput_signing::{
@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     let intro = client.schedgateway_intro(&PROTOCOL_VERSION).await?;
-    if intro != thruput_scheduler::SchedGatewayIntroOutcome::SchedGatewayIntroSuccess {
+    if intro != thruput_node_rpc::SchedGatewayIntroOutcome::SchedGatewayIntroSuccess {
         return Err("intro rejected".into());
     }
     println!("{:?}", client.schedgateway_submit_tx_batch(&batch).await?);

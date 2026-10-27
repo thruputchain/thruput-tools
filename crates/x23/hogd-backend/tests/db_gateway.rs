@@ -1,7 +1,7 @@
 use thruput_db_gateway::{DbGatewayConfig, DbGatewayConfigResult, DbGatewayResult};
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::NetworkHashText;
-use thruput_scheduler::{DbTip, RPCError, consensus::ConsensusValue};
+use thruput_node_rpc::{DbTip, RPCError, consensus::ConsensusValue};
 use thruput_xdr::contract::{ContractType, DeployedContractHash};
 use thruput_xdr::header::ProposalHeader;
 use thruput_xdr::network_config::{ConfigParam, NetworkConfig, NetworkConfigV0};

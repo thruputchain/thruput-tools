@@ -354,7 +354,7 @@ impl StorageReadBatcher {
 
 #[cfg(test)]
 mod tests {
-    use thruput_scheduler::RPCError;
+    use thruput_node_rpc::RPCError;
 
     use super::*;
     use std::collections::VecDeque;

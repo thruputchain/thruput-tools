@@ -2,7 +2,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use thruput_hogd_backend::submit::*;
-use thruput_scheduler::{ParallelBatch, parallel::ParallelSignedTransactionBatch};
+use thruput_node_rpc::{ParallelBatch, parallel::ParallelSignedTransactionBatch};
 use xdr_common::{BytesM, VecM};
 use xdrs::{EncodesAs, cxs, txs};
 

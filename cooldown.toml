@@ -24,6 +24,26 @@ crates = [
 ]
 min-publish-age = "0"
 
+# First-party crates that thruputchain/thruput-protocol-rs publishes to
+# crates.io. They were exempt while they came from the thruput registry; keep
+# them exempt.
+[[allow.package]]
+crates = [
+    "thruput-syscall",
+    "thruput-xdr-macros",
+    "thruput-xdr",
+    "thruput-spec",
+    "thruput-trace",
+    "thruput-scp",
+    "thruput-node-types",
+    "thruput-node-rpc",
+    "thruput-coordinator",
+    "thruput-indexer",
+    "thruput-db-gateway",
+    "thruput-view",
+]
+min-publish-age = "0"
+
 # Security fix for RUSTSEC-2026-0391
 [[allow.exact]]
 crate = "zstd"

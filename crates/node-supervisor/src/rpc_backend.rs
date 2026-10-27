@@ -15,7 +15,7 @@ use thruput_json_rpc_server::{
     ChainPlane, RpcRequestContext, RpcServerError, TipReading, ValidatedTransaction,
 };
 use thruput_json_rpc_types::{NetworkHashText, protocol_token::protocol_from_text};
-use thruput_scheduler::{
+use thruput_node_rpc::{
     DbTip, ExpectedDBTip, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
     sched_gateway::SchedGateway_SchedGateway1_Client,
 };

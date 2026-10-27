@@ -8,7 +8,7 @@
 use thruput_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
 use thruput_json_rpc_server::{RpcServerError, TipReading};
 use thruput_json_rpc_types::error::native::BackendDataInvalidReason as DataReason;
-use thruput_scheduler::RPCError;
+use thruput_node_rpc::RPCError;
 use thruput_xdr::storage_item::WireStorageItem;
 use thruput_xdr::types::{StorageKey, StorageKeyContractData};
 

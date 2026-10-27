@@ -157,7 +157,7 @@ mod tests {
         native::service::{NativeCapabilities, NativeService},
     };
     use thruput_json_rpc_types::{NetworkHash, error::codes};
-    use thruput_scheduler::SchedGatewaySubmitOutcomeBatch;
+    use thruput_node_rpc::SchedGatewaySubmitOutcomeBatch;
     use thruput_xdr::types::SHA256Hash;
     use tokio::sync::RwLock;
 

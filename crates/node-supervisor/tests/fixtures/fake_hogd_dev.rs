@@ -29,7 +29,7 @@ use thruput_indexer::{
 };
 use thruput_json_rpc_types::base58::Base58;
 use thruput_json_rpc_types::protocol_token::protocol_text;
-use thruput_scheduler::{
+use thruput_node_rpc::{
     BlockID, ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, ExpectedDBTip,
     ParallelBatch, ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
     ParallelSignedTransactionHashBatch, PendingTxCount, Proposal, ProposalTxs, ProposalTxsHash,
@@ -1017,7 +1017,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
     async fn schedulercoord_intro_coord(
         &self,
-        _card: thruput_scheduler::CoordCard,
+        _card: thruput_node_rpc::CoordCard,
     ) -> Result<CoordinatorRegistrationOutcome, ProgramError> {
         Ok(CoordinatorRegistrationOutcome::CoordinatorRegistrationOK)
     }
@@ -1206,8 +1206,8 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
     async fn schedulercoord_commit_genesis_ceremony(
         &self,
-        _request: thruput_scheduler::GenesisCeremonyRequest,
-    ) -> Result<thruput_scheduler::GenesisCeremonyResult, ProgramError> {
+        _request: thruput_node_rpc::GenesisCeremonyRequest,
+    ) -> Result<thruput_node_rpc::GenesisCeremonyResult, ProgramError> {
         Err(ProgramError::msg("not implemented in fake hogd-dev"))
     }
 
@@ -1223,7 +1223,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         hashes: TransactionHashBatch,
     ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-        use thruput_scheduler::{
+        use thruput_node_rpc::{
             SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
             SchedulerTransactionStatus,
         };
@@ -1305,7 +1305,7 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
         &self,
         hashes: TransactionHashBatch,
     ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-        use thruput_scheduler::{
+        use thruput_node_rpc::{
             SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
             SchedulerTransactionStatus,
         };

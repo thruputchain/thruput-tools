@@ -243,7 +243,7 @@ async fn sample_tip(endpoint: String, protocol: ProtocolCommit, metrics: Metrics
                 "scheduler_tip",
                 &addr.to_string(),
                 1,
-                thruput_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client::new,
+                thruput_node_rpc::sched_gateway::SchedGateway_SchedGateway1_Client::new,
             )
             .await
         })
@@ -256,12 +256,12 @@ where
     F: FnMut(tokio::time::Instant) -> Fut,
     Fut: std::future::Future<
             Output = Result<
-                thruput_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client,
+                thruput_node_rpc::sched_gateway::SchedGateway_SchedGateway1_Client,
                 Error,
             >,
         >,
 {
-    use thruput_scheduler::{rpc_types::ExpectedDBTip, sched_gateway::SchedGatewayIntroOutcome};
+    use thruput_node_rpc::{rpc_types::ExpectedDBTip, sched_gateway::SchedGatewayIntroOutcome};
     loop {
         let result: Result<(), Error> = async {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
@@ -604,14 +604,14 @@ mod tests {
                     let protocol: ProtocolCommit = xdrs::txs::decode(data).unwrap();
                     assert_eq!(protocol, PROTOCOL_VERSION);
                     Ok(xdrs::txs::encode(
-                        &thruput_scheduler::SchedGatewayIntroOutcome::SchedGatewayIntroSuccess,
+                        &thruput_node_rpc::SchedGatewayIntroOutcome::SchedGatewayIntroSuccess,
                     )
                     .unwrap())
                 }
                 2 => {
                     self.sampled.notify_one();
                     Ok(
-                        xdrs::txs::encode(&thruput_scheduler::ExpectedDBTip::Default { error: 1 })
+                        xdrs::txs::encode(&thruput_node_rpc::ExpectedDBTip::Default { error: 1 })
                             .unwrap(),
                     )
                 }
@@ -646,7 +646,7 @@ mod tests {
                             "scheduler_tip",
                             &addr.to_string(),
                             1,
-                            thruput_scheduler::SchedGateway_SchedGateway1_Client::new,
+                            thruput_node_rpc::SchedGateway_SchedGateway1_Client::new,
                         )
                         .await
                     }
