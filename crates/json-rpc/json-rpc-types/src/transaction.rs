@@ -15,10 +15,9 @@ pub struct TxHash(pub SHA256Hash);
 /// Lightweight transaction status from the mempool and indexer.
 ///
 /// Pending reports mempool presence; Committed reports scheduler success or an indexed record.
-/// See `docs/gateway/system-design.md` "Transaction Status Lookup Order" for
+/// See "Transaction Status Lookup Order" in the
+/// [gateway system design](https://github.com/thruputchain/thruput-tools/blob/main/docs/gateway/system-design.md) for
 /// degraded-mode behavior when a backend is unavailable.
-///
-/// New variants may be added in future phases.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -359,7 +358,7 @@ pub struct TransactionRef {
 ///
 /// Opaque cursors continue one historical walk; an empty cursor ends it.
 /// For restart rules, see the
-/// [pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).
+/// [pagination contract](https://docs.thruput.network/reference/json-rpc-api/#pagination).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionRefPage {

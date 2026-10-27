@@ -1,9 +1,8 @@
 //! Virtual clock owned by the harness.
 //!
 //! Agents read time and sleep only through this clock, never through
-//! `std::time`. Phase 0 exposes a manually advanced logical clock; a later
-//! phase drives it from block production so a whole scenario advances in
-//! virtual time.
+//! `std::time`. The clock only advances when a test advances it, so a whole
+//! scenario moves in virtual time.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 

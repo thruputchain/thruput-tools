@@ -1,4 +1,4 @@
-//! Request objects for the native RPC surface. Registration is migrated separately.
+//! Request objects for the native RPC surface.
 
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize};

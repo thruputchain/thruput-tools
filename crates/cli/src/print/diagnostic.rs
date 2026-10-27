@@ -135,7 +135,7 @@ impl Print {
     }
 }
 
-/// The Groundhog rv32 flag set enables these RISC-V features deliberately, so rustc's
+/// The Thruput rv32 flag set enables these RISC-V features deliberately, so rustc's
 /// per-crate "unstable feature" warnings about them are noise in the compact report.
 fn expected_target_feature_warning(text: &str) -> bool {
     const EXPECTED: [&str; 2] = ["relax", "unaligned-scalar-mem"];

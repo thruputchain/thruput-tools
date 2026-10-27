@@ -18,7 +18,7 @@ pub(crate) const GENESIS_ROOT_ARTIFACT_FILENAME: &str = "genesis_root.rv32a";
 
 #[cfg(test)]
 fn test_local_runtime_state_result() -> PathBuf {
-    PathBuf::from("/tmp/groundhog-config.toml")
+    PathBuf::from("/tmp/thruput-config.toml")
 }
 
 /// Block production mode for the supervised local node.
@@ -2044,7 +2044,7 @@ mod tests {
         assert_eq!(payload["dataDir"], "/tmp/hog-devnode-data");
         assert_eq!(
             payload["localRuntimeState"]["path"],
-            "/tmp/groundhog-config.toml"
+            "/tmp/thruput-config.toml"
         );
         assert!(payload.get("accounts").is_none());
     }

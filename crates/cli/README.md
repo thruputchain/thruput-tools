@@ -576,7 +576,7 @@ Start each new walk with an empty cursor at the last stored row's height from
 that ascending scan, and deduplicate the reread block. Save rows and progress
 together. A descending scan's last row is not a forward checkpoint, and
 `latestBlock` is the indexer's head, not proof of processed data. See the
-[restart walkthrough](https://docs.groundhog.dev/tutorials/add-events-to-a-contract/#resume-without-missing-events).
+[restart walkthrough](https://docs.thruput.network/typescript/events/#resume-without-missing-events).
 
 A receipt timeout includes the last successfully observed status and inspection
 guidance to reuse the original profile and RPC endpoint. Endpoint URLs are omitted
@@ -659,7 +659,7 @@ The preview and dry-run report sender, network hash, code hash, deployment nonce
 predicted address, expiry, funding amount, initializer and gas budgets. Dry-run
 does not submit. Wallet creation and faucet funding remain separate actions.
 
-Deploy JSON schema version 8 includes `nativeDeployment` for native transactions.
+Deploy JSON schema version 9 includes `nativeDeployment` for native transactions.
 If submission or confirmation cannot be verified, the failure includes the
 original `txHash`, `signedTx`, `predictedAddress`, endpoint, funding and initializer details.
 Inspect that transaction before taking further action. A timeout or `unknown`
@@ -693,12 +693,7 @@ fits the underlying type.
 `thruput call --dry-run` resolves selectors, encodes calldata, fetches the
 current chain tip to set expiry, signs the transaction, and prints or emits
 the prepared invocation without submitting it. A dry run therefore still
-needs a signing key and a reachable RPC endpoint; a later follow-up can
-split payload assembly from signing if we want a no-key-required dry run.
-
-Remaining follow-up: cache repeated embedded-spec loads, tighten the
-union/structured CLI UX, and remove the remaining local-source fallback
-once the spec-driven path has soaked.
+needs a signing key and a reachable RPC endpoint.
 
 ### `thruput view`
 
@@ -1101,8 +1096,8 @@ thruput --json config rm staging --global --yes
 thruput --json config profiles
 ```
 
-All config commands support `--json`. Their data payloads use
-`schemaVersion: 1`; warnings appear in the JSON result envelope instead of
+All config commands support `--json`. Each data payload carries its own
+`schemaVersion`; warnings appear in the JSON result envelope instead of
 human stderr.
 
 Contract aliases map names to addresses per profile. `deploy`, `call`, and
@@ -1141,7 +1136,7 @@ profiles may name a default key.
 | Template | Description |
 |----------|-------------|
 | `counter` | Counter contract with increment/decrement and tests |
-| `stub` | Bare-bones contract with empty init and deploy test |
+| `counter-app` | Counter contract with a React + Vite frontend |
 
 ## AI-Assisted Development
 

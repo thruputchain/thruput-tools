@@ -202,8 +202,8 @@ pub(crate) mod tests {
 
     use super::*;
 
-    const SEND: &str = "groundhog_sendRawTransaction";
-    const RECEIPT: &str = "groundhog_getTransactionReceipt";
+    const SEND: &str = "sendTransaction";
+    const RECEIPT: &str = "getTransactionReceipt";
     const LIMIT: u32 = 4096;
     const BATCH_CONCURRENCY: usize = 4;
 
@@ -368,7 +368,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn homogeneous_calls_bound_active_and_buffered_work_and_preserve_order() {
-        for (method, concurrency) in [SEND, RECEIPT, "groundhog_chainTip", "unknown"]
+        for (method, concurrency) in [SEND, RECEIPT, "getChainTip", "unknown"]
             .into_iter()
             .flat_map(|method| [1, 4, 128, 1024].map(|window| (method, window)))
         {
@@ -597,7 +597,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn mixed_methods_and_notifications_use_concurrent_dispatch() {
-        for other in [RECEIPT, "groundhog_chainTip", "unknown", SEND] {
+        for other in [RECEIPT, "getChainTip", "unknown", SEND] {
             let probe = Probe::new(2, LIMIT);
             let service =
                 ConcurrentBatchService::new(probe.clone(), LIMIT, RpcBatchConcurrency::default());
@@ -605,10 +605,8 @@ pub(crate) mod tests {
             if other == SEND {
                 let mut entries = batch.into_iter().collect::<Vec<_>>();
                 entries.push(Ok(BatchEntry::Notification(
-                    serde_json::from_str(
-                        r#"{"jsonrpc":"2.0","method":"groundhog_sendRawTransaction"}"#,
-                    )
-                    .unwrap(),
+                    serde_json::from_str(r#"{"jsonrpc":"2.0","method":"sendTransaction"}"#)
+                        .unwrap(),
                 )));
                 batch = Batch::from(entries);
             } else {
@@ -653,10 +651,7 @@ pub(crate) mod tests {
         assert_eq!(value(&invalid)[0]["error"]["code"], -32600);
         let notification = service
             .batch(Batch::from(vec![Ok(BatchEntry::Notification(
-                serde_json::from_str(
-                    r#"{"jsonrpc":"2.0","method":"groundhog_sendRawTransaction"}"#,
-                )
-                .unwrap(),
+                serde_json::from_str(r#"{"jsonrpc":"2.0","method":"sendTransaction"}"#).unwrap(),
             ))]))
             .await;
         assert!(notification.is_notification());
@@ -691,7 +686,7 @@ pub(crate) mod tests {
     ) {
         let invoked = Arc::new(AtomicUsize::new(0));
         let mut module = jsonrpsee::RpcModule::new(invoked.clone());
-        for method in [SEND, RECEIPT, "groundhog_chainTip"] {
+        for method in [SEND, RECEIPT, "getChainTip"] {
             module
                 .register_async_method(method, |params, invoked, _| async move {
                     invoked.fetch_add(1, Ordering::SeqCst);
@@ -736,7 +731,7 @@ pub(crate) mod tests {
         let send = call(SEND, json!("same"), json!([7]));
         let receipt = call(RECEIPT, Value::Null, json!([null]));
         let notification = json!({"jsonrpc":"2.0", "method":SEND, "params":[7]});
-        let tip = call("groundhog_chainTip", json!(2), json!([true]));
+        let tip = call("getChainTip", json!(2), json!([true]));
         let unknown = call("unknown", json!(3), json!([]));
         let cases = vec![
             "[".to_owned(),

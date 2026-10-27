@@ -68,7 +68,7 @@ if matches:
 DEVNODE_BINARY="$(expand_user_path "$THRUPUT_DEVNODE_BINARY")"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 
-WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/groundhog-testkit-local.XXXXXX")"
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/thruput-testkit-local.XXXXXX")"
 cleanup() {
     if [[ "${KEEP_WORKDIR:-0}" != "1" ]]; then
         rm -rf "$WORKDIR"
@@ -99,7 +99,7 @@ else
     fi
     [[ -x "$THRUPUT_BINARY" ]] || die "thruput binary is not executable: $THRUPUT_BINARY"
 
-    EXAMPLES_TARGET="$WORKDIR/groundhog-examples-target"
+    EXAMPLES_TARGET="$WORKDIR/thruput-examples-target"
     log "building thruput-examples caller-counter fixture"
     (
         cd "$EXAMPLES_ROOT"

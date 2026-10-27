@@ -1,5 +1,5 @@
 //! Binary allocator setup; profile control and conversion are shared.
-pub use groundhog_heap_profiling::{
+pub use thruput_heap_profiling::{
     Dump, allow_remote_env, check_dedicated_listener, initialize, routes,
 };
 

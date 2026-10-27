@@ -1,5 +1,5 @@
 //! Canonical off-chain signing and transaction construction helpers for
-//! Groundhog.
+//! Thruput.
 
 pub mod account;
 pub mod build;

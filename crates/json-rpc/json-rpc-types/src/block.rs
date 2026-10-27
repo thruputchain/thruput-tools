@@ -10,7 +10,8 @@ use crate::{
 };
 use crate::{base58::Base58, hex::HexBytes};
 
-/// Current chain tip. Returned by chainTip.
+/// Current chain tip, as read from the backend; `responses::ChainTip` is the
+/// `getChainTip` wire type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainTip {

@@ -226,7 +226,7 @@ mod tests {
         parse_aws_secret_output, request_aws_secret,
     };
 
-    const TEST_KEY_VARIABLE: &str = "GROUNDHOG_FAUCET_TEST_SECRET_KEY";
+    const TEST_KEY_VARIABLE: &str = "THRUPUT_FAUCET_TEST_SECRET_KEY";
 
     #[tokio::test]
     #[serial]
@@ -306,12 +306,12 @@ mod tests {
             region: "us-west-2".into(),
         };
         let empty_version = FaucetSecretKeySource::AwsSecretsManager {
-            secret_id: "groundhog/devnet/faucet".into(),
+            secret_id: "thruput/devnet/faucet".into(),
             version_id: String::new(),
             region: "us-west-2".into(),
         };
         let empty_region = FaucetSecretKeySource::AwsSecretsManager {
-            secret_id: "groundhog/devnet/faucet".into(),
+            secret_id: "thruput/devnet/faucet".into(),
             version_id: "version-1".into(),
             region: String::new(),
         };
@@ -348,7 +348,7 @@ mod tests {
             .build();
         let client = Client::from_conf(config);
 
-        let _ = request_aws_secret(&client, "groundhog/devnet/faucet", "version-1").await;
+        let _ = request_aws_secret(&client, "thruput/devnet/faucet", "version-1").await;
 
         let request = captured_request.expect_request();
         let body = std::str::from_utf8(
@@ -358,7 +358,7 @@ mod tests {
                 .expect("bug: captured request should have bytes"),
         )
         .expect("bug: AWS JSON request should be UTF-8");
-        assert!(body.contains(r#""SecretId":"groundhog/devnet/faucet""#));
+        assert!(body.contains(r#""SecretId":"thruput/devnet/faucet""#));
         assert!(body.contains(r#""VersionId":"version-1""#));
     }
 
@@ -370,7 +370,7 @@ mod tests {
             .version_id("version-1")
             .build();
 
-        let key = parse_aws_secret_output(output, "groundhog/devnet/faucet", "version-1")
+        let key = parse_aws_secret_output(output, "thruput/devnet/faucet", "version-1")
             .expect("bug: valid AWS SecretString should parse");
 
         assert_eq!(key.as_ref(), &[0xCD; 32]);
@@ -379,7 +379,7 @@ mod tests {
             .secret_string(format!("0X{}", "cd".repeat(32)))
             .version_id("version-1")
             .build();
-        let key = parse_aws_secret_output(uppercase_prefix, "groundhog/devnet/faucet", "version-1")
+        let key = parse_aws_secret_output(uppercase_prefix, "thruput/devnet/faucet", "version-1")
             .expect("bug: uppercase-prefixed AWS SecretString should parse");
         assert_eq!(key.as_ref(), &[0xCD; 32]);
 
@@ -387,7 +387,7 @@ mod tests {
             .secret_string(secret_value.clone() + "00")
             .version_id("version-1")
             .build();
-        let error = parse_aws_secret_output(malformed, "groundhog/devnet/faucet", "version-1")
+        let error = parse_aws_secret_output(malformed, "thruput/devnet/faucet", "version-1")
             .expect_err("bug: malformed AWS SecretString should fail");
         assert!(!error.to_string().contains(&secret_value));
     }
@@ -399,7 +399,7 @@ mod tests {
             .version_id("version-1")
             .build();
 
-        let error = parse_aws_secret_output(output, "groundhog/devnet/faucet", "version-1")
+        let error = parse_aws_secret_output(output, "thruput/devnet/faucet", "version-1")
             .expect_err("bug: missing SecretString should fail");
 
         assert!(error.to_string().contains("SecretString"), "{error}");
@@ -412,7 +412,7 @@ mod tests {
             .version_id("version-2")
             .build();
 
-        let error = parse_aws_secret_output(output, "groundhog/devnet/faucet", "version-1")
+        let error = parse_aws_secret_output(output, "thruput/devnet/faucet", "version-1")
             .expect_err("bug: mismatched secret version should fail");
 
         let message = error.to_string();

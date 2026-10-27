@@ -1,9 +1,8 @@
-//! Supervisor facade for the future hogd-backed local node.
+//! Supervisor for the hogd-backed local node behind `thruput node`.
 //!
-//! This crate owns Rust-side lifecycle concerns for `thruput node`: process
-//! supervision, eventual hogd-dev readiness wiring, and the JSON-RPC facade.
-//! It intentionally starts small so the process contract can be settled before
-//! hogd-specific command construction lands.
+//! This crate owns the Rust-side lifecycle of the local runtime: process
+//! supervision, readiness and block-driver wiring, local funding state, and
+//! the JSON-RPC facade that serves the same public API as the gateway.
 
 mod airdrop;
 mod block_driver;

@@ -1,4 +1,4 @@
-//! Groundhog JSON-RPC benchmark entry point.
+//! Thruput JSON-RPC benchmark entry point.
 
 #[tokio::main]
 async fn main() {

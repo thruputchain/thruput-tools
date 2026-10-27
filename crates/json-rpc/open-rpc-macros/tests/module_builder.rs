@@ -1,4 +1,4 @@
-use gh_open_rpc::{Project, ProjectInfo};
+use thruput_open_rpc::{Project, ProjectInfo};
 use thruput_open_rpc_macros::open_rpc;
 
 // The macro consumes this declaration. Its request is documented directly,

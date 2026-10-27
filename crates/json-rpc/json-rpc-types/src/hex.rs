@@ -4,8 +4,8 @@
 //! lowercase hex strings (e.g., `"0xa1b2c3"`). Typed identifiers and
 //! cryptographic values use the wrappers in [`crate::base58`].
 //!
-//! See `docs/gateway/system-design.md` "Wire Format Conventions" for the full
-//! serialization table.
+//! See "Wire Format Conventions" in the
+//! [gateway system design](https://github.com/thruputchain/thruput-tools/blob/main/docs/gateway/system-design.md) for the full serialization table.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -238,7 +238,7 @@ impl<T> From<T> for Hex0x<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Variable-length byte types (unchanged, already 0x-aware)
+// Variable-length byte types
 // ---------------------------------------------------------------------------
 
 /// Variable-length byte array. Serializes as `"0x..."` hex string.
@@ -304,7 +304,7 @@ impl AsRef<[u8]> for HexBytes {
 /// Fixed-size 32-byte event topic. Serializes as `"0x..."` hex string.
 ///
 /// Hogd supports up to 3 topics per event, each exactly 32 bytes.
-/// Topics are indexed and will be filterable in Phase 4.
+/// Topics are indexed and filterable.
 ///
 /// ```json
 /// "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"

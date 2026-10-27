@@ -1,5 +1,5 @@
 [package]
-name = "groundhog-heap-profiling"
+name = "thruput-heap-profiling"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Opt-in heap profiling for Groundhog services"
+description = "Opt-in heap profiling for Thruput services"
 
 [lints]
 workspace = true

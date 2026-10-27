@@ -32,7 +32,7 @@ pub enum ErrorDocsError {
     /// A container has an unexpected JSON shape.
     #[error("invalid OpenRPC shape at {0}")]
     InvalidShape(&'static str),
-    /// A method is not part of the native contract, including legacy methods.
+    /// A method is not part of the native contract.
     #[error("unknown native OpenRPC method: {0}")]
     UnknownMethod(String),
     /// Native methods must be unique within a document.

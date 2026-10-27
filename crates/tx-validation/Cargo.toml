@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Off-chain mirror of the bounds hogd checks before executing a transaction"
+description = "Pre-submission transaction checks that mirror the bounds hogd enforces at execution"
 
 [lints]
 workspace = true

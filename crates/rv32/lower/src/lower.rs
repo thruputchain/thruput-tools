@@ -93,7 +93,7 @@ pub const FINAL_SPEC_SECTION: &str = "thruputspecv2";
 /// The product of lowering: the serialized artifact plus the pieces that went
 /// into it (handy for metadata and tests).
 ///
-/// Non-exhaustive: produced only by [`lower`], and fields are added as the
+/// Non-exhaustive: produced only by [`lower`] and [`lower_with`], and fields are added as the
 /// lowerer learns to report more (`warnings` was the first such addition).
 #[derive(Debug, Clone)]
 #[non_exhaustive]

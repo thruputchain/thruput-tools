@@ -721,7 +721,7 @@ fn write_bootstrap_manifest(
     let bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|source| NodeSupervisorError::BootstrapManifestSerialize { source })?;
     let dir = tempfile::Builder::new()
-        .prefix("groundhog-hogd-bootstrap-")
+        .prefix("thruput-hogd-bootstrap-")
         .tempdir()
         .map_err(|source| NodeSupervisorError::BootstrapManifestTempDir { source })?;
     let path = dir.path().join(BOOTSTRAP_MANIFEST_FILE_NAME);
@@ -818,7 +818,8 @@ fn append_network_config_overrides(
     spec
 }
 
-/// Resolve the devnode binary path using the v1 lookup order.
+/// Resolve the devnode binary: the configured path, then `THRUPUT_DEVNODE_BINARY`,
+/// then a binary beside the current executable, then `PATH`.
 pub fn resolve_hogd_dev_binary(config: &HogdDevConfig) -> Result<PathBuf, NodeSupervisorError> {
     if let Some(binary) = resolve_hogd_dev_binary_before_path(config)? {
         return Ok(binary);

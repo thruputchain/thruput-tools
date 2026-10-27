@@ -1,4 +1,4 @@
-//! Groundhog JSON-RPC benchmark harness.
+//! Thruput JSON-RPC benchmark harness.
 //!
 //! Multi-worker load generator. In the default open-loop mode, each worker owns
 //! its own HTTP connection pool and fires requests on a pre-computed schedule.

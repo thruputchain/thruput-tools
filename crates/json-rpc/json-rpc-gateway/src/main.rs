@@ -58,9 +58,9 @@ fn native_module(
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 const BUILD_VERSION: thruput_build_info::BuildVersion = thruput_build_info::build_version!();
 
-/// Groundhog JSON-RPC gateway.
+/// Thruput JSON-RPC gateway.
 #[derive(Parser)]
-#[command(name = "hog-gateway", about = "Groundhog JSON-RPC gateway")]
+#[command(name = "hog-gateway", about = "Thruput JSON-RPC gateway")]
 struct Cli {
     /// Print resolved configuration as JSON and exit without opening listeners.
     #[arg(long)]
@@ -191,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         release_version = ?bundle_identity.release_version(),
         bundle_manifest_digest = ?bundle_identity.bundle_manifest_digest(),
         bundle_manifest_mismatch_reason = ?bundle_identity.mismatch_reason(),
-        "Groundhog release identity",
+        "Thruput release identity",
     );
 
     // --- Configuration ---

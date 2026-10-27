@@ -151,14 +151,14 @@ impl InstallationLease {
     }
 }
 
-/// Installs catalog-authorized bundles beneath one Groundhog cache root.
+/// Installs catalog-authorized bundles beneath one Thruput cache root.
 #[derive(Debug)]
 pub struct Installer {
     cache_root: PathBuf,
 }
 
 impl Installer {
-    /// Construct an installer using the Groundhog cache root, not the toolchain subdirectory.
+    /// Construct an installer using the Thruput cache root, not the toolchain subdirectory.
     pub fn new(cache_root: impl Into<PathBuf>) -> Self {
         Self {
             cache_root: cache_root.into(),
@@ -387,12 +387,12 @@ struct Completion {
     layout_version: u32,
 }
 
+/// Released by closing the file: an explicit `LOCK_UN` would also release
+/// the lock held through any inherited descriptor.
 #[derive(Debug)]
 struct InstallLock {
     file: File,
 }
-
-// Close only: explicit LOCK_UN would also release inherited descriptors' lock.
 
 fn open_lock(path: &Path) -> Result<File, InstallError> {
     let parent = path.parent().ok_or_else(|| {

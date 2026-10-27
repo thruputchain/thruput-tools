@@ -102,7 +102,7 @@ impl LocalAirdropConfig {
     }
 }
 
-/// Supervisor configuration for a local Groundhog node.
+/// Supervisor configuration for a local Thruput node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct NodeSupervisorConfig {

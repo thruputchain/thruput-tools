@@ -25,5 +25,5 @@ proc-macro2 = { workspace = true }
 proc-macro-crate = { workspace = true }
 
 [dev-dependencies]
-gh_open_rpc = { package = "thruput-open-rpc", path = "../open-rpc" }
+thruput-open-rpc = { workspace = true }
 jsonrpsee = { workspace = true }

@@ -1,7 +1,7 @@
 # thruput-client
 
 Reusable contract invocation and spec codec for Thruput clients.
-Groundhog CLI and the experimental Stellar adapter supply their own configuration,
+The Thruput CLI and the experimental Stellar adapter supply their own configuration,
 identity resolution, confirmation, runtime and output.
 
 ## Invocation phases
@@ -58,11 +58,11 @@ The `codec` module decodes canonical specs, resolves methods, derives selectors,
 encodes positional arguments and decodes returns/declared aborts. The caller
 loads any files and supplies the metadata. Best-effort return decoding can return
 `None`; the receipt still contains raw data. Ambient SDK exception-registry lookup
-stays in the Groundhog CLI compatibility layer.
+stays in the Thruput CLI compatibility layer.
 
 The crate owns no runtime, CLI parser, profiles, key store, project discovery,
 terminal output or process lifecycle. Its normal dependencies exclude the
-Groundhog CLI, node supervisor, compiler/lowerer, toolchain manager, JSON-RPC
+Thruput CLI, node supervisor, compiler/lowerer, toolchain manager, JSON-RPC
 server crate and contract SDK. Existing RPC, signing, XDR and spec types are
 re-exported so adapters can use matching versions.
 
@@ -80,7 +80,7 @@ typed StrKey. Stellar C addresses and legacy hex identifiers are rejected. Inval
 rejected; errors never include the supplied input. Secret results use
 `Zeroizing`; applications remain responsible for their own input buffers.
 
-These helpers preserve bytes. G public keys do not become Groundhog account or
+These helpers preserve bytes. G public keys do not become Thruput account or
 wallet addresses. Z identifies Thruput but does not distinguish local, test, and
 production networks. The spec codec
 accepts base58 and Z addresses, including nested typed arguments. Its decoded

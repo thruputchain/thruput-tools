@@ -648,7 +648,7 @@ fn unavailable_rust_environment(
 ///
 /// Never installed: rustup rejects the override and exits before any network
 /// access, which is what makes the probe cheap.
-const RUSTUP_OVERRIDE_PROBE: &str = "groundhog-rustup-probe-not-a-toolchain";
+const RUSTUP_OVERRIDE_PROBE: &str = "thruput-rustup-probe-not-a-toolchain";
 
 /// Reports whether the `cargo` that a build would invoke is rustup-managed,
 /// and so honors a project's `rust-toolchain.toml` pin, targets, and

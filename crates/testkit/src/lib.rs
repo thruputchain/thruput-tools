@@ -5,8 +5,9 @@
 //! a set of [`Agent`]s, and asserts on what they observe. Test scenarios are
 //! run in `#[tokio::test]` functions.
 //!
-//! Each agent receives a deterministic empty native account. Fund it explicitly
-//! with [`AgentContext::fund`], then [`deploy`] contracts with explicit funding
+//! Each agent receives a deterministic native account: a local node funds it
+//! at genesis, and an existing network leaves it empty until [`AgentContext::fund`]
+//! tops it up. Then [`deploy`] contracts with explicit funding
 //! and optional initialization, [`call`] them, await receipts, and read chain state,
 //! in addition to coordinating with other agents off-chain and using the
 //! virtual clock and deterministic randomness.
@@ -17,7 +18,8 @@
 //! Networks: [`NetworkConfig::existing`] attaches to a running node,
 //! [`NetworkConfig::local`] launches and owns an ephemeral `hog-devnode`, and
 //! [`NetworkConfig::offline`] runs agents with locally-derived accounts and no
-//! chain (for coordination/timing/messaging tests). See `docs/testkit/DESIGN.md`.
+//! chain (for coordination/timing/messaging tests). See the
+//! [testkit design](https://github.com/thruputchain/thruput-tools/blob/main/docs/testkit/DESIGN.md).
 //! [`Scenario::run_agents`] returns an error when any agent returns an error, so
 //! the ordinary `.await?` test path cannot silently ignore agent failures.
 

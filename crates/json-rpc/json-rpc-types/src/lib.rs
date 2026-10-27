@@ -1,3 +1,11 @@
+//! Shared JSON-RPC wire types for Thruput.
+//!
+//! [`requests`], [`responses`] and [`error::native`] define the wire contract
+//! that the server, the typed client and the `OpenRPC` generator share. The
+//! remaining modules hold the backend-side projections that server adapters
+//! build those wire types from, plus the shared `base58`, `hex` and `decimal`
+//! codecs.
+
 pub mod airdrop;
 pub mod balance;
 pub mod base58;

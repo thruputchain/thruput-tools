@@ -1,6 +1,6 @@
 # Workspace architecture
 
-This workspace connects contract developers and applications to Groundhog.
+This workspace connects contract developers and applications to Thruput.
 It owns the public JSON-RPC interface and the off-chain development tools.
 The `hogd` repository owns execution and chain state; the protocol repositories
 own the binary wire definitions and their language bindings.

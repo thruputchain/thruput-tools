@@ -10,7 +10,7 @@
 //! function below builds, or the multiplexed pool [`connect_pool`] and
 //! [`try_connect_pool`] build on request.
 //!
-//! It is an internal workspace boundary and follows the Groundhog workspace
+//! It is an internal workspace boundary and follows the Thruput workspace
 //! release rather than maintaining an independent public API contract.
 //!
 //! Consumers pass a builder closure to construct their typed client
@@ -77,17 +77,19 @@ pub enum PoolKind {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ConnectError {
-    /// The configured address could not be parsed as a `SocketAddr`.
-    /// Treat this as a hard configuration failure.
     /// The configured protocol override cannot name a protocol token.
     #[error("invalid protocol override: {reason}")]
     InvalidProtocolOverride {
         /// Why the configured text cannot name a token.
         reason: String,
     },
+    /// The configured address could not be parsed as a `SocketAddr`.
+    /// Treat this as a hard configuration failure.
     #[error("invalid address '{addr}': {source}")]
     BadAddress {
+        /// The configured address text.
         addr: String,
+        /// The parse failure.
         source: std::net::AddrParseError,
     },
 

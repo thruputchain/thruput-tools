@@ -163,8 +163,7 @@ pub fn parse_elf(data: &[u8]) -> Result<Vec<Section>> {
     let shstr_end = shstr_off
         .checked_add(shstr.size as usize)
         .ok_or_else(|| invalid("section string table overflow"))?;
-    // Deliberately stricter than the Python reference (which slices and so
-    // silently clamps a past-EOF table); we reject it outright.
+    // A past-EOF string table is rejected outright rather than clamped.
     let shstr_blob = data
         .get(shstr_off..shstr_end)
         .ok_or_else(|| invalid("section string table out of range"))?;
