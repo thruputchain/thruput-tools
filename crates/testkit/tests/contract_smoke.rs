@@ -32,26 +32,21 @@ const VERSION: &str = "0.1.0";
 /// The built fixture. These tests only run when asked for with `--ignored`, so
 /// a missing fixture is a setup error to report, not a reason to pass.
 fn caller_counter_artifact() -> PathBuf {
-    let root = std::env::var("GROUNDHOG_TESTKIT_ARTIFACT_ROOT").expect(
-        "set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing caller_counter.rv32a \
+    let root = std::env::var("THRUPUT_TESTKIT_ARTIFACT_ROOT").expect(
+        "set THRUPUT_TESTKIT_ARTIFACT_ROOT to a directory containing caller_counter.rv32a \
          (see scripts/smoke-testkit-local.sh)",
     );
     PathBuf::from(root).join("caller_counter.rv32a")
 }
 
 /// Local-node config taken from the smoke script's environment: the devnode
-/// binary, extra contract artifact roots, and an optional hogd protocol override.
+/// binary. The fixture is registered by path, so the devnode keeps its default
+/// contract artifact roots.
 fn local_config() -> LocalNetworkConfig {
     let mut config = LocalNetworkConfig::default();
     // config.log_level = Some(thruput_testkit::LogLevel::Trace);
     if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
-    }
-    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
-        config.contract_artifact_directories.push(path.into());
-    }
-    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
-        config.hogd_protocol = Some(protocol);
     }
     config
 }
@@ -168,7 +163,7 @@ async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [Contr
 }
 
 #[tokio::test]
-#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in THRUPUT_TESTKIT_ARTIFACT_ROOT"]
 async fn caller_counter_deploy_call_read() {
     let artifact = caller_counter_artifact();
 
@@ -240,7 +235,7 @@ async fn caller_counter_deploy_call_read() {
 }
 
 #[tokio::test]
-#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in THRUPUT_TESTKIT_ARTIFACT_ROOT"]
 async fn multiple_runs_are_possible() {
     let artifact = caller_counter_artifact();
 
@@ -282,7 +277,7 @@ async fn multiple_runs_are_possible() {
 }
 
 #[tokio::test]
-#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in THRUPUT_TESTKIT_ARTIFACT_ROOT"]
 async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
     let artifact = caller_counter_artifact();
 
@@ -356,7 +351,7 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
 }
 
 #[tokio::test]
-#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY and a built caller-counter fixture in THRUPUT_TESTKIT_ARTIFACT_ROOT"]
 async fn manual_block_production_stages_deploys_and_calls() {
     let artifact = caller_counter_artifact();
 

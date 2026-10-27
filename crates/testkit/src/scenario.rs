@@ -32,6 +32,10 @@ pub struct ScenarioBuilder {
 
 impl ScenarioBuilder {
     /// Use hosted schema-3 deterministic bootstrap accounts. Local schema-4 rejects this adapter.
+    ///
+    /// A local manifest carries public keys only, so it cannot supply signing
+    /// keys. For an existing local node, use the scenario-owned accounts and
+    /// fund them explicitly.
     #[must_use]
     pub fn bootstrap_accounts(mut self) -> Self {
         self.use_bootstrap_accounts = true;

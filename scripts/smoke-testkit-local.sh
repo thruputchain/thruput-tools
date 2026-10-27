@@ -8,69 +8,35 @@
 # (The test's `local` provider launches and owns the node itself, so this
 # script just builds the fixture and sets the environment.)
 #
-# Required environment:
-#   THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode (must support native deploy funding + initialization)
-#
-# Optional environment:
-#   THRUPUT_BINARY=/path/to/thruput
-#   GROUNDHOG_EXAMPLES_ROOT=/path/to/thruput-examples
-#   ARTIFACT_ROOT=/path/to/prebuilt/target/thruput
-#   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
-#   GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT=/path/to/devnode/built_contracts
-#   KEEP_WORKDIR=1
+# REQUIRES:
+# - thruput CLI and installed toolchain
+# - the thruput-examples repo, adjacent to this one
 
 set -euo pipefail
 
+log() { printf '==> %s\n' "$*" >&2; }
+die() { printf '!! %s\n' "$*" >&2; exit 1; }
+
+THRUPUT_DEVNODE_BINARY=$(thruput toolchain which)
+export THRUPUT_DEVNODE_BINARY
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-expand_user_path() {
-    case "$1" in
-        "~") printf '%s\n' "$HOME" ;;
-        "~/"*) printf '%s/%s\n' "$HOME" "${1#"~/"}" ;;
-        *) printf '%s\n' "$1" ;;
-    esac
-}
+REPO_VERSION="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' "$REPO_ROOT/Cargo.toml")"
+THRUPUT_VERSION="$(thruput --version | awk '{print $2}')"
+if [ "$THRUPUT_VERSION" != "$REPO_VERSION" ]; then
+    log "warning: thruput on PATH is $THRUPUT_VERSION, but this repo is $REPO_VERSION"
+fi
 
-log() { printf '==> %s\n' "$*" >&2; }
-die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+EXAMPLES_ROOT="$(realpath "$REPO_ROOT/../thruput-examples")"
+[ -d "$EXAMPLES_ROOT" ] || die "Couldn't find thruput-examples"
 
-find_examples_root() {
-    if [[ -n "${GROUNDHOG_EXAMPLES_ROOT:-}" ]]; then
-        expand_user_path "$GROUNDHOG_EXAMPLES_ROOT"
-        return
-    fi
-    local sibling
-    for sibling in "$REPO_ROOT/../thruput-examples" "$REPO_ROOT/../groundhog-examples"; do
-        if [[ -d "$sibling" ]]; then
-            printf '%s\n' "$sibling"
-            return
-        fi
-    done
-}
-
-detect_hogd_protocol() {
-    local binary="$1"
-    if [[ -n "${HOGD_PROTOCOL_OVERRIDE:-}" ]]; then
-        printf '%s\n' "$HOGD_PROTOCOL_OVERRIDE"
-        return
-    fi
-    local output
-    output="$("$binary" --help 2>&1 || true)"
-    python3 -c 'import re, sys
-text = re.sub(r"\x1b\[[0-9;]*m", "", sys.stdin.read())
-matches = re.findall(r"hogd protocol: (hogp/[A-Za-z0-9]+)", text)
-if matches:
-    print(matches[-1])
-' <<< "$output"
-}
-
-[[ -n "${THRUPUT_DEVNODE_BINARY:-}" ]] || die "set THRUPUT_DEVNODE_BINARY=/path/to/hog-devnode"
-DEVNODE_BINARY="$(expand_user_path "$THRUPUT_DEVNODE_BINARY")"
-[[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
-
-WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/groundhog-testkit-local.XXXXXX")"
+if [ -z "${WORKDIR:-}" ]; then
+    WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/thruput-testkit-local.XXXXXX")"
+fi
 cleanup() {
     if [[ "${KEEP_WORKDIR:-0}" != "1" ]]; then
+        log "removing workdir"
         rm -rf "$WORKDIR"
     else
         log "kept workdir: $WORKDIR"
@@ -78,65 +44,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -n "${ARTIFACT_ROOT:-}" ]]; then
-    ARTIFACT_ROOT="$(expand_user_path "$ARTIFACT_ROOT")"
-    log "using artifact root: $ARTIFACT_ROOT"
-else
-    EXAMPLES_ROOT="$(find_examples_root)"
-    [[ -n "$EXAMPLES_ROOT" ]] || die "set GROUNDHOG_EXAMPLES_ROOT or provide a prebuilt ARTIFACT_ROOT"
-    if [[ -n "${THRUPUT_BINARY:-}" ]]; then
-        THRUPUT_BINARY="$(expand_user_path "${THRUPUT_BINARY}")"
-        log "using thruput binary: $THRUPUT_BINARY"
-    else
-        log "building thruput"
-        # Export an absolute target dir before building, so cargo and the
-        # lookup below agree wherever the script is run from.
-        BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
-        [[ "$BUILD_TARGET_DIR" = /* ]] || BUILD_TARGET_DIR="$REPO_ROOT/$BUILD_TARGET_DIR"
-        export CARGO_TARGET_DIR="$BUILD_TARGET_DIR"
-        cargo build -p thruput-cli
-        THRUPUT_BINARY="$BUILD_TARGET_DIR/debug/thruput"
-    fi
-    [[ -x "$THRUPUT_BINARY" ]] || die "thruput binary is not executable: $THRUPUT_BINARY"
+TARGET_DIR="$WORKDIR"
+export THRUPUT_TESTKIT_ARTIFACT_ROOT="${TARGET_DIR}/thruput"
 
-    EXAMPLES_TARGET="$WORKDIR/groundhog-examples-target"
-    log "building thruput-examples caller-counter fixture"
-    (
-        cd "$EXAMPLES_ROOT"
-        "$THRUPUT_BINARY" build -p caller-counter --target-dir "$EXAMPLES_TARGET"
-    )
-    ARTIFACT_ROOT="$EXAMPLES_TARGET/thruput"
-fi
-[[ -f "$ARTIFACT_ROOT/caller_counter.rv32a" ]] || die "caller_counter.rv32a not found under $ARTIFACT_ROOT"
+log "building caller-counter fixture"
+(cd "$EXAMPLES_ROOT" && thruput build -p caller-counter --target-dir "$TARGET_DIR")
 
-HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
-ENV_ARGS=(
-    "THRUPUT_DEVNODE_BINARY=$DEVNODE_BINARY"
-    "GROUNDHOG_TESTKIT_ARTIFACT_ROOT=$ARTIFACT_ROOT"
-)
-if [[ -n "$HOGD_PROTOCOL" ]]; then
-    ENV_ARGS+=("HOGD_PROTOCOL_OVERRIDE=$HOGD_PROTOCOL")
-    log "using hogd protocol override: $HOGD_PROTOCOL"
-fi
+run_test() {
+    test_crate="$1"
+    test_name="$2"
+    cargo test \
+        -p thruput-testkit \
+        --test "$test_crate" "$test_name" \
+        -- --ignored --nocapture
+}
 
 log "running native testkit smoke with explicit account funding and atomic initialization"
-env "${ENV_ARGS[@]}" \
-    cargo test -p thruput-testkit --test contract_smoke caller_counter_deploy_call_read -- --ignored --nocapture
+run_test contract_smoke caller_counter_deploy_call_read
 
 log "running testkit manual block-production smoke"
-env "${ENV_ARGS[@]}" \
-    cargo test -p thruput-testkit --test contract_smoke manual_block_production_stages_deploys_and_calls -- --ignored --nocapture
+run_test contract_smoke manual_block_production_stages_deploys_and_calls
 
 log "running testkit cross-run registration smoke"
-env "${ENV_ARGS[@]}" \
-    cargo test -p thruput-testkit --test contract_smoke later_run_does_not_recover_an_earlier_runs_pending_registration -- --ignored --nocapture
+run_test contract_smoke later_run_does_not_recover_an_earlier_runs_pending_registration
 
 log "running testkit repeated scenario smoke"
-env "${ENV_ARGS[@]}" \
-    cargo test -p thruput-testkit --test contract_smoke multiple_runs_are_possible -- --ignored --nocapture
+run_test contract_smoke multiple_runs_are_possible
 
 log "running testkit two-agent live smoke"
-env "${ENV_ARGS[@]}" \
-    cargo test -p thruput-testkit --test trivial_scenario local_two_agents_live_smoke -- --ignored --nocapture
+run_test trivial_scenario local_two_agents_live_smoke
 
 log "testkit live contract smoke passed"

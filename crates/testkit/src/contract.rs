@@ -9,9 +9,66 @@
 //!
 //! [`Caller`] implements [`RemoteInvoker`], so an interface's generated
 //! `<Iface>Remote` proxy (from `#[contract]` with `thruput-sdk/remote`) can
-//! serve as that typed client: `SwapRouterRemote::new(ctx.caller().clone(),
-//! &address)`. Its state-changing methods return a [`ContractCall`], and its
-//! declared `pure` or `readOnly` methods a [`ContractView`].
+//! serve as that typed client. Its methods declared `pure` or `readOnly` return
+//! a [`ContractView`]; all others, including those that declare no effect,
+//! return a [`ContractCall`].
+//!
+//! Awaiting either gives the decoded return. A [`ContractCall`] can instead be
+//! awaited with its receipt, submitted without waiting, or simulated. With the
+//! `Counter` interface from the [crate docs](crate#typed-calls), plus a
+//! `peek` method that declares no effect:
+//!
+//! ```rust,no_run
+//! # #![allow(unexpected_cfgs)]
+//! # mod counter {
+//! #     use thruput_sdk::contract;
+//! #     #[contract(version = "0.1.0")]
+//! #     pub trait Counter {
+//! #         fn increment(&mut self, by: u64) -> u64;
+//! #         #[contract(effect = "readOnly")]
+//! #         fn get(&self) -> u64;
+//! #         fn peek(&self) -> u64;
+//! #     }
+//! # }
+//! # use counter::CounterRemote;
+//! use thruput_testkit::{AgentContext, Caller, Result, TestkitError};
+//!
+//! async fn exercise(ctx: &AgentContext, counter: &CounterRemote<Caller>) -> Result<()> {
+//!     // Submit, require success, and decode the return.
+//!     let count = counter.increment(1).await?;
+//!
+//!     // The same, keeping the receipt for its events or gas.
+//!     let (next, receipt) = counter.increment(1).with_receipt().await?;
+//!     assert_eq!(next, count + 1);
+//!     println!("{} events, {} gas", receipt.events.len(), receipt.gas_used);
+//!
+//!     // Only the receipt, ignoring the return value.
+//!     let receipt = counter.increment(1).receipt().await?;
+//!     println!("{} gas", receipt.gas_used);
+//!
+//!     // Submit now and await later: several calls can land in one block,
+//!     // which a manual block driver produces on request.
+//!     let first = counter.increment(1).submit().await?;
+//!     let second = counter.increment(1).submit().await?;
+//!     first.await_pending().await?;
+//!     second.await_pending().await?;
+//!     ctx.network().produce_block().await?;
+//!     first.await_receipt().await?;
+//!     second.await_receipt().await?;
+//!
+//!     // A call that reverts is an error, which a test can expect.
+//!     match counter.increment(u64::MAX).await {
+//!         Err(TestkitError::Reverted { .. }) => {}
+//!         other => panic!("an overflowing increment should revert, got {other:?}"),
+//!     }
+//!
+//!     // A method that declares no effect returns a `ContractCall`, even when
+//!     // it only reads: `simulate` it, since awaiting it would submit.
+//!     assert_eq!(counter.peek().simulate().await?, counter.get().await?);
+//!     Ok(())
+//! }
+//! # fn main() {}
+//! ```
 
 pub use thruput_xdr::contract::ContractEntrypointID;
 
@@ -280,6 +337,26 @@ pub fn try_entrypoint_id(
 /// Each method takes anything that can reach a [`Caller`]: an agent's `&ctx`,
 /// or a `Caller` cloned out of it with
 /// [`AgentContext::caller`](crate::AgentContext::caller).
+///
+/// Prefer an interface's generated `<Iface>Remote` proxy (see the
+/// [module docs](self)), which checks method names and argument types at
+/// compile time. A `Contract` suits a contract with no interface crate to
+/// generate one from:
+///
+/// ```rust,no_run
+/// use thruput_testkit::xdr::types::ContractAddress;
+/// use thruput_testkit::{AgentContext, Contract, Result};
+///
+/// async fn bump(ctx: &AgentContext, address: ContractAddress) -> Result<u64> {
+///     let counter = Contract::new(address, "Counter", "0.1.0");
+///     // One argument is passed as itself; several, as a tuple.
+///     counter.call(ctx, "increment", &1u64).await?;
+///     let count: u64 = counter.call_returning(ctx, "increment", &1u64).await?;
+///     let read: u64 = counter.view(ctx, "get", &(), Some(ctx.address())).await?;
+///     assert_eq!(read, count);
+///     Ok(count)
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct Contract {
     address: ContractAddress,

@@ -324,9 +324,6 @@ async fn local_two_agents_live_smoke() {
     if let Ok(path) = std::env::var("THRUPUT_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
-    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
-        config.hogd_protocol = Some(protocol);
-    }
 
     let scenario = Scenario::builder("local-live-smoke")
         .network(NetworkConfig::local(config))

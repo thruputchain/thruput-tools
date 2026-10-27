@@ -50,14 +50,10 @@ Scenario completion propagates actor errors to the ordinary Rust test result.
 ## Where to read next
 
 Start with the [crate Rustdoc](../../crates/testkit/src/lib.rs) and
-[tests](../../crates/testkit/tests/) for API usage. The main ownership points
-are [scenario.rs](../../crates/testkit/src/scenario.rs),
-[network.rs](../../crates/testkit/src/network.rs),
-[agent.rs](../../crates/testkit/src/agent.rs), and
-[clock.rs](../../crates/testkit/src/clock.rs).
+[tests](../../crates/testkit/tests/) for API usage.
 
 For a real local contract smoke, use
-[scripts/smoke-testkit-local.sh](../../scripts/smoke-testkit-local.sh) with
-`THRUPUT_DEVNODE_BINARY` and `GROUNDHOG_EXAMPLES_ROOT` set. The script builds
-the caller-counter fixture and runs the live tests. Source tests and a successful
-local run do not prove compatibility with every deployed network.
+[scripts/smoke-testkit-local.sh](../../scripts/smoke-testkit-local.sh). The
+script builds the caller-counter fixture and runs the live tests. Source tests
+and a successful local run do not prove compatibility with every deployed
+network.
