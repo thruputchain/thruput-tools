@@ -48,7 +48,7 @@ and [RV32 design](rv32/design.md).
 | `thruput-testkit` | Do several application actors interact correctly? |
 | `thruput-bench` | How does a specific RPC workload perform under controlled load? |
 
-The [testkit design](testkit/DESIGN.md) explains its ownership and timing model.
+The [testkit design doc](testkit/DESIGN.md) explains its ownership and timing model.
 Benchmark results describe the measured workload and environment, not general
 network capacity.
 
