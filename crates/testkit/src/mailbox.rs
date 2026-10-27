@@ -1,7 +1,8 @@
 //! Off-chain messaging between agents.
 //!
 //! Agents communicate only through harness-provided channels, never raw I/O,
-//! so the harness stays in a position to observe their interactions. The [`Mailbox`] transport carries opaque bytes; the typed
+//! so the harness stays in a position to observe their interactions. The
+//! [`Mailbox`] transport carries opaque bytes; the typed
 //! layer lives on `AgentContext::send`/`recv`, which CXS-encode and decode the
 //! payload and hand back a [`Message`].
 

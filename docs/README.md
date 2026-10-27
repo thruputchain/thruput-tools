@@ -19,6 +19,7 @@ Read the guide for the area you are changing:
 ## Operating the tools
 
 - [CLI reference](../crates/cli/README.md)
+- [Testkit](../crates/testkit/README.md)
 - [Local node, gateway, and runtime manifests](gateway/runtime-manifest.md)
 - [Benchmark scenarios and comparisons](gateway/bench-scenarios.md)
 - [Transaction-status miss benchmark](gateway/lookup-bench.md)

@@ -25,6 +25,12 @@ use crate::nonce::NonceNamespace;
 const EXPIRY_HEIGHT: i64 = 10_000_000;
 
 /// Explicit funding and optional initialization in the deployment transaction.
+///
+/// Every deploy helper takes these options. A deployment is one call of the
+/// agent's `DefaultWallet.deploy(nonce, contract_hash, amount, initializer)`,
+/// so funding, deployment and initialization commit atomically. The
+/// initializer (an entrypoint, gas budget and encoded calldata) runs as the
+/// wallet against the new contract.
 #[derive(Debug, Clone, Copy)]
 pub struct DeployOptions<'a> {
     /// Exact raw native token amount transferred to the new contract. Zero skips funding.
