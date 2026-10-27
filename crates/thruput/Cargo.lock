@@ -3198,7 +3198,6 @@ version = "0.40.2"
 dependencies = [
  "async-trait",
  "futures-util",
- "hex",
  "jsonrpsee",
  "serde",
  "sha2",
@@ -3209,7 +3208,6 @@ dependencies = [
  "thruput-json-rpc-types",
  "thruput-tx-validation",
  "thruput-xdr",
- "thruput-xdr-common",
  "thruput-xdrs",
  "tokio",
  "tracing",
@@ -3219,7 +3217,6 @@ dependencies = [
 name = "thruput-json-rpc-types"
 version = "0.40.2"
 dependencies = [
- "bytes",
  "hex",
  "schemars",
  "serde",
