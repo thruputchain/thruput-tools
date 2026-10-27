@@ -166,10 +166,6 @@ ConfigChangedDuringConfirmation
   hint text: review the current profile and rerun the removal command
   details: path
 
-CredentialsEmpty
-  code: credentials_empty
-  hint text: rerun `thruput init` and provide a password; the username is optional
-
 UnsupportedOs
   code: unsupported_os
   hint text: `thruput test` currently supports macOS and Linux host targets
@@ -217,14 +213,6 @@ KeyNameInvalid
 InvalidSecretSeed
   code: invalid_secret_seed
   hint text: provide one private seed through stdin or the hidden prompt; never pass it as a command argument
-
-JsonUnsupported
-  code: json_unsupported
-  hint format: run `thruput {0}` without `--json`
-
-NotImplemented
-  code: not_implemented
-  hint text: this command is planned for a future release
 
 IntegrationTestNotFound
   code: integration_test_not_found
@@ -425,11 +413,6 @@ LocalRuntimeUnavailable
   code: local_runtime_unavailable
   hint text: use a current local runtime manifest; start a fresh node if local state uses an unsupported schema
 
-ManifestEntrypoint
-  code: manifest_entrypoint_invalid
-  hint text: restart the local node with a compatible hog-devnode, or remove the stale runtime manifest reference from project or global config
-  details: keyName, field, message
-
 NetworkDescriptorInvalid
   code: network_descriptor_invalid
   hint text: check that the selected profile's RPC and faucet URLs refer to the same hosted network, then retry
@@ -444,10 +427,6 @@ NetworkDescriptorSchemaMismatch
   code: network_descriptor_mismatch
   hint text: this CLI and the network's faucet are on different releases; install the CLI release that matches the network, or retry after the network upgrades
   details: field, expected, actual
-
-WalletAddressDerivationFailed
-  code: wallet_address_derivation_failed
-  hint text: check the stored public key material, or regenerate the key
 
 SavedWalletAmbiguous
   code: saved_wallet_ambiguous

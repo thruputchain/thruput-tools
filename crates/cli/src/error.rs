@@ -259,12 +259,6 @@ pub enum CliError {
     #[hint("review the current profile and rerun the removal command")]
     #[details]
     ConfigChangedDuringConfirmation { path: std::path::PathBuf },
-    #[error("credential password cannot be empty")]
-    #[hint(
-        "rerun `thruput init` and provide a password; the username \
-         is optional"
-    )]
-    CredentialsEmpty,
     #[error("unsupported OS: {0}")]
     #[hint(
         "`thruput test` currently supports macOS and \
@@ -328,12 +322,6 @@ pub enum CliError {
         "provide one private seed through stdin or the hidden prompt; never pass it as a command argument"
     )]
     InvalidSecretSeed,
-    #[error("`--json` is not supported for `{0}`")]
-    #[hint("run `thruput {0}` without `--json`")]
-    JsonUnsupported(&'static str),
-    #[error("not yet implemented")]
-    #[hint("this command is planned for a future release")]
-    NotImplemented,
     #[error("integration test target not found at {0}")]
     #[hint("create `tests/integration.rs` before running `thruput test --integration`")]
     IntegrationTestNotFound(String),
@@ -652,21 +640,6 @@ pub enum CliError {
         /// Specific metadata lookup or validation failure.
         message: String,
     },
-    #[error("runtime manifest entrypoint `{field}` for key `{key_name}` is invalid: {message}")]
-    #[code("manifest_entrypoint_invalid")]
-    #[hint(
-        "restart the local node with a compatible hog-devnode, or remove the stale runtime \
-         manifest reference from project or global config"
-    )]
-    #[details]
-    ManifestEntrypoint {
-        /// Dev key name whose configured runtime manifest was read.
-        key_name: String,
-        /// Runtime manifest field path containing the malformed entrypoint.
-        field: &'static str,
-        /// Specific parse or validation failure.
-        message: String,
-    },
     #[error("hosted network descriptor field `{field}` is invalid: {message}")]
     #[hint(text = NETWORK_DESCRIPTOR_HINT)]
     #[details]
@@ -707,14 +680,6 @@ pub enum CliError {
         expected: String,
         /// Descriptor schema the faucet served.
         actual: String,
-    },
-    #[error("failed to derive wallet address for key `{key_name}`: {message}")]
-    #[hint("check the stored public key material, or regenerate the key")]
-    WalletAddressDerivationFailed {
-        /// Key name whose pubkey-derived wallet address could not be derived.
-        key_name: String,
-        /// Specific derivation failure.
-        message: String,
     },
     #[error(
         "multiple wallets are saved for key `{key_name}` in profile `{profile}`: {wallet_names:?}"

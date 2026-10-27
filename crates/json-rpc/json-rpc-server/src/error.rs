@@ -32,14 +32,6 @@ pub enum RpcServerError {
     #[error("transaction rejected: {0}")]
     TxRejected(String),
 
-    /// Transaction hash was not found in the backend.
-    #[error("transaction not found")]
-    TxNotFound,
-
-    /// Block height was not found in the backend.
-    #[error("block not found")]
-    BlockNotFound,
-
     /// Invalid method parameter value.
     #[error("invalid params: {0}")]
     InvalidParam(String),
@@ -98,8 +90,6 @@ impl RpcServerError {
             Self::ViewHeightUnavailable(_) => codes::VIEW_HEIGHT_UNAVAILABLE,
             Self::TxInvalid(_) | Self::TxInvalidDetailed(_) => codes::TX_INVALID,
             Self::TxRejected(_) => codes::TX_REJECTED,
-            Self::TxNotFound => codes::TX_NOT_FOUND,
-            Self::BlockNotFound => codes::BLOCK_NOT_FOUND,
             Self::InvalidParam(_) => codes::INVALID_PARAMS,
             Self::BackendUnavailable(_)
             | Self::BackendDataInvalid { .. }

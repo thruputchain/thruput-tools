@@ -93,9 +93,6 @@ pub struct HogdDevEndpoints {
     /// hogd-dev's compact readiness key `view`.
     #[serde(default, alias = "view")]
     pub view_gateway: Option<SocketAddr>,
-    /// Dev-control endpoint. Absent in the reduced contract.
-    #[serde(default)]
-    pub dev_control: Option<SocketAddr>,
 }
 
 /// Public native account metadata advertised by hog-devnode readiness.
@@ -1233,7 +1230,6 @@ fn readiness_from_runtime_manifest(
             indexer_block_explorer: manifest.endpoints.indexer,
             db_gateway: manifest.endpoints.db_gateway,
             view_gateway: manifest.endpoints.view_gateway,
-            dev_control: None,
         },
         dev_accounts,
         runtime_manifest: Some(manifest),

@@ -10,7 +10,6 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::mem::MaybeUninit;
-use std::ops::{Deref, DerefMut};
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -60,8 +59,7 @@ impl fmt::Display for HexDisplay<'_> {
 ///
 /// This is the one spelling of the wire convention for callers that need an
 /// owned `String` (log lines, CLI output, JSON built with `json!`). Types that
-/// serialize through serde should use [`HexBytes`], [`Hex0x`], or
-/// [`HexDisplay`] instead, which never allocate the intermediate string.
+/// serialize through serde should use [`HexBytes`] or [`HexDisplay`] instead, which never allocate the intermediate string.
 pub fn prefixed_hex(bytes: impl AsRef<[u8]>) -> String {
     let bytes = bytes.as_ref();
     let mut out = String::with_capacity(2 + bytes.len() * 2);
@@ -116,125 +114,6 @@ pub enum FixedHexError {
 /// Manifest and artifact hashes cross the wire in this form.
 pub fn sha256_prefixed_hex(bytes: &[u8]) -> String {
     prefixed_hex(Sha256::digest(bytes))
-}
-
-// ---------------------------------------------------------------------------
-// Hex0x<T> — generic 0x-prefixed hex wrapper for fixed-size XDR byte types
-// ---------------------------------------------------------------------------
-
-/// Wraps an XDR byte type (e.g., `SHA256Hash`, `ContractAddress`) and
-/// serializes it as a `"0x..."` lowercase hex string.
-///
-/// The inner type must implement `AsRef<[u8]>` (for serialization) and
-/// `From<[u8; N]>` (for deserialization). This is true for all
-/// `thruput-xdr` fixed-size byte types.
-///
-/// ```json
-/// "0xa1b2c3d4e5f6..."
-/// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Hex0x<T>(pub T);
-
-impl<T: AsRef<[u8]>> Serialize for Hex0x<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(&HexDisplay(self.0.as_ref()))
-    }
-}
-
-impl<'de, T> Deserialize<'de> for Hex0x<T>
-where
-    T: AsRef<[u8]> + TryFromSlice,
-{
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        let bytes = decode_prefixed_hex(&s).map_err(serde::de::Error::custom)?;
-        let inner = T::try_from_slice(&bytes).map_err(serde::de::Error::custom)?;
-        Ok(Hex0x(inner))
-    }
-}
-
-/// Trait for constructing a fixed-size XDR type from a byte slice.
-pub trait TryFromSlice: Sized {
-    fn try_from_slice(slice: &[u8]) -> Result<Self, String>;
-}
-
-/// Fixed byte length of an XDR type represented by [`Hex0x`].
-pub trait FixedHexLength {
-    /// Number of bytes in the canonical representation.
-    const BYTE_LENGTH: usize;
-}
-
-/// Implement `TryFromSlice` for a concrete XDR type with a known byte size.
-macro_rules! impl_try_from_slice_for {
-    ($ty:ty, $n:expr) => {
-        impl TryFromSlice for $ty {
-            fn try_from_slice(slice: &[u8]) -> Result<Self, String> {
-                let arr: [u8; $n] = slice.try_into().map_err(|_| {
-                    format!(
-                        "invalid length {}, expected {} bytes ({} hex characters)",
-                        slice.len(),
-                        $n,
-                        $n * 2
-                    )
-                })?;
-                Ok(<$ty>::from(arr))
-            }
-        }
-
-        impl FixedHexLength for $ty {
-            const BYTE_LENGTH: usize = $n;
-        }
-    };
-}
-
-impl_try_from_slice_for!(thruput_xdr::types::SHA256Hash, 32);
-impl_try_from_slice_for!(thruput_xdr::types::ContractAddress, 32);
-impl_try_from_slice_for!(thruput_xdr::types::Ed25519PublicKey, 32);
-impl_try_from_slice_for!(thruput_xdr::types::PublicKeyHash, 32);
-impl_try_from_slice_for!(thruput_xdr::types::StorageLongHash, 2048);
-impl_try_from_slice_for!(thruput_xdr::validator::ValidatorID, 32);
-
-impl<T: FixedHexLength + JsonSchema> JsonSchema for Hex0x<T> {
-    fn schema_name() -> Cow<'static, str> {
-        format!("Hex0x_{}", T::schema_name()).into()
-    }
-
-    fn schema_id() -> Cow<'static, str> {
-        format!("{}::Hex0x<{}>", module_path!(), T::schema_id()).into()
-    }
-
-    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
-        let pattern = format!("^0x[0-9a-f]{{{}}}$", T::BYTE_LENGTH * 2);
-        json_schema!({
-            "type": "string",
-            "pattern": pattern
-        })
-    }
-}
-
-impl<T: fmt::Debug> fmt::Debug for Hex0x<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<T> Deref for Hex0x<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-impl<T> DerefMut for Hex0x<T> {
-    fn deref_mut(&mut self) -> &mut T {
-        &mut self.0
-    }
-}
-
-impl<T> From<T> for Hex0x<T> {
-    fn from(inner: T) -> Self {
-        Hex0x(inner)
-    }
 }
 
 // ---------------------------------------------------------------------------

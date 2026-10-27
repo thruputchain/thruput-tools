@@ -5,11 +5,7 @@ fn hex_serialization_matches_reference_across_chunk_boundaries() {
     for len in (0..=257).chain([511, 512, 513, 2048, 65536]) {
         let bytes: Vec<u8> = (0..=255).cycle().take(len).collect();
         let expected = format!("\"0x{}\"", hex::encode(&bytes));
-        assert_eq!(
-            serde_json::to_string(&HexBytes(bytes.clone())).unwrap(),
-            expected
-        );
-        assert_eq!(serde_json::to_string(&Hex0x(bytes)).unwrap(), expected);
+        assert_eq!(serde_json::to_string(&HexBytes(bytes)).unwrap(), expected);
     }
     let bytes = std::array::from_fn(|i| u8::try_from(i * 8).unwrap());
     assert_eq!(
@@ -64,42 +60,6 @@ fn topic_roundtrip() {
 #[test]
 fn topic_wrong_length_fails() {
     let result: Result<Topic, _> = serde_json::from_str(r#""0xcafe""#);
-    assert!(result.is_err());
-}
-
-#[test]
-fn hex0x_sha256_roundtrip() {
-    use thruput_xdr::types::SHA256Hash;
-
-    let mut bytes = [0u8; 32];
-    bytes[0] = 0xab;
-    bytes[31] = 0xcd;
-    let original: Hex0x<SHA256Hash> = Hex0x(SHA256Hash::from(bytes));
-
-    let json = serde_json::to_string(&original).unwrap();
-    assert!(json.starts_with(r#""0xab"#));
-    assert!(json.ends_with(r#"cd""#));
-    assert_eq!(json.len(), 2 + 64 + 2); // quotes + 0x + 64 hex chars
-
-    let decoded: Hex0x<SHA256Hash> = serde_json::from_str(&json).unwrap();
-    assert_eq!(decoded, original);
-}
-
-#[test]
-fn hex0x_accepts_no_prefix() {
-    use thruput_xdr::types::SHA256Hash;
-
-    let hex_str = format!(r#""{}""#, "ab".to_owned() + &"00".repeat(30) + "cd");
-    let decoded: Hex0x<SHA256Hash> = serde_json::from_str(&hex_str).unwrap();
-    assert_eq!(decoded.0.as_ref()[0], 0xab);
-    assert_eq!(decoded.0.as_ref()[31], 0xcd);
-}
-
-#[test]
-fn hex0x_wrong_length_fails() {
-    use thruput_xdr::types::SHA256Hash;
-
-    let result: Result<Hex0x<SHA256Hash>, _> = serde_json::from_str(r#""0xcafe""#);
     assert!(result.is_err());
 }
 
