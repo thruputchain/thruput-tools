@@ -3,7 +3,7 @@ import {
   createPubkeyAccount,
   createWalletClient,
   localnet,
-  PrivateKeySigner,
+  Ed25519Signer,
   addressFromBase58,
 } from "@thruputchain/client";
 
@@ -37,7 +37,7 @@ async function connect() {
   const client = await createThruputClient({
     cluster: localnet({ rpcUrl: new URL("/rpc", window.location.origin).href }),
   });
-  const signer = new PrivateKeySigner(
+  const signer = Ed25519Signer.fromSeed(
     crypto.getRandomValues(new Uint8Array(32)),
   );
   const account = createPubkeyAccount({ signer, nonce: 0n });

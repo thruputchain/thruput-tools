@@ -1,2 +1,7 @@
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - "@thruputchain/client@0.25.0"
+  - "@thruputchain/contract-spec@0.19.1"
+  - "@thruputchain/protocol@0.19.1"
+  - "@thruputchain/xdr@0.19.1"
