@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.40.2
+
+- Update the Rust SDK to `0.57.1` and standard interfaces to `0.1.69`.
+  Newly generated projects pin SDK `0.57.1`.
+
 ## 0.40.1
 
 - Bundle the documentation snapshot from `thruput-docs` commit `53198a7`.
