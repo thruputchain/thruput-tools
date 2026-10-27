@@ -6,6 +6,12 @@
 //! name methods and pass Rust values instead of hand-building calldata.
 //! [`ContractCall`] is a prepared, typed call: the building block for typed
 //! clients whose methods mirror a contract interface.
+//!
+//! [`Caller`] implements [`RemoteInvoker`], so an interface's generated
+//! `<Iface>Remote` proxy (from `#[contract]` with `thruput-sdk/remote`) can
+//! serve as that typed client: `SwapRouterRemote::new(ctx.caller().clone(),
+//! &address)`. Its state-changing methods return a [`ContractCall`], and its
+//! declared `pure` or `readOnly` methods a [`ContractView`].
 
 pub use thruput_xdr::contract::ContractEntrypointID;
 
@@ -14,6 +20,7 @@ use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
 use std::pin::Pin;
 
+use thruput_contract_util::remote::{RemoteInvoker, RemoteMethod};
 use thruput_contract_util::semver::try_major_version_from_string;
 use thruput_json_rpc_types::responses::InvocationOutput;
 use thruput_json_rpc_types::responses::{ReceiptExecution, TransactionReceipt};
@@ -116,6 +123,108 @@ where
         let receipt = self.receipt().await?;
         let returned = decode_call_return(&receipt)?;
         Ok((returned, receipt))
+    }
+
+    /// Simulate the call instead of submitting it, with the caller as
+    /// `msg.sender`, and decode its return. For reading through a method
+    /// whose interface does not declare it read-only; any state changes are
+    /// discarded.
+    pub async fn simulate(self) -> Result<R> {
+        let (selector, calldata) = self.prepared?;
+        let sender = self.caller.address();
+        simulate_return(&self.caller, self.target, selector, &calldata, Some(sender)).await
+    }
+}
+
+/// A typed read-only contract invocation, prepared but not yet simulated.
+///
+/// Returned by a generated `<Iface>Remote` proxy for methods declared `pure`
+/// or `readOnly`. Awaiting it simulates the method with the caller as
+/// `msg.sender` and decodes the return as `R`. Nothing is submitted.
+#[must_use = "a contract view does nothing until it is awaited"]
+pub struct ContractView<R> {
+    caller: Caller,
+    target: ContractAddress,
+    method: String,
+    prepared: Result<(ContractEntrypointID, Vec<u8>)>,
+    returns: PhantomData<fn() -> R>,
+}
+
+impl<R> fmt::Debug for ContractView<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContractView")
+            .field("caller", &self.caller.address())
+            .field("target", &self.target)
+            .field("method", &self.method)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R> IntoFuture for ContractView<R>
+where
+    R: for<'r> ReadXDR<'r> + Send + 'static,
+{
+    type Output = Result<R>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Result<R>> + Send>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let (selector, calldata) = self.prepared?;
+            let sender = self.caller.address();
+            simulate_return(&self.caller, self.target, selector, &calldata, Some(sender)).await
+        })
+    }
+}
+
+/// Encode `args` now, so the prepared invocation borrows nothing.
+fn encode_for<A>(method: &RemoteMethod, args: &A) -> Result<(ContractEntrypointID, Vec<u8>)>
+where
+    A: WriteXDR + ?Sized,
+{
+    let calldata = xdrs::cxs::encode(args).map_err(TestkitError::encode)?;
+    Ok((method.entrypoint, calldata))
+}
+
+impl RemoteInvoker for Caller {
+    type Call<R> = ContractCall<R>;
+    type View<R> = ContractView<R>;
+
+    fn call<R, A>(
+        &self,
+        target: &ContractAddress,
+        method: RemoteMethod,
+        args: &A,
+    ) -> ContractCall<R>
+    where
+        R: xdrs::ReadXDROwned,
+        A: WriteXDR + ?Sized,
+    {
+        ContractCall {
+            caller: self.clone(),
+            target: *target,
+            method: method.name.to_owned(),
+            prepared: encode_for(&method, args),
+            returns: PhantomData,
+        }
+    }
+
+    fn view<R, A>(
+        &self,
+        target: &ContractAddress,
+        method: RemoteMethod,
+        args: &A,
+    ) -> ContractView<R>
+    where
+        R: xdrs::ReadXDROwned,
+        A: WriteXDR + ?Sized,
+    {
+        ContractView {
+            caller: self.clone(),
+            target: *target,
+            method: method.name.to_owned(),
+            prepared: encode_for(&method, args),
+            returns: PhantomData,
+        }
     }
 }
 
@@ -298,18 +407,39 @@ impl Contract {
         R: for<'r> ReadXDR<'r>,
     {
         let calldata = xdrs::cxs::encode(args).map_err(TestkitError::encode)?;
-        let response = ctx
-            .as_ref()
-            .network()
-            .view_call(self.address, self.selector(method)?, &calldata, caller)
-            .await?;
-        match response.output {
-            InvocationOutput::Return { return_data } => decode_return(&return_data.0),
-            other => Err(TestkitError::NoReturn {
-                kind: "view",
-                detail: format!("{other:?}"),
-            }),
-        }
+        simulate_return(
+            ctx.as_ref(),
+            self.address,
+            self.selector(method)?,
+            &calldata,
+            caller,
+        )
+        .await
+    }
+}
+
+/// Simulate `selector` on `target` and decode its return. A simulation
+/// invokes the target directly, so the return is not wallet-wrapped.
+async fn simulate_return<R>(
+    caller: &Caller,
+    target: ContractAddress,
+    selector: ContractEntrypointID,
+    calldata: &[u8],
+    sender: Option<ContractAddress>,
+) -> Result<R>
+where
+    R: for<'r> ReadXDR<'r>,
+{
+    let response = caller
+        .network()
+        .view_call(target, selector, calldata, sender)
+        .await?;
+    match response.output {
+        InvocationOutput::Return { return_data } => decode_return(&return_data.0),
+        other => Err(TestkitError::NoReturn {
+            kind: "view",
+            detail: format!("{other:?}"),
+        }),
     }
 }
 
@@ -355,9 +485,11 @@ mod tests {
     use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
     use thruput_xdr::types::SHA256Hash;
 
+    use thruput_contract_util::remote::{MethodEffect, RemoteInvoker, RemoteMethod};
+
     use super::{
-        Contract, ContractEntrypointID, decode_call_return, decode_return, entrypoint_id,
-        try_entrypoint_id,
+        Contract, ContractCall, ContractEntrypointID, ContractView, decode_call_return,
+        decode_return, entrypoint_id, try_entrypoint_id,
     };
 
     fn receipt(return_data: Option<Vec<u8>>) -> TransactionReceipt {
@@ -433,6 +565,74 @@ mod tests {
         assert!(matches!(
             call.await,
             Err(TestkitError::InvalidContractVersion { version }) if version == "latest"
+        ));
+    }
+
+    fn offline_caller() -> Caller {
+        let dev = derive_native_accounts(1, "seed", None).remove(0);
+        Caller::new(
+            Account::new(dev, NonceNamespace::for_run("seed", 0)),
+            Network::offline(),
+        )
+    }
+
+    fn remote_method(effect: Option<MethodEffect>) -> RemoteMethod {
+        RemoteMethod {
+            interface: Some("ERC20"),
+            version: "0.1.0",
+            name: "transfer",
+            entrypoint: entrypoint_id("ERC20", "0.1.0", "transfer"),
+            effect,
+        }
+    }
+
+    #[test]
+    fn remote_invocations_carry_the_proxy_selector_and_encoded_args() {
+        let caller = offline_caller();
+        let target = ContractAddress::from([7; 32]);
+        let receiver = ContractAddress::from([9; 32]);
+        let method = remote_method(Some(MethodEffect::StateChanging));
+        let expected = (
+            method.entrypoint,
+            xdrs::cxs::encode(&(&receiver, 5u64)).unwrap(),
+        );
+
+        let call: ContractCall<()> =
+            RemoteInvoker::call(&caller, &target, method, &(&receiver, 5u64));
+        assert_eq!((call.target, call.method.as_str()), (target, "transfer"));
+        assert_eq!(call.prepared.unwrap(), expected);
+
+        let view: ContractView<u64> =
+            RemoteInvoker::view(&caller, &target, method, &(&receiver, 5u64));
+        assert_eq!((view.target, view.method.as_str()), (target, "transfer"));
+        assert_eq!(view.prepared.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn remote_reads_simulate_rather_than_submit() {
+        let caller = offline_caller();
+        let target = ContractAddress::from([7; 32]);
+
+        // Both reads reach `simulateInvocation`, which an offline network refuses.
+        let view: ContractView<u64> = RemoteInvoker::view(
+            &caller,
+            &target,
+            remote_method(Some(MethodEffect::ReadOnly)),
+            &(),
+        );
+        assert!(matches!(
+            view.await,
+            Err(TestkitError::Offline {
+                operation: "simulateInvocation"
+            })
+        ));
+        let call: ContractCall<u64> =
+            RemoteInvoker::call(&caller, &target, remote_method(None), &());
+        assert!(matches!(
+            call.simulate().await,
+            Err(TestkitError::Offline {
+                operation: "simulateInvocation"
+            })
         ));
     }
 }
