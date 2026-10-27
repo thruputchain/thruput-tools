@@ -198,7 +198,7 @@ proc-macro-crate = "3"
 # 0.11 selects the aarch64 and x86 SHA-256 hardware backends at runtime through
 # cpufeatures, so the 0.10 "asm" feature (and its sha2-asm C build) is no longer
 # needed to get sha256h on ARM; see `make check-native`. 0.11 is also the line the
-# groundhog registry crates and aws-sigv4 use.
+# thruput registry crates and aws-sigv4 use.
 sha2 = "0.11"
 ed25519-compact = { version = "2.2", default-features = false, features = ["opt_size"] }
 ed25519-dalek = { version = "3", features = ["zeroize"] }
