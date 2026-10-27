@@ -36,3 +36,4 @@ xdrs = { workspace = true }
 jsonrpsee = { workspace = true }
 tempfile = { workspace = true }
 hex = { workspace = true }
+thruput-sdk = { workspace = true, features = ["remote"] }
