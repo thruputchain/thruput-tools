@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "sourceRevision": "3cc5d07f366f6182e06af875daffd57a90a66e06",
+  "sourceRevision": "53198a762a9adc3260457997acb6ad86b75d9932",
   "sourceDirty": false,
   "agentGuideCliVersion": "0.19.0",
   "archive": "snapshot.tar.gz",
-  "archiveBytes": 5439722,
-  "sha256": "733ec8f8d33e7ed98c71939f362c65a484041fd2236244015efdad70197dbf3c",
-  "sourceArchiveSha256": "2a3bd0cdbeeb0ad8f866c60c92e95028b820030fb642e16b50938c25c2bcdada"
+  "archiveBytes": 5306972,
+  "sha256": "cfcf827ce398ee53a5636a242ad1803846a3d197fb20727a66cd3a05242f6fb1",
+  "sourceArchiveSha256": "a0a7b2b0bdc98f89f4a27467d2895fb195e58a6a35715049ad8b3d2e170f83c9"
 }

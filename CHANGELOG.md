@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.40.1
+
+- Bundle the documentation snapshot from `thruput-docs` commit `53198a7`.
+- Use Thruput `Z` StrKeys for addresses. Stellar `C` StrKeys are now rejected.
+  Update commands and saved address text that use the old prefix. Base58
+  identifiers in RPC responses and CLI JSON reports are unchanged.
+- Read hogd hosted manifests using `thruput-bootstrap-account-v1` and
+  `hosted_dev_account`. The default dev-account signing helper now uses
+  `thruput-dev-accounts`, changing its derived signers. Explicit manifest
+  seeds remain authoritative.
+- Improve generated contract guidance and shared native/guest tests.
+- Update zstd dependencies and include license text in published tool crates.
+- Add regression coverage for transaction diagnostics, funding, history, and
+  local runtime behavior. Report an unrecorded backend rejection as
+  inconsistent data instead of a definite transaction rejection.
+
+## 0.40.0
 
 ### Contract builds
 
