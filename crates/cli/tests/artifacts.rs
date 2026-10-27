@@ -19,7 +19,7 @@ fn cargo_rv32_elf_output_path_uses_cargo_layout() {
 }
 
 #[test]
-fn thruput_rv32_output_paths_use_flat_groundhog_layout() {
+fn thruput_rv32_output_paths_use_flat_layout() {
     let artifact =
         thruput_rv32_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract-rv32");
     let metadata = thruput_rv32_metadata_output_path(

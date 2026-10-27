@@ -181,10 +181,10 @@ fn thruput() -> Command {
     let home = CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed);
     let config_home = test_homes_root().join(format!("config-{home}"));
     let cache_home = test_homes_root().join(format!("cache-{home}"));
-    let groundhog_config = config_home.join("thruput");
-    std::fs::create_dir_all(&groundhog_config).expect("bug: test config directory should exist");
+    let thruput_config = config_home.join("thruput");
+    std::fs::create_dir_all(&thruput_config).expect("bug: test config directory should exist");
     std::fs::write(
-        groundhog_config.join("config.toml"),
+        thruput_config.join("config.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
     )
     .expect("bug: test config should be writable");

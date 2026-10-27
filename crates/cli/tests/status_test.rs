@@ -13,7 +13,7 @@ fn quiet() -> Print {
     Print::quiet()
 }
 
-fn write_groundhog_registry_config(cargo_home: &std::path::Path) {
+fn write_thruput_registry_config(cargo_home: &std::path::Path) {
     fs::create_dir_all(cargo_home).unwrap();
     fs::write(
         cargo_home.join("config.toml"),
@@ -34,7 +34,7 @@ fn status_succeeds_when_fully_configured() {
     let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
     let _devnode_binary = EnvGuard::set("THRUPUT_DEVNODE_BINARY", &devnode);
 
-    write_groundhog_registry_config(&cargo_home);
+    write_thruput_registry_config(&cargo_home);
 
     thruput_cli::keys::generate(
         &Some("alice".into()),
@@ -87,7 +87,7 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
     let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
     let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
-    write_groundhog_registry_config(&cargo_home);
+    write_thruput_registry_config(&cargo_home);
 
     thruput_cli::keys::generate(
         &Some("alice".into()),
@@ -130,7 +130,7 @@ fn collect_report_does_not_invent_builtin_key_without_active_local_runtime() {
     let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
     let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
-    write_groundhog_registry_config(&cargo_home);
+    write_thruput_registry_config(&cargo_home);
 
     let report = thruput_cli::checks::collect_report(&project, None).unwrap();
     assert_eq!(report.effective_default_key, None);
@@ -152,7 +152,7 @@ fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
     let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
     let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
-    write_groundhog_registry_config(&cargo_home);
+    write_thruput_registry_config(&cargo_home);
 
     thruput_cli::keys::generate(
         &Some("alice".into()),
@@ -220,7 +220,7 @@ counter = "{project_counter}"
     let _cargo_home = EnvGuard::set("CARGO_HOME", &cargo_home);
     let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
 
-    write_groundhog_registry_config(&cargo_home);
+    write_thruput_registry_config(&cargo_home);
     thruput_cli::keys::generate(
         &Some("alice".into()),
         thruput_cli::keys::KeyScheme::Ed25519,
