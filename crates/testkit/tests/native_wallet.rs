@@ -30,7 +30,7 @@ use thruput_testkit::{
 };
 
 mod common;
-use common::serve_manifest_network_info;
+use common::{native_runtime_document, serve_manifest_network_info};
 
 #[derive(Clone, Copy)]
 enum Outcome {
@@ -103,26 +103,6 @@ impl Fixture {
         }
         builder.build().await.unwrap()
     }
-}
-
-fn native_runtime_document() -> serde_json::Value {
-    let mut document: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/hosted-runtime.json")).unwrap();
-    document["kind"] = "hosted-devnet-runtime".into();
-    for index in 0..2 {
-        let signer = derive_dev_account_signer("thruput-dev-accounts", index);
-        document["bootstrapAccounts"][index]["publicKey"] =
-            serde_json::to_value(thruput_json_rpc_types::Ed25519PublicKey::from(
-                thruput_xdr::types::Ed25519PublicKey::from(signer.verifying_key_bytes()),
-            ))
-            .unwrap();
-        document["bootstrapAccounts"][index]["walletAddress"] =
-            serde_json::to_value(thruput_json_rpc_types::ContractAddress::from(
-                PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address(),
-            ))
-            .unwrap();
-    }
-    document
 }
 
 #[tokio::test]

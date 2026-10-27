@@ -23,6 +23,19 @@
 
 ## 0.40.0
 
+### Testkit typed clients
+
+Tools now uses SDK 0.57.1 and standard interfaces 0.1.69, and newly scaffolded
+projects pin SDK 0.57.1. Both releases are compatible with 0.57.0 and 0.1.68.
+
+With the SDK's `remote` feature, `#[contract]` on interface `Foo` generates a
+`FooRemote<I>` that passes selectors and encoded arguments to the "invoker". A
+testkit `Caller` now serves as its invoker, so a scenario can use the proxy as a
+typed client. Methods declared `pure` or `readOnly` return the new
+`ContractView`, which simulates the call with the caller as `msg.sender`. Other
+methods return `ContractCall`. Use the new `ContractCall::simulate` to read
+through a method even if it is not declared read-only.
+
 ### Contract builds
 
 `thruput build` reads SDK 0.56's contract metadata: raw spec format 5 in the
