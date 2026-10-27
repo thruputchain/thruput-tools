@@ -42,8 +42,8 @@ pub use artifact::ArtifactKind;
 pub use caller::Caller;
 pub use clock::Clock;
 pub use contract::{
-    Contract, ContractCall, ContractEntrypointID, SubmittedContractCall, entrypoint_id,
-    try_entrypoint_id,
+    Contract, ContractCall, ContractEntrypointID, ContractView, SubmittedContractCall,
+    entrypoint_id, try_entrypoint_id,
 };
 pub use error::{AgentFailure, AgentFailures, Result, TestkitError};
 pub use logging::init_tracing;
