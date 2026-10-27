@@ -9,7 +9,7 @@
 
 use thruput_db_gateway::DbGatewayIntroOutcome;
 use thruput_indexer::IndexerBlockExplorerIntroOutcome;
-use thruput_scheduler::SchedGatewayIntroOutcome;
+use thruput_node_rpc::SchedGatewayIntroOutcome;
 use thruput_view::ViewGatewayIntroOutcome;
 
 /// One service's answer to the protocol intro handshake.

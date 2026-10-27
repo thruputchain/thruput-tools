@@ -1,10 +1,10 @@
 use thruput_json_rpc_server::RpcServerError;
-use thruput_scheduler::ExpectedDBTip;
-use thruput_scheduler::RPCError;
-use thruput_scheduler::SchedGatewaySubmitOutcome;
+use thruput_node_rpc::ExpectedDBTip;
+use thruput_node_rpc::RPCError;
+use thruput_node_rpc::SchedGatewaySubmitOutcome;
 
 use thruput_json_rpc_types::transaction::{SchedulerTransactionErrorSource, TransactionStatus};
-use thruput_scheduler::{
+use thruput_node_rpc::{
     SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
     SchedulerTransactionStatus as Status,
 };

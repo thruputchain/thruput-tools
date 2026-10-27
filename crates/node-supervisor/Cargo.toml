@@ -28,7 +28,7 @@ thruput-x23-transport = { workspace = true }
 thruput-xdr = { workspace = true }
 thruput-db-gateway = { workspace = true }
 thruput-indexer = { workspace = true }
-thruput-scheduler = { workspace = true }
+thruput-node-rpc = { workspace = true }
 thruput-view = { workspace = true }
 thruput-scp = { workspace = true }
 getrandom = { workspace = true }

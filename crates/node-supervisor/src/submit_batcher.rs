@@ -13,7 +13,7 @@ use thruput_json_rpc_server::{
     RpcRequestContext, RpcServerError, native::transaction::SubmissionAttempt,
 };
 use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
-use thruput_scheduler::{
+use thruput_node_rpc::{
     SchedGatewaySubmitOutcomeBatch, sched_gateway::SchedGateway_SchedGateway1_Client,
 };
 use tokio::{

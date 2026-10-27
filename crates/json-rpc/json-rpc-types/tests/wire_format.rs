@@ -21,7 +21,7 @@ use thruput_json_rpc_types::{
     base58::Base58,
     hex::{HexBytes, Topic},
 };
-use thruput_scheduler::{ConsensusValue, ProposalTxsHash};
+use thruput_node_rpc::{ConsensusValue, ProposalTxsHash};
 use thruput_xdr::{
     header::ProposalHeader,
     types::{

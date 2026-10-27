@@ -1,5 +1,5 @@
 use super::*;
-use thruput_scheduler::RPCError;
+use thruput_node_rpc::RPCError;
 use thruput_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
 use xdr_common::VecM;
 

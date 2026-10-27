@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use thruput_scheduler::SchedGatewaySubmitOutcome;
+use thruput_node_rpc::SchedGatewaySubmitOutcome;
 use tokio::sync::{Notify, Semaphore};
 use xdr_common::VecM;
 

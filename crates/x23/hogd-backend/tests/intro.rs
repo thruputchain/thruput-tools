@@ -1,6 +1,6 @@
 use thruput_db_gateway::DbGatewayIntroOutcome;
 use thruput_indexer::IndexerBlockExplorerIntroOutcome;
-use thruput_scheduler::SchedGatewayIntroOutcome;
+use thruput_node_rpc::SchedGatewayIntroOutcome;
 use thruput_view::ViewGatewayIntroOutcome;
 
 use thruput_hogd_backend::intro::*;

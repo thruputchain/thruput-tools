@@ -26,7 +26,7 @@ use thruput_json_rpc_types::{
     base58::Base58,
     transaction::{TransactionStatus, TxHash},
 };
-use thruput_scheduler::{
+use thruput_node_rpc::{
     ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount, RPCError,
     SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
     SchedulerTransactionOutcomeBatch,
@@ -137,7 +137,7 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
         &self,
         hashes: TransactionHashBatch,
     ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-        use thruput_scheduler::{
+        use thruput_node_rpc::{
             SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
             SchedulerTransactionStatus,
         };
@@ -426,7 +426,7 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
         &self,
     ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
         Ok(thruput_db_gateway::DbGatewayConfigResult::Default {
-            error: thruput_scheduler::RPCError::kRPCUnimplemented.0,
+            error: thruput_node_rpc::RPCError::kRPCUnimplemented.0,
         })
     }
     async fn dbgateway_intro(

@@ -1,6 +1,6 @@
 //! hogd-dev genesis readiness probe.
 
-use thruput_scheduler::{
+use thruput_node_rpc::{
     DbTip, SchedulerGetTipResult, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
 

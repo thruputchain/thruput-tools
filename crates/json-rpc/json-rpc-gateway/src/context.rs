@@ -12,7 +12,7 @@ use thruput_db_gateway::DbGateway_DbGateway1_Client;
 use thruput_hogd_backend::{IntroOutcome, intro};
 use thruput_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
 use thruput_json_rpc_types::protocol_token::{protocol_from_text, protocol_text};
-use thruput_scheduler::sched_gateway::{
+use thruput_node_rpc::sched_gateway::{
     SchedGateway_SchedGateway1_Client, SchedGatewayIntroOutcome,
 };
 use thruput_scp::network::ProtocolCommit;
@@ -814,7 +814,7 @@ mod tests {
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, TransactionPageResult,
         TransactionQuery, TransactionRefPageResult, TxInfoResult,
     };
-    use thruput_scheduler::{
+    use thruput_node_rpc::{
         ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount,
         SchedGatewaySubmitOutcomeBatch, SchedulerTransactionOutcomeBatch,
         sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
@@ -1029,7 +1029,7 @@ mod tests {
             &self,
         ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
             Ok(thruput_db_gateway::DbGatewayConfigResult::Default {
-                error: thruput_scheduler::RPCError::kRPCUnimplemented.0,
+                error: thruput_node_rpc::RPCError::kRPCUnimplemented.0,
             })
         }
         async fn dbgateway_intro(

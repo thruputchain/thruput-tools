@@ -24,6 +24,54 @@ minutes = 0
 crate = "thruput-xdr-common"
 minutes = 0
 
+[[allow.package]]
+crate = "thruput-syscall"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-xdr-macros"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-xdr"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-spec"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-trace"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-scp"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-node-types"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-node-rpc"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-coordinator"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-indexer"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-db-gateway"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-view"
+minutes = 0
+
 # Security fix for RUSTSEC-2026-0391
 [[allow.exact]]
 crate = "zstd"
