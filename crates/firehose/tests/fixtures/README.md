@@ -1,15 +1,15 @@
 # Live-node commitment fixtures
 
-Captured from a live node on 2026-10-14 using the catalog-managed
-`x86_64-unknown-linux-gnu` release, commit
-`d401c3487704329e8c0b3b8cac9c296e07abf79c`. The node's runtime manifest
+Captured from a live node on 2026-10-28 using the hogd `v0.1.31` release
+asset `hog-devnode-macos-arm64.tar.gz`, commit
+`dfa379ca7909294a19f748b078306e2e642d9ce0`. The node's runtime manifest
 reported the version and protocol below; `thruput-xdr` is the capture
 client's resolved binding version.
 
 | Fixture | hog-devnode | Protocol token | thruput-xdr |
 | --- | --- | --- | --- |
-| `bootstrap.hex` | `0.1.31-rc.7` | `hogp/5e10cec6536bc0d` | `0.55.0` |
-| `hundred-transactions.hex` | `0.1.31-rc.7` | `hogp/5e10cec6536bc0d` | `0.55.0` |
+| `bootstrap.hex` | `0.1.31` | `hogp/a67b703a554a9ca` | `0.63.0` |
+| `hundred-transactions.hex` | `0.1.31` | `hogp/a67b703a554a9ca` | `0.63.0` |
 
 Hex is the unmodified XDR `EventIndexerPulledBlock`, read using procedure 10
 only and archived from the node's origin by `examples/capture_origin.rs`, which
@@ -28,21 +28,31 @@ These preserve hogd-produced roots as an independent compatibility oracle for
 the Rust verifier. No key material is included; accounts use the public local
 development seed.
 
-To recapture, install the catalog node with `thruput toolchain install` and
-start `hog-devnode --bootstrap-manifest` with a schema-4 manifest that
-allocates the public key of `thruput-firehose:fixture` account zero. The node
-commits height 1 at startup, before any tailer can attach, and
-`hog-firehose-store tail` only bootstraps at the tip, so archive from origin
-with `examples/capture_origin.rs` and target height 1 instead. Run
-`examples/drive_blocks.rs` until height 31, submit 100 calls with
-`examples/submit_traffic.rs`, seed `fixture` and nonce start 100000, drive one
-more block and capture again with target height 32. Wrap the
-height-1 and height-32 hex at 60 columns without altering its bytes. Confirm
-the transaction counts and both roots before replacing fixtures.
+To recapture, download the host platform's release asset with
+`gh release download vX.Y.Z -R thruputchain/hogd --pattern 'hog-devnode-<os>-<arch>.tar.gz'`
+and extract it. Generate the public allocation with
+`cargo run -p thruput-firehose --example fixture_account > allocations.json`,
+then start
+`thruput node --json --block-driver interval --block-interval-ms <ms> --bootstrap-accounts allocations.json --hog-devnode-binary <path>`.
+The CLI supplies a schema-5 bootstrap manifest including the faucet and explicit
+allocations. The startup JSON line gives `data.runtimeManifest.path`; that
+manifest's `endpoints.schedulerGateway` is the submission endpoint, and its
+`endpoints.indexer` is the block explorer, not `EventIndexer1`. hog-devnode
+does not advertise the event indexer: list the `hog-devnode` child's listening
+ports (`lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN`) and probe each port that is
+not in the manifest with the capture below; the wrong ones fail with
+`Rpc(ProgUnavail)`. Confirm the helper's stderr wallet address in the manifest.
+Height 1 is the bootstrap block; archive it from origin with
+`cargo run -p thruput-firehose --example capture_origin -- EVENT_INDEXER ARCHIVE OUT_DIR 1`.
+Wait for roughly 30 empty blocks, then run
+`cargo run -p thruput-firehose --example submit_traffic -- <manifest> 100 100000 fixture`
+inside one block interval (5000 ms sufficed), confirm one block holds all 100
+transactions, and capture again with that height as the target. Wrap the
+captured hex at 60 columns without altering bytes. Confirm transaction counts
+and both roots before replacing the fixtures.
 
-The `thruput-xdr` bindings include `TxEventLog::gas_consumed`. Like hogd, the
-verifier serializes the whole event log followed by nondeterministic proposal
-data, using the leading transaction hash as the trie key and the remaining
-bytes as its value. Gas consumption is therefore included in the events-root
-commitment without a verifier change. Binding bumps that change this encoding
-require a fresh live capture, never a patch to the old fixture bytes.
+The verifier commits each leaf as hogd#4615 does:
+`0x02 || u64LE(64) || key || u64LE(len) || value`. The key is the leading
+transaction hash; the value is the event log minus that hash followed by the
+nondeterministic proposal data. Encoding or commitment changes require a fresh
+live capture, never a patch to fixture bytes.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.41.1
+
+- `hog-firehose-store` now verifies the hogd#4603/#4615 full-key leaf
+  commitment used by platform `0.1.31`. Version `0.41.0` rejected every such
+  block with `events_hash mismatch`.
+
 ## 0.41.0
 
 - Move to protocol `a67b703` through protocol-rs `0.63.0`, now taken from
