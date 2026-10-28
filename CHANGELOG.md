@@ -8,7 +8,8 @@
 - The CLI package is now `thruput`, replacing both `thruput-cli` and the
   separate `thruput` crate that only wrapped it. Its library is still
   `thruput_cli`. Use `cargo install thruput` and `-p thruput` where you used
-  `thruput-cli`.
+  `thruput-cli`. On crates.io, `thruput-cli` is a stub that only points to
+  `thruput`.
 - Update the Rust SDK to `0.58.0` and standard interfaces to `0.1.71`, now
   taken from crates.io. Newly generated projects pin SDK `0.58.0` and resolve
   every dependency from crates.io. Existing projects still name the thruput

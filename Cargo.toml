@@ -18,6 +18,7 @@ members = [
     "crates/x23/hogd-backend",
     "crates/toolchain",
     "crates/cli",
+    "crates/thruput-cli-stub",
     "crates/cli-macros",
     "crates/signing",
     "crates/tx-validation",

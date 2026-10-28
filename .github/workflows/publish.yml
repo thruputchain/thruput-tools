@@ -73,6 +73,7 @@ env:
     thruput-toolchain
     thruput-cli-macros
     thruput
+    thruput-cli
     thruput-testkit
 
 permissions:
