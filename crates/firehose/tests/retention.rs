@@ -129,7 +129,7 @@ fn explicit_audit_verifies_below_a_warm_watermark() {
     let store = archive(dir.path(), 2);
     store.clean_shutdown().unwrap();
     let mut block = fixture();
-    block.block.payload.event_logs.0[0].events.0.clear();
+    block.block.payload.tx_bodies.0.clear();
     fs::write(
         dir.path().join("00000000000000000001.xdr"),
         xdrs::txs::encode(&block).unwrap(),
@@ -191,7 +191,7 @@ fn warm_checkpoint_verifies_new_tail_and_preserves_floor_epoch_origin() {
     store.clean_shutdown().unwrap();
     // A tail above the checkpoint must still be verified on warm recovery.
     let mut fifth = next(&fourth);
-    fifth.block.payload.event_logs.0[0].events.0.clear();
+    fifth.block.payload.tx_bodies.0.clear();
     fs::write(
         dir.path().join("00000000000000000005.xdr"),
         xdrs::txs::encode(&fifth).unwrap(),

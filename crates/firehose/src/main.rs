@@ -48,7 +48,7 @@ enum Command {
         #[arg(required = true)]
         candidates: Vec<String>,
     },
-    /// Verify the local archive and exit without connecting to a node.
+    /// Verify archive consensus/body hashes, duplicates and continuity offline.
     Verify {
         #[arg(long)]
         store: PathBuf,

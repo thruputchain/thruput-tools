@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `hog-firehose-store` no longer recomputes `txs_hash`/`events_hash` Merkle
+  roots; it verifies the consensus hash, transaction body hashes and duplicate
+  transactions only. `0.41.0` rejected every platform `0.1.31` block with
+  `events_hash mismatch` after hogd#4603/#4615 changed the leaf commitment.
+
 ### Breaking Rust API changes
 
 Removed public items that nothing constructs or reads. None of them changes
