@@ -1,15 +1,62 @@
+# Releases every published crate in this repository to crates.io in one
+# idempotent pass, with the shared thruputchain/actions release actions, then
+# dispatches the binary release. The crates share the workspace version and
+# release under its `v<version>` tag.
+#
+# Nothing is tagged until the toolchain checks, the dry run and the release
+# checks pass, so a run that fails before tagging leaves the repository
+# untouched. Publishing skips versions crates.io already has from this
+# release, so a run that fails partway is resumed by dispatching it again on
+# the tagged commit.
+#
+# The bare `thruput` crate (crates/thruput) publishes last, under the same
+# tag. It is outside the workspace, and crates-io-publish only sees the
+# workspace it runs in, so its steps run that action's scripts from
+# crates/thruput instead.
+#
+# Authentication: crates.io trusted publishing (GitHub OIDC) for existing
+# crates; see crates-io-publish's README in thruputchain/actions. Creating a
+# crate needs the CRATESIO_CREATE_PACKAGE_TOKEN secret, a crates.io API token
+# with the scopes publish-new, trusted-publishing and change-owners. The
+# publish steps register this workflow as each new crate's trusted publisher
+# and add CRATE_OWNERS as its owners, so remove the secret and revoke the
+# token once every crate exists.
+#
+# The job runs in the `release` environment, and the trusted publishers the
+# publish steps register require it, so only runs that environment's
+# protection rules admit (required reviewers, deployment branches limited to
+# main) can publish. Keep CRATESIO_CREATE_PACKAGE_TOKEN a secret of
+# `release`, not of the repository: repository secrets reach every branch.
+#
+# crates.io lets a token create five crates in a burst, then one every ten
+# minutes, and the publish steps wait those limits out: a release that
+# creates every crate here takes about three hours.
+#
+# Dispatch with dry-run for the checks, with no tagging, publishing or binary
+# release.
 name: Release package
 
 on:
   workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Run publish checks only; skip tagging, publishing and the binary release'
+        type: boolean
+        default: false
+
+# Two concurrent releases would race on tags and crates.io state; queue them.
+concurrency:
+  group: publish
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  CARGO_REGISTRIES_THRUPUT_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
-  CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
-  CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
-  CARGO_REGISTRIES_THRUPUT_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
-  PUBLISH_PACKAGES: >-
+  # Owners added to each crate a run creates, besides the token's owner.
+  CRATE_OWNERS: github:thruputchain:core-maintainers
+  # Every published workspace crate, in dependency order, dev-dependencies
+  # included: the dry run packages each crate into vendor/ before the next one
+  # resolves against it, and each crate's dependencies must be live on
+  # crates.io before it publishes.
+  PACKAGES: >-
     thruput-build-info
     thruput-bundle-identity
     thruput-encoding
@@ -39,15 +86,21 @@ permissions:
 jobs:
   publish:
     permissions:
-      actions: write
-      contents: write
+      actions: write # dispatches release.yml
+      contents: write # pushes the release tag
+      id-token: write # crates.io trusted publishing
+    environment: release
     runs-on: namespace-profile-hogd-linux-2604
+    outputs:
+      released: ${{ steps.check.outputs.release == 'true' && !inputs.dry-run }}
 
     steps:
       - name: Checkout
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
         with:
-          persist-credentials: true
+          persist-credentials: false
+          # Full history and tags: the release checks read the tags.
+          fetch-depth: 0
 
       - name: Configure Namespace Cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
@@ -58,6 +111,35 @@ jobs:
         uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-hack@0.6.45
+
+      # A crate missing from PACKAGES would never be published, and a crate
+      # that depends on it would then fail to publish halfway through.
+      - name: Check PACKAGES lists every published crate
+        run: |
+          set -euo pipefail
+          expected=$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.publish != []) | .name' | sort)
+          listed=$(tr -s '[:space:]' '\n' <<<"$PACKAGES" | sed '/^$/d' | sort)
+          if [ "$expected" != "$listed" ]; then
+            echo "::error::PACKAGES in publish.yml doesn't match the workspace's published crates"
+            diff <(echo "$expected") <(echo "$listed") || true
+            exit 1
+          fi
+
+      # Tests stay in the repository: [workspace.package] excludes /tests and
+      # every published crate inherits it. A crate that sets its own
+      # `exclude` replaces the inherited one, so check what each would ship.
+      - name: Check published crates leave tests/ out
+        run: |
+          set -euo pipefail
+          status=0
+          for package in $PACKAGES; do
+            if cargo package --list --locked --package "$package" | grep '^tests/'; then
+              echo "::error::$package would publish its tests/ directory"
+              status=1
+            fi
+          done
+          exit "$status"
 
       # Fail before creating a tag or publishing any crate if the CLI's
       # committed default is unavailable, malformed, or incompatible.
@@ -73,67 +155,97 @@ jobs:
           python3 --version
           scripts/smoke-managed-toolchain.sh
 
-      - name: dry run
-        uses: thruputchain/actions/cargo-publish-dry-run@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
+      - name: Publish dry run
+        uses: thruputchain/actions/cargo-publish-dry-run@3e0d08d054591a349331ab57fe72197d6ccc0cf3
         with:
-          registry-name: thruput
-          packages: ${{ env.PUBLISH_PACKAGES }}
+          registry-name: crates-io
+          packages: ${{ env.PACKAGES }}
 
-      - name: tag commit with version
-        id: publish-tag
-        uses: thruputchain/actions/cargo-version-tag@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
+      # `v<version>` must be free or already on HEAD: a new commit needs a
+      # version bump.
+      - name: Check release
+        id: check
+        uses: thruputchain/actions/crates-io-publish@3e0d08d054591a349331ab57fe72197d6ccc0cf3
         with:
-          packages: ${{ env.PUBLISH_PACKAGES }}
+          mode: check
+          packages: ${{ env.PACKAGES }}
+          bootstrap-token: ${{ secrets.CRATESIO_CREATE_PACKAGE_TOKEN }}
 
-      - name: publish
-        uses: thruputchain/actions/cargo-publish@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
-        with:
-          packages: ${{ env.PUBLISH_PACKAGES }}
-          git-tag: ${{ steps.publish-tag.outputs.tag }}
-          registry-name: thruput
-          registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
-          publish-delay-seconds: '10'
-
-      - name: publish bare thruput crate
-        uses: thruputchain/actions/cargo-publish@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
-        with:
-          cargo-toml-path: crates/thruput/Cargo.toml
-          packages: thruput
-          git-tag: ${{ steps.publish-tag.outputs.tag }}
-          registry-name: thruput
-          registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
-          publish-delay-seconds: '10'
-
-      - name: push tag
+      # The bare crate's steps below run crates-io-publish's scripts directly,
+      # from crates/thruput. Keep this ref on the commit the `uses:` lines pin,
+      # and the env below on the inputs that action.yml maps for each mode.
+      - name: Fetch crates-io-publish for the bare thruput crate
         env:
-          ACTOR: ${{ github.actor }}
-          TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ steps.publish-tag.outputs.tag }}
+          ACTIONS_REF: 3e0d08d054591a349331ab57fe72197d6ccc0cf3
         run: |
-          git remote set-url origin "https://${ACTOR}:${TOKEN}@github.com/${REPO}.git"
-          LOCAL_COMMIT=$(git rev-parse "$TAG")
-          # Check if tag exists on remote and get its commit SHA
-          REMOTE_TAG_REF=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
-          if [ -n "$REMOTE_TAG_REF" ]; then
-            # Tag exists on remote, verify it points to the same commit
-            if [ "$REMOTE_TAG_REF" = "$LOCAL_COMMIT" ]; then
-              echo "Tag $TAG already exists on remote and points to the same commit ($LOCAL_COMMIT). Skipping push."
-            else
-              echo "Error: Tag $TAG exists on remote but points to different commit!"
-              echo "Remote: $REMOTE_TAG_REF"
-              echo "Local: $LOCAL_COMMIT"
-              exit 1
-            fi
-          else
-            # Tag doesn't exist on remote, push it
-            git push origin "$TAG"
-          fi
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/thruputchain-actions"
+          cd "$RUNNER_TEMP/thruputchain-actions"
+          git fetch -q --depth 1 https://github.com/thruputchain/actions "$ACTIONS_REF"
+          git checkout -q --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$ACTIONS_REF"
 
-      - name: trigger binary release
+      # Its version and `thruput-cli` pin are bumped by hand, so first check
+      # that it releases with the workspace, under the same tag.
+      - name: Check release (bare thruput crate)
+        id: check-bare
+        working-directory: crates/thruput
+        env:
+          PACKAGES: thruput
+          TAG_PREFIX: v
+          ON_EXISTING_TAG: fail
+          BOOTSTRAP_TOKEN: ${{ secrets.CRATESIO_CREATE_PACKAGE_TOKEN }}
+          REQUIRE_TRUSTED_PUBLISHING: 'true'
+          WORKSPACE_VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.name == "thruput") | .version')
+          if [ "$version" != "$WORKSPACE_VERSION" ]; then
+            echo "::error::crates/thruput is at $version, but the workspace is at $WORKSPACE_VERSION"
+            echo "::error::Bump crates/thruput's version and its thruput-cli pin with the workspace version"
+            exit 1
+          fi
+          bash "$RUNNER_TEMP/thruputchain-actions/crates-io-publish/check.sh"
+
+      - name: Tag release
+        id: tag
+        if: ${{ !inputs.dry-run && steps.check.outputs.release == 'true' }}
+        uses: thruputchain/actions/cargo-release-tag@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+        with:
+          packages: ${{ env.PACKAGES }}
+          github-token: ${{ github.token }}
+
+      - name: Publish
+        if: ${{ !inputs.dry-run && steps.check.outputs.release == 'true' }}
+        uses: thruputchain/actions/crates-io-publish@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+        with:
+          mode: publish
+          packages: ${{ env.PACKAGES }}
+          git-tag: ${{ steps.tag.outputs.tag }}
+          bootstrap-token: ${{ secrets.CRATESIO_CREATE_PACKAGE_TOKEN }}
+          crate-owners: ${{ env.CRATE_OWNERS }}
+
+      # After thruput-cli is live: the bare crate's publish-time verify build
+      # resolves it from crates.io.
+      - name: Publish bare thruput crate
+        if: ${{ !inputs.dry-run && steps.check-bare.outputs.release == 'true' }}
+        working-directory: crates/thruput
+        env:
+          PACKAGES: thruput
+          TAG_PREFIX: v
+          GIT_TAG: ${{ steps.tag.outputs.tag }}
+          BOOTSTRAP_TOKEN: ${{ secrets.CRATESIO_CREATE_PACKAGE_TOKEN }}
+          CRATE_OWNERS: ${{ env.CRATE_OWNERS }}
+          REQUIRE_TRUSTED_PUBLISHING: 'true'
+          PUBLISH_ARGS: ''
+        run: bash "$RUNNER_TEMP/thruputchain-actions/crates-io-publish/publish.sh"
+
+      - name: Trigger binary release
+        if: ${{ !inputs.dry-run && steps.check.outputs.release == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.publish-tag.outputs.tag }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           curl -fsS -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -144,10 +256,11 @@ jobs:
 
   # Scaffolds pin thruput-json-rpc-client to the CLI version, so CI can only
   # build them against the checkout. Check that a fresh scaffold resolves and
-  # builds from the registry alone now that this version is published.
-  registry-smoke:
+  # builds from crates.io alone now that this version is published.
+  crates-io-smoke:
     needs: publish
-    name: Registry smoke, ${{ matrix.template }} template (new + cargo build + cargo test)
+    if: ${{ needs.publish.outputs.released == 'true' }}
+    name: crates.io smoke, ${{ matrix.template }} template (new + cargo build + cargo test)
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
@@ -169,7 +282,7 @@ jobs:
         run: |
           crate_id=$(cargo pkgid --locked -p thruput-cli)
           version=${crate_id##*[@#]}
-          cargo install thruput --version "=$version" --registry thruput --locked \
+          cargo install thruput --version "=$version" --locked \
             --root "$RUNNER_TEMP/published-cli"
           test "$("$RUNNER_TEMP/published-cli/bin/thruput" --version)" = \
             "thruput $version (commit ${GITHUB_SHA:0:8})"

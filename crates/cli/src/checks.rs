@@ -88,8 +88,6 @@ pub struct EnvironmentStatus {
     pub rv32_target: RustTargetStatus,
     pub devnode: DevnodeStatus,
     pub genesis_root_artifact: GenesisRootArtifactStatus,
-    pub registry_configured: bool,
-    pub cargo_config_path: PathBuf,
 }
 
 pub use crate::keys::KeySummary;
@@ -181,19 +179,12 @@ fn is_zero(val: &usize) -> bool {
     *val == 0
 }
 
-/// Check the local toolchain and registry configuration.
+/// Check the local toolchain.
 pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliError> {
     let cargo = which::which("cargo").is_ok();
     let (rust_toolchain, rv32_target) = detect_rust_environment(project_start);
     let devnode = check_devnode();
     let genesis_root_artifact = check_genesis_root_artifact(&devnode);
-    let cargo_config_path = crate::config::cargo_config_path()?;
-
-    let registry_configured = match std::fs::read_to_string(&cargo_config_path) {
-        Ok(contents) => contents.contains("[registries.thruput]"),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => return Err(e.into()),
-    };
 
     Ok(EnvironmentStatus {
         cargo,
@@ -201,8 +192,6 @@ pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliE
         rv32_target,
         devnode,
         genesis_root_artifact,
-        registry_configured,
-        cargo_config_path,
     })
 }
 
@@ -466,17 +455,6 @@ fn add_environment_findings(
     }
 
     add_rust_toolchain_findings(environment, project, findings);
-
-    if !environment.registry_configured {
-        findings.push(Finding {
-            level: FindingLevel::Info,
-            code: "no_registry",
-            message: "global Thruput cargo registry not configured".into(),
-            hint: Some(Cow::Borrowed(
-                "new projects include project-local registry config; run `cargo login --registry thruput` before building if needed; Cargo stores the token globally in CARGO_HOME",
-            )),
-        });
-    }
 
     if !environment.devnode.reachable {
         findings.push(Finding {
@@ -1643,8 +1621,6 @@ mod tests {
                     sha256: Some("abc123".into()),
                     error: None,
                 },
-                registry_configured: true,
-                cargo_config_path: PathBuf::from("/tmp"),
             },
             keys: KeyStatus {
                 keys: Vec::new(),
@@ -1774,8 +1750,6 @@ mod tests {
                 sha256: Some("abc123".into()),
                 error: None,
             },
-            registry_configured: true,
-            cargo_config_path: PathBuf::from("/tmp/config.toml"),
         };
         let project = ProjectContext {
             config_path: Some(PathBuf::from("/tmp/thruput.toml")),
@@ -1904,24 +1878,6 @@ mod tests {
                 .as_deref()
                 .is_some_and(|error| error.contains("invalid"))
         );
-    }
-
-    #[test]
-    #[serial]
-    fn check_environment_detects_missing_registry_config() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cargo_home = tmp.path().join("cargo-home");
-
-        unsafe {
-            std::env::set_var("CARGO_HOME", &cargo_home);
-        }
-
-        let env = check_environment(tmp.path()).unwrap();
-        assert!(!env.registry_configured);
-
-        unsafe {
-            std::env::remove_var("CARGO_HOME");
-        }
     }
 
     #[test]
@@ -2105,10 +2061,9 @@ mod tests {
 
     #[test]
     #[serial]
-    fn collect_report_in_empty_environment_reports_missing_keys_and_registry() {
+    fn collect_report_in_empty_environment_reports_missing_keys() {
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
-            std::env::set_var("CARGO_HOME", tmp.path().join("cargo-home"));
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         }
 
@@ -2120,16 +2075,8 @@ mod tests {
                 .iter()
                 .any(|finding| finding.code == "no_keys")
         );
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|finding| finding.code == "no_registry"
-                    && finding.level == FindingLevel::Info)
-        );
 
         unsafe {
-            std::env::remove_var("CARGO_HOME");
             std::env::remove_var("XDG_CONFIG_HOME");
         }
     }
@@ -2159,8 +2106,6 @@ mod tests {
                     sha256: Some("abc123".into()),
                     error: None,
                 },
-                registry_configured: true,
-                cargo_config_path: PathBuf::from("/tmp"),
             },
             keys: KeyStatus {
                 keys: Vec::new(),

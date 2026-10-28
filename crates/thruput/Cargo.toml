@@ -15,7 +15,7 @@ edition = "2024"
 rust-version = "1.96"
 authors = ["Stellar Development Foundation"]
 license = "Apache-2.0"
-publish = ["thruput"]
+publish = ["crates-io"]
 repository = "https://github.com/thruputchain/thruput-tools"
 homepage = "https://github.com/thruputchain/thruput-tools"
 keywords = ["thruput"]
@@ -28,7 +28,7 @@ name = "thruput"
 path = "src/main.rs"
 
 [dependencies]
-thruput-cli = { path = "../cli", version = "=0.41.0", registry = "thruput" }
+thruput-cli = { path = "../cli", version = "=0.41.0" }
 
 # Profiles come from the root package being built, so this crate does not get
 # the workspace's. Keep these identical to the workspace `[profile]` tables;

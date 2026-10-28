@@ -91,12 +91,12 @@ hogd Spike oracle).
 
 See `hogd/docs/rv32/rv32-author-toolchain.md` for the full design.
 
-It is **published to the private `thruput` registry** and consumable two ways:
+It is **published to crates.io** and consumable two ways:
 
-- **as a binary** — `cargo install --registry thruput thruput-rv32-lower`
+- **as a binary** — `cargo install thruput-rv32-lower`
   puts `rv32-lower` on `$PATH`; hogd's smoke tests and other scripts can call it
   directly;
-- **as a library** — add `thruput-rv32-lower` (registry `thruput`) as a
+- **as a library** — add `thruput-rv32-lower` as a
   dependency and call `lower()` / `metadata` directly. `thruput build` uses
   this path. Add
   `thruput-rv32-artifact` for direct access to format constants, writer, and

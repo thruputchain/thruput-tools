@@ -67,8 +67,8 @@ pub const RAW_SPEC_SECTION_PREFIX: &str = "thruputspecraw";
 /// Raw contract-spec section prefix used through raw spec format 4.
 ///
 /// Stripped like [`RAW_SPEC_SECTION_PREFIX`] so an ELF linked against an older
-/// SDK cannot carry spec bytes into the image. Mirrors
-/// `thruput_spec_tool::LEGACY_RAW_SECTION_PREFIX`.
+/// SDK cannot carry spec bytes into the image. The SDK stopped recognizing it
+/// in 0.58.0; the lowerer still strips it.
 pub const LEGACY_RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
 
 /// Name prefix shared by every version of the finalized contract-spec

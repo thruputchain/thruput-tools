@@ -406,10 +406,10 @@ patches = {
     "thruput-spec": "thruput-spec",
     "thruput-trace": "thruput-trace",
     "thruput-xdr": "thruput-xdr",
+    "thruput-xdr-macros": "thruput-xdr-macros",
     "thruput-syscall": "thruput-syscall",
-    "hogexec-internal": "hogexec-internal",
 }
-lines.extend(["", '[patch."sparse+https://crates.thruput.network/api/v1/crates/"]'])
+lines.extend(["", "[patch.crates-io]"])
 for package, directory in patches.items():
     path = protocol_path / directory
     if not path.is_dir():

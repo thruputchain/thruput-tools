@@ -3986,7 +3986,7 @@ fn status_human_output_shows_sections() {
     assert!(stderr.contains("Genesis Root:"));
     assert!(!stderr.contains("Wasm Target:"));
     assert!(!stderr.contains("wasm-opt:"));
-    assert!(stderr.contains("Global Registry:"));
+    assert!(!stderr.contains("Global Registry:"));
     assert!(stderr.contains("Keys: none"));
     assert!(!stderr.contains("Mock Executor Auth"));
 }

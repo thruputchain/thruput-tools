@@ -6,21 +6,21 @@ use std::path::Path;
 /// SDK version exact-pinned into both scaffold target dependencies.
 ///
 /// Generated projects resolve outside this workspace, so this must be a
-/// version published to the Thruput registry, and one whose raw spec
+/// version published to crates.io, and one whose raw spec
 /// format this CLI reads — otherwise `thruput build` refuses the fresh
 /// scaffold at the preflight. Bump together with
 /// [`SCAFFOLD_TOOLCHAIN_CHANNEL`] when a new SDK release is validated on a
 /// newer nightly. The CI `cli-smoke` job builds and tests a fresh scaffold
-/// against the real registry, so an unpublished or incompatible pin fails
+/// against crates.io, so an unpublished or incompatible pin fails
 /// there (and stays red until the pinned SDK is published).
-pub const SCAFFOLD_SDK_VERSION: &str = "0.57.2";
+pub const SCAFFOLD_SDK_VERSION: &str = "0.58.0";
 
 /// `thruput-json-rpc-client` version pinned into scaffolded projects.
 ///
 /// Shares the CLI's workspace version and is published before the matching CLI.
 /// PR CI builds scaffolds against this checkout's crate
 /// (`scripts/use-checkout-client.sh`); `publish.yml` checks the published
-/// version from the registry. The caret requirement lets scaffolds pick up
+/// version from crates.io. The caret requirement lets scaffolds pick up
 /// newer compatible releases.
 pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 

@@ -56,7 +56,7 @@ cargo test --workspace --locked
   applicable generated-project and TypeScript checks from the workflow.
 - For snapshots, follow the owning test's update procedure, inspect the diff,
   then rerun without `UPDATE_SNAPSHOTS` to check the result.
-- Process smokes need registry access, a compatible real `hog-devnode`, localhost
+- Process smokes need crates.io access, a compatible real `hog-devnode`, localhost
   access, and writable runtime/cache directories. See README prerequisites and
   the relevant script: `scripts/smoke-local-dx.sh`,
   `scripts/smoke-runtime-manifest-bench.sh`, or `scripts/smoke-testkit-local.sh`.

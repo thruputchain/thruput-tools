@@ -9,10 +9,6 @@ on:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  CARGO_REGISTRIES_THRUPUT_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
-  CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
-  # Fallback if the CI runner overwrites .cargo/config.toml
-  CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
 
 permissions:
   contents: read
@@ -22,11 +18,8 @@ jobs:
   dependency-policy:
     permissions:
       contents: read
+    # No registry credentials: deny.toml admits crates.io only.
     uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
-    with:
-      registry-name: thruput
-    secrets:
-      registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
 
   # Lint our workflows
   workflow-lint:
@@ -184,7 +177,7 @@ jobs:
 
       # The scaffold pins thruput-json-rpc-client to this CLI version, which is
       # unpublished until the release runs. Build it against this checkout's
-      # crate. publish.yml repeats the smoke against the registry only.
+      # crate. publish.yml repeats the smoke against crates.io only.
       - name: Use this checkout's thruput-json-rpc-client
         run: scripts/use-checkout-client.sh "$RUNNER_TEMP"
 

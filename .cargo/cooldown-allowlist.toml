@@ -72,6 +72,118 @@ minutes = 0
 crate = "thruput-view"
 minutes = 0
 
+[[allow.package]]
+crate = "thruput-event"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-exn"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-storage-cost"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-contract-util"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-contract-spec"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-sys"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-macros"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-domain-separator"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-native-exec"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-u256"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-test-vectors"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-rv32-runtime"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-sdk"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-spec-tool"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-erc20-test"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-erc20-native-test"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-erc20-if"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-erc20-metadata-if"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-erc20-controls-if"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-erc20-pausable-if"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-signed-op-if"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-signed-op"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-erc20-permit-if"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-erc165-if"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-erc721-if"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-sep41"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-access-control-if"
+minutes = 0
+
+[[allow.package]]
+crate = "thruput-access-control"
+minutes = 0
+
 # Security fix for RUSTSEC-2026-0391
 [[allow.exact]]
 crate = "zstd"

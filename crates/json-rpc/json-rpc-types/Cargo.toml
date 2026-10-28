@@ -6,15 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
+exclude.workspace = true
 repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Shared JSON-RPC wire types for Thruput"
-
-exclude = [
-    "tests/",
-]
 
 [lints]
 workspace = true

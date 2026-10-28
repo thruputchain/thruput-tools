@@ -6,6 +6,12 @@ deploy, and test workflow into a single binary.
 ## Install
 
 ```bash
+cargo install thruput --locked
+```
+
+Or, from a checkout of this repository:
+
+```bash
 cargo install --path crates/cli
 cargo install --path crates/rv32/lower         # optional, for standalone `rv32-lower`
 ```
@@ -345,8 +351,7 @@ same profile, toolchain, and target directory. Run `thruput build -p
 ### `thruput test`
 
 Run contract tests against the test executor. Building generated projects
-resolves the SDK from the Thruput Cargo registry, so configure a Cargo
-credential provider first. The SDK downloads its checksum-verified test
+resolves the SDK from crates.io. The SDK downloads its checksum-verified test
 executor from public storage. Tests target the host platform so they run natively.
 
 ```bash

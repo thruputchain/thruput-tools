@@ -12,10 +12,9 @@ keywords.workspace = true
 categories.workspace = true
 description = "Thruput smart contract development tools"
 
-exclude = [
-    "fixtures/",
-    "tests/",
-]
+# Spelled out rather than inherited: a package `exclude` replaces the
+# workspace one.
+exclude = ["/fixtures", "/tests"]
 
 [[bin]]
 name = "thruput"

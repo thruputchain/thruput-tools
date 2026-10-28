@@ -6,7 +6,7 @@ A successful local run does not establish safe capacity for a hosted network.
 
 ## Local scenario runner
 
-From the repository root, provide a compatible real devnode and registry access:
+From the repository root, provide a compatible real devnode:
 
 ```sh
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \

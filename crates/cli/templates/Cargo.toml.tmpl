@@ -41,16 +41,15 @@ thruput-integration-test = ["dep:thruput-json-rpc-client", "dep:tokio", "dep:ser
 # / `cargo check` (and rust-analyzer) see a buildable crate without `dev`
 # being a default feature, and the rv32 build stays `no_std`.
 [target.'cfg(target_arch = "riscv32")'.dependencies]
-thruput-sdk = { version = "={{SDK_VERSION}}", registry = "thruput" }
+thruput-sdk = { version = "={{SDK_VERSION}}" }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
-thruput-sdk = { version = "={{SDK_VERSION}}", registry = "thruput", features = ["std"] }
+thruput-sdk = { version = "={{SDK_VERSION}}", features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 serde_json = { version = "1", optional = true }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies.thruput-json-rpc-client]
 version = "{{JSON_RPC_CLIENT_VERSION}}"
-registry = "thruput"
 optional = true
 
 # The self-dependency is deliberate: it turns the `dev` feature (and so

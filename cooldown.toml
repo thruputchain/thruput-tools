@@ -8,9 +8,6 @@ lockfile-baseline = "ignore"
 [registry]
 global-min-publish-age = "15 days"
 
-[registries.thruput]
-min-publish-age = "0"
-
 # First-party crates that thruputchain/xdrs publishes to crates.io. They were
 # exempt while they came from the thruput registry; keep them exempt.
 [[allow.package]]
@@ -41,6 +38,41 @@ crates = [
     "thruput-indexer",
     "thruput-db-gateway",
     "thruput-view",
+]
+min-publish-age = "0"
+
+# First-party crates that thruputchain/thruput-sdk-rs publishes to crates.io.
+# They were exempt while they came from the thruput registry; keep them exempt.
+[[allow.package]]
+crates = [
+    "thruput-event",
+    "thruput-exn",
+    "thruput-storage-cost",
+    "thruput-contract-util",
+    "thruput-contract-spec",
+    "thruput-sys",
+    "thruput-macros",
+    "thruput-domain-separator",
+    "thruput-native-exec",
+    "thruput-u256",
+    "thruput-test-vectors",
+    "thruput-rv32-runtime",
+    "thruput-sdk",
+    "thruput-spec-tool",
+    "thruput-erc20-test",
+    "thruput-erc20-native-test",
+    "thruput-erc20-if",
+    "thruput-erc20-metadata-if",
+    "thruput-erc20-controls-if",
+    "thruput-erc20-pausable-if",
+    "thruput-signed-op-if",
+    "thruput-signed-op",
+    "thruput-erc20-permit-if",
+    "thruput-erc165-if",
+    "thruput-erc721-if",
+    "thruput-sep41",
+    "thruput-access-control-if",
+    "thruput-access-control",
 ]
 min-publish-age = "0"
 

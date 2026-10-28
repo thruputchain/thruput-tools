@@ -2,12 +2,8 @@
 
 The Thruput command-line tools for building, testing and deploying smart contracts.
 
-Requires access to the private `thruput` Cargo registry. Follow the
-[Cargo access setup](https://thruput.network/docs/cli/install/#configure-cargo-access)
-before installing.
-
 ```sh
-cargo install thruput --registry thruput --locked
+cargo install thruput --locked
 thruput --help
 ```
 

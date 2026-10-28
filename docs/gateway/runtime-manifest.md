@@ -11,7 +11,7 @@ reimplementing node semantics in a development-only backend.
 
 ## Fast smoke
 
-From the repository root, with private registry access and a compatible runtime:
+From the repository root, with a compatible runtime:
 
 ```sh
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
@@ -129,7 +129,7 @@ The supervisor's validation and process protocol are in
 ## Native RPC qualification
 
 The example starts an ephemeral node with the native wire-14 API. It requires a
-compatible real runtime and the private registry access described in the README:
+compatible real runtime:
 
 ```sh
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
