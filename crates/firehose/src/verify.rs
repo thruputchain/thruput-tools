@@ -1,12 +1,13 @@
 //! Commitment encoding mirrors hogd's Merkle trie node encoding and
 //! `hogd/xdr/indexer_payload_validation.cc`. These are Patricia roots, not hashes
 //! of the serialized batches. Prefix tries always have branch roots.
+//! Leaves commit the full key and raw value per hogd#4603/#4615.
 use sha2::{Digest, Sha256};
 use thruput_indexer::EventIndexerPulledBlock;
 
 use crate::{Error, encode, invalid};
 
-type Leaf = (Vec<u8>, [u8; 32]);
+type Leaf = (Vec<u8>, Vec<u8>);
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
@@ -37,9 +38,9 @@ fn branch(leaves: &[Leaf], depth: usize) -> [u8; 32] {
 fn node(leaves: &[Leaf], depth: usize) -> [u8; 32] {
     let key = &leaves[0].0;
     if leaves.len() == 1 {
-        let mut bytes = vec![2]; // leaf
-        path(&mut bytes, &key[depth..]);
-        bytes.push(1);
+        let mut bytes = vec![2]; // leaf, full key and raw value
+        path(&mut bytes, key);
+        bytes.extend_from_slice(&(leaves[0].1.len() as u64).to_le_bytes());
         bytes.extend_from_slice(&leaves[0].1);
         return digest(&bytes);
     }
@@ -92,10 +93,10 @@ pub(crate) fn verify(pulled: &EventIndexerPulledBlock) -> Result<(), Error> {
         let key: Vec<u8> = hash.iter().flat_map(|b| [b >> 4, b & 15]).collect();
         let mut event_bytes = encode(event)?;
         event_bytes.extend_from_slice(&encode(&body.nondeterministic_proposal_data)?);
-        // The leading 32 bytes are the tx hash, which is already the trie key.
+        // The raw event value omits the leading 32-byte tx hash (the trie key).
         // The transaction trie commits presence only, so its value is empty.
-        events.push((key.clone(), digest(&event_bytes[32..])));
-        txs.push((key, digest(&[])));
+        events.push((key.clone(), event_bytes[32..].to_vec()));
+        txs.push((key, Vec::new()));
     }
     if encode(&value.proposal_header.events_hash)? != root(events)? {
         return Err(invalid("events_hash mismatch"));
@@ -109,6 +110,62 @@ pub(crate) fn verify(pulled: &EventIndexerPulledBlock) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hogd_go_golden_roots_verify_and_reject_event_mutation() {
+        use thruput_indexer::{
+            IndexerCommittedBlock, IndexerCommittedBlockIdentity, IndexerCommittedBlockPayload,
+            IndexerOutboxOrigin,
+        };
+
+        let hex: String = include_str!("../tests/fixtures/golden-committed-payload.hex")
+            .split_whitespace()
+            .collect();
+        let bytes = hex::decode(hex).unwrap();
+        assert_eq!(bytes.len(), 588);
+        assert_eq!(
+            hex::encode(digest(&bytes)),
+            "87b210f3526d9271844760e180b96fbb17a391b60149c3883b817bbe2d866daa"
+        );
+        let payload: IndexerCommittedBlockPayload = xdrs::txs::decode(&bytes).unwrap();
+        let header = &payload.consensus_value.proposal_header;
+        assert_eq!(
+            hex::encode(encode(&header.txs_hash).unwrap()),
+            "cc7425c1b3d77f0421ad1bf20ddc8f57d30d9ba697a22f703b64a95aac67d12e"
+        );
+        assert_eq!(
+            hex::encode(encode(&header.events_hash).unwrap()),
+            "326795f5450bb6dbcbde01a7aa49752420428a9369ffae49bbdb472e94d83ff7"
+        );
+        assert_eq!(payload.tx_bodies.len(), 1);
+        assert_eq!(payload.event_logs.len(), 1);
+        let identity = IndexerCommittedBlockIdentity {
+            consensus_hash: xdrs::txs::decode(&digest(&encode(&payload.consensus_value).unwrap()))
+                .unwrap(),
+        };
+        let mut block = EventIndexerPulledBlock {
+            origin: IndexerOutboxOrigin {
+                protocol: Default::default(),
+                epoch_sequence: 0,
+                first_height: 0.into(),
+                first_prev_hash: xdrs::txs::decode(&[0; 32]).unwrap(),
+            },
+            block: IndexerCommittedBlock { payload, identity },
+        };
+        assert!(verify(&block).is_ok());
+
+        block.block.payload.event_logs.0[0].gas_consumed ^= 1;
+        block.block.identity.consensus_hash = xdrs::txs::decode(&digest(
+            &encode(&block.block.payload.consensus_value).unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            verify(&block)
+                .unwrap_err()
+                .to_string()
+                .contains("events_hash mismatch")
+        );
+    }
 
     #[test]
     fn live_hundred_transaction_roots_are_order_independent_and_reject_duplicates() {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `hog-firehose-store` now verifies the hogd#4603/#4615 full-key leaf
+  commitment used by platform `0.1.31`. Version `0.41.0` rejected every such
+  block with `events_hash mismatch`.
+
 ### Breaking Rust API changes
 
 Removed public items that nothing constructs or reads. None of them changes
