@@ -119,8 +119,9 @@ publication. This state is never persisted. After a block the client asks with
 `Initialized` again. There is no polling timer or deadline on the parked pull.
 
 A new archive fast-forwards through retained history, verifying each block's
-roots, identity and continuity without writing it. Pulls advance an in-memory
-`Initialized` cursor. `CaughtUp` must confirm the same origin; only then does
+consensus hash, transaction body hashes, duplicates and continuity without writing
+it. Pulls advance an in-memory `Initialized` cursor. `CaughtUp` must confirm the
+same origin; only then does
 store publish `floor.xdr` at the last skipped progress and park. Subsequent live
 blocks are archived. Reconnects discard the skipped progress and restart from
 `Default`. With no skipped blocks, `CaughtUp` still adopts the origin directly.
@@ -138,7 +139,7 @@ All outcomes have distinct logs and counter labels:
 
 | Outcome | Action |
 | --- | --- |
-| Block | Verify roots/identity/continuity, fsync, then advance the cursor |
+| Block | Verify consensus hash, transaction body hashes, duplicates and continuity, fsync, then advance the cursor |
 | Skipped | Verify history without storing it; advance the bootstrap cursor and count `skipped` |
 | Replay | Identical archived record; count `replay` and back off one second |
 | CaughtUp | Healthy normal state; adopt epoch boundary and park |
@@ -232,16 +233,17 @@ below quantify that cost. A segment format is the next storage optimisation if
 file count/allocation or recovery duration becomes material. There is no claim
 that this layout has been qualified for millions of files.
 
-Full recovery verifies every consensus hash and recomputes both `events_hash` and
-`txs_hash` using hogd's prefix Patricia-trie encoding, including transaction/event
-pairing, nondeterministic proposal data, and duplicate-key rejection. Hashing the
-whole serialized batch would be wrong. Live-node fixtures cover both one and
-100 transactions, branch/extension/leaf paths, and order independence. Recovery
+Full recovery verifies payload format, non-negative heights, every consensus hash,
+event/body cardinality, transaction body hashes and duplicate transactions.
+The store deliberately does not recompute `txs_hash` or `events_hash`: hogd owns
+that hashing and recomputes on load. The firehose must not track its trie encoding.
+It reads the validator's own hog-event over a private link. Live-node fixtures
+cover both one and 100 transactions, body order independence and duplicates. Recovery
 also validates file heights and chain/epoch continuity; corruption is an error,
 never silently skipped or repaired.
 
-As in hogd, signature wrappers are outside both consensus payload commitments;
-these checks do not authenticate or detect changes confined to those wrappers.
+Signature wrappers and event contents are outside the store's hash checks;
+these checks do not authenticate or detect changes confined to those fields.
 Nor are consensus hashes an external trust anchor against an attacker rewriting
 an entire archive. This verifies consistency with the archived commitments.
 

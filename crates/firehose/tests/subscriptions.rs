@@ -494,8 +494,8 @@ fn verify_received(store: &mut Store, message: &Value) {
     )
     .unwrap();
     let decoded = xdrs::txs::decode(&bytes).unwrap();
-    // Uses the existing independently fixture-tested verifier for events_hash,
-    // txs_hash, consensus hash and chain continuity, on subscriber-received bytes.
+    // Uses the fixture-tested verifier for consensus and transaction body hashes,
+    // duplicates and chain continuity, on subscriber-received bytes.
     assert!(store.append(&decoded).unwrap());
 }
 
