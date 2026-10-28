@@ -33,7 +33,7 @@ members = [
 exclude = ["crates/thruput"]
 
 [workspace.package]
-version = "0.41.0"
+version = "0.42.0"
 edition = "2024"
 # Keep in step with rust-toolchain.toml. Without this, `cargo install
 # thruput-cli` on an older stable fails deep in dependency resolution with
@@ -63,27 +63,27 @@ zstd = "0.14.3"
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
-thruput-encoding = { path = "crates/encoding", version = "=0.41.0" }
-thruput-client = { path = "crates/client", version = "=0.41.0" }
-thruput-build-info = { path = "crates/build-info", version = "=0.41.0" }
-thruput-bundle-identity = { path = "crates/bundle-identity", version = "=0.41.0" }
-thruput-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.41.0" }
-thruput-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.41.0" }
-thruput-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.41.0" }
-thruput-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.41.0" }
-thruput-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.41.0" }
-thruput-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.41.0" }
-thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.41.0" }
-thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.41.0" }
-thruput-heap-profiling = { path = "crates/heap-profiling", version = "=0.41.0" }
-thruput-signing = { path = "crates/signing", version = "=0.41.0" }
-thruput-tx-validation = { path = "crates/tx-validation", version = "=0.41.0" }
-thruput-node-supervisor = { path = "crates/node-supervisor", version = "=0.41.0" }
-thruput-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.41.0" }
-thruput-rv32-lower = { path = "crates/rv32/lower", version = "=0.41.0" }
+thruput-encoding = { path = "crates/encoding", version = "=0.42.0" }
+thruput-client = { path = "crates/client", version = "=0.42.0" }
+thruput-build-info = { path = "crates/build-info", version = "=0.42.0" }
+thruput-bundle-identity = { path = "crates/bundle-identity", version = "=0.42.0" }
+thruput-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.42.0" }
+thruput-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.42.0" }
+thruput-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.42.0" }
+thruput-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.42.0" }
+thruput-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.42.0" }
+thruput-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.42.0" }
+thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.42.0" }
+thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.42.0" }
+thruput-heap-profiling = { path = "crates/heap-profiling", version = "=0.42.0" }
+thruput-signing = { path = "crates/signing", version = "=0.42.0" }
+thruput-tx-validation = { path = "crates/tx-validation", version = "=0.42.0" }
+thruput-node-supervisor = { path = "crates/node-supervisor", version = "=0.42.0" }
+thruput-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.42.0" }
+thruput-rv32-lower = { path = "crates/rv32/lower", version = "=0.42.0" }
 
-thruput-toolchain = { path = "crates/toolchain", version = "=0.41.0" }
-thruput-cli-macros = { path = "crates/cli-macros", version = "=0.41.0" }
+thruput-toolchain = { path = "crates/toolchain", version = "=0.42.0" }
+thruput-cli-macros = { path = "crates/cli-macros", version = "=0.42.0" }
 
 # --- protocol-rs (crates.io) ---
 # These crates define or encode the protocol schema. Keep them exact and update

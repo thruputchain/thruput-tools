@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.42.0
 
 - Publish every tool crate, and the `thruput` install crate, to crates.io
   instead of the thruput registry. Install the CLI with
