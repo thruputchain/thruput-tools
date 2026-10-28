@@ -12,19 +12,16 @@ and local development, simulation, and benchmark harnesses. The node runtime
 ## Install
 
 Building from source requires Rust 1.96 or newer. This workspace and generated
-contract projects currently depend on packages in the private Thruput Cargo
-registry. Repository access alone is not enough to build them; the commands
-below require registry credentials and authentication instructions from the
-Thruput team.
+contract projects take every dependency from crates.io and need no registry
+credentials.
 
 Generated contracts pin their own nightly toolchain, which rustup installs on
 first use.
 
-Install from the registry:
+Install from crates.io:
 
 ```sh
-export CARGO_REGISTRIES_THRUPUT_INDEX="sparse+https://crates.thruput.network/api/v1/crates/"
-cargo install thruput-cli --registry thruput --locked
+cargo install thruput --locked
 thruput --version
 ```
 
@@ -109,7 +106,7 @@ on gateway or benchmark integration.
 ## Contributing
 
 From the repository root, rustup uses [rust-toolchain.toml](rust-toolchain.toml).
-Configure private registry access, then build and run the core checks:
+Build and run the core checks:
 
 ```sh
 cargo build --workspace --locked
@@ -119,7 +116,7 @@ cargo test --workspace --locked
 ```
 
 Run the CLI without installing it with
-`cargo run -p thruput-cli -- --help`. `make help` lists convenience targets.
+`cargo run -p thruput -- --help`. `make help` lists convenience targets.
 
 For the complete local contract loop against a real runtime:
 
@@ -127,7 +124,7 @@ For the complete local contract loop against a real runtime:
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-local-dx.sh
 ```
 
-Process-level smokes need registry access and a compatible runtime; the ordinary
+Process-level smokes need crates.io access and a compatible runtime; the ordinary
 workspace test command does not run ignored live-node tests.
 [CI](.github/workflows/ci.yml) also checks generated projects and TypeScript
 bindings.
@@ -142,7 +139,7 @@ npx --prefix scripts/scaffold-app playwright install chromium
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode npm test --prefix scripts/scaffold-app
 ```
 
-It requires Node.js 22.12+, private Cargo and npm registry access, and a compatible
+It requires Node.js 22.12+, crates.io and private npm registry access, and a compatible
 runtime. `CHROMIUM_EXECUTABLE` can select an installed Chromium. The harness owns
 its node and uses isolated CLI configuration and dynamically allocated ports;
 the generated app connects to the node without managing it.

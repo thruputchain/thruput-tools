@@ -1,7 +1,7 @@
 # Convenience wrapper around cargo for this workspace. Cargo stays
 # authoritative; run `make help` for the available targets.
 #
-#   make config     fetch dependencies (needs the private registry token)
+#   make config     fetch dependencies from crates.io
 #   make cli        build just the thruput CLI
 #   make node       run a local node against a hog-devnode binary
 #   make help       list every target
@@ -66,7 +66,7 @@ TOOLCHAIN := $(shell grep -m1 '^channel' rust-toolchain.toml | tr -d '"' | awk '
 .PHONY: help
 help:
 	@echo "Setup"
-	@echo "  config        cargo fetch --locked; needs the thruput registry token"
+	@echo "  config        cargo fetch --locked"
 	@echo ""
 	@echo "Build"
 	@echo "  build         the whole workspace ($(PROFILE))"
@@ -90,10 +90,7 @@ help:
 	@echo ""
 	@echo "Variables: PROFILE BINS PREFIX BINDIR DESTDIR DEVNODE_BINARY NODE_ARGS"
 
-# The SDK and several workspace crates come from the private Thruput registry,
-# so this fails without a token in ~/.cargo/credentials.toml. That token needs
-# the "Bearer " prefix, and ~/.cargo/config.toml must set
-# global-credential-providers = ["cargo:token"].
+# Every dependency comes from crates.io, so this needs no credentials.
 .PHONY: config
 config:
 	$(CARGO) fetch --locked
@@ -141,7 +138,7 @@ check-native:
 
 .PHONY: cli
 cli:
-	$(CARGO) build -p thruput-cli $(CARGO_PROFILE_FLAG)
+	$(CARGO) build -p thruput $(CARGO_PROFILE_FLAG)
 
 # Runs the built binary rather than `cargo run` so an unbuilt tree says so
 # instead of starting a long compile with a node command tacked on the end.

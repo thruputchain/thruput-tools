@@ -9,10 +9,6 @@ on:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  CARGO_REGISTRIES_THRUPUT_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
-  CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
-  # Fallback if the CI runner overwrites .cargo/config.toml
-  CARGO_REGISTRIES_THRUPUT_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
 
 permissions:
   contents: read
@@ -22,11 +18,8 @@ jobs:
   dependency-policy:
     permissions:
       contents: read
+    # No registry credentials: deny.toml admits crates.io only.
     uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
-    with:
-      registry-name: thruput
-    secrets:
-      registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
 
   # Lint our workflows
   workflow-lint:
@@ -59,14 +52,6 @@ jobs:
       - name: Clippy (heap-profiling feature)
         run: cargo clippy --locked -p thruput-heap-profiling -p thruput-json-rpc-gateway -p thruput-faucet --all-targets --features thruput-heap-profiling/jemalloc,thruput-json-rpc-gateway/heap-profiling,thruput-faucet/heap-profiling -- -D warnings
 
-      # Outside the workspace (see its Cargo.toml), so the steps above skip it.
-      # --locked fails if its Cargo.lock no longer matches its manifest.
-      - name: Clippy (bare thruput crate)
-        working-directory: crates/thruput
-        run: |
-          cargo fmt --check
-          cargo clippy --all-targets --locked -- -D warnings
-
   test:
     needs: dependency-policy # Check deps before building anything
     name: Test
@@ -89,7 +74,7 @@ jobs:
         run: |
           python3 scripts/test_import_docs_snapshot.py
           python3 scripts/import-docs-snapshot.py
-          cargo package -p thruput-cli --list --allow-dirty --locked > /tmp/cli-package-files.txt
+          cargo package -p thruput --list --allow-dirty --locked > /tmp/cli-package-files.txt
           grep -Fx 'assets/docs/snapshot.tar.gz' /tmp/cli-package-files.txt
           grep -Fx 'assets/docs/snapshot-lock.json' /tmp/cli-package-files.txt
 
@@ -107,20 +92,20 @@ jobs:
 
           package_args=(
             -p thruput-json-rpc-gateway
-            -p thruput-cli
+            -p thruput
             -p thruput-rv32-lower
             -p thruput-faucet
           )
           targets=(
             thruput-json-rpc-gateway:hog-gateway
-            thruput-cli:thruput
+            thruput:thruput
             thruput-rv32-lower:rv32-lower
             thruput-faucet:thruput-faucet
           )
           source_commit=$(git rev-parse HEAD)
           export GROUNDHOG_SOURCE_COMMIT="$source_commit"
 
-          cargo test --quiet --locked -p thruput-cli \
+          cargo test --quiet --locked -p thruput \
             --test cli_integration_test version_flag
           cargo test --quiet --locked -p thruput-json-rpc-gateway \
             --test version_identity
@@ -144,7 +129,7 @@ jobs:
         timeout-minutes: 20
         run: |
           set -euo pipefail
-          cargo build --locked -p thruput-cli -p thruput-json-rpc-gateway --bins
+          cargo build --locked -p thruput -p thruput-json-rpc-gateway --bins
           runtime_version=$(python3 -c 'import json; print(json.load(open("crates/toolchain/catalog/hog-devnode.json"))["defaultVersion"])')
           target/debug/thruput --json toolchain install "$runtime_version" > /tmp/history-toolchain.json
           export THRUPUT_DEVNODE_BINARY
@@ -153,7 +138,7 @@ jobs:
           for test in real_block_queries real_local_state real_native_qualification real_network_identity; do
             cargo test --locked -p thruput-node-supervisor --test "$test" -- --ignored --test-threads=1
           done
-          cargo test --locked -p thruput-cli --test native_rpc_qualification -- --ignored --test-threads=1
+          cargo test --locked -p thruput --test native_rpc_qualification -- --ignored --test-threads=1
 
   cli-smoke:
     needs: dependency-policy # Check deps before building anything
@@ -177,14 +162,14 @@ jobs:
           cache: rust
 
       - name: Build thruput CLI
-        run: cargo build --locked -p thruput-cli
+        run: cargo build --locked -p thruput
 
       - name: Put thruput on PATH
         run: echo "${GITHUB_WORKSPACE}/target/debug" >> "$GITHUB_PATH"
 
       # The scaffold pins thruput-json-rpc-client to this CLI version, which is
       # unpublished until the release runs. Build it against this checkout's
-      # crate. publish.yml repeats the smoke against the registry only.
+      # crate. publish.yml repeats the smoke against crates.io only.
       - name: Use this checkout's thruput-json-rpc-client
         run: scripts/use-checkout-client.sh "$RUNNER_TEMP"
 
@@ -335,7 +320,7 @@ jobs:
           scope: '@thruputchain'
       - name: Build CLI and install selected runtime
         run: |
-          cargo build --locked -p thruput-cli
+          cargo build --locked -p thruput
           ./target/debug/thruput toolchain install --non-interactive
       - name: Install browser test dependencies
         run: |
@@ -373,7 +358,7 @@ jobs:
           cache: rust
 
       - name: Build thruput CLI
-        run: cargo build --locked -p thruput-cli
+        run: cargo build --locked -p thruput
 
       # Regenerating in place means the diff below also proves the checked-in
       # bindings are what the CLI emits today, not a stale snapshot.
@@ -398,7 +383,7 @@ jobs:
           if ! git diff --exit-code -- "$FIXTURES"; then
             echo
             echo "Generated bindings differ from the checked-in snapshots."
-            echo "Run: UPDATE_SNAPSHOTS=1 cargo test -p thruput-cli --lib codegen"
+            echo "Run: UPDATE_SNAPSHOTS=1 cargo test -p thruput --lib codegen"
             exit 1
           fi
           # git diff only covers tracked files, so check for untracked bindings too.

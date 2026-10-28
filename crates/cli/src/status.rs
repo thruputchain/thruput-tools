@@ -115,17 +115,6 @@ fn environment_items(report: &checks::StatusReport) -> Vec<(String, String)> {
             "Genesis Root".into(),
             genesis_root_artifact_label(&report.environment.genesis_root_artifact),
         ),
-        (
-            "Global Registry".into(),
-            if report.environment.registry_configured {
-                format!(
-                    "configured ({})",
-                    report.environment.cargo_config_path.display()
-                )
-            } else {
-                "not configured".into()
-            },
-        ),
     ]
 }
 

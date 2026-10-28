@@ -1,0 +1,53 @@
+# Yanks (or un-yanks) one version of every published crate from crates.io.
+# Crates that never had that version are skipped; the run fails only if
+# nothing was yanked.
+#
+# Trusted publishing tokens can only publish, so this needs the
+# CRATESIO_YANK_TOKEN secret: a crates.io API token with the yank scope,
+# owned by an owner of the crates. Keep it a secret of the `release`
+# environment (see publish.yml), so only runs it admits can use it.
+name: Yank package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to yank (e.g. 0.42.0)'
+        required: true
+        type: string
+      undo:
+        description: 'Un-yank (restore) instead of yank'
+        required: false
+        type: boolean
+        default: false
+
+# A yank racing a publish of the same version would leave crates.io state
+# depending on which finished last; queue behind publish.yml.
+concurrency:
+  group: publish
+
+permissions:
+  contents: read
+
+jobs:
+  yank:
+    permissions:
+      contents: read
+    environment: release
+    runs-on: namespace-profile-hogd-linux-2604
+
+    steps:
+      - name: Checkout
+        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
+        with:
+          persist-credentials: false
+
+      # Without a packages list, the action yanks every workspace crate that
+      # isn't publish = false.
+      - name: Yank
+        uses: thruputchain/actions/cargo-yank@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+        with:
+          version: ${{ inputs.version }}
+          undo: ${{ inputs.undo }}
+          registry-name: crates-io
+          registry-token: ${{ secrets.CRATESIO_YANK_TOKEN }}

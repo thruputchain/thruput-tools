@@ -1,5 +1,7 @@
 [package]
-name = "thruput-cli"
+# Published as `thruput`, so `cargo install thruput` installs the `thruput`
+# binary. The library keeps the `thruput_cli` name.
+name = "thruput"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,13 +11,16 @@ publish.workspace = true
 repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
-categories.workspace = true
+categories = ["development-tools", "command-line-utilities"]
 description = "Thruput smart contract development tools"
 
-exclude = [
-    "fixtures/",
-    "tests/",
-]
+# Spelled out rather than inherited: a package `exclude` replaces the
+# workspace one.
+exclude = ["/fixtures", "/tests"]
+
+[lib]
+name = "thruput_cli"
+path = "src/lib.rs"
 
 [[bin]]
 name = "thruput"

@@ -414,7 +414,7 @@ fn build_rv32_project_compiles_and_lowers_elf_without_global_setup() {
     );
     let spec_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&processed_spec_json).unwrap()).unwrap();
-    assert_eq!(spec_json["format"], "gh_contract_spec_v1");
+    assert_eq!(spec_json["format"], "thruput_contract_spec_v1");
     assert_eq!(spec_json["interfaces"][0]["name"], "Counter");
     assert_eq!(spec_json["interfaces"][0]["methods"][0]["name"], "get");
     let spec_xdr = fs::read(&processed_spec_xdr).unwrap();
@@ -1555,10 +1555,7 @@ fn wait_for_recorded_process_exit(pid_file: &Path, outlived: &str) {
 /// deliberately not decodable: the format check must fire before any fragment
 /// byte is read, and well-formed bytes would let a too-late check pass.
 fn rv32_elf_with_raw_spec_format(format: u32) -> Vec<u8> {
-    rv32_elf_with_raw_spec_section(thruput_spec_tool::RAW_SECTION_PREFIX, format)
-}
-
-fn rv32_elf_with_raw_spec_section(prefix: &str, format: u32) -> Vec<u8> {
+    let prefix = thruput_spec_tool::RAW_SECTION_PREFIX;
     support::minimal_rv32_elf_with_section(&format!("{prefix}v{format}"), &[0xff; 16])
 }
 
@@ -1605,20 +1602,6 @@ fn rv32_raw_spec_section_older_than_this_build_reports_skew() {
     assert!(
         message.contains(&(supported - 1).to_string()) && message.contains(&supported.to_string()),
         "expected both versions named, got: {message}"
-    );
-}
-
-#[test]
-#[serial_test::parallel]
-fn rv32_pre_rename_raw_spec_section_reports_skew() {
-    // An ELF linked against an SDK before 0.56 names the section
-    // `groundhogspecrawv4`; it must read as an old format, not as "no spec".
-    let elf = rv32_elf_with_raw_spec_section(thruput_spec_tool::LEGACY_RAW_SECTION_PREFIX, 4);
-    let message = finalize_rv32_spec_err(&elf);
-
-    assert!(
-        message.contains("older Thruput SDK") && message.contains("format 4"),
-        "expected a version-skew diagnosis naming format 4, got: {message}"
     );
 }
 

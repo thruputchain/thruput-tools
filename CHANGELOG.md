@@ -1,7 +1,29 @@
 # Changelog
 
-## Unreleased
+## 0.42.0
 
+- Publish every tool crate to crates.io instead of the thruput registry.
+  Install the CLI with `cargo install thruput --locked`; no registry
+  configuration or token is needed.
+- The CLI package is now `thruput`, replacing both `thruput-cli` and the
+  separate `thruput` crate that only wrapped it. Its library is still
+  `thruput_cli`. Use `cargo install thruput` and `-p thruput` where you used
+  `thruput-cli`. On crates.io, `thruput-cli` is a stub that only points to
+  `thruput`.
+- Update the Rust SDK to `0.58.0` and standard interfaces to `0.1.71`, now
+  taken from crates.io. Newly generated projects pin SDK `0.58.0` and resolve
+  every dependency from crates.io. Existing projects still name the thruput
+  registry; to move one, delete the `[registries]` and `[source]` tables from
+  its `.cargo/config.toml` and the `registry = "thruput"` keys from its
+  `Cargo.toml`.
+- Following SDK `0.58.0`, spec JSON sidecars carry
+  `"format": "thruput_contract_spec_v1"` (was `gh_contract_spec_v1`), and an
+  RV32 ELF whose raw spec section still has the pre-0.56 `groundhogspecraw`
+  name reads as having no contract spec rather than an older spec format.
+  `rv32-lower` still strips that section.
+- `thruput status` no longer checks for a global thruput registry entry. Its
+  JSON report drops `environment.registryConfigured` and
+  `environment.cargoConfigPath`, and the `no_registry` finding is gone.
 - `hog-firehose-store` no longer recomputes `txs_hash`/`events_hash` Merkle
   roots; it verifies the consensus hash, transaction body hashes and duplicate
   transactions only. `0.41.0` rejected every platform `0.1.31` block with

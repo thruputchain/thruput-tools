@@ -9,7 +9,7 @@ for methods and payloads.
 
 ## Build
 
-From the workspace root, with private Thruput registry access:
+From the workspace root:
 
 ```sh
 cargo build --locked -p thruput-json-rpc-gateway --bin hog-gateway

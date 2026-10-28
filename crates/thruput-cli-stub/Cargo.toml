@@ -1,0 +1,27 @@
+# Holds the `thruput-cli` name on crates.io, which the CLI published under
+# before it became `thruput` (crates/cli). It has no code and no binary, so
+# `cargo install thruput-cli` stops, and the crate page says what to run.
+[package]
+name = "thruput-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+exclude.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Renamed to `thruput`: install the Thruput CLI with `cargo install thruput`"
+readme = "README.md"
+
+# Not `thruput_cli`, the CLI's library name: two libraries with one name
+# collide in the target directory, and `cargo doc --workspace` refuses them.
+[lib]
+name = "thruput_cli_renamed"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

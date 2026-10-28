@@ -11,7 +11,7 @@ reimplementing node semantics in a development-only backend.
 
 ## Fast smoke
 
-From the repository root, with private registry access and a compatible runtime:
+From the repository root, with a compatible runtime:
 
 ```sh
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
@@ -129,7 +129,7 @@ The supervisor's validation and process protocol are in
 ## Native RPC qualification
 
 The example starts an ephemeral node with the native wire-14 API. It requires a
-compatible real runtime and the private registry access described in the README:
+compatible real runtime:
 
 ```sh
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
@@ -142,7 +142,7 @@ from the same protocol revision, including typed cursor outcomes. Ctrl-C stops t
 listener and runtime. The example checks API behavior, not production capacity;
 if the runtime exits early, stop the example with Ctrl-C.
 
-Build the CLI with `cargo build -p thruput-cli`. Use the printed URL for reads:
+Build the CLI with `cargo build -p thruput`. Use the printed URL for reads:
 
 ```sh
 target/debug/thruput tx list ADDRESS --rpc-url RPC_URL --json

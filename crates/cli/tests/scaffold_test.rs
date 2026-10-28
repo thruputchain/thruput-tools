@@ -70,6 +70,9 @@ fn assert_scaffold_cargo_config(dir: &std::path::Path) {
     assert_eq!(config.matches("panic=immediate-abort").count(), 1);
     assert!(!config.contains(r#""panic=abort""#));
     assert!(!config.contains("wasm"));
+    // Dependencies come from crates.io, so no registry is configured.
+    assert!(!config.contains("[registries"));
+    assert!(!config.contains("[source"));
 
     // The overlay is `build-std` and nothing else: cargo JOINS target
     // rustflags across config layers, so a `[target.*]` section here would
@@ -115,7 +118,7 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
 
 fn assert_counter_manifest(cargo: &str) {
     assert!(cargo.contains(r#"name = "my-counter""#));
-    assert!(cargo.contains("registry = \"thruput\""));
+    assert!(!cargo.contains("registry"));
     assert!(!cargo.contains("thruput-sdk/spec"));
     // The version pins live once, in the `scaffold` constants; here we assert
     // they were substituted (no placeholder survives below) and land on the
@@ -123,11 +126,11 @@ fn assert_counter_manifest(cargo: &str) {
     // `thruput-sdk` is declared once per target: plain on the guest, with `std` on
     // the host so `cargo build` / `cargo check` work without `dev`.
     assert!(cargo.contains(&format!(
-        r#"thruput-sdk = {{ version = "={}", registry = "thruput" }}"#,
+        r#"thruput-sdk = {{ version = "={}" }}"#,
         thruput_cli::scaffold::SCAFFOLD_SDK_VERSION
     )));
     assert!(cargo.contains(&format!(
-        r#"thruput-sdk = {{ version = "={}", registry = "thruput", features = ["std"] }}"#,
+        r#"thruput-sdk = {{ version = "={}", features = ["std"] }}"#,
         thruput_cli::scaffold::SCAFFOLD_SDK_VERSION
     )));
     assert!(cargo.contains(r#"[target.'cfg(target_arch = "riscv32")'.dependencies]"#));

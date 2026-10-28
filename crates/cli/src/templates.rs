@@ -178,7 +178,7 @@ pub const CATALOG: &[Template] = &[
             "contract tests",
             "Thruput project configuration",
         ],
-        prerequisites: &["Rust with rustup", "Thruput Cargo registry credentials"],
+        prerequisites: &["Rust with rustup"],
         next_steps: &["cargo test", "thruput build", "thruput test"],
         files: &[COUNTER, CONTRACT_README],
         agent_notes: None,
@@ -196,7 +196,7 @@ pub const CATALOG: &[Template] = &[
             "Thruput CLI configured via thruput init",
             "running thruput node",
             "Rust with rustup",
-            "Thruput Cargo and npm registry access",
+            "Thruput npm registry access",
             "Node.js 22.12+ and npm",
         ],
         next_steps: &[

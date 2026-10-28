@@ -1,9 +1,3 @@
-[registries.thruput]
-index = "sparse+https://crates.thruput.network/api/v1/crates/"
-
-[source.thruput]
-registry = "sparse+https://crates.thruput.network/api/v1/crates/"
-
 # Host tooling only: do not merge these flags into RV32 contract builds.
 [target.'cfg(target_os = "macos")']
 rustflags = ["-C", "force-frame-pointers=yes"]

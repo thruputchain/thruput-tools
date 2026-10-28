@@ -10,10 +10,11 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Lower a RISC-V rv32im contract ELF to the canonical Thruput RV32 artifact"
-# Published to the private `thruput` registry (inherits the workspace
-# allow-list) so hogd can install / shell out to the `rv32-lower` binary and
-# sdk_rs can depend on the library.
+# Published to crates.io (inherits the workspace allow-list) so hogd can
+# install / shell out to the `rv32-lower` binary and sdk_rs can depend on the
+# library.
 publish.workspace = true
+exclude.workspace = true
 
 [[bin]]
 name = "rv32-lower"

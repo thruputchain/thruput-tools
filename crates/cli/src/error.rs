@@ -855,7 +855,7 @@ fn cargo_failure_hint(stderr: &str) -> Cow<'static, str> {
             .contains("failed to select a version for the requirement `thruput-json-rpc-client =")
         {
             "the project's thruput-json-rpc-client version is unavailable in the configured registry; \
-         use a published CLI with its matching dependencies, or patch the registry dependency to \
+         use a published CLI with its matching dependencies, or patch the crates.io dependency to \
          the matching local RPC client source when testing an unpublished CLI"
         } else if stderr.contains("incompatible with `immediate-abort`") {
             "the prebuilt `core` uses a different panic strategy than the \

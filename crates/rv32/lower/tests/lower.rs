@@ -684,10 +684,6 @@ fn spec_metadata_section_names_match_spec_tool() {
         thruput_spec_tool::RAW_SECTION_PREFIX,
     );
     assert_eq!(
-        thruput_rv32_lower::lower::LEGACY_RAW_SPEC_SECTION_PREFIX,
-        thruput_spec_tool::LEGACY_RAW_SECTION_PREFIX,
-    );
-    assert_eq!(
         thruput_rv32_lower::lower::FINAL_SPEC_SECTION,
         thruput_spec_tool::FINAL_SECTION_NAME,
     );

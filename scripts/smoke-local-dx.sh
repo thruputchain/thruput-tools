@@ -406,10 +406,10 @@ patches = {
     "thruput-spec": "thruput-spec",
     "thruput-trace": "thruput-trace",
     "thruput-xdr": "thruput-xdr",
+    "thruput-xdr-macros": "thruput-xdr-macros",
     "thruput-syscall": "thruput-syscall",
-    "hogexec-internal": "hogexec-internal",
 }
-lines.extend(["", '[patch."sparse+https://crates.thruput.network/api/v1/crates/"]'])
+lines.extend(["", "[patch.crates-io]"])
 for package, directory in patches.items():
     path = protocol_path / directory
     if not path.is_dir():
@@ -589,10 +589,10 @@ HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     log "Building CLI and standalone gateway"
-    cargo build --locked -p thruput-cli -p thruput-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --locked -p thruput -p thruput-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
 else
     log "Building CLI"
-    cargo build --locked -p thruput-cli --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build --locked -p thruput --manifest-path "$REPO_ROOT/Cargo.toml"
 fi
 
 WORK="$(mktemp -d)"

@@ -15,7 +15,7 @@ Verify behavior in the affected source and tests.
 | Gateway and local runtime lifecycle | `crates/json-rpc/json-rpc-gateway/`, `crates/node-supervisor/` |
 | hogd response mapping and internal transport | `crates/x23/hogd-backend/`, `crates/x23/x23-transport/` |
 | Embeddable contract invocation | `crates/client/`; keep CLI configuration and node supervision outside this library |
-| CLI dispatch and commands | `crates/cli/src/app.rs`; `crates/thruput/` only packages the same binary |
+| CLI dispatch and commands | `crates/cli/src/app.rs`; the package is `thruput`, its library `thruput_cli` |
 | CLI output, prompts, and JSON reports | `crates/cli/src/print.rs`, `crates/cli/src/print/`; reuse `Print` |
 | CLI error metadata | `crates/cli/src/error.rs`, `crates/cli/tests/error_metadata.rs` |
 | Generated projects and bindings | `crates/cli/templates/`, `crates/cli/src/codegen.rs`, `crates/cli/tests/` |
@@ -56,7 +56,7 @@ cargo test --workspace --locked
   applicable generated-project and TypeScript checks from the workflow.
 - For snapshots, follow the owning test's update procedure, inspect the diff,
   then rerun without `UPDATE_SNAPSHOTS` to check the result.
-- Process smokes need registry access, a compatible real `hog-devnode`, localhost
+- Process smokes need crates.io access, a compatible real `hog-devnode`, localhost
   access, and writable runtime/cache directories. See README prerequisites and
   the relevant script: `scripts/smoke-local-dx.sh`,
   `scripts/smoke-runtime-manifest-bench.sh`, or `scripts/smoke-testkit-local.sh`.

@@ -415,7 +415,7 @@ fi
 
 log "Building $BENCH_BUILD_PROFILE CLI, gateway, and bench"
 cargo build "${BENCH_BUILD_ARGS[@]}" \
-    -p thruput-cli -p thruput-json-rpc-gateway -p thruput-bench \
+    -p thruput -p thruput-json-rpc-gateway -p thruput-bench \
     --manifest-path "$REPO_ROOT/Cargo.toml"
 
 if [[ -n "$BENCH_RESULTS_DIR" ]]; then
