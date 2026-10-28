@@ -130,7 +130,10 @@ jobs:
           set -euo pipefail
           status=0
           for package in $PACKAGES; do
-            if cargo package --list --locked --package "$package" | grep '^tests/'; then
+            # Assigned first, so a failed listing fails the step instead of
+            # reading as a clean one inside the `if`.
+            files=$(cargo package --list --locked --package "$package")
+            if grep '^tests/' <<<"$files"; then
               echo "::error::$package would publish its tests/ directory"
               status=1
             fi
