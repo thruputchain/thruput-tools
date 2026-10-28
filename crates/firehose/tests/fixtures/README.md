@@ -24,8 +24,8 @@ appends through the same commitment-verifying store as `hog-firehose-store`.
   events. This is a commitment fixture, not a throughput claim about
   successful contract calls.
 
-These preserve hogd-produced roots as an independent compatibility oracle for
-the Rust verifier. No key material is included; accounts use the public local
+The store checks the consensus hash and transaction body hashes only, with
+duplicate rejection. No key material is included; accounts use the public local
 development seed.
 
 To recapture, install the catalog node with `thruput toolchain install` and
@@ -40,9 +40,5 @@ more block and capture again with target height 32. Wrap the
 height-1 and height-32 hex at 60 columns without altering its bytes. Confirm
 the transaction counts and both roots before replacing fixtures.
 
-The `thruput-xdr` bindings include `TxEventLog::gas_consumed`. Like hogd, the
-verifier serializes the whole event log followed by nondeterministic proposal
-data, using the leading transaction hash as the trie key and the remaining
-bytes as its value. Gas consumption is therefore included in the events-root
-commitment without a verifier change. Binding bumps that change this encoding
-require a fresh live capture, never a patch to the old fixture bytes.
+A fresh live capture is still the way to refresh fixtures after XDR changes,
+never a patch to the old fixture bytes.
