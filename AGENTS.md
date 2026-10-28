@@ -15,7 +15,7 @@ Verify behavior in the affected source and tests.
 | Gateway and local runtime lifecycle | `crates/json-rpc/json-rpc-gateway/`, `crates/node-supervisor/` |
 | hogd response mapping and internal transport | `crates/x23/hogd-backend/`, `crates/x23/x23-transport/` |
 | Embeddable contract invocation | `crates/client/`; keep CLI configuration and node supervision outside this library |
-| CLI dispatch and commands | `crates/cli/src/app.rs`; `crates/thruput/` only packages the same binary |
+| CLI dispatch and commands | `crates/cli/src/app.rs`; the package is `thruput`, its library `thruput_cli` |
 | CLI output, prompts, and JSON reports | `crates/cli/src/print.rs`, `crates/cli/src/print/`; reuse `Print` |
 | CLI error metadata | `crates/cli/src/error.rs`, `crates/cli/tests/error_metadata.rs` |
 | Generated projects and bindings | `crates/cli/templates/`, `crates/cli/src/codegen.rs`, `crates/cli/tests/` |

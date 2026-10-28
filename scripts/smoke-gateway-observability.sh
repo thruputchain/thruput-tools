@@ -271,7 +271,7 @@ DEVNODE_BINARY="$(find_hogd_dev_binary)"
 HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
 log "Building CLI and gateway"
-cargo build -p thruput-cli -p thruput-json-rpc-gateway \
+cargo build -p thruput -p thruput-json-rpc-gateway \
     --manifest-path "$REPO_ROOT/Cargo.toml"
 
 WORK="$(mktemp -d)"

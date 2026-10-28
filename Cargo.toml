@@ -29,14 +29,12 @@ members = [
     "crates/bench",
     "crates/testkit",
 ]
-# Builds the same `thruput` binary as crates/cli; see its Cargo.toml.
-exclude = ["crates/thruput"]
 
 [workspace.package]
 version = "0.42.0"
 edition = "2024"
 # Keep in step with rust-toolchain.toml. Without this, `cargo install
-# thruput-cli` on an older stable fails deep in dependency resolution with
+# thruput` on an older stable fails deep in dependency resolution with
 # one "<crate> requires rustc 1.96" line per crate instead of naming this
 # package's requirement up front.
 rust-version = "1.96"

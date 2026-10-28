@@ -138,7 +138,7 @@ check-native:
 
 .PHONY: cli
 cli:
-	$(CARGO) build -p thruput-cli $(CARGO_PROFILE_FLAG)
+	$(CARGO) build -p thruput $(CARGO_PROFILE_FLAG)
 
 # Runs the built binary rather than `cargo run` so an unbuilt tree says so
 # instead of starting a long compile with a node command tacked on the end.

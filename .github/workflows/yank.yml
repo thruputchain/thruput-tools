@@ -1,6 +1,6 @@
-# Yanks (or un-yanks) one version of every published crate from crates.io,
-# the bare `thruput` crate included. Crates that never had that version are
-# skipped; a step fails only if it yanked nothing.
+# Yanks (or un-yanks) one version of every published crate from crates.io.
+# Crates that never had that version are skipped; the run fails only if
+# nothing was yanked.
 #
 # Trusted publishing tokens can only publish, so this needs the
 # CRATESIO_YANK_TOKEN secret: a crates.io API token with the yank scope,
@@ -44,21 +44,10 @@ jobs:
 
       # Without a packages list, the action yanks every workspace crate that
       # isn't publish = false.
-      - name: Yank workspace crates
+      - name: Yank
         uses: thruputchain/actions/cargo-yank@3e0d08d054591a349331ab57fe72197d6ccc0cf3
         with:
           version: ${{ inputs.version }}
           undo: ${{ inputs.undo }}
           registry-name: crates-io
           registry-token: ${{ secrets.CRATESIO_YANK_TOKEN }}
-
-      # Outside the workspace, so the step above doesn't see it.
-      - name: Yank bare thruput crate
-        uses: thruputchain/actions/cargo-yank@3e0d08d054591a349331ab57fe72197d6ccc0cf3
-        with:
-          version: ${{ inputs.version }}
-          undo: ${{ inputs.undo }}
-          registry-name: crates-io
-          registry-token: ${{ secrets.CRATESIO_YANK_TOKEN }}
-          cargo-toml-path: crates/thruput/Cargo.toml
-          packages: thruput

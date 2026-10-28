@@ -142,7 +142,7 @@ from the same protocol revision, including typed cursor outcomes. Ctrl-C stops t
 listener and runtime. The example checks API behavior, not production capacity;
 if the runtime exits early, stop the example with Ctrl-C.
 
-Build the CLI with `cargo build -p thruput-cli`. Use the printed URL for reads:
+Build the CLI with `cargo build -p thruput`. Use the printed URL for reads:
 
 ```sh
 target/debug/thruput tx list ADDRESS --rpc-url RPC_URL --json

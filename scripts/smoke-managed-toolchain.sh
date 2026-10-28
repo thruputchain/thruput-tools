@@ -4,7 +4,7 @@ set -euo pipefail
 TASK_REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ -z "${THRUPUT_CLI:-}" ]]; then
     THRUPUT_CLI="$(cargo build --locked --manifest-path "$TASK_REPO_ROOT/Cargo.toml" \
-        -p thruput-cli --bin thruput --message-format=json | python3 -c '
+        -p thruput --bin thruput --message-format=json | python3 -c '
 import json, sys
 artifacts = [json.loads(line) for line in sys.stdin]
 paths = [a["executable"] for a in artifacts if a.get("reason") == "compiler-artifact"

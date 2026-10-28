@@ -116,7 +116,7 @@ cargo test --workspace --locked
 ```
 
 Run the CLI without installing it with
-`cargo run -p thruput-cli -- --help`. `make help` lists convenience targets.
+`cargo run -p thruput -- --help`. `make help` lists convenience targets.
 
 For the complete local contract loop against a real runtime:
 

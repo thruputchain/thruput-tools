@@ -10,9 +10,8 @@ Run the **Release package** GitHub Actions workflow for a normal release.
 Dispatch it with `dry-run` to run every check without tagging or publishing.
 
 - [`publish.yml`](../.github/workflows/publish.yml) publishes the Rust crates to
-  crates.io, including the standalone `thruput` install crate after
-  `thruput-cli`. It creates and pushes the matching `vX.Y.Z` tag, then
-  dispatches binary packaging. Smoke tests then install that published CLI and
+  crates.io, the CLI among them as `thruput` (`crates/cli`). It creates and
+  pushes the matching `vX.Y.Z` tag, then dispatches binary packaging. Smoke tests then install that published CLI and
   build and test both generated templates from crates.io alone.
 - [`release.yml`](../.github/workflows/release.yml) is dispatch-only and internal to
   `publish.yml`. Do not run it directly for normal releases.
@@ -20,14 +19,12 @@ Dispatch it with `dry-run` to run every check without tagging or publishing.
   every published crate.
 
 Before release, bump the workspace version in `Cargo.toml` and keep internal
-workspace dependency pins aligned. `crates/thruput` is outside the workspace,
-so bump its version and its `thruput-cli` pin by hand; a `thruput-cli` test
-fails if they drift. Do not manually push `v*` tags.
+workspace dependency pins aligned. Do not manually push `v*` tags.
 
 The SDK and protocol crates are exact pins in `Cargo.toml`, and generated
 projects pin the SDK version in `crates/cli/src/scaffold.rs`. Each pinned
-version must already be on crates.io: refresh `Cargo.lock` and
-`crates/thruput/Cargo.lock` after moving a pin.
+version must already be on crates.io: refresh `Cargo.lock` after moving a
+pin.
 
 ## crates.io credentials
 

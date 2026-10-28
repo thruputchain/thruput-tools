@@ -1,5 +1,4 @@
-//! The `thruput` command-line entry point, shared by the `thruput-cli` and
-//! `thruput` packages so both install the same binary.
+//! The `thruput` command-line entry point.
 
 use crate::result::CommandResult;
 use crate::{CliError, Print};

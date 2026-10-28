@@ -9,11 +9,6 @@
 # release, so a run that fails partway is resumed by dispatching it again on
 # the tagged commit.
 #
-# The bare `thruput` crate (crates/thruput) publishes last, under the same
-# tag. It is outside the workspace, and crates-io-publish only sees the
-# workspace it runs in, so its steps run that action's scripts from
-# crates/thruput instead.
-#
 # Authentication: crates.io trusted publishing (GitHub OIDC) for existing
 # crates; see crates-io-publish's README in thruputchain/actions. Creating a
 # crate needs the CRATESIO_CREATE_PACKAGE_TOKEN secret, a crates.io API token
@@ -77,7 +72,7 @@ env:
     thruput-rv32-lower
     thruput-toolchain
     thruput-cli-macros
-    thruput-cli
+    thruput
     thruput-testkit
 
 permissions:
@@ -171,43 +166,6 @@ jobs:
           packages: ${{ env.PACKAGES }}
           bootstrap-token: ${{ secrets.CRATESIO_CREATE_PACKAGE_TOKEN }}
 
-      # The bare crate's steps below run crates-io-publish's scripts directly,
-      # from crates/thruput. Keep this ref on the commit the `uses:` lines pin,
-      # and the env below on the inputs that action.yml maps for each mode.
-      - name: Fetch crates-io-publish for the bare thruput crate
-        env:
-          ACTIONS_REF: 3e0d08d054591a349331ab57fe72197d6ccc0cf3
-        run: |
-          set -euo pipefail
-          git init -q "$RUNNER_TEMP/thruputchain-actions"
-          cd "$RUNNER_TEMP/thruputchain-actions"
-          git fetch -q --depth 1 https://github.com/thruputchain/actions "$ACTIONS_REF"
-          git checkout -q --detach FETCH_HEAD
-          test "$(git rev-parse HEAD)" = "$ACTIONS_REF"
-
-      # Its version and `thruput-cli` pin are bumped by hand, so first check
-      # that it releases with the workspace, under the same tag.
-      - name: Check release (bare thruput crate)
-        id: check-bare
-        working-directory: crates/thruput
-        env:
-          PACKAGES: thruput
-          TAG_PREFIX: v
-          ON_EXISTING_TAG: fail
-          BOOTSTRAP_TOKEN: ${{ secrets.CRATESIO_CREATE_PACKAGE_TOKEN }}
-          REQUIRE_TRUSTED_PUBLISHING: 'true'
-          WORKSPACE_VERSION: ${{ steps.check.outputs.version }}
-        run: |
-          set -euo pipefail
-          version=$(cargo metadata --no-deps --format-version 1 --locked \
-            | jq -r '.packages[] | select(.name == "thruput") | .version')
-          if [ "$version" != "$WORKSPACE_VERSION" ]; then
-            echo "::error::crates/thruput is at $version, but the workspace is at $WORKSPACE_VERSION"
-            echo "::error::Bump crates/thruput's version and its thruput-cli pin with the workspace version"
-            exit 1
-          fi
-          bash "$RUNNER_TEMP/thruputchain-actions/crates-io-publish/check.sh"
-
       - name: Tag release
         id: tag
         if: ${{ !inputs.dry-run && steps.check.outputs.release == 'true' }}
@@ -225,21 +183,6 @@ jobs:
           git-tag: ${{ steps.tag.outputs.tag }}
           bootstrap-token: ${{ secrets.CRATESIO_CREATE_PACKAGE_TOKEN }}
           crate-owners: ${{ env.CRATE_OWNERS }}
-
-      # After thruput-cli is live: the bare crate's publish-time verify build
-      # resolves it from crates.io.
-      - name: Publish bare thruput crate
-        if: ${{ !inputs.dry-run && steps.check-bare.outputs.release == 'true' }}
-        working-directory: crates/thruput
-        env:
-          PACKAGES: thruput
-          TAG_PREFIX: v
-          GIT_TAG: ${{ steps.tag.outputs.tag }}
-          BOOTSTRAP_TOKEN: ${{ secrets.CRATESIO_CREATE_PACKAGE_TOKEN }}
-          CRATE_OWNERS: ${{ env.CRATE_OWNERS }}
-          REQUIRE_TRUSTED_PUBLISHING: 'true'
-          PUBLISH_ARGS: ''
-        run: bash "$RUNNER_TEMP/thruputchain-actions/crates-io-publish/publish.sh"
 
       - name: Trigger binary release
         if: ${{ !inputs.dry-run && steps.check.outputs.release == 'true' }}
@@ -280,7 +223,7 @@ jobs:
       - name: Install published CLI
         shell: bash
         run: |
-          crate_id=$(cargo pkgid --locked -p thruput-cli)
+          crate_id=$(cargo pkgid --locked -p thruput)
           version=${crate_id##*[@#]}
           cargo install thruput --version "=$version" --locked \
             --root "$RUNNER_TEMP/published-cli"

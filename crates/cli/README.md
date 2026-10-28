@@ -19,7 +19,7 @@ cargo install --path crates/rv32/lower         # optional, for standalone `rv32-
 For local development without installing:
 
 ```bash
-cargo run -p thruput-cli -- node
+cargo run -p thruput -- node
 ```
 
 For a full local-DX smoke against a real `hog-devnode` binary:
