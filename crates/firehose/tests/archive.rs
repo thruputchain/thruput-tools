@@ -68,7 +68,7 @@ fn live_node_fixture_recovers_cursor_and_replay_is_idempotent() {
 }
 
 #[test]
-fn recovery_rejects_corrupt_events_transactions_and_consensus() {
+fn recovery_rejects_corrupt_transaction_hashes_cardinality_and_consensus() {
     for field in 0..4 {
         let dir = tempfile::tempdir().unwrap();
         let mut block = fixture();
@@ -77,15 +77,18 @@ fn recovery_rejects_corrupt_events_transactions_and_consensus() {
         drop(store);
         match field {
             0 => {
-                block.block.payload.event_logs.0[0].events.0.clear();
+                block.block.payload.event_logs.0[0].tx_hash =
+                    thruput_xdr::transaction::TransactionHash::new([0; 32]);
             }
             1 => {
                 block.block.payload.tx_bodies.0.clear();
             }
             2 => {
-                block.block.payload.consensus_value.proposal_header.txs_hash =
-                    thruput_xdr::types::TxsHash::new([0; 32].into());
-                rehash(&mut block);
+                block.block.payload.tx_bodies.0[0]
+                    .signed_tx
+                    .tx
+                    .uniquifier
+                    .nonce += 1;
             }
             _ => {
                 block.block.identity.consensus_hash =
@@ -99,6 +102,21 @@ fn recovery_rejects_corrupt_events_transactions_and_consensus() {
         .unwrap();
         assert!(Store::open(dir.path()).is_err());
     }
+}
+
+#[test]
+fn recovery_accepts_changed_roots_and_event_contents_with_valid_consensus_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut block = fixture();
+    let header = &mut block.block.payload.consensus_value.proposal_header;
+    header.txs_hash = thruput_xdr::types::TxsHash::new([0; 32].into());
+    header.events_hash = thruput_xdr::types::EventsHash::new([0; 32].into());
+    rehash(&mut block);
+    block.block.payload.event_logs.0[0].events.0.clear();
+    let mut store = Store::open(dir.path()).unwrap();
+    assert!(store.append(&block).unwrap());
+    drop(store);
+    assert_eq!(Store::open_verified(dir.path()).unwrap().verified_blocks, 1);
 }
 
 #[test]

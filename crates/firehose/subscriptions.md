@@ -51,7 +51,7 @@ in acknowledgements and metrics. Each `firehose_block` notification contains:
 `record` is the **exact complete stored `EventIndexerPulledBlock` XDR**, transported
 as canonical `0x` hex, not decoded JSON fields. `byteLength` counts original bytes,
 not hex characters or JSON framing. Decode these bytes with the protocol bindings
-to recompute `events_hash` and `txs_hash`, and verify the consensus hash. The
+to verify the consensus hash and transaction body hashes, and reject duplicates. The
 envelope hash is the same commitment contained in the record. Hex doubles payload
 size; it does not change the audited bytes. `ingestedAtUnixMicros` is captured
 after durable append, before fanout; it is absent for archive reads and is not
