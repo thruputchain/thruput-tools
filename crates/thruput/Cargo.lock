@@ -2878,7 +2878,7 @@ dependencies = [
 
 [[package]]
 name = "thruput"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "thruput-cli",
 ]
@@ -2894,11 +2894,11 @@ dependencies = [
 
 [[package]]
 name = "thruput-build-info"
-version = "0.41.0"
+version = "0.41.1"
 
 [[package]]
 name = "thruput-bundle-identity"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "hex",
  "serde",
@@ -2909,7 +2909,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-cli"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2969,7 +2969,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-cli-macros"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2978,7 +2978,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-client"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "hex",
  "jsonrpsee",
@@ -3050,7 +3050,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-encoding"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "stellar-strkey",
  "thiserror 2.0.21",
@@ -3108,7 +3108,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-hogd-backend"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "thruput-db-gateway",
  "thruput-indexer",
@@ -3142,7 +3142,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-json-rpc-api"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "jsonrpsee",
  "serde",
@@ -3154,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-json-rpc-client"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "jsonrpsee",
  "serde",
@@ -3168,7 +3168,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-json-rpc-server"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -3191,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-json-rpc-types"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "bytes",
  "hex",
@@ -3243,7 +3243,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-node-supervisor"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -3293,7 +3293,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-open-rpc"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "schemars",
  "serde",
@@ -3302,7 +3302,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-open-rpc-macros"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3338,7 +3338,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-rv32-artifact"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "sha2",
  "thiserror 2.0.21",
@@ -3346,7 +3346,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-rv32-lower"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "clap",
  "same-file",
@@ -3407,7 +3407,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-signing"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -3460,7 +3460,7 @@ checksum = "744a0fd0cd9f401de5f6836df80d0681698d16b42557c325652469a1c02e3fc7"
 
 [[package]]
 name = "thruput-toolchain"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "async-trait",
  "flate2",
@@ -3492,7 +3492,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-tx-validation"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "thiserror 2.0.21",
  "thruput-json-rpc-types",
@@ -3526,7 +3526,7 @@ dependencies = [
 
 [[package]]
 name = "thruput-x23-transport"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "thiserror 2.0.21",
  "thruput-rpc-driver",
