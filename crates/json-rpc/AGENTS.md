@@ -14,6 +14,6 @@ For method/error changes, check the catalog and per-method mapping in
 `json-rpc-types/src/error/native/`, and the generator in
 `open-rpc-spec/src/native.rs`.
 
-Do not hand-edit the generated OpenRPC snapshot. Follow
-[spec_snapshot.rs](open-rpc-spec/tests/spec_snapshot.rs) to regenerate it,
-inspect the diff, and rerun without `UPDATE_SNAPSHOTS`.
+Do not hand-edit the generated OpenRPC snapshot or its Markdown reference.
+Follow [spec_snapshot.rs](open-rpc-spec/tests/spec_snapshot.rs) to regenerate
+both, inspect the diff, and rerun without `UPDATE_SNAPSHOTS`.

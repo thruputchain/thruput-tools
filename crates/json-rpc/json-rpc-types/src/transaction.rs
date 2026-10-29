@@ -15,9 +15,9 @@ pub struct TxHash(pub SHA256Hash);
 /// Lightweight transaction status from the mempool and indexer.
 ///
 /// Pending reports mempool presence; Committed reports scheduler success or an indexed record.
-/// See "Transaction Status Lookup Order" in the
+/// See "Transaction status" in the
 /// [gateway system design](https://github.com/thruputchain/thruput-tools/blob/main/docs/gateway/system-design.md) for
-/// degraded-mode behavior when a backend is unavailable.
+/// how scheduler and indexer reads combine.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 #[serde(tag = "status", rename_all = "camelCase")]

@@ -1,7 +1,9 @@
-//! Builds the Thruput `OpenRPC` document from the Rust API declarations. The
-//! `thruput-open-rpc-spec` binary prints it to stdout.
+//! Builds the Thruput `OpenRPC` document from the Rust API declarations, and
+//! generates a Markdown reference from it. The `thruput-open-rpc-spec` binary prints
+//! the document to stdout.
 
 pub mod native;
+pub mod reference;
 
 /// Build the canonical public JSON-RPC contract from its Rust declarations.
 pub fn build_spec() -> serde_json::Value {

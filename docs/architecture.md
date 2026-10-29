@@ -15,28 +15,28 @@ flowchart LR
     L -->|x23| D[Owned hog-devnode process]
 ```
 
-The production gateway connects to independently managed backend services.
-The local supervisor starts one `hog-devnode` process and connects to the
-services it advertises. Both use the same public server implementation and
-shared hogd response mapping. Local testing therefore exercises the public
-interface without requiring a full validator deployment or a second RPC API.
+The production gateway connects to separately managed backend services. The
+local supervisor starts one `hog-devnode` process and connects to the services
+that it advertises. Both use the same public server and the same hogd response
+mapping. Local tests therefore exercise the public interface without a validator
+deployment or a second RPC API.
 
-The subprocess boundary keeps runtime state, auth, scheduling, and execution
-with their owner in `hogd`. It avoids duplicating those semantics in Rust or
-introducing a C ABI between the CLI and the runtime. The supervisor owns
-startup, readiness, logs, and shutdown. See [runtime manifests](gateway/runtime-manifest.md)
+The subprocess boundary keeps runtime state, auth, scheduling, and execution in
+`hogd`, their owner. The tools do not copy those semantics into Rust or link the
+runtime through a C ABI. The supervisor owns startup, readiness, logs, and
+shutdown. See [runtime manifests](gateway/runtime-manifest.md)
 for the handoff and [gateway design](gateway/system-design.md) for RPC behavior.
 
 ## The contract development path
 
-The CLI scaffolds a Rust project, invokes its pinned toolchain, and lowers the
-resulting ELF into an RV32 artifact. Contract interface metadata produces the
-spec sidecar used for invocation and TypeScript binding generation. Deployment
-and calls then use the public JSON-RPC interface, as applications do.
+The CLI scaffolds a Rust project, builds it with the project's pinned toolchain,
+and lowers the ELF into an RV32 artifact. The contract's interface metadata
+becomes a spec sidecar, used for invocation and TypeScript bindings. Deploys and
+calls use the public JSON-RPC interface, as applications do.
 
-The separation matters: building a contract is offline and cannot decide
-whether a particular chain will admit it. Signing identifies the network and
-wallet; the runtime decides admission and execution. See [CLI design](cli/design.md)
+A build does not read chain state, so it cannot decide whether a chain will
+admit the contract. Signing identifies the network and wallet; the runtime decides
+admission and execution. See [CLI design](cli/design.md)
 and [RV32 design](rv32/design.md).
 
 ## Choosing a test tool
@@ -48,9 +48,9 @@ and [RV32 design](rv32/design.md).
 | `thruput-testkit` | Do several application actors interact correctly? |
 | `thruput-bench` | How does a specific RPC workload perform under controlled load? |
 
-The [testkit design doc](testkit/DESIGN.md) explains its ownership and timing model.
-Benchmark results describe the measured workload and environment, not general
-network capacity.
+See the [testkit design](testkit/DESIGN.md) for its ownership and timing model.
+A benchmark result describes the measured workload and environment, not network
+capacity.
 
 ## Where to read the code
 
@@ -62,11 +62,11 @@ network capacity.
 | Backend response mapping | [hogd-backend](../crates/x23/hogd-backend/src/lib.rs) |
 | Production service wiring | [gateway](../crates/json-rpc/json-rpc-gateway/src/main.rs) |
 | Local runtime lifecycle | [node-supervisor](../crates/node-supervisor/src/lib.rs) |
-| CLI entrypoints | [CLI](../crates/cli/src/main.rs) |
+| CLI commands | [CLI](../crates/cli/src/app.rs) |
 | Embeddable invocation | [client](../crates/client/src/lib.rs) |
 | Signing and wallet transactions | [signing](../crates/signing/src/lib.rs) |
 
 [Cargo.toml](../Cargo.toml) lists the complete workspace. The
-[OpenRPC artifact](../crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json)
-is generated from the Rust API and payload types; it is the reference for
-consumers integrating against the wire interface.
+[JSON-RPC reference](../crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.md)
+and its [OpenRPC document](../crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json)
+are generated from the API and payload types. Integrate against them.

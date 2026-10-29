@@ -56,7 +56,7 @@ pub async fn native_block_by_height(
 /// Number of transactions in the mempool.
 ///
 /// **Deferred** — the scheduler-gateway RPC exists, but standalone handler
-/// plumbing remains deferred. See `docs/gateway/system-design.md`, "Views and reads".
+/// plumbing remains deferred. See `docs/gateway/system-design.md`, "Method availability".
 #[tracing::instrument(skip_all)]
 pub async fn pending_transaction_count(_ctx: &GatewayContext) -> Result<u64, RpcServerError> {
     Err(RpcServerError::NotImplemented(

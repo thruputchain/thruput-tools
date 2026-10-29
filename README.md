@@ -11,9 +11,8 @@ and local development, simulation, and benchmark harnesses. The node runtime
 
 ## Install
 
-Building from source requires Rust 1.96 or newer. This workspace and generated
-contract projects take every dependency from crates.io and need no registry
-credentials.
+Building from source requires Rust 1.96 or newer. External Rust dependencies
+come from crates.io; no registry credentials are needed.
 
 Generated contracts pin their own nightly toolchain, which rustup installs on
 first use.
@@ -72,23 +71,17 @@ For a runtime built in `hogd`, set
 See the [toolchain reference](crates/cli/README.md#thruput-toolchain)
 for supported hosts, version selection, and local overrides.
 
-For managed runtime installation, wallets, hosted Futurenet, container networking,
-and the full command reference, see the [CLI guide](crates/cli/README.md).
-Use `thruput <command> --help` for the installed version's options.
-`thruput docs` serves the bundled developer documentation locally.
+See the [CLI guide](crates/cli/README.md) for the full command reference, and
+`thruput <command> --help` for the installed version's options. `thruput docs`
+serves the bundled developer documentation locally.
 
 ## Clients and API
 
-The public API uses native JSON-RPC methods such as `sendTransaction` and `getTransactionReceipt`. Start with the
-[generated OpenRPC specification](crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json)
-for methods, types, and errors. Its wire-format version is independent of the
-Rust workspace version and is reported by `getVersionInfo` as `wireFormat`.
-
-Wire format 11 encodes every 64-bit-or-wider integer as a canonical decimal string,
-including small values such as `"0"`. This applies to requests and responses;
-JSON numbers are rejected for these fields. Smaller bounded integers remain JSON
-numbers. The TypeScript client exposes wide integers as `bigint`. CLI JSON reports
-follow the same precision policy, with independently versioned command schemas.
+The [JSON-RPC reference](crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.md)
+lists the public methods, types, and errors. It is generated from the
+[OpenRPC specification](crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json),
+which defines the exact schemas and wire encodings. The wire-format version is
+independent of the workspace version; `getVersionInfo` reports it as `wireFormat`.
 
 - [Rust client](crates/client/): contract invocation and supplied-spec codecs.
 - [Typed Rust RPC client](crates/json-rpc/json-rpc-client/): the JSON-RPC surface.
@@ -97,11 +90,9 @@ follow the same precision policy, with independently versioned command schemas.
 - [TypeScript protocol bindings](https://github.com/thruputchain/thruput-protocol-ts):
   XDR and contract-spec primitives.
 
-The gateway and local node share the same public server implementation.
-Internal x23 services and runtime manifests connect the tooling to `hogd`;
-application clients use JSON-RPC. See the
-[runtime manifest quickstart](docs/gateway/runtime-manifest.md) when working
-on gateway or benchmark integration.
+The gateway and the local node share one public server. Applications use
+JSON-RPC; the tools reach `hogd` through internal x23 services. For gateway or
+benchmark work, see the [runtime manifest quickstart](docs/gateway/runtime-manifest.md).
 
 ## Contributing
 
@@ -124,14 +115,11 @@ For the complete local contract loop against a real runtime:
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-local-dx.sh
 ```
 
-Process-level smokes need crates.io access and a compatible runtime; the ordinary
-workspace test command does not run ignored live-node tests.
-[CI](.github/workflows/ci.yml) also checks generated projects and TypeScript
-bindings.
+Process smokes need Python 3, crates.io access, and a compatible runtime. The workspace
+test command skips ignored live-node tests. [CI](.github/workflows/ci.yml) also
+checks generated projects and TypeScript bindings.
 
-The counter-app browser smoke generates a fresh project and verifies wallet
-funding, execution, failure feedback, reloads, state across frontend restarts,
-explicit redeployment, node resets, and cleanup:
+The counter-app browser smoke drives a freshly generated app against a real node:
 
 ```sh
 npm ci --prefix scripts/scaffold-app
@@ -139,23 +127,18 @@ npx --prefix scripts/scaffold-app playwright install chromium
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode npm test --prefix scripts/scaffold-app
 ```
 
-It requires Node.js 22.12+, crates.io and private npm registry access, and a compatible
-runtime. `CHROMIUM_EXECUTABLE` can select an installed Chromium. The harness owns
-its node and uses isolated CLI configuration and dynamically allocated ports;
-the generated app connects to the node without managing it.
+It needs Node.js 22.12 or newer, GitHub Packages npm access for `@thruputchain`,
+crates.io access, and a compatible runtime. `CHROMIUM_EXECUTABLE` selects an
+installed Chromium.
 
-Crates are grouped by subsystem: `crates/json-rpc` (public API and gateway),
-`crates/x23` (hogd adapters), and `crates/rv32` (artifact format and lowering).
-Other crates, including `cli`, `client`, `node-supervisor`, and `testkit`, live
-directly under `crates/`. See the [crate layout](crates/README.md);
-[Cargo.toml](Cargo.toml) lists every workspace crate.
+See the [crate layout](crates/README.md) for how crates are grouped.
 
-Use feature branches and pull requests. Follow existing Rust conventions:
-typed `thiserror` errors, no `.unwrap()` outside tests, and documented public
-behavior. Include tests for changed behavior and describe what you verified.
+Use feature branches and pull requests. Use typed `thiserror` errors, no
+`.unwrap()` outside tests, and document public behavior. Add tests for changed
+behavior, and state what you verified.
 
 - [Workspace architecture](docs/architecture.md): component boundaries and source map.
-- [Documentation index](docs/README.md): design rationale, operating guides, and proposals.
+- [Documentation index](docs/README.md): design rationale and operating guides.
 - [Release instructions](docs/releases.md): publishing and binary artifacts.
 - [Bundled documentation maintenance](docs/bundled-documentation.md): updating
   the developer guide shipped with the CLI.
