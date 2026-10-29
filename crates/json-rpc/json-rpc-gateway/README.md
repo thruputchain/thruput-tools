@@ -4,7 +4,7 @@ The standalone JSON-RPC gateway connects public clients to hogd's internal x23
 services. It shares the public server implementation with the local node;
 production connections, admission, deadlines, and recovery remain gateway-owned.
 Read the [gateway design](../../../docs/gateway/system-design.md) for those
-boundaries and the [OpenRPC snapshot](../open-rpc-spec/snapshots/thruput-spec.json)
+boundaries and the [JSON-RPC reference](../open-rpc-spec/snapshots/thruput-spec.md)
 for methods and payloads.
 
 ## Build

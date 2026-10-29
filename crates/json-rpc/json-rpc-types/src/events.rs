@@ -254,7 +254,7 @@ pub struct EventQuery {
 /// `topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.
 /// `num_topics` (0–3) determines the split point. Max total 1024 bytes.
 ///
-/// See "Event Parsing" in the [gateway system design](https://github.com/thruputchain/thruput-tools/blob/main/docs/gateway/system-design.md) for details.
+/// See "Event parsing" in the [gateway system design](https://github.com/thruputchain/thruput-tools/blob/main/docs/gateway/system-design.md) for details.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EmittedEvent {

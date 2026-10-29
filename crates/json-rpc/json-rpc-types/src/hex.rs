@@ -4,8 +4,8 @@
 //! lowercase hex strings (e.g., `"0xa1b2c3"`). Typed identifiers and
 //! cryptographic values use the wrappers in [`crate::base58`].
 //!
-//! See "Wire Format Conventions" in the
-//! [gateway system design](https://github.com/thruputchain/thruput-tools/blob/main/docs/gateway/system-design.md) for the full serialization table.
+//! See "Wire format conventions" in the
+//! [gateway system design](https://github.com/thruputchain/thruput-tools/blob/main/docs/gateway/system-design.md).
 
 use std::borrow::Cow;
 use std::fmt;
