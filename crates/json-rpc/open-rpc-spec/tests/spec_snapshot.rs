@@ -109,7 +109,7 @@ fn spec_with_error_data(first: serde_json::Value, second: serde_json::Value) -> 
     })
 }
 
-fn error_data(field: serde_json::Value, definitions: serde_json::Value) -> serde_json::Value {
+fn error_data(field: &serde_json::Value, definitions: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "definitions": definitions,
         "oneOf": [{
@@ -124,10 +124,13 @@ fn error_data(field: serde_json::Value, definitions: serde_json::Value) -> serde
 #[should_panic(expected = "Failed data")]
 fn markdown_reference_rejects_conflicting_error_kind_fields() {
     let spec = spec_with_error_data(
-        error_data(serde_json::json!({"type": "string"}), serde_json::json!({})),
         error_data(
-            serde_json::json!({"type": "integer"}),
-            serde_json::json!({}),
+            &serde_json::json!({"type": "string"}),
+            &serde_json::json!({}),
+        ),
+        error_data(
+            &serde_json::json!({"type": "integer"}),
+            &serde_json::json!({}),
         ),
     );
     render_markdown(&spec);
@@ -138,11 +141,8 @@ fn markdown_reference_rejects_conflicting_error_kind_fields() {
 fn markdown_reference_rejects_conflicting_error_data_definitions() {
     let field = serde_json::json!({"$ref": "#/definitions/Reason"});
     let spec = spec_with_error_data(
-        error_data(
-            field.clone(),
-            serde_json::json!({"Reason": {"enum": ["a"]}}),
-        ),
-        error_data(field, serde_json::json!({"Reason": {"enum": ["b"]}})),
+        error_data(&field, &serde_json::json!({"Reason": {"enum": ["a"]}})),
+        error_data(&field, &serde_json::json!({"Reason": {"enum": ["b"]}})),
     );
     render_markdown(&spec);
 }
@@ -151,8 +151,8 @@ fn markdown_reference_rejects_conflicting_error_data_definitions() {
 fn markdown_reference_accepts_matching_error_data() {
     let data = || {
         error_data(
-            serde_json::json!({"$ref": "#/definitions/Reason"}),
-            serde_json::json!({"Reason": {"enum": ["a"]}}),
+            &serde_json::json!({"$ref": "#/definitions/Reason"}),
+            &serde_json::json!({"Reason": {"enum": ["a"]}}),
         )
     };
     let reference = render_markdown(&spec_with_error_data(data(), data()));
