@@ -91,6 +91,75 @@ fn markdown_reference_covers_every_method_and_type() {
     }
 }
 
+/// Two methods that declare the same error with the supplied per-method data schemas.
+fn spec_with_error_data(first: serde_json::Value, second: serde_json::Value) -> serde_json::Value {
+    let method = |name: &str, data: serde_json::Value| {
+        serde_json::json!({
+            "name": name,
+            "params": [],
+            "result": {"name": "result", "schema": {"type": "string"}},
+            "errors": [{"$ref": "#/components/errors/Failed"}],
+            "x-data-schema": {"Failed": data},
+        })
+    };
+    serde_json::json!({
+        "info": {"title": "Test", "version": "1.0.0"},
+        "components": {"schemas": {}, "errors": {"Failed": {"code": -1, "message": "Failed"}}},
+        "methods": [method("first", first), method("second", second)],
+    })
+}
+
+fn error_data(field: serde_json::Value, definitions: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "definitions": definitions,
+        "oneOf": [{
+            "properties": {"kind": {"const": "failed", "type": "string"}, "field": field},
+            "required": ["kind"],
+            "type": "object",
+        }],
+    })
+}
+
+#[test]
+#[should_panic(expected = "Failed data")]
+fn markdown_reference_rejects_conflicting_error_kind_fields() {
+    let spec = spec_with_error_data(
+        error_data(serde_json::json!({"type": "string"}), serde_json::json!({})),
+        error_data(
+            serde_json::json!({"type": "integer"}),
+            serde_json::json!({}),
+        ),
+    );
+    render_markdown(&spec);
+}
+
+#[test]
+#[should_panic(expected = "error-data definition Reason")]
+fn markdown_reference_rejects_conflicting_error_data_definitions() {
+    let field = serde_json::json!({"$ref": "#/definitions/Reason"});
+    let spec = spec_with_error_data(
+        error_data(
+            field.clone(),
+            serde_json::json!({"Reason": {"enum": ["a"]}}),
+        ),
+        error_data(field, serde_json::json!({"Reason": {"enum": ["b"]}})),
+    );
+    render_markdown(&spec);
+}
+
+#[test]
+fn markdown_reference_accepts_matching_error_data() {
+    let data = || {
+        error_data(
+            serde_json::json!({"$ref": "#/definitions/Reason"}),
+            serde_json::json!({"Reason": {"enum": ["a"]}}),
+        )
+    };
+    let reference = render_markdown(&spec_with_error_data(data(), data()));
+    assert!(reference.contains("| -1 | `Failed` | Failed | `\"failed\"` |"));
+    assert!(reference.contains("### `Reason`"));
+}
+
 /// Compare generated text with a checked-in file, or rewrite it with `UPDATE_SNAPSHOTS=1`.
 fn check_snapshot(relative_path: &str, actual: &str) {
     let snapshot_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
