@@ -27,9 +27,7 @@ unmaintained = "all"
 maximum-db-staleness = "P7D"
 
 [licenses]
-# Internal crates (publish = false) carry no license field, such as
-# thruput-bench. They ship to nobody.
-private = { ignore = true }
+# Include unpublished workspace crates: their source is distributed here too.
 allow = [
     "Apache-2.0",
     "MIT",
