@@ -1,5 +1,8 @@
 //! Two real signing domains and persistent identity. Run explicitly with --ignored.
 
+#[path = "support/ramdb.rs"]
+mod ramdb;
+
 use std::time::Duration;
 
 use jsonrpsee::core::client::ClientT;
@@ -36,6 +39,7 @@ fn config(
         .with_hogd_dev(
             HogdDevConfig::default()
                 .with_binary_path(binary)
+                .with_ramdb_bytes(ramdb::ramdb_bytes(256 * ramdb::MIB))
                 .with_contract_artifact_directories([artifacts])
                 .with_init_network_hash(hash)
                 .with_bootstrap_accounts(accounts),
