@@ -26,6 +26,9 @@ workspace dependency pins aligned. Do not manually push `v*` tags. Existing
 release tags cannot be changed or deleted. The `release` environment admits
 only workflow runs from `main`; selecting a resume tag changes the checked-out
 source, not the workflow ref.
+Binary packaging also runs its workflow definition from `main`, checks out the
+selected tag, and requires the `release` environment before creating the GitHub
+Release. Resuming a release does not run the older tag's workflow definition.
 
 The SDK and protocol crates are exact pins in `Cargo.toml`, and generated
 projects pin the SDK version in `crates/cli/src/scaffold.rs`. Each pinned

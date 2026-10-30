@@ -100,6 +100,10 @@ jobs:
         env:
           RELEASE_REF: ${{ inputs.release-ref }}
         run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo '::error::dispatch Release package from main'
+            exit 1
+          fi
           if [ -n "$RELEASE_REF" ] && [[ ! "$RELEASE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::release-ref must be an existing vX.Y.Z release tag"
             exit 1
@@ -224,12 +228,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          curl -fsS -X POST \
+          set -euo pipefail
+          jq -n --arg tag "$TAG" '{ref: "main", inputs: {"release-ref": $tag}}' | curl -fsS -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/dispatches" \
-            -d "{\"ref\":\"$TAG\"}"
+            --data-binary @-
 
   # Scaffolds pin thruput-json-rpc-client to the CLI version, so CI can only
   # build them against the checkout. Check that a fresh scaffold resolves and

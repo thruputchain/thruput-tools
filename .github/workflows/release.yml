@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      release-ref:
+        description: 'Existing vX.Y.Z tag to package; workflow must run from main'
+        required: true
+        type: string
   pull_request:
     paths:
       - '.github/workflows/release.yml'
@@ -13,6 +18,7 @@ on:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RELEASE_REF: ${{ inputs.release-ref || github.ref_name }}
   RELEASE_CRATES: >-
     thruput-bundle-identity
     thruput
@@ -21,6 +27,10 @@ env:
 permissions:
   # The publish job raises this to "write"
   contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'pull_request' && github.ref || inputs.release-ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -57,10 +67,32 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Verify publish-driven workflow ref
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_ACTOR_ID" != 41898282 ] || [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo '::error::release.yml is internal; dispatch Release package from main'
+            exit 1
+          fi
+          if [[ ! "$RELEASE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo '::error::release-ref must be an existing vX.Y.Z tag'
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.release-ref) || github.ref }}
           fetch-depth: 0
+
+      - name: Verify reviewed release source
+        if: github.event_name != 'pull_request'
+        run: |
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo '::error::release tag must point to reviewed main history'
+            exit 1
+          fi
 
       - name: Set up Rust 1.96.0
         run: |
@@ -86,28 +118,12 @@ jobs:
       - name: Verify native architecture
         run: test "$(uname -m)" = "${{ matrix.machine }}"
 
-      - name: Verify publish-driven release
+      - name: Verify published crate versions
         if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
 
-          if [ "${GITHUB_ACTOR}" != "github-actions[bot]" ]; then
-            echo "release.yml is internal; run the Release package workflow instead."
-            echo "Unexpected actor: ${GITHUB_ACTOR}"
-            exit 1
-          fi
-
-          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
-            echo "::error::release tag must point to reviewed main history"
-            exit 1
-          fi
-
-          TAG="${GITHUB_REF_NAME}"
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "release.yml must be dispatched on a release tag ref, got: $TAG"
-            exit 1
-          fi
-
+          TAG="$RELEASE_REF"
           VERSION="${TAG#v}"
           if [ "$CRATE_VERSION" != "$VERSION" ]; then
             echo "Release tag version $VERSION does not match workspace crate version $CRATE_VERSION"
@@ -224,7 +240,7 @@ jobs:
           set -euo pipefail
 
           mkdir -p artifacts package
-          release_ref=${GITHUB_REF_NAME//\//-}
+          release_ref=${RELEASE_REF//\//-}
 
           for app in $RELEASE_APPS; do
             archive_base="${app}-${release_ref}-${{ matrix.release_target }}"
@@ -270,7 +286,7 @@ jobs:
           cargo build --locked --release --target x86_64-unknown-linux-gnu \
             -p thruput-json-rpc-gateway --bin hog-gateway --features heap-profiling
           grep -aq '<jemalloc>' target/znver5/x86_64-unknown-linux-gnu/release/hog-gateway
-          release_ref=${GITHUB_REF_NAME//\//-}
+          release_ref=${RELEASE_REF//\//-}
           archive_base="hog-gateway-${release_ref}-x86_64-unknown-linux-gnu-znver5"
           mkdir -p "package/$archive_base"
           cp target/znver5/x86_64-unknown-linux-gnu/release/hog-gateway README.md LICENSE "package/$archive_base/"
@@ -331,9 +347,10 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && github.actor_id == '41898282' && github.ref == 'refs/heads/main'
     needs: assemble
     runs-on: ubuntu-24.04
+    environment: release
     permissions:
       contents: write
     steps:
@@ -350,5 +367,6 @@ jobs:
             artifacts/*.tar.gz
             artifacts/SHA256SUMS
           generate_release_notes: true
+          tag_name: ${{ inputs.release-ref }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(inputs.release-ref, '-') }}
