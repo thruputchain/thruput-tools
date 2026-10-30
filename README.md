@@ -35,6 +35,13 @@ Cargo installs `thruput` under `~/.cargo/bin`; make sure it is on your
 
 ## Run your first contract locally
 
+On Ubuntu/Debian, the Linux runtime needs the system jemalloc library:
+
+```sh
+sudo apt-get update
+sudo apt-get install --no-install-recommends -y libjemalloc2
+```
+
 Install the CLI's selected runtime bundle, then create and build a project:
 
 ```sh
