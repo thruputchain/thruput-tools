@@ -96,6 +96,9 @@ benchmark work, see the [runtime manifest quickstart](docs/gateway/runtime-manif
 
 ## Contributing
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and review expectations,
+and [SECURITY.md](SECURITY.md) to report a vulnerability privately.
+
 From the repository root, rustup uses [rust-toolchain.toml](rust-toolchain.toml).
 Build and run the core checks:
 
@@ -127,8 +130,8 @@ npx --prefix scripts/scaffold-app playwright install chromium
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode npm test --prefix scripts/scaffold-app
 ```
 
-It needs Node.js 22.12 or newer, GitHub Packages npm access for `@thruputchain`,
-crates.io access, and a compatible runtime. `CHROMIUM_EXECUTABLE` selects an
+It needs Node.js 22.12 or newer, public npmjs and crates.io access, and a
+compatible runtime. `CHROMIUM_EXECUTABLE` selects an
 installed Chromium.
 
 See the [crate layout](crates/README.md) for how crates are grouped.

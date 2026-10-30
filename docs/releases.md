@@ -8,6 +8,9 @@ See the [changelog](../CHANGELOG.md) for upgrade notes and breaking API changes.
 
 Run the **Release package** GitHub Actions workflow for a normal release.
 Dispatch it with `dry-run` to run every check without tagging or publishing.
+Always dispatch from `main`. To resume an older release, set `release-ref` to
+its existing `vX.Y.Z` tag; the workflow checks that the selected commit belongs
+to reviewed `main` history before building or publishing it.
 
 - [`publish.yml`](../.github/workflows/publish.yml) publishes the Rust crates to
   crates.io, the CLI among them as `thruput` (`crates/cli`). It creates and
@@ -19,7 +22,10 @@ Dispatch it with `dry-run` to run every check without tagging or publishing.
   every published crate.
 
 Before release, bump the workspace version in `Cargo.toml` and keep internal
-workspace dependency pins aligned. Do not manually push `v*` tags.
+workspace dependency pins aligned. Do not manually push `v*` tags. Existing
+release tags cannot be changed or deleted. The `release` environment admits
+only workflow runs from `main`; selecting a resume tag changes the checked-out
+source, not the workflow ref.
 
 The SDK and protocol crates are exact pins in `Cargo.toml`, and generated
 projects pin the SDK version in `crates/cli/src/scaffold.rs`. Each pinned

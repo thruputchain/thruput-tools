@@ -26,25 +26,24 @@ jobs:
     permissions:
       contents: read
     uses: thruputchain/actions/.github/workflows/workflow-lint.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
-    with:
-      lint-app-id: ${{ vars.PROTOCOL_SYNCHRONIZER_APP_ID }}
-    secrets:
-      lint-app-private-key: ${{ secrets.PROTOCOL_SYNCHRONIZER_SECRET_KEY }}
 
   clippy:
     needs: dependency-policy # Check deps before building anything
     name: Clippy
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
+          persist-credentials: false
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -55,17 +54,20 @@ jobs:
   test:
     needs: dependency-policy # Check deps before building anything
     name: Test
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
+          persist-credentials: false
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Format
         run: cargo fmt --check
@@ -143,7 +145,7 @@ jobs:
   cli-smoke:
     needs: dependency-policy # Check deps before building anything
     name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + thruput test + thruput test --integration)
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     # Every template renders its own sources, so each one gets the full
@@ -154,12 +156,15 @@ jobs:
         template: [counter, minimal]
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
+          persist-credentials: false
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build thruput CLI
         run: cargo build --locked -p thruput
@@ -300,24 +305,24 @@ jobs:
   scaffold-app:
     needs: dependency-policy
     name: Counter app (generated project + real-node browser smoke)
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       contents: read
-      packages: read
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
-      - name: Set up Node.js and package authentication
+          persist-credentials: false
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-          registry-url: https://npm.pkg.github.com
-          scope: '@thruputchain'
       - name: Build CLI and install selected runtime
         run: |
           cargo build --locked -p thruput
@@ -325,13 +330,13 @@ jobs:
       - name: Install browser test dependencies
         run: |
           npm ci --prefix scripts/scaffold-app
+          npm audit --prefix scripts/scaffold-app --audit-level=high
           npx --prefix scripts/scaffold-app playwright install --with-deps chromium
       # smoke.mjs scaffolds under TMPDIR; see cli-smoke for why it is patched.
       - name: Use this checkout's thruput-json-rpc-client
         run: scripts/use-checkout-client.sh "$RUNNER_TEMP"
       - name: Test generated counter app
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TMPDIR: ${{ runner.temp }}
         run: npm test --prefix scripts/scaffold-app
 
@@ -340,7 +345,7 @@ jobs:
   codegen-typecheck:
     needs: dependency-policy # Check deps before building anything
     name: Codegen typecheck (spec artifact -> thruput codegen ts -> tsc)
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
@@ -350,12 +355,15 @@ jobs:
       TYPESCRIPT_VERSION: 6.0.3
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
+          persist-credentials: false
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build thruput CLI
         run: cargo build --locked -p thruput
@@ -420,19 +428,18 @@ jobs:
 
   faucet-web:
     name: Faucet web (format, build)
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
-      packages: read # install @thruputchain/* from GitHub Packages
     defaults:
       run:
         working-directory: crates/faucet/web
-    env:
-      GH_NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -443,9 +450,8 @@ jobs:
       - name: Install dependencies
         run: |
           corepack enable
-          # pnpm only reads registry tokens from user-level config.
-          pnpm config set "//npm.pkg.github.com/:_authToken" "$GH_NPM_TOKEN"
           pnpm install --frozen-lockfile
+          pnpm audit --audit-level=high
 
       - name: Check formatting
         run: pnpm format:check

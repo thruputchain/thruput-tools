@@ -162,10 +162,6 @@ const APP: &[File] = &[
         include_str!("../templates/counter-app/README.md.tmpl"),
     ),
     ("web/.gitignore", "/generated/\n"),
-    (
-        ".npmrc",
-        "@thruputchain:registry=https://npm.pkg.github.com\n",
-    ),
 ];
 
 /// Available templates. The minimal default is deliberately not a catalog entry.
@@ -196,7 +192,6 @@ pub const CATALOG: &[Template] = &[
             "Thruput CLI configured via thruput init",
             "running thruput node",
             "Rust with rustup",
-            "Thruput npm registry access",
             "Node.js 22.12+ and npm",
         ],
         next_steps: &[

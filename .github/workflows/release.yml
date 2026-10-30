@@ -32,7 +32,7 @@ jobs:
             machine: x86_64
             platform: linux
             release_target: x86_64-unknown-linux-gnu
-            runner: namespace-profile-hogd-linux-2604
+            runner: ubuntu-24.04
             artifact_name: groundhog-rpc-x86_64-release-artifacts
             release_apps: >-
               hog-gateway thruput rv32-lower thruput-faucet
@@ -41,7 +41,7 @@ jobs:
             machine: aarch64
             platform: linux
             release_target: aarch64-unknown-linux-gnu
-            runner: namespace-profile-hogd-linux-arm64
+            runner: ubuntu-24.04-arm
             artifact_name: groundhog-rpc-arm64-release-artifacts
             release_apps: >-
               hog-gateway thruput rv32-lower thruput-faucet
@@ -50,23 +50,28 @@ jobs:
             machine: arm64
             platform: macos
             release_target: aarch64-apple-darwin
-            runner: namespace-profile-hogd-arm64-macos
+            runner: macos-26
             artifact_name: groundhog-rpc-macos-arm64-release-artifacts
             release_apps: thruput
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
-      - uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Rust 1.96.0
         run: |
           rustup toolchain install 1.96.0 --profile minimal --no-self-update
           rustup default 1.96.0
 
-      - uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          cache: rust
+          prefix-key: release-rust
+          cache-bin: false
+          save-if: false
 
       - name: Read crate version
         run: |
@@ -89,6 +94,11 @@ jobs:
           if [ "${GITHUB_ACTOR}" != "github-actions[bot]" ]; then
             echo "release.yml is internal; run the Release package workflow instead."
             echo "Unexpected actor: ${GITHUB_ACTOR}"
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::release tag must point to reviewed main history"
             exit 1
           fi
 
@@ -278,7 +288,7 @@ jobs:
 
   assemble:
     needs: build
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -323,7 +333,7 @@ jobs:
   publish:
     if: github.event_name != 'pull_request'
     needs: assemble
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

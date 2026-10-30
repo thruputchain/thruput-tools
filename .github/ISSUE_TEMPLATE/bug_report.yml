@@ -1,0 +1,25 @@
+name: Bug report
+description: Report an unexpected behavior in the developer tools.
+body:
+  - type: markdown
+    attributes:
+      value: For vulnerabilities, use the private reporting channel in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version and platform
+      description: Include thruput --version, operating system, and relevant runtime version.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Give minimal steps and describe the expected and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Include relevant output after removing keys, tokens, and personal data.

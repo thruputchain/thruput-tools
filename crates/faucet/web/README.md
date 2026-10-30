@@ -7,15 +7,16 @@ submits.
 
 ## Local Development
 
-`@thruputchain/*` packages are published to GitHub Packages, which requires a
-GitHub token with `read:packages` even to install. pnpm ignores tokens in the
-committed `.npmrc`, so set one once in your user-level config:
+All dependencies, including `@thruputchain/*`, are public on npmjs. No registry
+token is needed:
 
 ```sh
-pnpm config set "//npm.pkg.github.com/:_authToken" "$(gh auth token)"
 pnpm install
 pnpm dev
 ```
+
+IBM Plex Sans and Mono font notices are in `public/font-licenses/` and are
+copied into production builds alongside the font assets.
 
 The page uses the public Devnet gateway by default. Set `VITE_THRUPUT_RPC_URL`
 to use another gateway, for example a local `thruput node`:
@@ -35,7 +36,7 @@ pnpm build
 
 ## Railway Deployment
 
-Create a service from the `groundhogchain/groundhog-rpc` GitHub repository with
+Create a service from the `thruputchain/thruput-tools` GitHub repository with
 these settings:
 
 | Setting        | Value                                     |
@@ -44,7 +45,6 @@ these settings:
 | Config File    | `/crates/faucet/web/railway.json`         |
 | Branch         | `main` after the deployment changes merge |
 
-For a preview before merge, select `feat/thruput-faucet-branding` instead.
 Generate a public domain under **Settings → Networking** after deployment.
 Railway supplies `PORT`; use that port for the generated domain.
 
@@ -52,10 +52,8 @@ The checked-in configuration selects Railpack, builds with pnpm, and checks
 `/healthz`. Leave the start command unset: Railpack detects Vite and serves
 `dist/` with the checked-in `Caddyfile`.
 
-The install needs a token with `read:packages` to fetch
-`@thruputchain/client`, in pnpm's user-level config rather than the committed
-`.npmrc`. Set `GH_NPM_TOKEN` as a build variable and make the install command
-`pnpm config set "//npm.pkg.github.com/:_authToken" "$GH_NPM_TOKEN" && pnpm install --frozen-lockfile`. The page talks to the public
+Use `pnpm install --frozen-lockfile` to install the public dependencies.
+The page talks to the public
 Devnet gateway directly, which allows cross-origin requests; no signing key,
 database or volume is needed. The hosted faucet continues to sign and submit
 airdrops.
@@ -67,7 +65,6 @@ the faucet.
 ## Production Build
 
 ```sh
-pnpm config set "//npm.pkg.github.com/:_authToken" "$GH_NPM_TOKEN"
 pnpm install --frozen-lockfile
 VITE_THRUPUT_RPC_URL=https://rpc.example.com pnpm build
 ```
