@@ -10,7 +10,9 @@ new snapshot.
    CI run. It contains `snapshot.tar.gz` and `snapshot-lock.json`.
 2. Run `python3 scripts/import-docs-snapshot.py /path/to/artifact` here. This
    validates the archive's checksum, size, clean source identity and contents,
-   removes historical skill downloads (`agent-guide.md` and `agents/`), then
+   removes historical skill downloads (`agent-guide.md` and `agents/`), adds
+   missing Inter and Inconsolata font notices from the checked-in upstream
+   license texts in `crates/cli/assets/docs/font-licenses/`, then
    writes the documentation archive and its updated pin to
    `crates/cli/assets/docs/`. The pin retains the original archive checksum in
    `sourceArchiveSha256`; the documentation source identity is unchanged.
@@ -21,6 +23,10 @@ new snapshot.
 
 `python3 scripts/import-docs-snapshot.py` without an argument verifies the current
 pin. The Rust bundle test checks the same pin/content contract and cache recovery.
+The font notice sources are [Inter](https://github.com/rsms/inter/blob/master/LICENSE.txt)
+and [Inconsolata](https://github.com/google/fonts/blob/main/ofl/inconsolata/OFL.txt).
+The importer preserves existing notices and every other selected documentation
+file. The notices are embedded in the CLI's archive and served at `/font-licenses/`.
 The full documentation set can evolve independently of CLI releases; changing
 what a CLI ships is an explicit selection. A guide version in the manifest does
 not assert that every SDK example or deployed Futurenet matches that version.

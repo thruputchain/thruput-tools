@@ -13,6 +13,7 @@ import tarfile
 MAX_FILES = 4096
 MAX_BYTES = 64 * 1024 * 1024
 MAX_TAR_BYTES = MAX_BYTES + MAX_FILES * 1024 + 10240
+FONT_NOTICES = Path(__file__).resolve().parent.parent / "crates/cli/assets/docs/font-licenses"
 
 
 def is_agent_guide(name: str) -> bool:
@@ -72,9 +73,21 @@ def import_snapshot(source: Path, target: Path) -> dict:
     output = io.BytesIO()
     with tarfile.open(source / "snapshot.tar.gz", "r:gz") as original:
         with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as filtered:
+            names = set(original.getnames())
             for entry in original:
                 if not is_agent_guide(entry.name):
                     filtered.addfile(entry, original.extractfile(entry))
+            # Some selected site builds contain fonts with license URLs but no
+            # license text. Ship the upstream notices with those exact fonts.
+            for family in ("inter", "inconsolata"):
+                if any(name.startswith(f"_astro/{family}-") and name.endswith(".woff2")
+                       for name in names):
+                    name = f"font-licenses/{family}.txt"
+                    if name not in names:
+                        notice = (FONT_NOTICES / f"{family}.txt").read_bytes()
+                        entry = tarfile.TarInfo(name)
+                        entry.size = len(notice)
+                        filtered.addfile(entry, io.BytesIO(notice))
     archive = gzip.compress(output.getvalue(), mtime=0)
     pin.setdefault("sourceArchiveSha256", pin["sha256"])
     pin["sha256"] = hashlib.sha256(archive).hexdigest()

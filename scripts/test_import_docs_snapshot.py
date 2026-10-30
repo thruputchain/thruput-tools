@@ -34,6 +34,7 @@ class ImportSnapshotTests(unittest.TestCase):
             files["markdown/manifest.json"] = json.dumps({
                 "schemaVersion": 1, "snapshot": snapshot,
             }).encode()
+            files["_astro/inter-latin-wght-normal.abc.woff2"] = b"Selected font bytes"
             guides = ["agent-guide.md", "agents/0.19.0/agent-guide.md", "agents/current.json"]
             with tarfile.open(source / "snapshot.tar.gz", "w:gz") as archive:
                 for name, content in {**files, **dict.fromkeys(guides, b"Old skill")}.items():
@@ -55,9 +56,11 @@ class ImportSnapshotTests(unittest.TestCase):
             self.assertEqual(imported["sourceArchiveSha256"], pin["sha256"])
             self.assertEqual({field: imported[field] for field in snapshot}, snapshot)
             with tarfile.open(target / "snapshot.tar.gz", "r:gz") as archive:
-                self.assertEqual(set(archive.getnames()), set(files))
+                self.assertEqual(set(archive.getnames()), set(files) | {"font-licenses/inter.txt"})
                 for name, content in files.items():
                     self.assertEqual(archive.extractfile(name).read(), content)
+                self.assertEqual(archive.extractfile("font-licenses/inter.txt").read(),
+                                 (IMPORTER["FONT_NOTICES"] / "inter.txt").read_bytes())
             self.assertEqual((source / "snapshot.tar.gz").read_bytes(), original)
 
             # Reimporting the same input and an already-filtered artifact is stable.

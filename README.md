@@ -57,7 +57,7 @@ thruput test
 Start the node from the generated project directory:
 
 ```sh
-thruput node
+thruput node --ramdb-bytes 1073741824
 ```
 
 Leave it running. In another terminal, enter the same project directory and
@@ -72,6 +72,9 @@ The node listens on `127.0.0.1:9545` and is ephemeral by default. Use
 `thruput node --data-dir .thruput/node` to preserve state across restarts.
 `thruput test --integration` manages its own ephemeral node for the project's
 integration tests.
+The example above allocates a 1 GiB RAM database. The runtime's default is
+15 GiB; on smaller hosts, also pass
+`--node-arg "--ramdb-bytes 1073741824"` to `thruput test --integration`.
 
 For a runtime built in `hogd`, set
 `THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode` before starting the node.

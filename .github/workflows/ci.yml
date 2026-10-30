@@ -237,7 +237,7 @@ jobs:
       # Nothing else exercises the integration deploy end to end.
       - name: Integration tests (thruput test --integration)
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
-        run: thruput test --integration
+        run: thruput test --integration --node-arg "--ramdb-bytes 1073741824"
 
       # --node-arg must reach hog-devnode: an explicit valid capacity still
       # passes, and a bad one fails startup with hog-devnode's own parse error
@@ -353,6 +353,7 @@ jobs:
       - name: Test generated counter app
         env:
           TMPDIR: ${{ runner.temp }}
+          SMOKE_RAMDB_BYTES: "1073741824"
         run: npm test --prefix scripts/scaffold-app
 
   # Codegen tests assert on generated text. This job runs the real CLI over the
