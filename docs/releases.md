@@ -16,8 +16,9 @@ to reviewed `main` history before building or publishing it.
   crates.io, the CLI among them as `thruput` (`crates/cli`). It creates and
   pushes the matching `vX.Y.Z` tag, then dispatches binary packaging. Smoke tests then install that published CLI and
   build and test both generated templates from crates.io alone.
-- [`release.yml`](../.github/workflows/release.yml) is dispatch-only and internal to
-  `publish.yml`. Do not run it directly for normal releases.
+- [`release.yml`](../.github/workflows/release.yml) packages native binaries.
+  `publish.yml` dispatches it for releases; it also checks packaging on PRs
+  that change release inputs. Do not dispatch it directly for normal releases.
 - [`yank.yml`](../.github/workflows/yank.yml) yanks or restores one version of
   every published crate.
 
@@ -26,9 +27,16 @@ workspace dependency pins aligned. Do not manually push `v*` tags. Existing
 release tags cannot be changed or deleted. The `release` environment admits
 only workflow runs from `main`; selecting a resume tag changes the checked-out
 source, not the workflow ref.
-Binary packaging also runs its workflow definition from `main`, checks out the
-selected tag, and requires the `release` environment before creating the GitHub
-Release. Resuming a release does not run the older tag's workflow definition.
+For this supported release/resume path, binary packaging runs its workflow
+definition from `main`, checks out the selected tag, and requires the `release`
+environment before creating the GitHub Release. Resuming through `publish.yml`
+does not run the older tag's workflow definition.
+
+Historical tags retain their original workflow files. The updated workflow
+checks do not prevent a repository writer from dispatching an older definition
+that lacks those guards. Restrict historical workflow execution separately
+when enforcing the same release boundary; immutable tags alone do not prevent
+workflow execution.
 
 The SDK and protocol crates are exact pins in `Cargo.toml`, and generated
 projects pin the SDK version in `crates/cli/src/scaffold.rs`. Each pinned
