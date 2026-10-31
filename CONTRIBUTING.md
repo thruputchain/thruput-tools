@@ -13,9 +13,15 @@ main pushes, and maintainer workflows use Namespace. Both paths run the same
 checks. Outside-contributor workflows may need a repository writer's approval
 before running; workflow approval and approval to merge are separate.
 
+Reviewers are chosen manually. Merging normally requires approval from someone
+with repository write access. Members of `core-maintainers` may explicitly
+bypass review approval when merging a pull request; required CI checks and the other branch
+protections still apply.
+
 Describe the concrete problem, resulting behavior, and checks you ran. Include a
-regression test when it verifies a meaningful behavior change. Keep unrelated changes separate, preserve public
-wire encodings, and follow the owning crate's guidance.
+regression test when it verifies a meaningful behavior change. Keep unrelated
+changes separate, preserve public wire encodings, and follow the owning crate's
+guidance.
 
 Use [issues](https://github.com/thruputchain/thruput-tools/issues) for bug reports
 and feature proposals. For a substantial API or architectural change, explain
