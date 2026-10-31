@@ -20,7 +20,7 @@ jobs:
   analyze:
     # Public code scanning is available without enabling a paid private-repo feature.
     if: github.event.repository.private == false
-    name: Analyze (${{ matrix.language }})
+    # Use default matrix names: private-repo skips happen before expansion.
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     timeout-minutes: 30
     permissions:
