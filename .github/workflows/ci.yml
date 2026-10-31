@@ -17,6 +17,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Fork PRs use GitHub-hosted runners; repository branches use Namespace.
+# Keep the repository comparison: org membership and the triggering actor are
+# not reliable indicators of where the proposed code comes from.
+# GitHub caches are saved only by main pushes, never by PRs on either provider.
 jobs:
   # Check rust dependencies against policy
   dependency-policy:
@@ -24,17 +28,21 @@ jobs:
       contents: read
     # No registry credentials: deny.toml admits crates.io only.
     uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
+    with:
+      runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
   # Lint our workflows
   workflow-lint:
     permissions:
       contents: read
     uses: thruputchain/actions/.github/workflows/workflow-lint.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
+    with:
+      runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
   clippy:
     needs: dependency-policy # Check deps before building anything
     name: Clippy
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     steps:
@@ -58,7 +66,7 @@ jobs:
   test:
     needs: dependency-policy # Check deps before building anything
     name: Test
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     steps:
@@ -95,7 +103,7 @@ jobs:
   heap-profiling:
     needs: dependency-policy
     name: Heap profiling
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     steps:
@@ -118,7 +126,7 @@ jobs:
   runtime-qualification:
     needs: dependency-policy
     name: Runtime qualification
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     steps:
@@ -195,7 +203,7 @@ jobs:
   managed-runtime:
     needs: dependency-policy
     name: Managed runtime (${{ matrix.target }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.github_runner || matrix.namespace_runner }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -203,11 +211,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - github_runner: ubuntu-24.04
+            namespace_runner: namespace-profile-hogd-linux-2604
             target: x86_64-unknown-linux-gnu
-          - runner: ubuntu-24.04-arm
+          - github_runner: ubuntu-24.04-arm
+            namespace_runner: namespace-profile-hogd-linux-arm64
             target: aarch64-unknown-linux-gnu
-          - runner: macos-26
+          - github_runner: macos-26
+            namespace_runner: namespace-profile-hogd-arm64-macos
             target: aarch64-apple-darwin
     steps:
       - name: Checkout
@@ -230,7 +241,7 @@ jobs:
   cli-smoke:
     needs: dependency-policy # Check deps before building anything
     name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + thruput test + thruput test --integration)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     # Every template renders its own sources, so each one gets the full
@@ -395,7 +406,7 @@ jobs:
   scaffold-app:
     needs: dependency-policy
     name: Counter app (generated project + real-node browser smoke)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     timeout-minutes: 25
     permissions:
       contents: read
@@ -441,7 +452,7 @@ jobs:
   codegen-typecheck:
     needs: dependency-policy # Check deps before building anything
     name: Codegen typecheck (spec artifact -> thruput codegen ts -> tsc)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     env:
@@ -524,7 +535,7 @@ jobs:
 
   faucet-web:
     name: Faucet web (format, build)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     timeout-minutes: 10
     permissions:
       contents: read

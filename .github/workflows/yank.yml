@@ -34,7 +34,7 @@ jobs:
     permissions:
       contents: read
     environment: release
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-hogd-linux-2604
 
     steps:
       - name: Checkout

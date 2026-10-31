@@ -6,9 +6,15 @@ toolchain in [rust-toolchain.toml](rust-toolchain.toml). The
 [CI workflow](.github/workflows/ci.yml) is the source for required checks,
 including generated-project and TypeScript validation.
 
-Use a feature branch and pull request. Describe the concrete problem, resulting
-behavior, and checks you ran. Include a regression test when it verifies a
-meaningful behavior change. Keep unrelated changes separate, preserve public
+Contributors without repository write access should fork the repository and
+open a pull request against `main`. Repository writers can use feature branches
+in this repository. Fork PRs run on GitHub-hosted runners; same-repository PRs,
+main pushes, and maintainer workflows use Namespace. Both paths run the same
+checks. Outside-contributor workflows may need a repository writer's approval
+before running; workflow approval and approval to merge are separate.
+
+Describe the concrete problem, resulting behavior, and checks you ran. Include a
+regression test when it verifies a meaningful behavior change. Keep unrelated changes separate, preserve public
 wire encodings, and follow the owning crate's guidance.
 
 Use [issues](https://github.com/thruputchain/thruput-tools/issues) for bug reports

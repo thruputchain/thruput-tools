@@ -42,7 +42,8 @@ jobs:
             machine: x86_64
             platform: linux
             release_target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            github_runner: ubuntu-24.04
+            namespace_runner: namespace-profile-hogd-linux-2604
             artifact_name: groundhog-rpc-x86_64-release-artifacts
             release_apps: >-
               hog-gateway thruput rv32-lower thruput-faucet
@@ -51,7 +52,8 @@ jobs:
             machine: aarch64
             platform: linux
             release_target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
+            github_runner: ubuntu-24.04-arm
+            namespace_runner: namespace-profile-hogd-linux-arm64
             artifact_name: groundhog-rpc-arm64-release-artifacts
             release_apps: >-
               hog-gateway thruput rv32-lower thruput-faucet
@@ -60,10 +62,11 @@ jobs:
             machine: arm64
             platform: macos
             release_target: aarch64-apple-darwin
-            runner: macos-26
+            github_runner: macos-26
+            namespace_runner: namespace-profile-hogd-arm64-macos
             artifact_name: groundhog-rpc-macos-arm64-release-artifacts
             release_apps: thruput
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.github_runner || matrix.namespace_runner }}
     permissions:
       contents: read
     steps:
@@ -304,7 +307,7 @@ jobs:
 
   assemble:
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     steps:
@@ -349,7 +352,7 @@ jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' && github.actor_id == '41898282' && github.ref == 'refs/heads/main'
     needs: assemble
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-hogd-linux-2604
     environment: release
     permissions:
       contents: write

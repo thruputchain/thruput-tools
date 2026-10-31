@@ -90,7 +90,7 @@ jobs:
       contents: write # pushes the release tag
       id-token: write # crates.io trusted publishing
     environment: release
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-hogd-linux-2604
     outputs:
       released: ${{ steps.check.outputs.release == 'true' && !inputs.dry-run }}
       source-commit: ${{ steps.source.outputs.commit }}
@@ -243,7 +243,7 @@ jobs:
     needs: publish
     if: ${{ needs.publish.outputs.released == 'true' }}
     name: crates.io smoke, ${{ matrix.template }} template (new + cargo build + cargo test)
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
     env:
