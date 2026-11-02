@@ -191,7 +191,7 @@ fn config_mutations_distinguish_changed_and_unchanged_results() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(output.stdout.is_empty());
-        let mut screen = vt100::Parser::new(100, 60, 0);
+        let mut screen = vt100::Parser::new(100.try_into().unwrap(), 60.try_into().unwrap(), 0);
         screen.process(&output.stderr);
         assert!(
             screen.screen().contents().contains(expected),
@@ -310,7 +310,7 @@ fn visible(output: &Output, columns: u16) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stderr.is_empty());
-    let mut terminal = vt100::Parser::new(100, columns, 0);
+    let mut terminal = vt100::Parser::new(100.try_into().unwrap(), columns.try_into().unwrap(), 0);
     terminal.process(&output.stdout);
     terminal.screen().contents()
 }
