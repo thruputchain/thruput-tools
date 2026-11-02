@@ -52,7 +52,7 @@ categories = ["development-tools"]
 
 [workspace.dependencies]
 shlex = "2"
-reqwest = "0.12"
+reqwest = "0.13"
 fs2 = "0.4"
 flate2 = "1"
 tar = { version = "0.4.46", default-features = false }
@@ -125,7 +125,7 @@ aws-smithy-types = "1.6.1"
 # --- JSON-RPC ---
 # Only the HTTP client is used; "client" would also pull the WebSocket and wasm
 # clients (soketto, gloo-net, web-sys and friends) into every build.
-jsonrpsee = { version = "0.25", features = ["server", "http-client", "macros"] }
+jsonrpsee = { version = "0.26", features = ["server", "http-client", "macros"] }
 jsonrpsee-types = "0.25"
 
 # --- HTTP / Async ---
@@ -133,7 +133,7 @@ axum = "0.8"
 http = "1"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "timeout"] }
 hyper = "1"
 http-body-util = "0.1"
 
@@ -146,29 +146,29 @@ serde_json = "1"
 url = "2"
 bytes = "1"
 hex = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 semver = "1"
 libc = "0.2"
 # getrandom 0.2 stays in the graph through ring and soketto; keep our own calls on
 # the current line so nothing here holds the old one once those move.
 getrandom = "0.4"
-signal-hook = "0.3"
-nix = { version = "0.30", default-features = false, features = ["process"] }
+signal-hook = "0.4"
+nix = { version = "0.31", default-features = false, features = ["process"] }
 
 # --- Test support ---
 insta = "1"
-jsonschema = { version = "0.59", default-features = false }
+jsonschema = { version = "0.60", default-features = false }
 serial_test = "4"
 tempfile = "3"
 same-file = "1"
 pretty_assertions = "1"
-vt100 = "0.16"
+vt100 = "0.18"
 
 # --- Observability ---
 tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
 tikv-jemalloc-sys = { version = "0.7", features = ["profiling"] }
 backtrace = "0.3"
-object = { version = "0.37", default-features = false, features = ["read_core", "elf", "std"] }
+object = { version = "0.40", default-features = false, features = ["read_core", "elf", "std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-opentelemetry = "0.34"
@@ -188,11 +188,11 @@ clap_complete = "4.5.66"
 toml = "1"
 toml_edit = "0.25"
 unicode-width = "0.2"
-which = "7"
+which = "8"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "std", "layout-cache", "unstable-rendered-line-info"] }
 
 # --- Proc macros ---
-syn = { version = "2", features = ["full", "parsing", "printing"] }
+syn = { version = "3", features = ["full", "parsing", "printing"] }
 quote = "1"
 proc-macro2 = "1"
 proc-macro-crate = "3"
@@ -208,7 +208,7 @@ ed25519-dalek = { version = "3", features = ["zeroize"] }
 # Pure ML-DSA (FIPS 204). Keys are expanded from the stored 32-byte seed.
 ml-dsa = { version = "0.1.1", default-features = false, features = ["zeroize"] }
 zeroize = "1"
-stellar-strkey = "=0.0.18"
+stellar-strkey = "=1.0.0"
 rpassword = "7.4"
 
 # --- Error handling ---
