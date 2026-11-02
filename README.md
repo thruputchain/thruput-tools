@@ -65,6 +65,7 @@ deploy and read the counter:
 
 ```sh
 thruput deploy --fund 10 --profile local
+thruput inspect my-counter --profile local
 thruput call my-counter get --profile local
 ```
 

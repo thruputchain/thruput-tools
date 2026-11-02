@@ -51,6 +51,15 @@ impl Report {
     }
 
     pub fn card(&mut self, title: &str, items: &[(String, String)]) {
+        self.card_with_headings(title, items, &[]);
+    }
+
+    pub fn card_with_headings(
+        &mut self,
+        title: &str,
+        items: &[(String, String)],
+        headings: &[usize],
+    ) {
         let title_style = self.renderer.theme.title();
         self.summary_width = None;
         let title = terminal_safe(title);
@@ -78,7 +87,7 @@ impl Report {
         let Some(width) = width.filter(|width| {
             usize::from(*width) >= (UnicodeWidthStr::width(title.as_str()) + 5).max(8)
         }) else {
-            self.plain_card(&title, &items, title_style);
+            self.plain_card(&title, &items, title_style, headings);
             return;
         };
         let content_width = width - 4;
@@ -90,13 +99,18 @@ impl Report {
             paragraph(label.as_str()).line_count(content_width) > usize::from(u16::MAX)
                 || paragraph(value.as_str()).line_count(value_budget.max(2)) > usize::from(u16::MAX)
         }) {
-            self.plain_card(&title, &items, title_style);
+            self.plain_card(&title, &items, title_style, headings);
             return;
         }
         self.edge(&title, width, true, title_style);
-        for (label, value) in &items {
+        for (index, (label, value)) in items.iter().enumerate() {
             if label.is_empty() {
-                self.body(&paragraph(value.as_str()), width, 0);
+                let style = if headings.contains(&index) {
+                    self.renderer.theme.label()
+                } else {
+                    Style::default()
+                };
+                self.body(&paragraph(safe_line(value, style)), width, 0);
             } else if value_budget >= 18 {
                 let label = paragraph(safe_line(&format!("{label}:"), self.renderer.theme.label()));
                 let value = paragraph(value.as_str());
@@ -126,13 +140,24 @@ impl Report {
         self.edge("", width, false, title_style);
     }
 
-    fn plain_card(&mut self, title: &str, items: &[(String, String)], title_style: Style) {
+    fn plain_card(
+        &mut self,
+        title: &str,
+        items: &[(String, String)],
+        title_style: Style,
+        headings: &[usize],
+    ) {
         self.renderer
             .text(Text::from(safe_line(title, title_style)), 0);
         self.renderer.lines.push(String::new());
-        for (label, value) in items {
+        for (index, (label, value)) in items.iter().enumerate() {
             if label.is_empty() {
-                self.renderer.text(Text::from(value.clone()), 0);
+                let style = if headings.contains(&index) {
+                    self.renderer.theme.label()
+                } else {
+                    Style::default()
+                };
+                self.renderer.text(Text::from(safe_line(value, style)), 0);
             } else if self.renderer.policy.width.is_some() {
                 self.renderer.text(Text::from(format!("{label}:")), 0);
                 self.renderer.text(Text::from(value.clone()), 2);

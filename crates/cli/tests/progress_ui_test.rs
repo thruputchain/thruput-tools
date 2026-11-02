@@ -635,7 +635,7 @@ fn live_failure_finishes_progress_before_the_shared_error() {
 }
 
 #[test]
-fn build_warnings_follow_the_result_card() {
+fn missing_spec_fails_without_a_success_card() {
     let fixture = Fixture::new();
     fs::write(
         fixture.root.join("fixture.elf"),
@@ -643,11 +643,11 @@ fn build_warnings_follow_the_result_card() {
     )
     .unwrap();
     let mut pty = Pty::spawn(fixture.command("slow"));
-    assert!(pty.finish().success());
+    assert!(!pty.finish().success());
     let history = pty.history();
-    let complete = history.find("Build complete").unwrap();
-    let warning = history.find("no contract spec found").unwrap();
-    assert!(warning > complete, "{history}");
+    assert!(!history.contains("Build complete"), "{history}");
+    assert!(history.contains("requires a contract spec"), "{history}");
+    assert!(!fixture.root.join("target/thruput/demo.rv32a").exists());
 }
 
 #[test]

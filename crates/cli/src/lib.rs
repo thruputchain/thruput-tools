@@ -30,6 +30,7 @@ pub(crate) mod faucet_client;
 pub(crate) mod http_client;
 pub mod init;
 pub mod init_json;
+pub mod inspect;
 pub mod keys;
 pub(crate) mod keys_json;
 mod native_rpc;
