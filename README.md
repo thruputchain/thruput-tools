@@ -35,6 +35,13 @@ Cargo installs `thruput` under `~/.cargo/bin`; make sure it is on your
 
 ## Run your first contract locally
 
+On Ubuntu/Debian, the Linux runtime needs the system jemalloc library:
+
+```sh
+sudo apt-get update
+sudo apt-get install --no-install-recommends -y libjemalloc2
+```
+
 Install the CLI's selected runtime bundle, then create and build a project:
 
 ```sh
@@ -50,7 +57,7 @@ thruput test
 Start the node from the generated project directory:
 
 ```sh
-thruput node
+thruput node --ramdb-bytes 1073741824
 ```
 
 Leave it running. In another terminal, enter the same project directory and
@@ -65,6 +72,9 @@ The node listens on `127.0.0.1:9545` and is ephemeral by default. Use
 `thruput node --data-dir .thruput/node` to preserve state across restarts.
 `thruput test --integration` manages its own ephemeral node for the project's
 integration tests.
+The example above allocates a 1 GiB RAM database. The runtime's default is
+15 GiB; on smaller hosts, also pass
+`--node-arg "--ramdb-bytes 1073741824"` to `thruput test --integration`.
 
 For a runtime built in `hogd`, set
 `THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode` before starting the node.
@@ -95,6 +105,9 @@ JSON-RPC; the tools reach `hogd` through internal x23 services. For gateway or
 benchmark work, see the [runtime manifest quickstart](docs/gateway/runtime-manifest.md).
 
 ## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and review expectations,
+and [SECURITY.md](SECURITY.md) to report a vulnerability privately.
 
 From the repository root, rustup uses [rust-toolchain.toml](rust-toolchain.toml).
 Build and run the core checks:
@@ -127,8 +140,8 @@ npx --prefix scripts/scaffold-app playwright install chromium
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode npm test --prefix scripts/scaffold-app
 ```
 
-It needs Node.js 22.12 or newer, GitHub Packages npm access for `@thruputchain`,
-crates.io access, and a compatible runtime. `CHROMIUM_EXECUTABLE` selects an
+It needs Node.js 22.12 or newer, public npmjs and crates.io access, and a
+compatible runtime. `CHROMIUM_EXECUTABLE` selects an
 installed Chromium.
 
 See the [crate layout](crates/README.md) for how crates are grouped.

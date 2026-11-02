@@ -19,7 +19,16 @@ const env = {
   ...process.env,
   XDG_CONFIG_HOME: join(work, "config"),
   THRUPUT_CLI: cli,
+  NPM_CONFIG_USERCONFIG: join(work, "npm-user.rc"),
+  NPM_CONFIG_GLOBALCONFIG: join(work, "npm-global.rc"),
+  NPM_CONFIG_CACHE: join(work, "npm-cache"),
+  NPM_CONFIG_REGISTRY: "https://registry.npmjs.org",
 };
+await writeFile(env.NPM_CONFIG_USERCONFIG, "");
+await writeFile(env.NPM_CONFIG_GLOBALCONFIG, "");
+delete env.NODE_AUTH_TOKEN;
+delete env.NPM_TOKEN;
+delete env.GH_NPM_TOKEN;
 delete env.THRUPUT_PROFILE;
 delete env.THRUPUT_DEFAULT_KEY;
 delete env.THRUPUT_RUNTIME_MANIFEST;

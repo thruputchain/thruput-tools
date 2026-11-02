@@ -13,6 +13,15 @@ env:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Fork PRs use GitHub-hosted runners; repository branches use Namespace.
+# Keep the repository comparison: org membership and the triggering actor are
+# not reliable indicators of where the proposed code comes from.
+# Build caches use separate provider prefixes and are saved only by main pushes,
+# never by PRs on either provider.
 jobs:
   # Check rust dependencies against policy
   dependency-policy:
@@ -20,6 +29,8 @@ jobs:
       contents: read
     # No registry credentials: deny.toml admits crates.io only.
     uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
+    with:
+      runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
   # Lint our workflows
   workflow-lint:
@@ -27,24 +38,26 @@ jobs:
       contents: read
     uses: thruputchain/actions/.github/workflows/workflow-lint.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
     with:
-      lint-app-id: ${{ vars.PROTOCOL_SYNCHRONIZER_APP_ID }}
-    secrets:
-      lint-app-private-key: ${{ secrets.PROTOCOL_SYNCHRONIZER_SECRET_KEY }}
+      runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
   clippy:
     needs: dependency-policy # Check deps before building anything
     name: Clippy
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
+          persist-credentials: false
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-rust' || 'namespace-rust' }}
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -55,17 +68,26 @@ jobs:
   test:
     needs: dependency-policy # Check deps before building anything
     name: Test
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
+          persist-credentials: false
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libjemalloc2
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-rust' || 'namespace-rust' }}
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Format
         run: cargo fmt --check
@@ -81,10 +103,53 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+  heap-profiling:
+    needs: dependency-policy
+    name: Heap profiling
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-rust' || 'namespace-rust' }}
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
       - name: Test (heap-profiling feature)
         run: |
           cargo test --locked -p thruput-heap-profiling --features jemalloc
           cargo test --locked -p thruput-heap-profiling --features jemalloc --release
+
+  runtime-qualification:
+    needs: dependency-policy
+    name: Runtime qualification
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libjemalloc2
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-rust' || 'namespace-rust' }}
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Verify component version and source reporting
         run: |
@@ -140,10 +205,49 @@ jobs:
           done
           cargo test --locked -p thruput --test native_rpc_qualification -- --ignored --test-threads=1
 
+  managed-runtime:
+    needs: dependency-policy
+    name: Managed runtime (${{ matrix.target }})
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.github_runner || matrix.namespace_runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - github_runner: ubuntu-24.04
+            namespace_runner: namespace-profile-hogd-linux-2604
+            target: x86_64-unknown-linux-gnu
+          - github_runner: ubuntu-24.04-arm
+            namespace_runner: namespace-profile-hogd-linux-arm64
+            target: aarch64-unknown-linux-gnu
+          - github_runner: macos-26
+            namespace_runner: namespace-profile-hogd-arm64-macos
+            target: aarch64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libjemalloc2
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-rust' || 'namespace-rust' }}
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Acquire runtime, start node, and restart offline
+        run: scripts/smoke-managed-toolchain.sh
+
   cli-smoke:
     needs: dependency-policy # Check deps before building anything
     name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + thruput test + thruput test --integration)
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     # Every template renders its own sources, so each one gets the full
@@ -154,12 +258,21 @@ jobs:
         template: [counter, minimal]
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
+          persist-credentials: false
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libjemalloc2
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-rust' || 'namespace-rust' }}
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build thruput CLI
         run: cargo build --locked -p thruput
@@ -222,7 +335,7 @@ jobs:
       # Nothing else exercises the integration deploy end to end.
       - name: Integration tests (thruput test --integration)
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
-        run: thruput test --integration
+        run: thruput test --integration --node-arg "--ramdb-bytes 1073741824"
 
       # --node-arg must reach hog-devnode: an explicit valid capacity still
       # passes, and a bad one fails startup with hog-devnode's own parse error
@@ -300,24 +413,30 @@ jobs:
   scaffold-app:
     needs: dependency-policy
     name: Counter app (generated project + real-node browser smoke)
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     timeout-minutes: 25
     permissions:
       contents: read
-      packages: read
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
-      - name: Set up Node.js and package authentication
+          persist-credentials: false
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libjemalloc2
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-rust' || 'namespace-rust' }}
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-          registry-url: https://npm.pkg.github.com
-          scope: '@thruputchain'
       - name: Build CLI and install selected runtime
         run: |
           cargo build --locked -p thruput
@@ -325,14 +444,15 @@ jobs:
       - name: Install browser test dependencies
         run: |
           npm ci --prefix scripts/scaffold-app
+          npm audit --prefix scripts/scaffold-app --audit-level=high
           npx --prefix scripts/scaffold-app playwright install --with-deps chromium
       # smoke.mjs scaffolds under TMPDIR; see cli-smoke for why it is patched.
       - name: Use this checkout's thruput-json-rpc-client
         run: scripts/use-checkout-client.sh "$RUNNER_TEMP"
       - name: Test generated counter app
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TMPDIR: ${{ runner.temp }}
+          SMOKE_RAMDB_BYTES: "1073741824"
         run: npm test --prefix scripts/scaffold-app
 
   # Codegen tests assert on generated text. This job runs the real CLI over the
@@ -340,7 +460,7 @@ jobs:
   codegen-typecheck:
     needs: dependency-policy # Check deps before building anything
     name: Codegen typecheck (spec artifact -> thruput codegen ts -> tsc)
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
       contents: read
     env:
@@ -350,12 +470,16 @@ jobs:
       TYPESCRIPT_VERSION: 6.0.3
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
-
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache: rust
+          persist-credentials: false
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-rust' || 'namespace-rust' }}
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build thruput CLI
         run: cargo build --locked -p thruput
@@ -420,19 +544,18 @@ jobs:
 
   faucet-web:
     name: Faucet web (format, build)
-    runs-on: namespace-profile-hogd-linux-2604
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     timeout-minutes: 10
     permissions:
       contents: read
-      packages: read # install @thruputchain/* from GitHub Packages
     defaults:
       run:
         working-directory: crates/faucet/web
-    env:
-      GH_NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -443,9 +566,8 @@ jobs:
       - name: Install dependencies
         run: |
           corepack enable
-          # pnpm only reads registry tokens from user-level config.
-          pnpm config set "//npm.pkg.github.com/:_authToken" "$GH_NPM_TOKEN"
           pnpm install --frozen-lockfile
+          pnpm audit --audit-level=high
 
       - name: Check formatting
         run: pnpm format:check

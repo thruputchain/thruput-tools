@@ -16,6 +16,7 @@ jobs:
       contents: read
     uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
     with:
+      runs-on: namespace-profile-hogd-linux-2604
       checks: advisories
 
   # This workflow is asynchronous, so report problems by filing an issue
@@ -27,3 +28,5 @@ jobs:
       contents: read
       issues: write
     uses: thruputchain/actions/.github/workflows/rust-advisory-issue.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
+    with:
+      runs-on: namespace-profile-hogd-linux-2604

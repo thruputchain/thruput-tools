@@ -97,7 +97,10 @@ try:
         kill_parent = attempt == 2
         phase = 'parent SIGKILL' if kill_parent else ('offline restart' if offline else 'fresh-cache startup')
         args = [str(binary), '--json'] + (['--offline'] if offline else [])
-        args += ['node', '--port', '0', '--data-dir', str(root / 'node')]
+        cores = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 8)
+        ramdb_bytes = env.get('SMOKE_RAMDB_BYTES', str(max(1024**3, cores * 16 * 1024**2)))
+        args += ['node', '--port', '0', '--data-dir', str(root / 'node'),
+                 '--ramdb-bytes', ramdb_bytes]
         output = root / ('offline.json' if offline else 'online.json')
         errors = root / ('offline.log' if offline else 'online.log')
         with output.open('w') as stdout, errors.open('w') as stderr:

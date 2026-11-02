@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Generated counter applications and the faucet frontend install their npm
+  dependencies from the public registry without a GitHub token.
+- Update frontend and browser-harness dependencies to address reported npm
+  advisories, and include the faucet's font license notices in production builds.
+- Run CI on GitHub-hosted runners and resume releases from reviewed `main`
+  workflow definitions with an explicit existing release tag.
+
 ## 0.42.0
 
 - Publish every tool crate to crates.io instead of the thruput registry.
