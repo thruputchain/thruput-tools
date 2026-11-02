@@ -1,4 +1,4 @@
-//! The Thruput RV32 **v5 artifact format**: constants, writer, and
+//! The Thruput RV32 **v6 artifact format**: constants, writer, and
 //! self-verifier.
 //!
 //! This is the single Rust source of truth for the on-disk format the hogd
@@ -20,13 +20,16 @@
 //! shadow. v5 also bumps the entry ABI to 3: `sp` is seeded to 0 and the
 //! guest owns stack placement (v2 seeded `sp` to the top of data memory).
 //!
-//! Header layout (little-endian, no padding, 128 bytes total):
+//! v6 appends an opaque, versioned contract spec outside guest memory. Its
+//! integrity is covered by the enclosing `SHA256(XDR(Contract))` identity.
+//!
+//! Header layout (little-endian, no padding, 136 bytes total):
 //!
 //! ```text
 //!   off  size  field
 //!     0     8  magic "GHRV32A1"
-//!     8     4  format_version          (5)
-//!    12     4  header_bytes            (128)
+//!     8     4  format_version          (6)
+//!    12     4  header_bytes            (136)
 //!    16     8  vm_profile_digest
 //!    24     4  flags                   (0)
 //!    28     4  entry_abi_version       (3)
@@ -39,11 +42,13 @@
 //!    60     4  initial_memory_start
 //!    64    32  sha256(code)
 //!    96    32  sha256(initial_memory)
+//!   128     4  spec_schema_version     (0 iff spec_size is 0)
+//!   132     4  spec_size
 //! ```
 //!
-//! Body: `header || code || initial_memory`. Section positions are implicit:
+//! Body: `header || code || initial_memory || spec`. Section positions are implicit:
 //! code starts at `header_bytes`, `initial_memory` directly after code, and
-//! the file ends exactly at `header_bytes + code_size + initial_memory_size`
+//! the file ends exactly at `header_bytes + code_size + initial_memory_size + spec_size`
 //! — there are no stored file offsets (v5 dropped v4's redundant
 //! `code_offset` / `initial_memory_offset` fields).
 
@@ -71,9 +76,9 @@ pub const INSTRUCTION_BYTES: usize = 4;
 /// Artifact magic: `GHRV32A1`.
 pub const MAGIC: [u8; 8] = *b"GHRV32A1";
 /// Artifact format version.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 /// Fixed header size in bytes.
-pub const HEADER_BYTES: usize = 128;
+pub const HEADER_BYTES: usize = 136;
 /// VM-profile digest the runtime validates the artifact against.
 pub const VM_PROFILE_DIGEST: u64 = 0x55c5_3a68_5f0e_b33d;
 /// Entry ABI version (3 = enter at PC 0 with the method id seeded in a0/a1
@@ -95,7 +100,7 @@ pub const GAS_SCHEDULE_DIGEST: u64 = 0x9183_17c2_1c46_bb60;
 /// Digest size of each section hash stamped into the artifact header.
 pub const DIGEST_BYTES: usize = 32;
 
-/// Fixed v5 header offsets.
+/// Fixed v6 header offsets.
 pub const FORMAT_VERSION_OFFSET: usize = 8;
 pub const HEADER_SIZE_OFFSET: usize = 12;
 pub const VM_PROFILE_OFFSET: usize = 16;
@@ -110,8 +115,13 @@ pub const INITIAL_MEMORY_SIZE_OFFSET: usize = 56;
 pub const INITIAL_MEMORY_START_OFFSET: usize = 60;
 pub const CODE_DIGEST_OFFSET: usize = 64;
 pub const INITIAL_MEMORY_DIGEST_OFFSET: usize = CODE_DIGEST_OFFSET + DIGEST_BYTES;
+/// Opaque spec schema identity; zero denotes absence.
+pub const SPEC_SCHEMA_VERSION_OFFSET: usize = 128;
+/// Number of spec payload bytes following initial memory.
+pub const SPEC_SIZE_OFFSET: usize = 132;
 
-const _: () = assert!(INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES == HEADER_BYTES);
+const _: () = assert!(INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES == SPEC_SCHEMA_VERSION_OFFSET);
+const _: () = assert!(SPEC_SIZE_OFFSET + 4 == HEADER_BYTES);
 
 // Project-specific seeded FNV-1a fold. NOTE: FNV_OFFSET_BASIS is intentionally
 // NOT the canonical 64-bit FNV-1a basis (0xcbf29ce484222325); it is a fixed
@@ -122,14 +132,14 @@ const _: () = assert!(INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES == HEADER_BYTE
 // cross-repo fingerprint check enforces. Do not "fix" to the canonical value.
 const FNV_OFFSET_BASIS: u64 = 1_469_598_103_934_665_603;
 const FNV_PRIME: u64 = 1_099_511_628_211;
-const FORMAT_FINGERPRINT_DOMAIN: &[u8] = b"groundhog.rv32.artifact.format.v5";
+const FORMAT_FINGERPRINT_DOMAIN: &[u8] = b"groundhog.rv32.artifact.format.v6";
 const SECTION_DIGEST_ALGORITHM: &[u8] = b"sha256";
-const CANONICAL_SECTION_ORDER: &[u8] = b"header|code|initial_memory";
+const CANONICAL_SECTION_ORDER: &[u8] = b"header|code|initial_memory|spec";
 const FLAGS_REQUIRED_VALUE: u32 = 0;
 
-/// Pinned v5 artifact-format contract fingerprint. hogd pins the same value
+/// Pinned v6 artifact-format contract fingerprint. hogd pins the same value
 /// as `kArtifactFormatFingerprint` in `rv32/artifact.h`.
-pub const FORMAT_FINGERPRINT: u64 = 0xc5f0_0a7d_4451_045e;
+pub const FORMAT_FINGERPRINT: u64 = 0x36f9_478f_a875_ca39;
 const _: () = assert!(compute_format_fingerprint() == FORMAT_FINGERPRINT);
 
 const fn fnv_digest_byte(digest: u64, value: u8) -> u64 {
@@ -183,7 +193,7 @@ const fn fold_layout_field(
     format_fingerprint_u64(digest, size_name, size as u64)
 }
 
-/// Compute the v5 artifact-format contract fingerprint.
+/// Compute the v6 artifact-format contract fingerprint.
 #[must_use]
 pub const fn compute_format_fingerprint() -> u64 {
     compute_format_fingerprint_with_inputs(
@@ -238,7 +248,7 @@ pub const fn compute_format_fingerprint_with_domain(domain: &[u8]) -> u64 {
     )
 }
 
-// Intentionally a long, flat enumeration: it folds every runtime-validated v5
+// Intentionally a long, flat enumeration: it folds every runtime-validated v6
 // format fact in a fixed order. Splitting it would obscure the field list that
 // is the whole point of the fingerprint.
 #[allow(clippy::too_many_lines)]
@@ -367,6 +377,20 @@ const fn compute_format_fingerprint_with_inputs(
         INITIAL_MEMORY_DIGEST_OFFSET,
         DIGEST_BYTES,
     );
+    digest = fold_layout_field(
+        digest,
+        b"header.spec_schema_version.offset",
+        b"header.spec_schema_version.size",
+        SPEC_SCHEMA_VERSION_OFFSET,
+        4,
+    );
+    digest = fold_layout_field(
+        digest,
+        b"header.spec_size.offset",
+        b"header.spec_size.size",
+        SPEC_SIZE_OFFSET,
+        4,
+    );
 
     digest = format_fingerprint_bytes(
         digest,
@@ -384,6 +408,7 @@ const fn compute_format_fingerprint_with_inputs(
     digest = format_fingerprint_u64(digest, b"code_size_nonzero", 1);
     digest = format_fingerprint_u64(digest, b"initial_memory_start_plus_size_le_memory_bytes", 1);
     digest = format_fingerprint_u64(digest, b"initial_memory_start_zero_when_empty", 1);
+    digest = format_fingerprint_u64(digest, b"spec_schema_zero_iff_empty", 1);
     digest = format_fingerprint_bytes(digest, b"canonical_section_order", canonical_section_order);
     digest = format_fingerprint_u64(digest, b"no_section_gaps_or_trailing_bytes", 1);
     digest
@@ -409,8 +434,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// Assemble a complete v5 artifact from the code section and the stored span
-/// of the data-memory image.
+/// Assemble a spec-less v6 artifact from code and the stored data-memory span.
 ///
 /// `initial_memory` is staged at data address `initial_memory_start` — the
 /// runtime zero-fills `[0, base)` and `[base + initial_memory.len(),
@@ -424,6 +448,43 @@ pub fn build_artifact(
     initial_memory_start: usize,
     memory_bytes: usize,
 ) -> Result<Vec<u8>> {
+    build_artifact_with_spec(
+        code,
+        initial_memory,
+        initial_memory_start,
+        memory_bytes,
+        None,
+    )
+}
+
+/// A borrowed, opaque contract spec. Container validation does not validate its schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtifactSpec<'a> {
+    /// Nonzero schema version; unknown versions remain valid opaque metadata.
+    pub schema_version: u32,
+    /// Nonempty serialized spec bytes, excluded from guest memory.
+    pub bytes: &'a [u8],
+}
+
+/// Assemble a v6 artifact with an optional opaque spec.
+pub fn build_artifact_with_spec(
+    code: &[u8],
+    initial_memory: &[u8],
+    initial_memory_start: usize,
+    memory_bytes: usize,
+    spec: Option<ArtifactSpec<'_>>,
+) -> Result<Vec<u8>> {
+    let (spec_version, spec_bytes) = match spec {
+        Some(spec) if spec.schema_version != 0 && !spec.bytes.is_empty() => {
+            (spec.schema_version, spec.bytes)
+        }
+        Some(_) => {
+            return Err(invalid(
+                "spec version and payload must be nonzero when present",
+            ));
+        }
+        None => (0, &[][..]),
+    };
     // The loader rejects code_size == 0; refuse to emit such an artifact even
     // when called directly (not via `lower`).
     if code.is_empty() {
@@ -471,6 +532,8 @@ pub fn build_artifact(
     header.extend_from_slice(&memory_base.to_le_bytes());
     header.extend_from_slice(&sha256(code));
     header.extend_from_slice(&sha256(initial_memory));
+    header.extend_from_slice(&spec_version.to_le_bytes());
+    header.extend_from_slice(&to_u32(spec_bytes.len(), "spec size")?.to_le_bytes());
     if header.len() != HEADER_BYTES {
         return Err(verify("internal artifact header size mismatch"));
     }
@@ -478,6 +541,7 @@ pub fn build_artifact(
     let mut artifact = header;
     artifact.extend_from_slice(code);
     artifact.extend_from_slice(initial_memory);
+    artifact.extend_from_slice(spec_bytes);
     Ok(artifact)
 }
 
@@ -493,9 +557,9 @@ pub struct DeclaredSizes {
     pub code_bytes: u32,
 }
 
-/// Read the sizes a v5 artifact header declares, without verifying the rest.
+/// Read the sizes a v6 artifact header declares, without verifying the rest.
 ///
-/// `None` when `artifact` does not carry a v5 header (too short, wrong magic,
+/// `None` when `artifact` does not carry a v6 header (too short, wrong magic,
 /// or another format version): such bytes are not an artifact this crate can
 /// speak for, and what to do with them is the caller's decision. The sizes
 /// are reported as stamped, so a header that disagrees with its body is
@@ -583,8 +647,15 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     let code_size = read_u32(CODE_SIZE_OFFSET) as usize;
     let init_mem_size = read_u32(INITIAL_MEMORY_SIZE_OFFSET) as usize;
     let init_mem_start = read_u32(INITIAL_MEMORY_START_OFFSET) as usize;
+    let spec_version = read_u32(SPEC_SCHEMA_VERSION_OFFSET);
+    let spec_size = read_u32(SPEC_SIZE_OFFSET) as usize;
+    if (spec_version == 0) != (spec_size == 0) {
+        return Err(verify(
+            "spec schema version must be zero if and only if spec is empty",
+        ));
+    }
 
-    // Canonical layout: the body is exactly header || code || initial_memory
+    // Canonical layout: header || code || initial_memory || spec,
     // with no gaps or trailing bytes, and the stored memory prefix fits the
     // declared data address space. This mirrors the structural acceptance set
     // the consensus C++ loader enforces, so the writer's self-check rejects
@@ -614,11 +685,12 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
         ));
     }
     // Section positions are implicit: code at HEADER_BYTES, initial_memory
-    // directly after, and the file ends exactly there — no gaps, no trailing
+    // directly after, followed by the spec — no gaps, no trailing
     // bytes. Checked math for the same 32-bit wrap reason as above.
     let expected_len = HEADER_BYTES
         .checked_add(code_size)
         .and_then(|len| len.checked_add(init_mem_size))
+        .and_then(|len| len.checked_add(spec_size))
         .ok_or_else(|| verify("non-canonical section layout"))?;
     if expected_len != artifact.len() {
         return Err(verify("non-canonical section layout"));
@@ -629,7 +701,7 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
         &artifact[INITIAL_MEMORY_DIGEST_OFFSET..INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES];
 
     let code = &artifact[HEADER_BYTES..HEADER_BYTES + code_size];
-    let memory = &artifact[HEADER_BYTES + code_size..];
+    let memory = &artifact[HEADER_BYTES + code_size..HEADER_BYTES + code_size + init_mem_size];
 
     if sha256(code).as_slice() != code_dig {
         return Err(verify("code digest mismatch"));
@@ -639,4 +711,26 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Validate the container and borrow its spec without interpreting its schema.
+/// Callers must verify the enclosing contract hash to authenticate these bytes.
+pub fn artifact_spec(artifact: &[u8]) -> Result<Option<ArtifactSpec<'_>>> {
+    verify_artifact(artifact)?;
+    let read_u32 = |offset| {
+        u32::from_le_bytes(
+            artifact[offset..offset + 4]
+                .try_into()
+                .expect("bug: verified header"),
+        )
+    };
+    let schema_version = read_u32(SPEC_SCHEMA_VERSION_OFFSET);
+    if schema_version == 0 {
+        return Ok(None);
+    }
+    let size = read_u32(SPEC_SIZE_OFFSET) as usize;
+    Ok(Some(ArtifactSpec {
+        schema_version,
+        bytes: &artifact[artifact.len() - size..],
+    }))
 }

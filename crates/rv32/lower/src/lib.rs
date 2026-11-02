@@ -12,7 +12,7 @@
 //!      the minimal nonzero initial-memory span and its load base. Dispatch
 //!      lives in the guest (since v4), so no symbol scanning is needed and
 //!      stripped builds are valid.
-//!   3. `thruput-rv32-artifact` — pack the v5 header + sections, then
+//!   3. `thruput-rv32-artifact` — pack the v6 header + sections, then
 //!      self-verify.
 //!
 //! See `docs/rv32/design.md` for the surrounding design.

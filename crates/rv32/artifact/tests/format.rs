@@ -1,4 +1,4 @@
-//! v5 format writer/verifier contract tests: header field placement, the
+//! v6 format writer/verifier contract tests: header field placement, the
 //! `initial_memory_start` load-base semantics, and the canonicality rules the
 //! verifier enforces on it.
 
@@ -11,16 +11,16 @@ fn read_u32(bytes: &[u8], off: usize) -> u32 {
 }
 
 #[test]
-fn v5_header_layout_and_field_values() {
+fn v6_header_layout_and_field_values() {
     let code = [0u8; 8];
     let memory = [0xAAu8, 0xBB, 0xCC];
     let start = 0x1008;
     let artifact = build_artifact(&code, &memory, start, DEFAULT_MEMORY_BYTES).expect("builds");
 
     assert_eq!(&artifact[..8], b"GHRV32A1");
-    assert_eq!(read_u32(&artifact, 8), 5, "format_version");
-    assert_eq!(read_u32(&artifact, 12), 128, "header_bytes");
-    assert_eq!(HEADER_BYTES, 128);
+    assert_eq!(read_u32(&artifact, 8), 6, "format_version");
+    assert_eq!(read_u32(&artifact, 12), 136, "header_bytes");
+    assert_eq!(HEADER_BYTES, 136);
     assert_eq!(
         read_u32(&artifact, 28),
         3,
@@ -42,13 +42,14 @@ fn v5_header_layout_and_field_values() {
         sha256(&memory).as_slice(),
         "initial_memory digest"
     );
-    assert_eq!(&artifact[128..136], &code, "code section placement");
+    assert_eq!(&artifact[128..136], &[0; 8], "absent spec");
+    assert_eq!(&artifact[136..144], &code, "code section placement");
     assert_eq!(
-        &artifact[136..],
+        &artifact[144..],
         &memory,
         "initial_memory section placement"
     );
-    assert_eq!(artifact.len(), 128 + 8 + 3);
+    assert_eq!(artifact.len(), 136 + 8 + 3);
 
     verify_artifact(&artifact).expect("self-verifies");
 }
@@ -171,13 +172,13 @@ fn declared_sizes_reads_the_header_and_nothing_else() {
         declared_sizes(&artifact)
     );
 
-    // Not a v5 artifact: too short, wrong magic, or another format version.
+    // Not a v6 artifact: too short, wrong magic, or another format version.
     assert_eq!(declared_sizes(&artifact[..HEADER_BYTES - 1]), None);
     let mut bad_magic = artifact.clone();
     bad_magic[0] ^= 0xff;
     assert_eq!(declared_sizes(&bad_magic), None);
     let mut other_version = artifact.clone();
-    other_version[8..12].copy_from_slice(&6u32.to_le_bytes());
+    other_version[8..12].copy_from_slice(&5u32.to_le_bytes());
     assert_eq!(declared_sizes(&other_version), None);
     assert_eq!(declared_sizes(&[]), None);
 }
