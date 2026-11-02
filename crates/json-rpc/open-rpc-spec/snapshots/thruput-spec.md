@@ -2,7 +2,7 @@
 
 <!-- Generated from thruput-spec.json by tests/spec_snapshot.rs. Do not edit. -->
 
-Wire format `14.3.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
+Wire format `14.4.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
 
 This file lists all native methods. A server serves only the methods that its backends support; `getVersionInfo` lists them. For exact schemas, see [thruput-spec.json](thruput-spec.json).
 
@@ -25,6 +25,7 @@ This file lists all native methods. A server serves only the methods that its ba
 | [`getBalance`](#getbalance) | Read native token balance and its state height. |
 | [`getRegisteredAuth`](#getregisteredauth) | Read registered authorization at an address. |
 | [`getContractDeployment`](#getcontractdeployment) | Read the deployed contract identity at a committed snapshot. |
+| [`getEffectiveContract`](#geteffectivecontract) | Resolve current committed-state contract selection for root or nested invocation. Explicit deployments take precedence; only root invocations use the network default. Does not authorize execution, include transaction-local deployments, or identify historical code. |
 | [`getContractArtifact`](#getcontractartifact) | Read complete canonical Contract XDR by hash. Availability does not prove deployment. |
 | [`getEvents`](#getevents) | Scan indexed events matching the supplied filters. |
 | [`getTransactionsByRootAddress`](#gettransactionsbyrootaddress) | Read transactions whose root invocation targets the address, excluding internal calls and incoming transfers. |
@@ -285,6 +286,25 @@ Read the deployed contract identity at a committed snapshot.
 | `address` | [`Base58_ContractAddress`](#base58_contractaddress) | yes |  |
 
 **Result:** [`ContractDeploymentResult`](#contractdeploymentresult)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
+### `getEffectiveContract`
+
+Resolve current committed-state contract selection for root or nested invocation. Explicit deployments take precedence; only root invocations use the network default. Does not authorize execution, include transaction-local deployments, or identify historical code.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `address` | [`Base58_ContractAddress`](#base58_contractaddress) | yes |  |
+| `context` | [`InvocationContext`](#invocationcontext) | yes |  |
+
+**Result:** [`EffectiveContractResult`](#effectivecontractresult)
 
 | Code | [Error](#errors) | Data `kind` |
 | --- | --- | --- |
@@ -730,6 +750,26 @@ A descending walk starts at retained end or an inclusive height.
 | `"atEnd"` | none |
 | `"atHeight"` | `blockHeight`: decimal string |
 
+### `EffectiveContract`
+
+Explicit deployment takes precedence. Network defaults apply only to root invocations.
+
+| `source` | Other fields |
+| --- | --- |
+| `"explicitDeployment"` | `contract`: [`ContractDeployment`](#contractdeployment) |
+| `"networkDefault"` | `contract`: [`ContractDeployment`](#contractdeployment) |
+
+### `EffectiveContractResult`
+
+Current committed-state selection, not authorization or historical execution evidence. Null means no applicable contract in this context. Transaction-local deployments are excluded.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `address` | [`Base58_ContractAddress`](#base58_contractaddress) | yes |  |
+| `context` | [`InvocationContext`](#invocationcontext) | yes |  |
+| `selection` | [`EffectiveContract`](#effectivecontract) \| null | yes |  |
+| `stateBlockHeight` | decimal string | yes | Canonical decimal block height in the inclusive range 0 to 9223372036854775807. |
+
 ### `EmittedEvent`
 
 Parsed event with a typed emitter address and raw topic/data bytes.
@@ -828,6 +868,12 @@ One batch invocation; freshness belongs to the whole batch.
 | `gasLimit` | decimal string | no | Canonical decimal integer in the inclusive range 0 to 18446744073709551615. |
 
 The server rejects unknown fields.
+
+### `InvocationContext`
+
+Committed-state resolution only; transaction-local deployments are excluded.
+
+Type: `"root"` | `"nested"`
 
 ### `InvocationOutput`
 

@@ -214,7 +214,7 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         .request::<out::VersionInfo, _>("getVersionInfo", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: version should report the embedding client identity");
-    assert_eq!(version.wire_format, "14.3.0");
+    assert_eq!(version.wire_format, "14.4.0");
     let expected = [
         "dev_getPendingTransactionCount",
         "getBalance",
@@ -222,6 +222,7 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         "getChainTip",
         "getContractArtifact",
         "getContractDeployment",
+        "getEffectiveContract",
         "getNetworkInfo",
         "getRegisteredAuth",
         "getServerLimits",

@@ -147,7 +147,7 @@ fn all_kinds_codes_and_declared_methods_have_consistent_schemas() {
     assert_eq!(err::ERROR_INFOS.len(), 12);
     let unique: std::collections::BTreeSet<_> = err::ERROR_INFOS.iter().map(|v| v.code).collect();
     assert_eq!(unique.len(), 12);
-    assert_eq!(err::METHODS.len(), 23);
+    assert_eq!(err::METHODS.len(), 24);
     for method in err::METHODS {
         let codes = err::method_error_codes(method).unwrap();
         assert_eq!(
@@ -181,7 +181,7 @@ fn all_kinds_codes_and_declared_methods_have_consistent_schemas() {
     }
     assert!(err::method_error_codes("futureMethod").is_none());
     assert!(err::method_data_schema("getBalance", -32031).is_none());
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.3.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.4.0");
 }
 
 #[test]

@@ -66,6 +66,7 @@ impl NativeCapabilities {
             | "getBalance"
             | "getRegisteredAuth"
             | "getContractDeployment"
+            | "getEffectiveContract"
             | "getContractArtifact" => self.db,
             "simulateInvocation" | "simulateInvocations" => self.simulation,
             "faucet_requestAirdrop" => matches!(
@@ -243,6 +244,9 @@ macro_rules! dispatch {
     };
     (get_contract_deployment, $s:expr, $r:expr) => {
         $s.reads.get_contract_deployment($r).await
+    };
+    (get_effective_contract, $s:expr, $r:expr) => {
+        $s.reads.get_effective_contract($r).await
     };
     (get_contract_artifact, $s:expr, $r:expr) => {
         $s.reads.get_contract_artifact($r).await

@@ -31,6 +31,7 @@ impl NativeReadCapabilities {
                 "getBalance",
                 "getRegisteredAuth",
                 "getContractDeployment",
+                "getEffectiveContract",
                 "getContractArtifact",
             ]);
         }
@@ -193,6 +194,56 @@ impl<C, R: super::NativeBlockPlane, V> NativeReadService<C, R, V> {
     }
 }
 impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadService<C, R, V> {
+    pub async fn get_effective_contract(
+        &self,
+        request: input::EffectiveContractQuery,
+    ) -> RpcResult<out::EffectiveContractResult> {
+        let context = self.context();
+        self.within(context, async {
+            Self::require(self.capabilities.db, "getEffectiveContract")?;
+            // Both reads are committed snapshots. Equal heights bind the fallback
+            // configuration and deployment absence to the same state. Bound retries
+            // rather than return a mixed-state selection during commit churn.
+            for _ in 0..3 {
+                let deployed = self
+                    .state
+                    .native_contract_deployment(context, request.address)
+                    .await?;
+                snapshot(&deployed.state_block_height)?;
+                if deployed.address != request.address {
+                    return Err(invalid("deployment read returned another address"));
+                }
+                let selection = if let Some(contract) = deployed.deployment {
+                    Some(out::EffectiveContract::ExplicitDeployment { contract })
+                } else if request.context == input::InvocationContext::Root {
+                    let tip = self.chain.chain_tip(context).await?;
+                    snapshot(&tip.tip.height)?;
+                    if tip.tip.height != deployed.state_block_height {
+                        continue;
+                    }
+                    let contract = tip.default_wallet.ok_or_else(|| {
+                        RpcServerError::BackendUnavailable(
+                            "chain default contract configuration unavailable".into(),
+                        )
+                    })?;
+                    Some(out::EffectiveContract::NetworkDefault { contract })
+                } else {
+                    None
+                };
+                return Ok(out::EffectiveContractResult {
+                    address: request.address,
+                    context: request.context,
+                    state_block_height: deployed.state_block_height,
+                    selection,
+                });
+            }
+            Err(RpcServerError::BackendUnavailable(
+                "could not read contract selection at one committed height".into(),
+            ))
+        })
+        .await
+    }
+
     pub async fn get_contract_deployment(
         &self,
         request: input::AddressQuery,

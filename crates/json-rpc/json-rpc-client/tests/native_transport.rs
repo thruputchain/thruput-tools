@@ -85,14 +85,14 @@ thruput_json_rpc_api::native_methods!(exercise_clients);
 
 #[tokio::test]
 async fn all_typed_methods_roundtrip_through_actual_adapters() {
-    assert_eq!(METHOD_NAMES.len(), 23);
+    assert_eq!(METHOD_NAMES.len(), 24);
     let service = Service::default();
     let module = NativeModule::new(service.clone()).unwrap().finalize();
     assert_eq!(module.supported_methods(), sorted_methods());
     let (http, handle) = start(module.into_rpc()).await;
     let client = NativeClient::new(http.clone());
     exercise_clients(&client, &service).await;
-    assert_eq!(service.calls.lock().unwrap().len(), 23);
+    assert_eq!(service.calls.lock().unwrap().len(), 24);
     handle.stop().unwrap();
     handle.stopped().await;
 }
@@ -183,7 +183,7 @@ async fn configured_subset_is_frozen_into_discovery_and_removed_methods_are_abse
     }
     let module = module.finalize();
     let expected = module.supported_methods().to_vec();
-    assert_eq!(expected.len(), 20);
+    assert_eq!(expected.len(), 21);
     let (http, handle) = start(module.into_rpc()).await;
     let client = NativeClient::new(http.clone());
     let DecodedResponse::Known(version) = client.get_version_info(EmptyRequest {}).await.unwrap()

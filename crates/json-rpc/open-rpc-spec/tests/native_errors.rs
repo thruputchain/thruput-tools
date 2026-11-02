@@ -43,7 +43,7 @@ fn catalogue_has_twelve_components_thirteen_kinds_and_unique_method_codes() {
     let document = decorated();
     let components = document["components"]["errors"].as_object().unwrap();
     assert_eq!(components.len(), 12);
-    assert_eq!(errors::METHODS.len(), 23);
+    assert_eq!(errors::METHODS.len(), 24);
     assert_eq!(
         document["components"]["schemas"]["Preserved"],
         json!({"type": "boolean"})

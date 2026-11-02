@@ -48,6 +48,10 @@ macro_rules! native_methods {
             get_registered_auth("getRegisteredAuth", named, plain): $crate::types::requests::AddressQuery => $crate::types::responses::RegisteredAuthResult;
             /// Read the deployed contract identity at a committed snapshot.
             get_contract_deployment("getContractDeployment", named, plain): $crate::types::requests::AddressQuery => $crate::types::responses::ContractDeploymentResult;
+            /// Resolve current committed-state contract selection for root or nested invocation.
+            /// Explicit deployments take precedence; only root invocations use the network default.
+            /// Does not authorize execution, include transaction-local deployments, or identify historical code.
+            get_effective_contract("getEffectiveContract", named, plain): $crate::types::requests::EffectiveContractQuery => $crate::types::responses::EffectiveContractResult;
             /// Read complete canonical Contract XDR by hash. Availability does not prove deployment.
             get_contract_artifact("getContractArtifact", named, plain): $crate::types::requests::ContractArtifactQuery => $crate::types::responses::ContractArtifactResult;
             /// Scan indexed events matching the supplied filters.

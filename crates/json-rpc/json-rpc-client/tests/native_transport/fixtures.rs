@@ -22,6 +22,7 @@ pub fn request(method: &str) -> Value {
             json!({"address": address()})
         }
         "getContractArtifact" => json!({"hash": address()}),
+        "getEffectiveContract" => json!({"address": address(), "context": "root"}),
         "getEvents" => {
             json!({"filters": [{"addresses": [address()]}], "start": {"order": "ascending", "anchor": {"kind": "atBeginning"}}})
         }
@@ -53,6 +54,9 @@ pub fn response(method: &str) -> Value {
             json!({"address": address(), "stateBlockHeight": "42", "deployment": null})
         }
         "getContractArtifact" => json!({"hash": address(), "contractXdr": "0x0000000300000000"}),
+        "getEffectiveContract" => {
+            json!({"address": address(), "context": "root", "stateBlockHeight": "42", "selection": null})
+        }
         "getVersionInfo" => {
             json!({"wireFormat": "14.0.0", "supportedMethods": ["incorrectServiceValue"], "implementation": "transport-test"})
         }

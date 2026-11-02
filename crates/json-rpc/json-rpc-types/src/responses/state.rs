@@ -7,6 +7,35 @@ use super::{
 };
 use crate::{BlockHeight, ContractAddress, Ed25519PublicKey, SHA256Hash, hex::HexBytes};
 
+impl ResponseData for crate::requests::InvocationContext {
+    fn is_supported(&self) -> bool {
+        true
+    }
+}
+
+response_object! {
+/// Current committed-state selection, not authorization or historical execution evidence.
+/// Null means no applicable contract in this context. Transaction-local deployments are excluded.
+EffectiveContractResult {
+    address: ContractAddress,
+    context: crate::requests::InvocationContext,
+    #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]
+    #[schemars(schema_with = "height_schema")]
+    state_block_height: BlockHeight,
+    #[serde(deserialize_with = "nullable")]
+    #[schemars(schema_with = "nullable_schema::<EffectiveContract>")]
+    selection: Option<EffectiveContract>,
+}
+}
+
+response_enum! {
+/// Explicit deployment takes precedence. Network defaults apply only to root invocations.
+EffectiveContract, "source" {
+    ExplicitDeployment("explicitDeployment", true) { contract: ContractDeployment },
+    NetworkDefault("networkDefault", true) { contract: ContractDeployment },
+}
+}
+
 response_object! {
 /// Deployment at a committed snapshot. Null means no deployment in this snapshot.
 ContractDeploymentResult {

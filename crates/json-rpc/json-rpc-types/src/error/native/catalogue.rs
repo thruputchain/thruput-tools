@@ -127,6 +127,7 @@ pub const METHODS: &[&str] = &[
     "getRegisteredAuth",
     "getContractDeployment",
     "getContractArtifact",
+    "getEffectiveContract",
     "getEvents",
     "getTransactionsByRootAddress",
     "getBlockByHeight",
@@ -208,6 +209,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
         | "getBalance"
         | "getRegisteredAuth"
         | "getContractDeployment"
+        | "getEffectiveContract"
         | "dev_getPendingTransactionCount" => &[
             INVALID_PARAMS,
             BACKEND_UNAVAILABLE,

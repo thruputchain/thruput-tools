@@ -59,6 +59,7 @@ core_results! {
     auth("getRegisteredAuth"): req::AddressQuery => res::RegisteredAuthResult,
     deployment("getContractDeployment"): req::AddressQuery => res::ContractDeploymentResult,
     artifact("getContractArtifact"): req::ContractArtifactQuery => res::ContractArtifactResult,
+    effective("getEffectiveContract"): req::EffectiveContractQuery => res::EffectiveContractResult,
     events("getEvents"): req::EventQuery => res::EventPage,
     root("getTransactionsByRootAddress"): req::RootAddressQuery => res::TransactionRefPage,
     block("getBlockByHeight"): req::BlockQuery => res::BlockResult,
@@ -100,6 +101,9 @@ fn valid(method: &str) -> Value {
             json!({"address": identifier(), "stateBlockHeight": "42", "deployment": {"hash": identifier(), "size": 123, "contractType": 3}})
         }
         "getContractArtifact" => json!({"hash": identifier(), "contractXdr": "0x0000000300000000"}),
+        "getEffectiveContract" => {
+            json!({"address": identifier(), "context": "nested", "stateBlockHeight": "42", "selection": null})
+        }
         "getVersionInfo" => {
             json!({"wireFormat": "14.0.0", "supportedMethods": ["getVersionInfo"], "implementation": "test"})
         }
@@ -173,7 +177,7 @@ fn check(method: &str, raw: &Value, expected: Option<bool>, schema_valid: bool) 
 #[test]
 fn all_core_results_have_known_schemas_and_roundtrip_without_legacy_fields() {
     let document = spec();
-    assert_eq!(document["methods"].as_array().unwrap().len(), 20);
+    assert_eq!(document["methods"].as_array().unwrap().len(), 21);
     for (method, _, encode) in cases() {
         let value = valid(method);
         check(method, &value, Some(true), true);
@@ -188,7 +192,7 @@ fn all_core_results_have_known_schemas_and_roundtrip_without_legacy_fields() {
     for method in ["getTransactionReceipt", "getBlockByHeight"] {
         check(method, &Value::Null, Some(true), true);
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.3.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.4.0");
 }
 
 #[test]

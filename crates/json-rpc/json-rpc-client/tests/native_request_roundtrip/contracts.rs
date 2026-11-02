@@ -91,6 +91,7 @@ fn valid_request(method: &str) -> Value {
             json!({"address": address()})
         }
         "getContractArtifact" => json!({"hash": address()}),
+        "getEffectiveContract" => json!({"address": address(), "context": "root"}),
         "getEvents" => {
             json!({"filters": [{"addresses": [address()]}], "start": {"order": "ascending", "anchor": {"kind": "atBeginning"}}})
         }
@@ -139,7 +140,7 @@ fn assert_case(method: &str, value: &Value, accepted: bool) {
 fn all_core_methods_put_required_parameters_first() {
     let document = request_spec();
     let methods = document["methods"].as_array().unwrap();
-    assert_eq!(methods.len(), 20);
+    assert_eq!(methods.len(), 21);
     for method in methods {
         let mut saw_optional = false;
         for param in method["params"].as_array().unwrap() {
@@ -159,7 +160,7 @@ fn all_core_methods_put_required_parameters_first() {
 #[test]
 fn all_core_request_schemas_match_strict_parsing() {
     let document = request_spec();
-    assert_eq!(document["methods"].as_array().unwrap().len(), 20);
+    assert_eq!(document["methods"].as_array().unwrap().len(), 21);
     let meta: Value =
         serde_json::from_str(include_str!("../fixtures/openrpc-meta-1.14.9.json")).unwrap();
     jsonschema::options()
