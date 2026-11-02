@@ -51,11 +51,14 @@ core_results! {
     send("sendTransaction"): req::SendTransactionRequest => res::SendTransactionResult,
     status("getTransactionStatus"): req::TransactionQuery => res::TransactionStatus,
     receipt("getTransactionReceipt"): req::TransactionQuery => res::ReceiptResult,
+    input("getTransactionInput"): req::TransactionQuery => res::TransactionInputResult,
     simulation("simulateInvocation"): req::SimulateInvocationRequest => res::SimulationResult,
     simulations("simulateInvocations"): req::SimulateInvocationsRequest => res::SimulationResults,
     storage("getStorage"): req::StorageQuery => res::StorageResult,
     balance("getBalance"): req::AddressQuery => res::BalanceResult,
     auth("getRegisteredAuth"): req::AddressQuery => res::RegisteredAuthResult,
+    deployment("getContractDeployment"): req::AddressQuery => res::ContractDeploymentResult,
+    artifact("getContractArtifact"): req::ContractArtifactQuery => res::ContractArtifactResult,
     events("getEvents"): req::EventQuery => res::EventPage,
     root("getTransactionsByRootAddress"): req::RootAddressQuery => res::TransactionRefPage,
     block("getBlockByHeight"): req::BlockQuery => res::BlockResult,
@@ -90,6 +93,13 @@ fn costs() -> Value {
 }
 fn valid(method: &str) -> Value {
     match method {
+        "getTransactionInput" => {
+            json!({"status": "available", "transactionHash": identifier(), "blockHeight": "42", "transactionXdr": "0x00000000"})
+        }
+        "getContractDeployment" => {
+            json!({"address": identifier(), "stateBlockHeight": "42", "deployment": {"hash": identifier(), "size": 123, "contractType": 3}})
+        }
+        "getContractArtifact" => json!({"hash": identifier(), "contractXdr": "0x0000000300000000"}),
         "getVersionInfo" => {
             json!({"wireFormat": "14.0.0", "supportedMethods": ["getVersionInfo"], "implementation": "test"})
         }
@@ -163,7 +173,7 @@ fn check(method: &str, raw: &Value, expected: Option<bool>, schema_valid: bool) 
 #[test]
 fn all_core_results_have_known_schemas_and_roundtrip_without_legacy_fields() {
     let document = spec();
-    assert_eq!(document["methods"].as_array().unwrap().len(), 17);
+    assert_eq!(document["methods"].as_array().unwrap().len(), 20);
     for (method, _, encode) in cases() {
         let value = valid(method);
         check(method, &value, Some(true), true);
@@ -178,7 +188,7 @@ fn all_core_results_have_known_schemas_and_roundtrip_without_legacy_fields() {
     for method in ["getTransactionReceipt", "getBlockByHeight"] {
         check(method, &Value::Null, Some(true), true);
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.1.1");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.3.0");
 }
 
 #[test]

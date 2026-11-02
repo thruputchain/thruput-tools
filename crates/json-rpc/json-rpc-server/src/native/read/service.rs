@@ -30,6 +30,8 @@ impl NativeReadCapabilities {
                 "getStorage",
                 "getBalance",
                 "getRegisteredAuth",
+                "getContractDeployment",
+                "getContractArtifact",
             ]);
         }
         if self.simulation {
@@ -191,6 +193,44 @@ impl<C, R: super::NativeBlockPlane, V> NativeReadService<C, R, V> {
     }
 }
 impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadService<C, R, V> {
+    pub async fn get_contract_deployment(
+        &self,
+        request: input::AddressQuery,
+    ) -> RpcResult<out::ContractDeploymentResult> {
+        let context = self.context();
+        self.within(context, async {
+            Self::require(self.capabilities.db, "getContractDeployment")?;
+            let result = self
+                .state
+                .native_contract_deployment(context, request.address)
+                .await?;
+            snapshot(&result.state_block_height)?;
+            if result.address != request.address {
+                return Err(invalid("deployment read returned another address"));
+            }
+            Ok(result)
+        })
+        .await
+    }
+
+    pub async fn get_contract_artifact(
+        &self,
+        request: input::ContractArtifactQuery,
+    ) -> RpcResult<out::ContractArtifactResult> {
+        let context = self.context();
+        self.within(context, async {
+            Self::require(self.capabilities.db, "getContractArtifact")?;
+            let result = self
+                .state
+                .native_contract_artifact(context, request.hash)
+                .await?;
+            if result.hash != request.hash {
+                return Err(invalid("artifact read returned another hash"));
+            }
+            Ok(result)
+        })
+        .await
+    }
     #[tracing::instrument(skip_all)]
     pub async fn get_chain_tip(&self, _: input::EmptyRequest) -> RpcResult<out::ChainTip> {
         let context = self.context();

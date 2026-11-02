@@ -5,6 +5,46 @@ use super::{
 };
 use crate::{BlockHeight, ContractAddress, hex::HexBytes, transaction::TxHash};
 
+/// Maximum canonical Transaction XDR returned by an input read (4 MiB).
+pub const MAX_TRANSACTION_INPUT_BYTES: usize = 4 * 1024 * 1024;
+
+fn transaction_input_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut schema = hex_schema(generator);
+    schema.insert(
+        "maxLength".into(),
+        (2 + 2 * MAX_TRANSACTION_INPUT_BYTES).into(),
+    );
+    schema
+}
+
+fn read_transaction_input<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<HexBytes, D::Error> {
+    let bytes = read_hex(deserializer)?;
+    if bytes.0.len() > MAX_TRANSACTION_INPUT_BYTES {
+        return Err(serde::de::Error::custom("transactionXdr exceeds 4 MiB"));
+    }
+    Ok(bytes)
+}
+
+response_enum! {
+/// Retained committed input. Unavailable does not prove nonexecution or nonexistence.
+/// The hash covers exactly transactionXdr, not signatures or proposal data.
+/// Availability says nothing about execution success. Bodies above 4 MiB are not served.
+TransactionInputResult, "status" {
+    Available("available", true) {
+        transaction_hash: TxHash,
+        #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]
+        #[schemars(schema_with = "height_schema")]
+        block_height: BlockHeight,
+        #[serde(deserialize_with = "read_transaction_input")]
+        #[schemars(schema_with = "transaction_input_schema")]
+        transaction_xdr: HexBytes,
+    },
+    Unavailable("unavailable", true) {},
+}
+}
+
 response_strings! {
 /// A successful send acknowledges this admission attempt only.
 Admission { Accepted("accepted", true) }

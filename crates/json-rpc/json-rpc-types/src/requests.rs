@@ -80,6 +80,13 @@ macro_rules! object_enum {
 pub struct EmptyRequest {}
 
 object_request! {
+/// Select retained canonical contract bytes by their SHA-256 identity.
+ContractArtifactQuery {
+    hash: crate::SHA256Hash,
+}
+}
+
+object_request! {
 /// Select committed block metadata by a nonnegative signed-64 height.
 BlockQuery {
     /// Canonical decimal string, from zero through `i64::MAX`.

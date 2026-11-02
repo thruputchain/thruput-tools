@@ -16,6 +16,20 @@ fn address() -> String {
     "1".repeat(32)
 }
 
+#[test]
+fn artifact_hash_requires_a_named_fixed_width_identifier() {
+    accepts::<ContractArtifactQuery>(json!({"hash": address()}));
+    for malformed in [
+        json!({}),
+        json!([address()]),
+        json!({"hash": "0x00"}),
+        json!({"hash": "1".repeat(31)}),
+        json!({"hash": address(), "address": address()}),
+    ] {
+        rejects::<ContractArtifactQuery>(malformed);
+    }
+}
+
 fn invocation() -> Value {
     json!({"address": address(), "entrypoint": "0x0102030405060708", "calldata": "0x"})
 }

@@ -90,6 +90,22 @@ impl NativeHistoryPlane for StubBackend {
 
 #[async_trait]
 impl NativeStatePlane for StubBackend {
+    async fn native_contract_deployment(
+        &self,
+        _: RpcRequestContext,
+        _: ContractAddress,
+    ) -> Result<out::ContractDeploymentResult, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getContractDeployment".into(),
+        ))
+    }
+    async fn native_contract_artifact(
+        &self,
+        _: RpcRequestContext,
+        _: thruput_json_rpc_types::SHA256Hash,
+    ) -> Result<out::ContractArtifactResult, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getContractArtifact".into()))
+    }
     #[tracing::instrument(skip_all)]
     async fn native_storage(
         &self,
@@ -111,6 +127,13 @@ impl NativeStatePlane for StubBackend {
 
 #[async_trait]
 impl NativeTransactionReadPlane for StubBackend {
+    async fn native_input(
+        &self,
+        _: RpcRequestContext,
+        _: TxHash,
+    ) -> Result<out::TransactionInputResult, NativeReadError> {
+        Err(RpcServerError::NotImplemented("getTransactionInput".into()).into())
+    }
     #[tracing::instrument(skip_all)]
     async fn native_receipt(
         &self,

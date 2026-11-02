@@ -8,6 +8,41 @@ use super::{
 use crate::{BlockHeight, ContractAddress, Ed25519PublicKey, SHA256Hash, hex::HexBytes};
 
 response_object! {
+/// Deployment at a committed snapshot. Null means no deployment in this snapshot.
+ContractDeploymentResult {
+    address: ContractAddress,
+    #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]
+    #[schemars(schema_with = "height_schema")]
+    state_block_height: BlockHeight,
+    #[serde(deserialize_with = "nullable")]
+    #[schemars(schema_with = "nullable_schema::<ContractDeployment>")]
+    deployment: Option<ContractDeployment>,
+}
+}
+
+response_object! {
+/// Stored deployment identity. Size is the artifact byte count, or zero for native code.
+ContractDeployment {
+    hash: SHA256Hash,
+    #[schemars(schema_with = "u32_schema")]
+    size: u32,
+    #[schemars(schema_with = "i32_schema")]
+    contract_type: i32,
+}
+}
+
+response_object! {
+/// Complete canonical XDR Contract bytes, including discriminant and padding.
+/// Content retrieval does not prove deployment or transaction commitment.
+ContractArtifactResult {
+    hash: SHA256Hash,
+    #[serde(deserialize_with = "read_hex")]
+    #[schemars(schema_with = "hex_schema")]
+    contract_xdr: HexBytes,
+}
+}
+
+response_object! {
 /// Storage at a committed snapshot. The item member is required, even if null.
 StorageResult {
     #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]

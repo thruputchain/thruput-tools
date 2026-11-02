@@ -7,9 +7,11 @@
 
 mod block;
 pub use block::block_lookup;
+mod contract;
 pub mod history;
 mod simulation;
 mod state;
+pub use contract::*;
 pub mod transaction;
 pub use simulation::*;
 pub use state::*;

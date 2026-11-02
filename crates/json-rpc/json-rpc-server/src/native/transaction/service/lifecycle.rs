@@ -106,6 +106,35 @@ impl<S: NativeSubmitPlane, C: ChainPlane, R> NativeTransactionService<S, C, R> {
 }
 
 impl<S, C, R: NativeTransactionReadPlane> NativeTransactionService<S, C, R> {
+    /// Read canonical retained input without interpreting execution success.
+    pub async fn get_transaction_input(
+        &self,
+        request: input::TransactionQuery,
+    ) -> RpcResult<out::TransactionInputResult> {
+        let context = self.request_context();
+        let result = within_native_read_deadline(
+            context,
+            self.read.native_input(context, request.transaction_hash),
+        )
+        .await;
+        match result {
+            Ok(out::TransactionInputResult::Available {
+                ref transaction_hash,
+                ref block_height,
+                ref transaction_xdr,
+            }) if *transaction_hash != request.transaction_hash
+                || **block_height < 0
+                || transaction_xdr.0.len() > out::MAX_TRANSACTION_INPUT_BYTES =>
+            {
+                Err(read_error(crate::native::transaction::invalid_receipt()))
+            }
+            Ok(result) => Ok(result),
+            Err(mut error) => {
+                error.observation = None;
+                Err(read_error(error))
+            }
+        }
+    }
     /// Native committed receipt lookup, preserving independently validated observation.
     #[tracing::instrument(skip_all)]
     pub async fn get_transaction_receipt(

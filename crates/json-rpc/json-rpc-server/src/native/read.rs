@@ -54,6 +54,16 @@ pub trait NativeHistoryPlane: Send + Sync + 'static {
 /// State answers validated before transport demultiplexing loses evidence.
 #[async_trait]
 pub trait NativeStatePlane: Send + Sync + 'static {
+    async fn native_contract_deployment(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<out::ContractDeploymentResult, RpcServerError>;
+    async fn native_contract_artifact(
+        &self,
+        context: RpcRequestContext,
+        hash: thruput_json_rpc_types::SHA256Hash,
+    ) -> Result<out::ContractArtifactResult, RpcServerError>;
     async fn native_storage(
         &self,
         context: RpcRequestContext,
@@ -93,6 +103,10 @@ fn invalid(message: &str) -> RpcServerError {
 /// Project read-only failure evidence; no error here asserts write admission.
 pub(super) fn rpc_error(error: &RpcServerError) -> ErrorObjectOwned {
     let (code, data) = match error {
+        RpcServerError::ContractArtifactUnavailable(hash) => (
+            codes::CONTRACT_ARTIFACT_UNAVAILABLE,
+            ErrorData::ContractArtifactUnavailable { hash: *hash },
+        ),
         RpcServerError::InvalidParam(_) => (
             codes::INVALID_PARAMS,
             ErrorData::InvalidParams {

@@ -114,6 +114,10 @@ pub enum BackendDataInvalidReason {
 )]
 #[non_exhaustive]
 pub enum ErrorData {
+    /// Bytes unavailable at this server, without an assertion about retention history.
+    ContractArtifactUnavailable {
+        hash: crate::SHA256Hash,
+    },
     InvalidParams {
         #[serde(
             default,

@@ -1,4 +1,5 @@
 pub mod blocks;
+pub mod contracts;
 pub mod native_history;
 pub mod receipt;
 pub mod view;

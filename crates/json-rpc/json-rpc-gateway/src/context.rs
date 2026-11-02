@@ -1025,6 +1025,12 @@ mod tests {
 
     #[allow(refining_impl_trait)]
     impl DbGateway_DbGateway1 for TestDbGateway {
+        async fn dbgateway_get_contract(
+            &self,
+            _: thruput_xdr::types::SHA256Hash,
+        ) -> Result<thruput_db_gateway::DbGatewayContractResult, rpc_driver::ProgramError> {
+            panic!("bug: intro rejection test should not issue artifact reads")
+        }
         async fn dbgateway_get_config(
             &self,
         ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
