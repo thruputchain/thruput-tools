@@ -318,7 +318,7 @@ impl Pty {
             master,
             slave,
             original,
-            parser: vt100::Parser::new(12, 80, 10000),
+            parser: vt100::Parser::new(12.try_into().unwrap(), 80.try_into().unwrap(), 10000),
             raw: Vec::new(),
             queries: 0,
             progress_rows: 0,
@@ -442,7 +442,9 @@ impl Pty {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        self.parser.screen_mut().set_size(rows, columns);
+        self.parser
+            .screen_mut()
+            .set_size(rows.try_into().unwrap(), columns.try_into().unwrap());
         // SAFETY: resize only this test's PTY.
         assert_eq!(
             unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &raw const size) },
