@@ -707,6 +707,12 @@ fn prepare_deploy_transaction_plan(
     options: &DeploymentOptions<'_>,
     sender: Option<crate::account_resolution::ResolvedTransactionSender>,
 ) -> Result<DeployPlan, CliError> {
+    crate::contract_spec::load_artifact_spec_bytes(&artifact_bytes)?.ok_or_else(|| {
+        CliError::SpecFailed(
+            "deployment requires an embedded contract spec; rebuild with the current SDK tooling"
+                .into(),
+        )
+    })?;
     let rpc_url = profile.rpc_endpoint()?;
     if options.init_method.is_none()
         && (!options.init_args.is_empty() || options.init_gas_limit.is_some())

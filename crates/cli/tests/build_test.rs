@@ -402,8 +402,7 @@ fn build_rv32_project_compiles_and_lowers_elf_without_global_setup() {
     assert_eq!(result.spec_json, Some(processed_spec_json.clone()));
     assert_eq!(result.spec_xdr, Some(processed_spec_xdr.clone()));
     assert!(result.warnings.is_empty(), "{:?}", result.warnings);
-    // Only the minimal nonzero data span is stored; the spec-metadata section
-    // is skipped, so the artifact is header + code, far below the full image.
+    // The spec is stored outside the minimal guest data image.
     assert!(result.size_bytes < 64 * 1024);
     assert!(fs::read(&processed_rv32).unwrap().starts_with(b"GHRV32A1"));
     let metadata: serde_json::Value =
@@ -418,6 +417,12 @@ fn build_rv32_project_compiles_and_lowers_elf_without_global_setup() {
     assert_eq!(spec_json["interfaces"][0]["name"], "Counter");
     assert_eq!(spec_json["interfaces"][0]["methods"][0]["name"], "get");
     let spec_xdr = fs::read(&processed_spec_xdr).unwrap();
+    let embedded = thruput_rv32_artifact::artifact_spec(&fs::read(&result.rv32).unwrap())
+        .unwrap()
+        .unwrap()
+        .bytes
+        .to_vec();
+    assert_eq!(embedded, spec_xdr, "embedded and exported specs must match");
     let spec = thruput_cli::contract_spec::load_contract_spec_from_xdr(&spec_xdr)
         .expect("bug: rv32 spec sidecar should decode");
     assert_eq!(spec.interfaces.len(), 1);
@@ -621,7 +626,14 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
         .join("demo_contract_rv32.rv32.json");
     let cargo_args_log = project_root.join("cargo-args.log");
     let elf_fixture = project_root.join("fixture.elf");
-    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    fs::write(
+        &elf_fixture,
+        support::minimal_rv32_elf_with_section(
+            thruput_spec_tool::RAW_SECTION_NAME,
+            &support::contract_spec_raw_for_interface("Counter"),
+        ),
+    )
+    .unwrap();
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
         project_root.display(),
@@ -720,7 +732,14 @@ fn guest_memory_project(tmp: &TempDir, metadata_table: &str) -> GuestMemoryProje
         .join("demo_contract_rv32");
     let cargo_args_log = project_root.join("cargo-args.log");
     let elf_fixture = project_root.join("fixture.elf");
-    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    fs::write(
+        &elf_fixture,
+        support::minimal_rv32_elf_with_section(
+            thruput_spec_tool::RAW_SECTION_NAME,
+            &support::contract_spec_raw_for_interface("Counter"),
+        ),
+    )
+    .unwrap();
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}},"metadata":{metadata_table}}}]}}"#,
         project_root.display(),
@@ -1245,7 +1264,14 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
         .join("riscv32im-unknown-none-elf/release")
         .join("demo_contract");
     let elf_fixture = project_root.join("fixture.elf");
-    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    fs::write(
+        &elf_fixture,
+        support::minimal_rv32_elf_with_section(
+            thruput_spec_tool::RAW_SECTION_NAME,
+            &support::contract_spec_raw_for_interface("Counter"),
+        ),
+    )
+    .unwrap();
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         project_root.display(),
@@ -1336,7 +1362,14 @@ fn build_relays_what_cargo_reports_while_it_reads_the_registry() {
         .join("riscv32im-unknown-none-elf/release")
         .join("demo_contract");
     let elf_fixture = project_root.join("fixture.elf");
-    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    fs::write(
+        &elf_fixture,
+        support::minimal_rv32_elf_with_section(
+            thruput_spec_tool::RAW_SECTION_NAME,
+            &support::contract_spec_raw_for_interface("Counter"),
+        ),
+    )
+    .unwrap();
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         project_root.display(),

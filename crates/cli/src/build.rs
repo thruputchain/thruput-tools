@@ -502,7 +502,7 @@ pub fn build_rv32_project(
 
     print.phase("Lowering RV32 ELF...");
     let elf_bytes = fs::read(&elf)?;
-    let lowered = thruput_rv32_lower::lower_with(
+    let mut lowered = thruput_rv32_lower::lower_with(
         &elf_bytes,
         &thruput_rv32_lower::LowerOptions {
             memory_bytes: layout.memory_bytes(),
@@ -525,6 +525,29 @@ pub fn build_rv32_project(
             lowered.initial_memory_start
         ));
     }
+    // Invalidate the prior build before publishing new sidecars. A failed spec
+    // finalization must not leave an old artifact looking like this build's output.
+    match fs::remove_file(&rv32) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    print.phase("Finalizing contract spec...");
+    let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?
+        .ok_or_else(|| CliError::SpecFailed("contract build requires a contract spec; use the low-level lowerer for custom spec-less artifacts".into()))?;
+    lowered.artifact = thruput_rv32_artifact::build_artifact_with_spec(
+        &lowered.code,
+        &lowered.initial_memory,
+        lowered.initial_memory_start,
+        lowered.memory_bytes,
+        Some(thruput_rv32_artifact::ArtifactSpec {
+            schema_version: crate::contract_spec::ARTIFACT_SPEC_SCHEMA_VERSION,
+            bytes: &finalized.xdr_bytes,
+        }),
+    )
+    .map_err(thruput_rv32_lower::LowerError::from)?;
+    thruput_rv32_artifact::verify_artifact(&lowered.artifact)
+        .map_err(thruput_rv32_lower::LowerError::from)?;
     let lower_metadata_doc =
         thruput_rv32_lower::render_metadata(&thruput_rv32_lower::MetadataInput {
             elf: &elf_bytes,
@@ -543,31 +566,22 @@ pub fn build_rv32_project(
         return Err(error.into());
     }
 
-    print.phase("Checking for contract spec...");
-    let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?;
-    let spec_json = finalized.as_ref().map(|f| f.json_path.clone());
-    let spec_xdr = finalized.as_ref().map(|f| f.xdr_path.clone());
+    let spec_json = Some(finalized.json_path);
+    let spec_xdr = Some(finalized.xdr_path);
     let source_name = rv32
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
     let mut warnings = Vec::new();
     let bindings_ts = if bindings.iter().any(|binding| binding == "ts") {
-        if let Some(ref finalized) = finalized {
-            print.phase("Generating TypeScript bindings...");
-            let ts_path = rv32.with_extension("ts");
-            let ts = crate::codegen::generate_ts_bindings(&finalized.spec, source_name)?;
-            fs::write(&ts_path, ts.as_bytes())?;
-            print.status(format_args!("Wrote {}", ts_path.display()));
-            Some(ts_path)
-        } else {
-            print.warn("no contract spec found — skipping TypeScript bindings");
-            None
-        }
+        print.phase("Generating TypeScript bindings...");
+        let ts_path = rv32.with_extension("ts");
+        let ts = crate::codegen::generate_ts_bindings(&finalized.spec, source_name)?;
+        fs::write(&ts_path, ts.as_bytes())?;
+        print.status(format_args!("Wrote {}", ts_path.display()));
+        Some(ts_path)
     } else {
-        if let Some(ref finalized) = finalized
-            && let Some(warning) = ts_bindings_warning(&finalized.spec, source_name)
-        {
+        if let Some(warning) = ts_bindings_warning(&finalized.spec, source_name) {
             print.warn(&warning.message);
             warnings.push(warning);
         }

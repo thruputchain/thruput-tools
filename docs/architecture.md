@@ -30,9 +30,10 @@ for the handoff and [gateway design](gateway/system-design.md) for RPC behavior.
 ## The contract development path
 
 The CLI scaffolds a Rust project, builds it with the project's pinned toolchain,
-and lowers the ELF into an RV32 artifact. The contract's interface metadata
-becomes a spec sidecar, used for invocation and TypeScript bindings. Deploys and
-calls use the public JSON-RPC interface, as applications do.
+and lowers the ELF into an RV32 artifact. The build embeds the canonical contract
+spec outside guest memory and exports JSON/XDR sidecars. Invocation and TypeScript
+bindings use the embedded spec; sidecars are exports, not fallback metadata.
+Deploys, calls, and onchain inspection use the public JSON-RPC interface.
 
 A build does not read chain state, so it cannot decide whether a chain will
 admit the contract. Signing identifies the network and wallet; the runtime decides

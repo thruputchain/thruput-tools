@@ -25,7 +25,14 @@ fn write_rv32_build_fixture(project_root: &Path) -> (PathBuf, PathBuf) {
     )
     .unwrap();
     let fixture = project_root.join("fixture.elf");
-    fs::write(&fixture, support::minimal_rv32_elf()).unwrap();
+    fs::write(
+        &fixture,
+        support::minimal_rv32_elf_with_section(
+            thruput_spec_tool::RAW_SECTION_NAME,
+            &support::minimal_contract_spec_raw(),
+        ),
+    )
+    .unwrap();
     let raw_elf = project_root.join("target/riscv32im-unknown-none-elf/release/demo_contract");
     (fixture, raw_elf)
 }
@@ -338,7 +345,14 @@ fn write_workspace_fixture(
     )
     .unwrap();
     let fixture = root.join("fixture.elf");
-    fs::write(&fixture, support::minimal_rv32_elf()).unwrap();
+    fs::write(
+        &fixture,
+        support::minimal_rv32_elf_with_section(
+            thruput_spec_tool::RAW_SECTION_NAME,
+            &support::minimal_contract_spec_raw(),
+        ),
+    )
+    .unwrap();
 
     let mut members = Vec::new();
     let mut snake_cases = Vec::new();
