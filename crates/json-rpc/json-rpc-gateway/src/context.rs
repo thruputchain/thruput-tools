@@ -190,6 +190,12 @@ pub struct GatewayContext {
     /// Execution slots matching the dedicated scheduler lookup pool.
     pub(crate) scheduler_lookup_execution: Arc<Semaphore>,
 
+    /// Running plus queued full-artifact reads, shared across all callers.
+    pub(crate) artifact_read_admission: Semaphore,
+
+    /// Full-artifact reads consume more memory than batched state reads.
+    pub(crate) artifact_read_execution: Semaphore,
+
     /// Scheduler pool held away from request handlers until its readiness
     /// grace period has elapsed.
     pub(crate) scheduler_quarantine: Arc<RwLock<Option<QuarantinedScheduler>>>,
@@ -389,6 +395,8 @@ impl GatewayContext {
                 config.scheduler_lookup_pool_size.get(),
             )),
             scheduler_quarantine: Arc::new(RwLock::new(None)),
+            artifact_read_admission: Semaphore::new(64),
+            artifact_read_execution: Semaphore::new(4),
             indexer,
             batch_submitter,
             protocol,
