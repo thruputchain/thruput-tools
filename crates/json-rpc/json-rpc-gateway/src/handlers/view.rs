@@ -36,11 +36,16 @@ async fn batch_result(
     )?;
     let result = timed_backend_call(
         &ctx.metrics,
+        &ctx.lanes.view,
+        u32::try_from(query.calls.0.len()).unwrap_or(u32::MAX),
         HealthBackend::ViewGateway,
         "viewgateway_view_batch",
         VIEW_GATEWAY,
         deadline,
-        client.viewgateway_view_batch(&query),
+        {
+            let query = query.clone();
+            async move { client.viewgateway_view_batch(&query).await }
+        },
         // Expected refusals are healthy backend round trips, even though the
         // public response remains an error for the caller.
         |result| match result {
@@ -63,16 +68,21 @@ async fn batch_result(
 async fn view_result_from_client(
     client: &thruput_view::ViewGateway_ViewGateway1_Client,
     metrics: &GatewayMetrics,
+    lane: &crate::lanes::Lane,
     query: &TransactionViewQuery,
     deadline: Instant,
 ) -> Result<ViewGatewayResult, RpcServerError> {
+    let client = client.clone();
+    let query = query.clone();
     let result = timed_backend_call(
         metrics,
+        lane,
+        1,
         HealthBackend::ViewGateway,
         "viewgateway_view",
         VIEW_GATEWAY,
         deadline,
-        client.viewgateway_view(query),
+        async move { client.viewgateway_view(&query).await },
         // A rejected request is the caller's error, not the backend's: the
         // backend answered correctly, so it counts as a healthy round trip.
         |result| {
@@ -115,6 +125,7 @@ pub async fn native_simulate(
     let result = view_result_from_client(
         &client,
         &ctx.metrics,
+        &ctx.lanes.view,
         &query,
         backend_deadline(context, timeout)?,
     )
@@ -406,9 +417,12 @@ mod tests {
         let query = shared_view::view_query(request(None), 123).expect("query maps");
         let metrics = GatewayMetrics::for_tests();
 
+        let lanes =
+            crate::lanes::BackendLanes::new(&crate::config::AdmissionConfig::default(), &metrics);
         let result = view_result_from_client(
             &client,
             &metrics,
+            &lanes.view,
             &query,
             Instant::now() + Duration::from_millis(10),
         )

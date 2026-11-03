@@ -231,13 +231,16 @@ async fn lookup_transaction_info(
     tx_hash: TxHash,
 ) -> Result<TxInfoResult, RpcServerError> {
     let hash = shared_receipt::tx_hash_to_wire(tx_hash);
+    let client = client.clone();
     timed_backend_call(
         &ctx.metrics,
+        &ctx.lanes.indexer_point,
+        1,
         HealthBackend::Indexer,
         "get_transaction_info",
         INDEXER,
         deadline,
-        client.get_transaction_info(&hash),
+        async move { client.get_transaction_info(&hash).await },
         |_| true,
     )
     .await
