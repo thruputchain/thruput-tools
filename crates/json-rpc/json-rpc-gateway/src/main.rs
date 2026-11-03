@@ -6,6 +6,7 @@ mod context;
 mod handlers;
 mod health;
 mod heap_profiling;
+mod lanes;
 mod listener;
 mod metrics;
 mod middleware;
