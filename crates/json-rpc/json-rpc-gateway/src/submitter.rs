@@ -105,7 +105,7 @@ impl SubmitSink for SchedulerSink {
                 let result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
                     Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
                 } else {
-                    clear_scheduler_if_current(&self.scheduler, generation).await;
+                    // A spent request budget is not evidence that the scheduler is unhealthy.
                     call.abort();
                     let _ = call.await;
                     Err(())
@@ -457,10 +457,7 @@ mod tests {
     use super::*;
     use crate::health::{GatewayHealthSnapshot, HealthStatus};
     use std::collections::VecDeque;
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
+    use std::sync::Mutex;
     use std::time::Duration;
     use tokio::sync::Notify;
 
@@ -564,14 +561,13 @@ mod tests {
         }
     }
 
-    struct TimeoutInvalidatesSink {
+    struct DeadlineSink {
         cutoff: Instant,
-        valid: AtomicBool,
         deadlines: Mutex<Vec<Instant>>,
     }
 
     #[async_trait]
-    impl SubmitSink for TimeoutInvalidatesSink {
+    impl SubmitSink for DeadlineSink {
         async fn submit(
             &self,
             _batch: SubmitBatch<Vec<u8>>,
@@ -579,16 +575,11 @@ mod tests {
         ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
             self.deadlines.lock().unwrap().push(deadline);
             if deadline < self.cutoff {
-                self.valid.store(false, Ordering::SeqCst);
                 Err(RpcServerError::BackendTimeout)
-            } else if self.valid.load(Ordering::SeqCst) {
+            } else {
                 Ok(VecM(vec![
                     SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
                 ]))
-            } else {
-                Err(RpcServerError::BackendUnavailable(
-                    "scheduler invalidated by older timeout".into(),
-                ))
             }
         }
     }
@@ -860,11 +851,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn newer_submission_finishes_before_old_timeout_invalidates_scheduler() {
+    async fn newer_submission_finishes_before_old_timeout() {
         let now = Instant::now();
-        let sink = Arc::new(TimeoutInvalidatesSink {
+        let sink = Arc::new(DeadlineSink {
             cutoff: now + Duration::from_secs(3),
-            valid: AtomicBool::new(true),
             deadlines: Mutex::new(Vec::new()),
         });
         let processor = SubmitProcessor {
@@ -897,7 +887,7 @@ mod tests {
         newer_waiter
             .await
             .expect("newer reply should be sent")
-            .expect("newer cohort should finish before invalidation");
+            .expect("newer cohort should succeed");
         assert!(matches!(
             old_waiter.await.expect("old reply should be sent"),
             Err(RpcServerError::BackendTimeout)
