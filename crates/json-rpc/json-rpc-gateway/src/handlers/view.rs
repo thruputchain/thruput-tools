@@ -43,8 +43,13 @@ async fn batch_result(
         VIEW_GATEWAY,
         deadline,
         {
-            let query = query.clone();
-            async move { client.viewgateway_view_batch(&query).await }
+            let mut query = query.clone();
+            // Runs only once the lane is acquired: waiting spent part of the
+            // deadline, so hogd gets only the budget that remains.
+            async move {
+                query.budget_millis = remaining_budget_millis(deadline);
+                client.viewgateway_view_batch(&query).await
+            }
         },
         // Expected refusals are healthy backend round trips, even though the
         // public response remains an error for the caller.
@@ -63,6 +68,18 @@ async fn batch_result(
         ctx.metrics.observe_view_timeout();
     }
     Ok((query, result?))
+}
+
+/// Milliseconds left before `deadline`, at least 1 because hogd rejects a zero
+/// budget. `timed_backend_call` refuses calls whose deadline has already passed.
+fn remaining_budget_millis(deadline: Instant) -> u32 {
+    u32::try_from(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis(),
+    )
+    .unwrap_or(u32::MAX)
+    .max(1)
 }
 
 async fn view_result_from_client(
@@ -172,6 +189,14 @@ mod tests {
     use xdr_common::{BytesM, VecM};
 
     use super::*;
+
+    #[test]
+    fn batch_budget_is_what_remains_at_dispatch() {
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let budget = remaining_budget_millis(deadline);
+        assert!((1..=500).contains(&budget), "{budget}");
+        assert_eq!(remaining_budget_millis(Instant::now()), 1);
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum FakeViewGatewayMode {
