@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### 0.43.0 release preparation
+
+- Produce RV32 v6 artifacts with canonical onchain specs. Published tools 0.42.0
+  produce v5 and cannot build fixtures for the v6-only runtime.
+- The v6 runtime cannot execute committed v5 contracts: loading one returns
+  `Unrecoverable`. Rebuild and redeploy contracts on a compatible fresh network.
+  An existing futurenet needs a separately approved reset; installing new tools
+  does not migrate its stored contracts.
+- Release remains blocked on compatible published protocol bindings and a v6
+  hogd release. The managed runtime catalog still points to v0.1.31; update its
+  version and verified asset digests only after the matching release exists.
+  Qualify the exact CLI/runtime pair before enabling v6 production use.
+
 - Generated counter applications and the faucet frontend install their npm
   dependencies from the public registry without a GitHub token.
 - Update frontend and browser-harness dependencies to address reported npm
