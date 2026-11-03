@@ -5,6 +5,8 @@ use thruput_contract_spec::{ContractSpec, ContractSpecInterface};
 use crate::codec::spec_string_text;
 use crate::{CliError, Print};
 
+mod bounded;
+
 /// Canonical TXS/XDR `ContractSpec` schema embedded in RV32 v6 artifacts.
 pub const ARTIFACT_SPEC_SCHEMA_VERSION: u32 = 1;
 
@@ -27,6 +29,8 @@ fn spec_xdr_sidecar_path(artifact: &Path) -> PathBuf {
 
 /// XDR-decode raw bytes into a `ContractSpec`.
 pub fn load_contract_spec_from_xdr(bytes: &[u8]) -> Result<ContractSpec, CliError> {
+    bounded::check(bytes)
+        .map_err(|e| CliError::SpecFailed(format!("failed to decode .spec.xdr: {e}")))?;
     xdrs::txs::decode(bytes)
         .map_err(|e| CliError::SpecFailed(format!("failed to decode .spec.xdr: {e}")))
 }
@@ -597,6 +601,54 @@ mod tests {
         let xdr_bytes = xdrs::txs::encode(&spec).expect("bug: spec should encode");
         let loaded = load_contract_spec_from_xdr(&xdr_bytes).expect("bug: should decode");
         assert_eq!(loaded, spec);
+    }
+
+    #[test]
+    fn deeply_nested_artifact_returns_spec_error_in_subprocess() {
+        const CHILD: &str = "THRUPUT_TEST_DEEP_SPEC_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            // Construct wire bytes directly so the fixture itself needs no
+            // recursive construction, encoding, or drop.
+            let mut bytes = Vec::new();
+            for word in [1_u32, 0, 0, 0, 1, 0, 0] {
+                bytes.extend(word.to_be_bytes());
+            }
+            for _ in 0..20_000 {
+                bytes.extend(
+                    thruput_contract_spec::ContractTypeKind::Option
+                        .0
+                        .to_be_bytes(),
+                );
+            }
+            bytes.extend([0; 16]); // Void return leaf, no effect/typedefs/events.
+            let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+                &[0; 4],
+                &[],
+                0,
+                64,
+                Some(thruput_rv32_artifact::ArtifactSpec {
+                    schema_version: 1,
+                    bytes: &bytes,
+                }),
+            )
+            .unwrap();
+            let error = super::load_artifact_spec_bytes(&artifact).unwrap_err();
+            assert!(matches!(error, crate::CliError::SpecFailed(_)));
+            assert!(error.to_string().contains("type nesting limit"));
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "contract_spec::tests::deeply_nested_artifact_returns_spec_error_in_subprocess",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "child failed: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
     }
 
     #[test]
