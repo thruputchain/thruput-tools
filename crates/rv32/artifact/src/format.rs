@@ -589,6 +589,28 @@ pub fn declared_sizes(artifact: &[u8]) -> Option<DeclaredSizes> {
 /// insurance against a writer regression slipping past until the C++ parser
 /// flags it.
 pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
+    verify_container(artifact)?;
+    let gas_version = u32::from_le_bytes(
+        artifact[GAS_VERSION_OFFSET..GAS_VERSION_OFFSET + 4]
+            .try_into()
+            .expect("bug: verified header"),
+    );
+    let gas_digest = u64::from_le_bytes(
+        artifact[GAS_DIGEST_OFFSET..GAS_DIGEST_OFFSET + 8]
+            .try_into()
+            .expect("bug: verified header"),
+    );
+    if gas_version != GAS_TABLE_VERSION || gas_digest != GAS_SCHEDULE_DIGEST {
+        return Err(verify("gas schedule mismatch"));
+    }
+    if artifact[MEMORY_BYTES_OFFSET..MEMORY_BYTES_OFFSET + 4] == [0; 4] {
+        return Err(verify("memory_bytes out of range"));
+    }
+    Ok(())
+}
+
+// Readers validate the envelope, not the producer's execution settings.
+fn verify_container(artifact: &[u8]) -> Result<()> {
     if artifact.len() < HEADER_BYTES {
         return Err(verify("artifact shorter than header"));
     }
@@ -634,11 +656,6 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     if read_u32(SYSCALL_ABI_OFFSET) != SYSCALL_ABI_VERSION {
         return Err(verify("syscall_abi mismatch"));
     }
-    if read_u32(GAS_VERSION_OFFSET) != GAS_TABLE_VERSION
-        || read_u64(GAS_DIGEST_OFFSET) != GAS_SCHEDULE_DIGEST
-    {
-        return Err(verify("gas schedule mismatch"));
-    }
     if read_u32(FLAGS_OFFSET) != FLAGS_REQUIRED_VALUE {
         return Err(verify("flags must be zero"));
     }
@@ -662,9 +679,6 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     // anything the loader would on shape alone. How large `code_size` and
     // `memory_bytes` may be is the deploying chain's configuration, checked
     // there rather than here.
-    if memory_bytes == 0 {
-        return Err(verify("memory_bytes out of range"));
-    }
     if code_size == 0 {
         return Err(verify("code size out of range"));
     }
@@ -716,7 +730,7 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
 /// Validate the container and borrow its spec without interpreting its schema.
 /// Callers must verify the enclosing contract hash to authenticate these bytes.
 pub fn artifact_spec(artifact: &[u8]) -> Result<Option<ArtifactSpec<'_>>> {
-    verify_artifact(artifact)?;
+    verify_container(artifact)?;
     let read_u32 = |offset| {
         u32::from_le_bytes(
             artifact[offset..offset + 4]

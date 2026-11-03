@@ -43,6 +43,37 @@ fn absent_spec_has_one_encoding() {
 }
 
 #[test]
+fn reader_accepts_runtime_gas_schedule_without_relaxing_producer_checks() {
+    let mut artifact = fixture(1);
+    artifact[36..40].copy_from_slice(&4u32.to_le_bytes());
+    artifact[40..48].copy_from_slice(&0xa958d226df658598u64.to_le_bytes());
+    assert_eq!(artifact_spec(&artifact).unwrap().unwrap().bytes, &[1, 2, 3]);
+    assert!(verify_artifact(&artifact).is_err());
+    artifact[136] ^= 1;
+    assert!(artifact_spec(&artifact).is_err());
+}
+
+#[test]
+fn reader_accepts_zero_memory_but_still_checks_initial_memory_span() {
+    let mut artifact = build_artifact_with_spec(
+        &[0; 4],
+        &[],
+        0,
+        16,
+        Some(ArtifactSpec {
+            schema_version: 1,
+            bytes: &[1, 2, 3],
+        }),
+    )
+    .unwrap();
+    artifact[48..52].copy_from_slice(&0u32.to_le_bytes());
+    assert_eq!(artifact_spec(&artifact).unwrap().unwrap().bytes, &[1, 2, 3]);
+    assert!(verify_artifact(&artifact).is_err());
+    artifact[60..64].copy_from_slice(&1u32.to_le_bytes());
+    assert!(artifact_spec(&artifact).is_err());
+}
+
+#[test]
 fn spec_length_must_match_the_complete_body() {
     for size in [0u32, 2, 4, u32::MAX] {
         let mut artifact = fixture(1);
