@@ -75,6 +75,10 @@ pub(crate) async fn timed_backend_call<T: Send + 'static, E: std::fmt::Display +
             )));
         }
     };
+    if Instant::now() >= deadline {
+        // The wait used up the deadline; do not start work nobody can receive.
+        return Err(RpcServerError::BackendTimeout);
+    }
     let (caller, task) = crate::lanes::CallerGuard::new(lane, permit, permits);
     let (send, receive) = tokio::sync::oneshot::channel();
     let metrics = metrics.clone();
@@ -165,6 +169,32 @@ mod tests {
             )
             .await
         })
+    }
+
+    #[tokio::test]
+    async fn deadline_spent_before_dispatch_skips_backend_and_frees_lane() {
+        let (lanes, metrics) = lanes(2);
+        let seen = Arc::new(AtomicUsize::new(0));
+        let polled = seen.clone();
+        let result = timed_backend_call(
+            &metrics,
+            &lanes.view,
+            1,
+            HealthBackend::ViewGateway,
+            "viewgateway_view",
+            VIEW_GATEWAY,
+            Instant::now(),
+            async move {
+                polled.fetch_add(1, Ordering::SeqCst);
+                Ok::<(), String>(())
+            },
+            |()| true,
+        )
+        .await;
+        assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
+        assert_eq!(seen.load(Ordering::SeqCst), 0);
+        assert_eq!(lanes.view.permits.available_permits(), 2);
+        assert_eq!(lanes.view.metrics.held.get(), 0.0);
     }
 
     #[tokio::test]
