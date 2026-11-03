@@ -1,13 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.43.0
 
 - Generated counter applications and the faucet frontend install their npm
   dependencies from the public registry without a GitHub token.
 - Update frontend and browser-harness dependencies to address reported npm
   advisories, and include the faucet's font license notices in production builds.
-- Run CI on GitHub-hosted runners and resume releases from reviewed `main`
-  workflow definitions with an explicit existing release tag.
+- Run fork PR checks on GitHub-hosted runners; same-repository PRs and
+  maintainer workflows continue to use Namespace. Resume releases from reviewed
+  `main` workflow definitions with an explicit existing release tag.
+- Add a generated Markdown JSON-RPC reference beside the OpenRPC specification.
+
+### Breaking Rust API changes
+
+- Update `jsonrpsee` from 0.25 to 0.26, including the types re-exported by
+  `thruput-client` and `thruput-json-rpc-client`. Applications passing these
+  transport types across crate boundaries must use the same dependency version.
+  This does not change the JSON-RPC wire format.
 
 ## 0.42.0
 
