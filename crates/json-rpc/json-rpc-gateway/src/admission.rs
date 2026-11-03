@@ -18,7 +18,7 @@ use jsonrpsee::{
     types::{ErrorObjectOwned, Request},
 };
 use thruput_json_rpc_server::RpcServerError;
-use thruput_json_rpc_types::error::native::{ErrorData, codes};
+use thruput_json_rpc_types::error::native::{AttemptAdmission, ErrorData, codes};
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
     time::Instant,
@@ -242,13 +242,16 @@ enum Rejection {
 }
 
 impl Rejection {
-    fn error(self) -> ErrorObjectOwned {
+    fn error(self, method: &str) -> ErrorObjectOwned {
         match self {
             Self::Overloaded => ErrorObjectOwned::owned(
                 codes::OVERLOADED,
                 RpcServerError::Overloaded("gateway admission".into()).to_string(),
                 Some(ErrorData::Overloaded {
-                    admission: None,
+                    // sendTransaction refusals must say whether submission was
+                    // attempted; admission refuses before any attempt.
+                    admission: (method == "sendTransaction")
+                        .then_some(AttemptAdmission::NotAttempted),
                     transaction_hash: None,
                     retry_after_ms: None,
                     error: None,
@@ -322,7 +325,8 @@ where
             let _guard = match this.admission.acquire(req.method_name(), req.extensions()) {
                 Ok(guard) => guard,
                 Err(rejection) => {
-                    return MethodResponse::error(req.id().into_owned(), rejection.error());
+                    let error = rejection.error(req.method_name());
+                    return MethodResponse::error(req.id().into_owned(), error);
                 }
             };
             this.inner.call(req).await
@@ -526,7 +530,7 @@ mod tests {
     #[test]
     fn admission_rejections_match_native_wire_and_reader_contracts() {
         use thruput_json_rpc_types::error::native::DecodedError;
-        let overloaded = serde_json::to_value(Rejection::Overloaded.error()).unwrap();
+        let overloaded = serde_json::to_value(Rejection::Overloaded.error("getChainTip")).unwrap();
         assert_eq!(overloaded["code"], codes::OVERLOADED);
         assert_eq!(
             overloaded["message"],
@@ -540,7 +544,8 @@ mod tests {
             matches!(DecodedError::decode("getChainTip", overloaded), DecodedError::Known { data, .. } if matches!(*data, ErrorData::Overloaded { admission: None, transaction_hash: None, retry_after_ms: None, error: None }))
         );
 
-        let limited = serde_json::to_value(Rejection::RateLimited(123).error()).unwrap();
+        let limited =
+            serde_json::to_value(Rejection::RateLimited(123).error("getChainTip")).unwrap();
         assert_eq!(limited["code"], codes::RATE_LIMITED);
         assert_eq!(
             limited["data"],
@@ -549,6 +554,35 @@ mod tests {
         assert!(
             matches!(DecodedError::decode("getChainTip", limited), DecodedError::Known { data, .. } if matches!(*data, ErrorData::RateLimited { retry_after_ms: Some(123) }))
         );
+    }
+
+    #[test]
+    fn every_method_decodes_its_admission_rejections_as_typed_errors() {
+        use thruput_json_rpc_types::error::native::DecodedError;
+        let known = |method: &str, rejection: Rejection| {
+            let raw = serde_json::to_value(rejection.error(method)).unwrap();
+            assert!(
+                matches!(
+                    DecodedError::decode(method, raw.clone()),
+                    DecodedError::Known { .. }
+                ),
+                "{method}: {raw}"
+            );
+        };
+        macro_rules! check {
+            ($( $(#[$doc:meta])* $name:ident($wire:literal, $parse:ident, $decorate:ident): $request:ty => $response:ty; )*) => {
+                $(
+                    known($wire, Rejection::Overloaded);
+                    // Zero-cost methods are never rate limited.
+                    if explicit_cost($wire, 16) != Some(0) {
+                        known($wire, Rejection::RateLimited(1));
+                    }
+                )*
+            };
+        }
+        thruput_json_rpc_api::native_methods!(check);
+        let raw = serde_json::to_value(Rejection::Overloaded.error("sendTransaction")).unwrap();
+        assert_eq!(raw["data"]["admission"], "notAttempted");
     }
 
     #[derive(Clone)]
