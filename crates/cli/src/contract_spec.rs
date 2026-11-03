@@ -250,10 +250,10 @@ pub fn finalize_rv32_spec(
         return Ok(None);
     };
 
-    write_spec_sidecars(rv32_artifact, spec, print).map(Some)
+    encode_and_export_spec(rv32_artifact, spec, print).map(Some)
 }
 
-fn write_spec_sidecars(
+fn encode_and_export_spec(
     artifact: &Path,
     spec: ContractSpec,
     print: &Print,
