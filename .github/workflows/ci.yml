@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
     # No registry credentials: deny.toml admits crates.io only.
-    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
+    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@3e0d08d054591a349331ab57fe72197d6ccc0cf3
     with:
       runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
@@ -36,7 +36,7 @@ jobs:
   workflow-lint:
     permissions:
       contents: read
-    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@c2827cac0ab8b51c5a3ef119b2c1c854dffa5ae6
+    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@3e0d08d054591a349331ab57fe72197d6ccc0cf3
     with:
       runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
@@ -434,7 +434,7 @@ jobs:
           cache-bin: false
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - name: Build CLI and install selected runtime
@@ -558,7 +558,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
 
