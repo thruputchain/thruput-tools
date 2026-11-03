@@ -333,7 +333,7 @@ pub(crate) fn resolve_artifact_call(
         });
     }
     let spec = crate::contract_spec::load_artifact_contract_spec(artifact)?.ok_or_else(||
-        CliError::SpecFailed("initializer requires the selected artifact's current .spec.xdr sidecar; rebuild it or supply an explicit entrypoint".into()))?;
+        CliError::SpecFailed("initializer requires the selected artifact's embedded spec; rebuild with `thruput build` or supply an explicit entrypoint".into()))?;
     let metadata = thruput_client::codec::resolve_spec_method(&spec, method)?.ok_or_else(|| {
         CliError::SpecFailed(format!(
             "initializer method `{method}` is absent from the selected artifact's spec"

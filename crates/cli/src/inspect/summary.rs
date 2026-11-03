@@ -121,6 +121,16 @@ fn effect_label(effect: &Value) -> String {
     }
 }
 
+fn exception_types(interfaces: &[Value]) -> Vec<&Value> {
+    let mut seen = std::collections::HashSet::new();
+    interfaces
+        .iter()
+        .flat_map(|interface| entries(&interface["throws"]))
+        .map(|error| &error["type"])
+        .filter(|ty| seen.insert(*ty))
+        .collect()
+}
+
 pub(super) fn render(data: &Value, print: &Print) {
     let mut headings = Vec::new();
     let spec = &data["spec"];
@@ -182,22 +192,23 @@ pub(super) fn render(data: &Value, print: &Print) {
         }
     }
 
-    let mut errors = Vec::new();
-    for error in interfaces
-        .iter()
-        .flat_map(|interface| entries(&interface["throws"]))
-    {
-        if !errors.contains(&&error["type"]) {
-            errors.push(&error["type"]);
-        }
-    }
+    let errors = exception_types(interfaces);
     let definitions = entries(&spec["type_defs"]);
+    let definitions_by_name: std::collections::HashMap<_, _> = definitions
+        .iter()
+        .map(|definition| (&definition["name"], definition))
+        .collect();
+    let error_names: std::collections::HashSet<_> = errors
+        .iter()
+        .filter(|error| error["kind"] == "named")
+        .map(|error| &error["name"])
+        .collect();
     if !errors.is_empty() {
         section(&mut rows, &mut headings, "Errors");
         for error in &errors {
-            if let Some(definition) = definitions
-                .iter()
-                .find(|definition| error["kind"] == "named" && definition["name"] == error["name"])
+            if let Some(definition) = (error["kind"] == "named")
+                .then(|| definitions_by_name.get(&error["name"]))
+                .flatten()
             {
                 definition_rows(definition, &mut rows);
             } else {
@@ -207,11 +218,7 @@ pub(super) fn render(data: &Value, print: &Print) {
     }
     let types = definitions
         .iter()
-        .filter(|definition| {
-            !errors
-                .iter()
-                .any(|error| error["kind"] == "named" && error["name"] == definition["name"])
-        })
+        .filter(|definition| !error_names.contains(&definition["name"]))
         .collect::<Vec<_>>();
     if !types.is_empty() {
         section(&mut rows, &mut headings, "Types");

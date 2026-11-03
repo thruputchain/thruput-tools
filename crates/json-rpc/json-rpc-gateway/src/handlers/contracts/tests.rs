@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::Duration;
 
@@ -14,6 +14,7 @@ use crate::{config::GatewayConfig, context::BackendClient, metrics::GatewayMetri
 struct GatedSender {
     calls: AtomicUsize,
     release: Semaphore,
+    missing: AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -25,6 +26,14 @@ impl RpcSender for GatedSender {
     async fn send_call(&self, _: ProgVers, _: u32, _: CallBuf) -> Result<RpcResponse, RpcError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.release.acquire().await.unwrap().forget();
+        if self.missing.load(Ordering::SeqCst) {
+            return Ok(RpcResponse::from_payload(
+                thruput_node_rpc::RPCError::kRPCNotFound
+                    .0
+                    .to_be_bytes()
+                    .to_vec(),
+            ));
+        }
         Err(RpcError::SystemError)
     }
 }
@@ -33,6 +42,7 @@ fn context() -> (GatewayContext, Arc<GatedSender>) {
     let sender = Arc::new(GatedSender {
         calls: AtomicUsize::new(0),
         release: Semaphore::new(0),
+        missing: AtomicBool::new(false),
     });
     let client = DbGateway_DbGateway1_Client::new(sender.clone());
     let ctx = GatewayContext::assemble(
@@ -105,6 +115,29 @@ async fn queued_deadline_never_dispatches_and_returns_admission() {
     ));
     assert_eq!(sender.calls.load(Ordering::SeqCst), 0);
     assert_eq!(ctx.artifact_read_admission.available_permits(), 64);
+    assert_metric(&ctx, "timeout");
+}
+
+fn assert_metric(ctx: &GatewayContext, outcome: &str) {
+    let snapshot = crate::health::GatewayHealthSnapshot::for_test(
+        crate::health::HealthStatus::Starting,
+        None,
+        &[],
+    );
+    let body = ctx.metrics.gather(&snapshot).unwrap();
+    assert!(body.contains(&format!("groundhog_gateway_backend_requests_total{{backend=\"db_gateway\",operation=\"dbgateway_get_contract\",outcome=\"{outcome}\"}} 1")), "{body}");
+}
+
+#[tokio::test]
+async fn artifact_miss_is_a_successful_backend_read() {
+    let (ctx, sender) = context();
+    sender.missing.store(true, Ordering::SeqCst);
+    sender.release.add_permits(1);
+    assert!(matches!(
+        artifact(&ctx, request(), hash()).await,
+        Err(RpcServerError::ContractArtifactUnavailable(_))
+    ));
+    assert_metric(&ctx, "ok");
 }
 
 #[tokio::test(start_paused = true)]

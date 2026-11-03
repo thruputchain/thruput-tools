@@ -81,7 +81,9 @@ pub fn run(
         contents.push('\n');
         std::fs::write(path, contents)?;
     }
-    summary::render(&data, print);
+    if !print.is_json() {
+        summary::render(&data, print);
+    }
     if let Some(path) = output {
         print.detail("Spec written", path.display());
     }
@@ -112,11 +114,28 @@ fn inspect_artifact(
             {
                 return Err(invalid("artifact does not match deployment type or size"));
             }
-            let Some(spec) = crate::contract_spec::load_artifact_spec_bytes(&rv32_contract.data.0)?
+            let bytes = &rv32_contract.data.0;
+            if bytes.len() < 12 || bytes[..8] != thruput_rv32_artifact::MAGIC {
+                return Err(invalid("invalid RV32 artifact header"));
+            }
+            if bytes[8..12] != thruput_rv32_artifact::FORMAT_VERSION.to_le_bytes() {
+                return Ok(("unsupportedFormat", Value::Null));
+            }
+            let Some(embedded) = thruput_rv32_artifact::artifact_spec(bytes)
+                .map_err(|e| CliError::SpecFailed(e.to_string()))?
             else {
                 return Ok(("absent", Value::Null));
             };
-            let value = serde_json::from_str(&thruput_spec_tool::render_spec_json(&spec))
+            if embedded.schema_version != crate::contract_spec::ARTIFACT_SPEC_SCHEMA_VERSION {
+                return Ok(("unsupportedSchema", Value::Null));
+            }
+            let spec = crate::contract_spec::load_contract_spec_from_xdr(embedded.bytes)?;
+            // Preflight already bounds type depth to 64. The human JSON shape
+            // adds object/array levels and can exceed serde_json's default 128.
+            let json = thruput_spec_tool::render_spec_json(&spec);
+            let mut reader = serde_json::Deserializer::from_str(&json);
+            reader.disable_recursion_limit();
+            let value = <Value as serde::Deserialize>::deserialize(&mut reader)
                 .map_err(|e| CliError::SpecFailed(e.to_string()))?;
             Ok(("available", value))
         }
@@ -217,12 +236,54 @@ mod tests {
         )
         .unwrap();
         let (deployment, artifact) = response(data);
-        assert!(
-            inspect_artifact(&deployment, &artifact)
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported embedded spec schema")
+        assert_eq!(
+            inspect_artifact(&deployment, &artifact).unwrap(),
+            ("unsupportedSchema", Value::Null)
         );
+    }
+
+    #[test]
+    fn preserves_identity_for_unknown_formats_but_rejects_bad_magic() {
+        let mut data = build_artifact(&[0; 4], &[], 0, 16).unwrap();
+        data[8..12].copy_from_slice(&5_u32.to_le_bytes());
+        let (deployment, artifact) = response(data.clone());
+        assert_eq!(
+            inspect_artifact(&deployment, &artifact).unwrap(),
+            ("unsupportedFormat", Value::Null)
+        );
+        data[0] ^= 1;
+        let (deployment, artifact) = response(data);
+        assert!(inspect_artifact(&deployment, &artifact).is_err());
+    }
+
+    #[test]
+    fn inspects_the_maximum_supported_tuple_depth() {
+        use thruput_contract_spec::ContractTypeKind;
+        let mut bytes = Vec::new();
+        for word in [1_u32, 0, 0, 0, 1, 0, 0] {
+            bytes.extend(word.to_be_bytes());
+        }
+        for _ in 1..64 {
+            bytes.extend(ContractTypeKind::Tuple.0.to_be_bytes());
+            bytes.extend(1_u32.to_be_bytes());
+        }
+        bytes.extend(ContractTypeKind::U8.0.to_be_bytes());
+        bytes.extend([0; 12]);
+        let data = build_artifact_with_spec(
+            &[0; 4],
+            &[],
+            0,
+            16,
+            Some(ArtifactSpec {
+                schema_version: 1,
+                bytes: &bytes,
+            }),
+        )
+        .unwrap();
+        let (deployment, artifact) = response(data);
+        let (status, value) = inspect_artifact(&deployment, &artifact).unwrap();
+        assert_eq!(status, "available");
+        assert!(!value["interfaces"].as_array().unwrap().is_empty());
     }
 
     #[test]

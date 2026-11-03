@@ -61,7 +61,7 @@ pub fn load_contract_spec_from_file(path: &Path) -> Result<Option<ContractSpec>,
 /// an address-to-artifact association; callers use the enclosing contract hash.
 pub(crate) fn load_artifact_spec_bytes(bytes: &[u8]) -> Result<Option<ContractSpec>, CliError> {
     let Some(spec) = thruput_rv32_artifact::artifact_spec(bytes)
-        .map_err(|error| CliError::SpecFailed(format!("invalid artifact: {error}")))?
+        .map_err(|error| CliError::SpecFailed(format!("invalid artifact: {error}; rebuild with `thruput build` using a toolchain compatible with the runtime")))?
     else {
         return Ok(None);
     };
@@ -262,6 +262,11 @@ fn encode_and_export_spec(
     spec: ContractSpec,
     print: &Print,
 ) -> Result<FinalizedSpec, CliError> {
+    let xdr_bytes = xdrs::txs::encode(&spec)
+        .map_err(|e| CliError::SpecFailed(format!("failed to encode .spec.xdr: {e}")))?;
+    // Use the same schema-1 limits at build, deploy, inspect, and SDK discovery.
+    // Reject before publishing any sidecar or finalized artifact.
+    bounded::check(&xdr_bytes).map_err(|e| CliError::SpecFailed(e.to_string()))?;
     let spec_json_path = spec_json_sidecar_path(artifact);
 
     let json_str = thruput_spec_tool::render_spec_json(&spec);
@@ -271,8 +276,6 @@ fn encode_and_export_spec(
     print.status(format_args!("Wrote {}", spec_json_path.display()));
 
     let spec_xdr_path = spec_xdr_sidecar_path(artifact);
-    let xdr_bytes = xdrs::txs::encode(&spec)
-        .map_err(|e| CliError::SpecFailed(format!("failed to encode .spec.xdr: {e}")))?;
     std::fs::write(&spec_xdr_path, &xdr_bytes).map_err(|e| {
         CliError::Other(format!("failed to write {}: {e}", spec_xdr_path.display()))
     })?;
@@ -323,6 +326,42 @@ mod tests {
     fn spec_json_sidecar_path_replaces_artifact_extension() {
         let path = spec_json_sidecar_path(Path::new("/tmp/demo.rv32a"));
         assert_eq!(path, Path::new("/tmp/demo.spec.json"));
+    }
+
+    #[test]
+    fn build_rejects_unsupported_spec_before_exporting_sidecars() {
+        let mut ty = ContractType::Void;
+        for _ in 0..64 {
+            ty = ContractType::Option {
+                option_inner: Box::new(ty),
+            };
+        }
+        let spec = ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: "Demo".try_into().unwrap(),
+                vers: "1.0.0".try_into().unwrap(),
+                throws: vec![].try_into().unwrap(),
+                methods: vec![ContractSpecMethod {
+                    name: "get".try_into().unwrap(),
+                    args: vec![].try_into().unwrap(),
+                    return_type: ty,
+                    effect: None,
+                }]
+                .try_into()
+                .unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("demo.rv32a");
+        let error = super::encode_and_export_spec(&path, spec, &crate::Print::new(true, false))
+            .unwrap_err();
+        assert!(error.to_string().contains("nesting limit"));
+        assert!(!spec_json_sidecar_path(&path).exists());
+        assert!(!spec_xdr_sidecar_path(&path).exists());
     }
 
     #[test]
