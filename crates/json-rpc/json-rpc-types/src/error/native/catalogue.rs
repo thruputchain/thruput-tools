@@ -22,6 +22,8 @@ pub mod codes {
     pub const BACKEND_TIMEOUT: i32 = -32051;
     /// Gateway or backend refusal, including scheduler capacity or not-ready state.
     pub const OVERLOADED: i32 = -32053;
+    /// The client exceeded its request budget before reaching a backend.
+    pub const RATE_LIMITED: i32 = -32055;
     /// The backend data cannot satisfy the method contract.
     pub const BACKEND_DATA_INVALID: i32 = -32054;
 }
@@ -89,6 +91,12 @@ pub const ERROR_INFOS: &[RpcErrorInfo] = &[
         description: "Gateway or backend refusal, including scheduler capacity or not-ready state.",
     },
     RpcErrorInfo {
+        name: "RateLimited",
+        code: codes::RATE_LIMITED,
+        message: "Rate limited",
+        description: "The client exceeded its request budget. Retry after data.retryAfterMs milliseconds. The request never reached a backend.",
+    },
+    RpcErrorInfo {
         name: "BackendDataInvalid",
         code: codes::BACKEND_DATA_INVALID,
         message: "Invalid backend data",
@@ -130,11 +138,11 @@ pub const METHODS: &[&str] = &[
 pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
     use codes::{
         BACKEND_DATA_INVALID, BACKEND_TIMEOUT, BACKEND_UNAVAILABLE, FUNDING_ATTEMPT_STOPPED,
-        HISTORY_UNAVAILABLE, INVALID_PARAMS, LOCAL_FUNDING_UNRESOLVED, OVERLOADED,
+        HISTORY_UNAVAILABLE, INVALID_PARAMS, LOCAL_FUNDING_UNRESOLVED, OVERLOADED, RATE_LIMITED,
         STATE_HEIGHT_UNAVAILABLE, TRANSACTION_INVALID, TRANSACTION_REJECTED,
     };
     Some(match method {
-        "getVersionInfo" | "getNetworkInfo" | "getServerLimits" => &[INVALID_PARAMS],
+        "getVersionInfo" | "getNetworkInfo" | "getServerLimits" => &[INVALID_PARAMS, OVERLOADED],
         "sendTransaction" => &[
             INVALID_PARAMS,
             TRANSACTION_INVALID,
@@ -142,6 +150,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
             BACKEND_UNAVAILABLE,
             BACKEND_TIMEOUT,
             OVERLOADED,
+            RATE_LIMITED,
             BACKEND_DATA_INVALID,
         ],
         "simulateInvocation" | "simulateInvocations" => &[
@@ -150,6 +159,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
             BACKEND_UNAVAILABLE,
             BACKEND_TIMEOUT,
             OVERLOADED,
+            RATE_LIMITED,
             BACKEND_DATA_INVALID,
         ],
         "getEvents"
@@ -161,6 +171,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
             BACKEND_UNAVAILABLE,
             BACKEND_TIMEOUT,
             OVERLOADED,
+            RATE_LIMITED,
             BACKEND_DATA_INVALID,
         ],
         "faucet_requestAirdrop" => &[
@@ -169,6 +180,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
             BACKEND_UNAVAILABLE,
             BACKEND_TIMEOUT,
             OVERLOADED,
+            RATE_LIMITED,
             BACKEND_DATA_INVALID,
         ],
         "dev_fundAccount" => &[
@@ -178,6 +190,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
             BACKEND_UNAVAILABLE,
             BACKEND_TIMEOUT,
             OVERLOADED,
+            RATE_LIMITED,
             BACKEND_DATA_INVALID,
         ],
         "getChainTip"
@@ -192,6 +205,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
             BACKEND_UNAVAILABLE,
             BACKEND_TIMEOUT,
             OVERLOADED,
+            RATE_LIMITED,
             BACKEND_DATA_INVALID,
         ],
         _ => return None,
@@ -201,7 +215,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
 pub(super) fn kind_code(kind: &str) -> Option<i32> {
     use codes::{
         BACKEND_DATA_INVALID, BACKEND_TIMEOUT, BACKEND_UNAVAILABLE, FUNDING_ATTEMPT_STOPPED,
-        HISTORY_UNAVAILABLE, INVALID_PARAMS, LOCAL_FUNDING_UNRESOLVED, OVERLOADED,
+        HISTORY_UNAVAILABLE, INVALID_PARAMS, LOCAL_FUNDING_UNRESOLVED, OVERLOADED, RATE_LIMITED,
         STATE_HEIGHT_UNAVAILABLE, TRANSACTION_INVALID, TRANSACTION_REJECTED,
     };
     Some(match kind {
@@ -215,6 +229,7 @@ pub(super) fn kind_code(kind: &str) -> Option<i32> {
         "backendUnavailable" => BACKEND_UNAVAILABLE,
         "backendTimeout" => BACKEND_TIMEOUT,
         "overloaded" => OVERLOADED,
+        "rateLimited" => RATE_LIMITED,
         "backendDataInvalid" => BACKEND_DATA_INVALID,
         _ => return None,
     })
@@ -290,6 +305,7 @@ pub const fn outcome_for_code(code: i32) -> &'static str {
         codes::BACKEND_UNAVAILABLE => "backend_unavailable",
         codes::BACKEND_TIMEOUT => "backend_timeout",
         codes::OVERLOADED | -32006 | -32009 => "overloaded",
+        codes::RATE_LIMITED => "rate_limited",
         codes::BACKEND_DATA_INVALID => "backend_data_invalid",
         -32601 => "not_implemented",
         _ => "internal_error",

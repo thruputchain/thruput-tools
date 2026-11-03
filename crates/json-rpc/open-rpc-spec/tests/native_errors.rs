@@ -39,10 +39,10 @@ fn validator(document: &Value, method: &str, component: &str) -> jsonschema::Val
 }
 
 #[test]
-fn catalogue_has_eleven_components_twelve_kinds_and_unique_method_codes() {
+fn catalogue_has_twelve_components_thirteen_kinds_and_unique_method_codes() {
     let document = decorated();
     let components = document["components"]["errors"].as_object().unwrap();
-    assert_eq!(components.len(), 11);
+    assert_eq!(components.len(), 12);
     assert_eq!(errors::METHODS.len(), 20);
     assert_eq!(
         document["components"]["schemas"]["Preserved"],
@@ -68,7 +68,8 @@ fn catalogue_has_eleven_components_twelve_kinds_and_unique_method_codes() {
             );
         }
     }
-    assert_eq!(kinds.len(), 12);
+    assert_eq!(kinds.len(), 13);
+    assert!(kinds.contains("rateLimited"));
     assert!(kinds.contains("invalidParams") && kinds.contains("invalidCursor"));
     for method in document["methods"].as_array().unwrap() {
         let name = method["name"].as_str().unwrap();
@@ -242,7 +243,7 @@ fn invalid_input_is_rejected_without_partial_mutation() {
     assert_eq!(subset["methods"].as_array().unwrap().len(), 1);
     assert_eq!(
         subset["components"]["errors"].as_object().unwrap().len(),
-        11
+        12
     );
 }
 

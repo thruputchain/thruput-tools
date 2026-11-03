@@ -4,10 +4,11 @@
 //! rather than tower-http's `TraceLayer`, which wraps the response body
 //! in a type incompatible with jsonrpsee's HTTP body constraints.
 //!
-//! Phase 4 adds:
-//! - Per-IP rate limiting (token bucket)
-//! - Request size limits
-//! - Per-method Prometheus histograms
+//! Client identity is derived from the TCP peer and trusted proxy headers.
+//! Per-call concurrency and token budgets are enforced by RPC admission.
+
+mod client;
+pub(crate) use client::{ClientIdentityLayer, ClientKey, PeerAddr};
 
 use std::{
     future::Future,
@@ -27,8 +28,10 @@ use crate::metrics::{GatewayMetrics, status_class};
 /// Build the Tower HTTP middleware stack from configuration.
 ///
 /// Layer order (outermost → innermost):
-/// 1. **CORS** — permissive for dev, restrictive for prod
-/// 2. **Timeout** — per-request timeout from config
+/// 1. **Client identity** — TCP peer and trusted proxy headers
+/// 2. **HTTP metrics** — status and duration, including timeout responses
+/// 3. **CORS** — permissive during development
+/// 4. **Timeout** — per-request timeout from config
 #[allow(clippy::type_complexity)]
 pub(crate) fn http_middleware(
     config: &GatewayConfig,
@@ -38,11 +41,17 @@ pub(crate) fn http_middleware(
         TimeoutLayer,
         tower::layer::util::Stack<
             CorsLayer,
-            tower::layer::util::Stack<HttpMetricsLayer, tower::layer::util::Identity>,
+            tower::layer::util::Stack<
+                HttpMetricsLayer,
+                tower::layer::util::Stack<ClientIdentityLayer, tower::layer::util::Identity>,
+            >,
         >,
     >,
 > {
     ServiceBuilder::new()
+        .layer(ClientIdentityLayer(
+            config.client_admission.trusted_proxies.clone(),
+        ))
         .layer(HttpMetricsLayer::new(metrics, "jsonrpc"))
         .layer(cors_layer())
         .layer(TimeoutLayer::with_status_code(

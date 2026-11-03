@@ -37,6 +37,39 @@ identity before forwarding airdrops, keeping signing material and faucet policy
 in the faucet service. See [airdrop.rs](src/airdrop.rs) for startup and degraded
 behavior.
 
+### Client admission
+
+The gateway enforces budgets per JSON-RPC call, including each array entry and
+WebSocket message. Configure them independently of backend capacity:
+
+```toml
+[client_admission]
+max_in_flight_calls = 4096
+max_in_flight_per_connection = 64
+client_rate_per_sec = 50
+client_burst = 200
+max_tracked_clients = 100000
+trusted_proxies = ["127.0.0.1/32", "::1/128"]
+```
+
+Only trusted proxy peers may supply `X-Forwarded-For`; direct clients are keyed
+by their peer address. IPv4 uses the full address and IPv6 uses its /64.
+Concurrency rejection returns `-32053`; a client that exceeds its token budget
+receives `-32055` (Rate limited) with `data.kind = "rateLimited"` and a decimal
+string `data.retryAfterMs` delay in milliseconds. These
+requests never reach a backend. Rejected notifications are dropped silently.
+Discovery methods cost no tokens but still consume concurrency permits.
+`simulateInvocations` conservatively costs `10 × view_batch.max_calls` per request.
+See [client admission configuration](src/config/client_admission.rs) for validated
+ranges and [admission](src/admission.rs) for the method cost table. Unknown clients
+share an overflow bucket when the tracking cap is reached; idle entries are
+evicted on insertion into their shard, sweeping at most once per second per shard.
+
+Prometheus exposes `groundhog_gateway_admission_rejected_total` with the bounded
+`reason` labels `global`, `connection`, and `rate_limited`, plus
+`groundhog_gateway_admission_in_flight`, `groundhog_gateway_tracked_clients`, and
+`groundhog_gateway_connections_open`. There are no per-client labels.
+
 ## Operate and measure
 
 Heap profiling is opt-in on the existing private observability listener:
