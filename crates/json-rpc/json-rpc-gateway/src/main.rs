@@ -1,4 +1,5 @@
 mod adaptive_batch;
+mod admission;
 mod airdrop;
 mod backend;
 mod config;
@@ -11,6 +12,7 @@ mod metrics;
 mod middleware;
 mod observability;
 mod rpc_middleware;
+mod server;
 mod storage_batcher;
 mod submitter;
 mod telemetry;
@@ -278,32 +280,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // --- Server ---
-    let max_response_body_size = jsonrpsee::core::TEN_MB_SIZE_BYTES;
-    let server_cfg = jsonrpsee::server::ServerConfig::builder()
-        .max_connections(ctx.config.max_connections)
-        .max_response_body_size(max_response_body_size)
-        .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(
-            thruput_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS,
-        ))
-        .build();
-    let http_mw = middleware::http_middleware(&ctx.config, metrics.clone());
-    let rpc_metrics = metrics.clone();
-    let batch_ctx = ctx.clone();
-    let rpc_mw = jsonrpsee::core::middleware::RpcServiceBuilder::new()
-        // Metrics must remain outermost: it observes each array once in response order.
-        .layer_fn(move |inner| rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone()))
-        .layer_fn(move |inner| {
-            batch_ctx
-                .config
-                .batch_service(inner, max_response_body_size)
-        })
-        .layer_fn(rpc_middleware::RpcTracingService::new);
-    let server = jsonrpsee::server::Server::builder()
-        .set_config(server_cfg)
-        .set_http_middleware(http_mw)
-        .set_rpc_middleware(rpc_mw)
-        .build_from_tcp(listener::bind(&ctx.config.listen_address).await?)?;
-
     let rpc_config = RpcServerConfig::default()
         .with_request_timeout_ms(ctx.config.request_timeout_ms.max(3))
         .with_max_events_per_page(ctx.config.max_events_per_page)
@@ -326,7 +302,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .with_bundle_identity(&bundle_identity);
     let rpc = native_module(api, airdrop)?;
-    let handle = server.start(rpc);
+    let admission = admission::Admission::new(
+        ctx.config.client_admission.clone(),
+        ctx.config.view_batch.max_calls,
+        metrics.clone(),
+    );
+    let handle = server::start(
+        listener::bind(&ctx.config.listen_address).await?,
+        ctx.config.clone(),
+        rpc,
+        metrics.clone(),
+        admission,
+    )?;
 
     tracing::info!("hog-gateway listening");
 

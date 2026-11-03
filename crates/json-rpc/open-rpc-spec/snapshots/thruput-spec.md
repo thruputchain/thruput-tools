@@ -2,7 +2,7 @@
 
 <!-- Generated from thruput-spec.json by tests/spec_snapshot.rs. Do not edit. -->
 
-Wire format `14.4.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
+Wire format `14.5.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
 
 This file lists all native methods. A server serves only the methods that its backends support; `getVersionInfo` lists them. For exact schemas, see [thruput-spec.json](thruput-spec.json).
 
@@ -46,6 +46,7 @@ No parameters.
 | Code | [Error](#errors) | Data `kind` |
 | --- | --- | --- |
 | -32602 | `InvalidParams` | `"invalidParams"` |
+| -32053 | `Overloaded` | `"overloaded"` |
 
 ### `getNetworkInfo`
 
@@ -58,6 +59,7 @@ No parameters.
 | Code | [Error](#errors) | Data `kind` |
 | --- | --- | --- |
 | -32602 | `InvalidParams` | `"invalidParams"` |
+| -32053 | `Overloaded` | `"overloaded"` |
 
 ### `getChainTip`
 
@@ -73,6 +75,7 @@ No parameters.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getChainConfig`
@@ -89,6 +92,7 @@ No parameters.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getServerLimits`
@@ -102,6 +106,7 @@ No parameters.
 | Code | [Error](#errors) | Data `kind` |
 | --- | --- | --- |
 | -32602 | `InvalidParams` | `"invalidParams"` |
+| -32053 | `Overloaded` | `"overloaded"` |
 
 ### `sendTransaction`
 
@@ -121,6 +126,7 @@ Submit a signed envelope for authoritative admission.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getTransactionStatus`
@@ -139,6 +145,7 @@ Read retained transaction observations.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getTransactionReceipt`
@@ -157,6 +164,7 @@ Read indexed execution, or null when no receipt is available.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getTransactionInput`
@@ -175,6 +183,7 @@ Read retained committed Transaction XDR. Unavailable does not prove nonexecution
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `simulateInvocation`
@@ -200,6 +209,7 @@ Simulate an invocation without committing state.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `simulateInvocations`
@@ -220,6 +230,7 @@ Simulate a batch against one state snapshot.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getStorage`
@@ -239,6 +250,7 @@ Read serialized storage at an address.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getBalance`
@@ -257,6 +269,7 @@ Read native token balance and its state height.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getRegisteredAuth`
@@ -275,6 +288,7 @@ Read registered authorization at an address.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getContractDeployment`
@@ -293,6 +307,7 @@ Read the deployed contract identity at a committed snapshot.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getEffectiveContract`
@@ -312,6 +327,7 @@ Resolve current committed-state contract selection for root or nested invocation
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getContractArtifact`
@@ -331,6 +347,7 @@ Read complete canonical Contract XDR by hash. Availability does not prove deploy
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getEvents`
@@ -353,6 +370,7 @@ Scan indexed events matching the supplied filters.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getTransactionsByRootAddress`
@@ -375,6 +393,7 @@ Read transactions whose root invocation targets the address, excluding internal 
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getBlockByHeight`
@@ -394,6 +413,7 @@ Read committed block metadata, or null when unavailable.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `getTransactionsByBlock`
@@ -416,6 +436,7 @@ Read a page of transactions in a committed block.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `faucet_requestAirdrop`
@@ -436,6 +457,7 @@ Request one faucet funding attempt. Receipt polling is a separate operation.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `dev_fundAccount`
@@ -459,6 +481,7 @@ Submit a local funding transfer.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ### `dev_getPendingTransactionCount`
@@ -475,6 +498,7 @@ No parameters.
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
+| -32055 | `RateLimited` | `"rateLimited"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
 ## Errors
@@ -494,6 +518,7 @@ The `kind` field identifies the shape of `data`.
 | -32051 | `BackendTimeout` | Backend timeout | `"backendTimeout"` | `admission?`: [`AttemptAdmission`](#attemptadmission), `retryAfterMs?`: [`DecimalU64`](#decimalu64), `transactionHash?`: [`TxHash`](#txhash) |
 | -32053 | `Overloaded` | Temporary refusal | `"overloaded"` | `admission?`: [`AttemptAdmission`](#attemptadmission), `error?`: [`SchedulerError`](#schedulererror), `retryAfterMs?`: [`DecimalU64`](#decimalu64), `transactionHash?`: [`TxHash`](#txhash) |
 | -32054 | `BackendDataInvalid` | Invalid backend data | `"backendDataInvalid"` | `admission?`: [`AttemptAdmission`](#attemptadmission), `observation?`: [`ReceiptObservation`](#receiptobservation), `reason?`: [`BackendDataInvalidReason`](#backenddatainvalidreason), `transactionHash?`: [`TxHash`](#txhash) |
+| -32055 | `RateLimited` | Rate limited | `"rateLimited"` | `retryAfterMs?`: [`DecimalU64`](#decimalu64) |
 | -32602 | `InvalidParams` | Invalid params | `"invalidCursor"` | `path?`: string, `reason?`: [`InvalidCursorReason`](#invalidcursorreason) |
 | -32602 | `InvalidParams` | Invalid params | `"invalidParams"` | `path?`: string, `reason?`: [`InvalidParamsReason`](#invalidparamsreason) |
 

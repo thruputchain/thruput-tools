@@ -192,7 +192,7 @@ fn all_core_results_have_known_schemas_and_roundtrip_without_legacy_fields() {
     for method in ["getTransactionReceipt", "getBlockByHeight"] {
         check(method, &Value::Null, Some(true), true);
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.4.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.5.0");
 }
 
 #[test]
