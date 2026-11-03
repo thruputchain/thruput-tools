@@ -137,7 +137,7 @@ async fn simulation_uses_only_native_methods_and_named_address_request() {
     let response = json!(simulation(InvocationOutput::Return {
         return_data: HexBytes(vec![])
     }));
-    let (client, handle, calls) = endpoint("14.0.0", &["simulateInvocation"], response).await;
+    let (client, handle, calls) = endpoint("15.0.0", &["simulateInvocation"], response).await;
     fetch_simulation(&client, &prepared(), None).await.unwrap();
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 2);
@@ -156,7 +156,7 @@ async fn simulation_uses_only_native_methods_and_named_address_request() {
 
 #[tokio::test]
 async fn incompatible_endpoint_stops_before_simulation_without_legacy_fallback() {
-    for (wire, methods) in [("13.0.0", vec!["simulateInvocation"]), ("14.0.0", vec![])] {
+    for (wire, methods) in [("14.4.0", vec!["simulateInvocation"]), ("15.0.0", vec![])] {
         let (client, handle, calls) = endpoint(wire, &methods, Value::Null).await;
         assert!(fetch_simulation(&client, &prepared(), None).await.is_err());
         assert_eq!(calls.lock().unwrap().len(), 1);
@@ -167,7 +167,7 @@ async fn incompatible_endpoint_stops_before_simulation_without_legacy_fallback()
 #[tokio::test]
 async fn pinned_network_mismatch_stops_before_simulation() {
     let (client, handle, calls) = endpoint(
-        "14.0.0",
+        "15.0.0",
         &["simulateInvocation", "getNetworkInfo"],
         Value::Null,
     )
@@ -190,7 +190,7 @@ async fn pinned_network_mismatch_stops_before_simulation() {
 async fn unfamiliar_simulation_retains_complete_raw_result() {
     let raw = json!({"stateBlockHeight":"7", "output":{"result":"future","proof":"opaque"},
         "events":[], "gasUsed":"0", "futureField":{"evidence":42}});
-    let (client, handle, _) = endpoint("14.0.0", &["simulateInvocation"], raw.clone()).await;
+    let (client, handle, _) = endpoint("15.0.0", &["simulateInvocation"], raw.clone()).await;
     let error = fetch_simulation(&client, &prepared(), None)
         .await
         .unwrap_err();
@@ -246,7 +246,7 @@ async fn manifest_only_network_pin_rejects_mismatching_endpoint_before_simulatio
         thruput_xdr::types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from([8; 32]))
     );
     let (client, handle, calls) = endpoint(
-        "14.0.0",
+        "15.0.0",
         &["simulateInvocation", "getNetworkInfo"],
         Value::Null,
     )

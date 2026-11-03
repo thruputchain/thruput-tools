@@ -15,7 +15,7 @@ use thruput_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1, IndexerBlockExplorer_IndexerBlockExplorer1_Client,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
     TransactionPage as IdxTransactionPage, TransactionPageResult, TransactionQuery,
-    TransactionRefPage, TransactionRefPageResult, TxInfoResult,
+    TransactionRefPageResult, TxInfoResult,
 };
 use thruput_json_rpc_server::native::read::{NativeStatePlane, StateKey};
 use thruput_json_rpc_server::native::transaction::NativeTransactionReadPlane;
@@ -346,20 +346,21 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     async fn get_transactions_by_address(
         &self,
         _arg0: AddressTransactionQuery,
-    ) -> Result<TransactionRefPageResult, ProgramError> {
+    ) -> Result<thruput_indexer::AddressTransactionRefPageResult, ProgramError> {
+        use thruput_indexer::{AddressTransactionRefPage, AddressTransactionRefPageResult};
         if let FakeIndexerMode::HistoryOutcome(outcome) = self.mode {
-            return Ok(TransactionRefPageResult::Default { outcome });
+            return Ok(AddressTransactionRefPageResult::Default { outcome });
         }
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail"));
         }
         // No canned per-address dataset; report an exhausted stream.
-        Ok(TransactionRefPageResult::IndexerQueryOk {
-            page: TransactionRefPage {
+        Ok(AddressTransactionRefPageResult::IndexerQueryOk {
+            page: AddressTransactionRefPage {
                 refs: VecM(vec![]),
                 cursor: BytesM(vec![]),
                 latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
-                oldest_block: IdxBlockHeight::from(0_i64),
+                oldest_block: IdxBlockHeight::from(1_i64),
             },
         })
     }
@@ -1452,9 +1453,9 @@ async fn native_history_preserves_typed_outcomes_across_x23() {
                 .await
                 .unwrap_err(),
             backend
-                .native_root_transactions(
+                .native_address_transactions(
                     RpcRequestContext::unbounded(),
-                    input::RootAddressQuery {
+                    input::AddressHistoryQuery {
                         address: ContractAddress::from([0; 32]).into(),
                         start: None,
                         cursor: cursor(),

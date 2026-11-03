@@ -1019,7 +1019,7 @@ mod tests {
         async fn get_transactions_by_address(
             &self,
             _arg0: AddressTransactionQuery,
-        ) -> Result<TransactionRefPageResult, ProgramError> {
+        ) -> Result<thruput_indexer::AddressTransactionRefPageResult, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
 

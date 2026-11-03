@@ -68,21 +68,21 @@ fn tip(height: i64) -> Value {
 
 #[test]
 fn wire_compatibility_requires_a_canonical_version_and_supported_major() {
-    for wire in ["14.0.0", "14.1.7", "14.99.99"] {
+    for wire in ["15.0.0", "15.1.7", "15.99.99"] {
         assert!(compatible_wire_format(wire), "{wire}");
     }
     for wire in [
-        "13.0.0",
-        "15.0.0",
-        "14",
-        "14.0",
-        "14.0.0.0",
-        "014.0.0",
-        "14.00.0",
-        "14.0.0-beta",
-        "14.-1.0",
-        "14. 0.0",
-        "14.0.18446744073709551616",
+        "14.4.0",
+        "16.0.0",
+        "15",
+        "15.0",
+        "15.0.0.0",
+        "015.0.0",
+        "15.00.0",
+        "15.0.0-beta",
+        "15.-1.0",
+        "15. 0.0",
+        "15.0.18446744073709551616",
     ] {
         assert!(!compatible_wire_format(wire), "{wire}");
     }
@@ -95,7 +95,7 @@ async fn endpoint_preparation_uses_only_native_reads() {
         (
             "getVersionInfo",
             Ok(version(
-                "14.1.1",
+                "15.1.1",
                 &["sendTransaction", "getTransactionReceipt"],
             )),
         ),
@@ -141,7 +141,7 @@ async fn endpoint_preparation_uses_only_native_reads() {
 
 #[tokio::test]
 async fn missing_methods_or_incompatible_wire_stop_preparation_without_submission() {
-    for (wire, missing) in [("13.0.0", false), ("14.0.0", true)] {
+    for (wire, missing) in [("14.4.0", false), ("15.0.0", true)] {
         let (client, handle, calls) = endpoint(vec![(
             "getVersionInfo",
             Ok(version(wire, &["getNetworkInfo"])),
@@ -239,7 +239,7 @@ async fn native_admission_and_failed_receipt_submit_exactly_once() {
     let hash = signed.tx_hash();
     let (client, handle, calls) = endpoint(vec![
         ("sendTransaction",Ok(json!({"transactionHash":hash,"admission":"accepted"}))),
-        ("getTransactionReceipt",Ok(json!({"transactionHash":hash,"blockHeight":"42","execution":{"result":"abort","abortData":"0x0102"},"events":[],"gasUsed":"200"}))),
+        ("getTransactionReceipt",Ok(json!({"transactionHash":hash,"blockHeight":"42","execution":{"result":"abort","abortData":"0x0102"},"invokedAddresses":[],"events":[],"gasUsed":"200"}))),
     ]).await;
     let admitted = signed.submit(&client).await.unwrap();
     assert_eq!(admitted.tx_hash, hash);

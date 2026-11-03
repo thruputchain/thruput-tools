@@ -569,8 +569,9 @@ observed attempt diagnostic with its block height. It need not describe the sche
 same or latest attempt. Neither the status nor the diagnostic authorizes automatic
 resubmission or replacement; receipt waiting remains read-only.
 `tx list` preserves the endpoint's opaque cursor
-and does not fetch receipts. Address history includes root invocations only, so
-incoming wallet-wrapped transfers may not appear in a recipient's history.
+and does not fetch receipts. Address history includes root targets and addresses
+whose runtime frames entered, including failed frames. A transfer need not invoke
+its recipient, so this history is not an asset ledger.
 
 Keep the target and filters unchanged when continuing a page. A returned `"0x"`
 cursor ends that historical walk; an empty page with a non-empty cursor does not.

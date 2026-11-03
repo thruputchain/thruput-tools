@@ -26,7 +26,7 @@ pub fn request(method: &str) -> Value {
         "getEvents" => {
             json!({"filters": [{"addresses": [address()]}], "start": {"order": "ascending", "anchor": {"kind": "atBeginning"}}})
         }
-        "getTransactionsByRootAddress" => {
+        "getTransactionsByAddress" => {
             json!({"address": address(), "start": {"order": "descending", "anchor": {"kind": "atHeight", "blockHeight": "9007199254740993"}}})
         }
         "getBlockByHeight" => json!({"blockHeight": "812"}),
@@ -69,7 +69,7 @@ pub fn response(method: &str) -> Value {
         "sendTransaction" => json!({"transactionHash": address(), "admission": "accepted"}),
         "getTransactionStatus" => json!({"status": "committed", "blockHeight": "9007199254740993"}),
         "getTransactionReceipt" => {
-            json!({"transactionHash": address(), "blockHeight": "9007199254740993", "execution": output, "events": [event], "gasUsed": "18446744073709551615"})
+            json!({"transactionHash": address(), "blockHeight": "9007199254740993", "execution": output, "invokedAddresses": [address()], "events": [event], "gasUsed": "18446744073709551615"})
         }
         "simulateInvocation" => {
             json!({"stateBlockHeight": "9007199254740993", "output": output, "events": [event], "gasUsed": "18446744073709551615"})
@@ -89,7 +89,10 @@ pub fn response(method: &str) -> Value {
         "getEvents" => {
             json!({"events": [{"transactionHash": address(), "blockHeight": "812", "sequenceNumber": 0, "event": event}], "nextCursor": "0x0102", "oldestIndexedBlockHeight": "0", "latestIndexedBlockHeight": "9007199254740993"})
         }
-        "getTransactionsByRootAddress" | "getTransactionsByBlock" => {
+        "getTransactionsByAddress" => {
+            json!({"transactions": [{"transactionHash": address(), "blockHeight": "812", "isRootTarget": true, "wasInvoked": true}], "nextCursor": null, "coverage": {"fromBlockHeight": "1", "throughBlockHeight": "9007199254740993"}})
+        }
+        "getTransactionsByBlock" => {
             json!({"transactions": [{"transactionHash": address(), "blockHeight": "812"}], "nextCursor": null, "oldestIndexedBlockHeight": "0", "latestIndexedBlockHeight": "9007199254740993"})
         }
         "getBlockByHeight" => {

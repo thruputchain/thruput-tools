@@ -50,6 +50,21 @@ homepage = "https://github.com/thruputchain/thruput-tools"
 keywords = ["thruput"]
 categories = ["development-tools"]
 
+# Coordinated invocation-history protocol candidate. Replace this source pin
+# with a qualified crates.io family before publishing a tools release.
+[patch.crates-io]
+thruput-xdr = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-xdr-macros = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-syscall = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-indexer = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-node-rpc = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-node-types = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-db-gateway = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-view = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-scp = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-trace = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+thruput-spec = { git = "https://github.com/thruputchain/thruput-protocol-rs", rev = "720c855bfb879ed3c1df90d8f71df805da57fd5b" }
+
 [workspace.dependencies]
 shlex = "2"
 reqwest = "0.13"

@@ -14,7 +14,7 @@ async fn retained_hash_resumes_receipt_wait_without_submission() {
     let mut methods = RpcModule::new(());
     methods.register_method("getTransactionReceipt", move |params, (), _| {
         assert_eq!(params.parse::<serde_json::Value>().unwrap(), json!({"transactionHash":hash}));
-        json!({"transactionHash":hash,"blockHeight":"12","execution":{"result":"return","returnData":"0x"},"events":[],"gasUsed":"3"})
+        json!({"transactionHash":hash,"blockHeight":"12","execution":{"result":"return","returnData":"0x"},"invokedAddresses":[],"events":[],"gasUsed":"3"})
     }).unwrap();
     // No submission method exists: this flow can only read the retained hash.
     let handle = server.start(methods);

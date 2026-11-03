@@ -593,6 +593,7 @@ impl crate::native::transaction::NativeTransactionReadPlane for Backend {
     ) -> Result<out::ReceiptResult, crate::native::transaction::NativeReadError> {
         self.check().await?;
         Ok(Some(out::TransactionReceipt {
+            invoked_addresses: vec![],
             transaction_hash: hash,
             block_height: 42.into(),
             execution: out::ReceiptExecution::Return {
@@ -649,7 +650,7 @@ async fn assembly_registers_each_configured_plane_independently() {
                 "getTransactionInput",
                 "getBlockByHeight",
                 "getEvents",
-                "getTransactionsByRootAddress",
+                "getTransactionsByAddress",
                 "getTransactionsByBlock",
             ]);
         }
@@ -688,7 +689,7 @@ async fn assembly_registers_each_configured_plane_independently() {
             before["result"]["supportedMethods"],
             serde_json::json!(expected)
         );
-        assert_eq!(before["result"]["wireFormat"], "14.4.0");
+        assert_eq!(before["result"]["wireFormat"], "15.0.0");
         assert_eq!(before["result"]["implementation"], "test-build");
         assert!(before["result"].get("releaseVersion").is_none());
         assert!(before["result"].get("bundleManifestDigest").is_none());
@@ -764,7 +765,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
             expected.extend([
                 "sendTransaction",
                 "getEvents",
-                "getTransactionsByRootAddress",
+                "getTransactionsByAddress",
                 "getTransactionsByBlock",
                 "getBlockByHeight",
                 "getTransactionStatus",
@@ -789,7 +790,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
             .request("getVersionInfo", ObjectParams::new())
             .await
             .unwrap();
-        assert_eq!(version["wireFormat"], "14.4.0");
+        assert_eq!(version["wireFormat"], "15.0.0");
         assert_eq!(version["supportedMethods"], serde_json::json!(expected));
         let limits: serde_json::Value = client
             .request("getServerLimits", ObjectParams::new())
@@ -915,7 +916,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
         handle.stop().unwrap();
         handle.stopped().await;
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.4.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "15.0.0");
 }
 
 #[test]
@@ -1217,24 +1218,42 @@ impl NativeHistoryPlane for Backend {
             latest_indexed_block_height: 42.into(),
         })
     }
-    async fn native_root_transactions(
+    async fn native_address_transactions(
         &self,
         _: RpcRequestContext,
-        request: input::RootAddressQuery,
-    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        request: input::AddressHistoryQuery,
+    ) -> Result<out::AddressTransactionPage, RpcServerError> {
         self.check().await?;
         assert!(request.limit.is_some_and(|value| value > 0 && value <= 200));
         if let Some(error) = &self.history_error {
             return Err(error.clone());
         }
         if let Some(result) = &self.history_refs {
-            return Ok(result.clone());
+            return Ok(out::AddressTransactionPage {
+                transactions: result
+                    .transactions
+                    .iter()
+                    .map(|item| out::AddressTransactionRef {
+                        transaction_hash: item.transaction_hash,
+                        block_height: item.block_height.clone(),
+                        is_root_target: true,
+                        was_invoked: true,
+                    })
+                    .collect(),
+                next_cursor: result.next_cursor.clone(),
+                coverage: out::AddressHistoryCoverage {
+                    from_block_height: result.oldest_indexed_block_height.clone(),
+                    through_block_height: result.latest_indexed_block_height.clone(),
+                },
+            });
         }
-        Ok(out::TransactionRefPage {
+        Ok(out::AddressTransactionPage {
             transactions: vec![],
             next_cursor: None,
-            oldest_indexed_block_height: 0.into(),
-            latest_indexed_block_height: 42.into(),
+            coverage: out::AddressHistoryCoverage {
+                from_block_height: 1.into(),
+                through_block_height: 42.into(),
+            },
         })
     }
     async fn native_block_transactions(
@@ -1491,7 +1510,7 @@ async fn root_reference_pages_enforce_the_inclusive_anchor() {
             NativeReadCapabilities::new(false, false),
         )
     };
-    let root = input::RootAddressQuery {
+    let root = input::AddressHistoryQuery {
         address: invocation().address,
         start: Some(input::HistoryStart::Ascending {
             anchor: input::AscendingAnchor::AtHeight {
@@ -1502,14 +1521,14 @@ async fn root_reference_pages_enforce_the_inclusive_anchor() {
         limit: Some(2),
     };
     run(reference_page())
-        .get_transactions_by_root_address(root.clone())
+        .get_transactions_by_address(root.clone())
         .await
         .unwrap();
     let mut wrong = reference_page();
     wrong.transactions[0].block_height = 8.into();
     assert_eq!(
         run(wrong)
-            .get_transactions_by_root_address(root)
+            .get_transactions_by_address(root)
             .await
             .unwrap_err()
             .code(),

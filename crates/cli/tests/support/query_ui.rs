@@ -114,7 +114,7 @@ impl Query {
                 let method = request["method"].as_str().unwrap();
                 let mut reply = match method {
                     "getVersionInfo" => {
-                        json!({"result":{"wireFormat":"14.0.0","implementation":"test","supportedMethods":["getBalance","getStorage","simulateInvocation","getTransactionStatus","getTransactionReceipt","getTransactionsByRootAddress","getEvents"]}})
+                        json!({"result":{"wireFormat":"15.0.0","implementation":"test","supportedMethods":["getBalance","getStorage","simulateInvocation","getTransactionStatus","getTransactionReceipt","getTransactionsByAddress","getEvents"]}})
                     }
                     "getTransactionReceipt" => json!({"result":null}),
                     _ => {
@@ -304,8 +304,8 @@ fn inspection_commands_render_complete_empty_and_pending_results() {
         ),
         (
             vec!["tx", "list"],
-            json!({"transactions":[],"nextCursor":"0xaabb","latestIndexedBlockHeight":"12","oldestIndexedBlockHeight":"0"}),
-            "getTransactionsByRootAddress",
+            json!({"transactions":[],"nextCursor":null,"coverage":{"fromBlockHeight":"1","throughBlockHeight":"12"}}),
+            "getTransactionsByAddress",
             "Transaction history",
         ),
         (
@@ -330,8 +330,13 @@ fn inspection_commands_render_complete_empty_and_pending_results() {
             "{history}"
         );
         if args == ["tx", "list"] {
-            assert!(history.find(title).unwrap() < history.find("root invocations only").unwrap());
-            assert!(history.contains("0xaabb"));
+            assert!(
+                history.find(title).unwrap()
+                    < history
+                        .find("root targets and entered runtime addresses")
+                        .unwrap()
+            );
+            assert!(history.contains("none (end of history)"));
         }
         query.finish(method);
     }

@@ -194,6 +194,7 @@ async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
 
 fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
     TransactionReceipt {
+        invoked_addresses: vec![],
         transaction_hash: tx_hash,
         block_height: 3.into(),
         execution: ReceiptExecution::Return {

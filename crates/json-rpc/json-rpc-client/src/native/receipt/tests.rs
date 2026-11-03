@@ -64,8 +64,7 @@ fn config() -> ReceiptPollConfig {
     }
 }
 fn receipt_raw(execution: Value) -> Value {
-    let mut raw =
-        json!({"transactionHash": hash(), "blockHeight": "7", "events": [], "gasUsed": "9"});
+    let mut raw = json!({"transactionHash": hash(), "blockHeight": "7", "invokedAddresses": [], "events": [], "gasUsed": "9"});
     raw["execution"] = execution;
     raw
 }

@@ -51,6 +51,93 @@
       }
     },
     "schemas": {
+      "AddressHistoryCoverage": {
+        "description": "Inclusive contiguous range with complete retained invocation evidence.",
+        "properties": {
+          "fromBlockHeight": {
+            "description": "Canonical decimal block height in the inclusive range 0 to 9223372036854775807.",
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+            "type": "string",
+            "x-integer-maximum": "9223372036854775807",
+            "x-integer-minimum": "0"
+          },
+          "throughBlockHeight": {
+            "description": "Canonical decimal block height in the inclusive range 0 to 9223372036854775807.",
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+            "type": "string",
+            "x-integer-maximum": "9223372036854775807",
+            "x-integer-minimum": "0"
+          }
+        },
+        "required": [
+          "fromBlockHeight",
+          "throughBlockHeight"
+        ],
+        "type": "object"
+      },
+      "AddressTransactionPage": {
+        "description": "Deduplicated root-target and entered-address history within stated coverage.",
+        "properties": {
+          "coverage": {
+            "$ref": "#/components/schemas/AddressHistoryCoverage"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "minLength": 4,
+                "pattern": "^0x(?:[0-9a-f]{2})*(?![\\s\\S])",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/AddressTransactionRef"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "transactions",
+          "nextCursor",
+          "coverage"
+        ],
+        "type": "object"
+      },
+      "AddressTransactionRef": {
+        "description": "Transaction membership for the queried address, not a per-call outcome.",
+        "properties": {
+          "blockHeight": {
+            "description": "Canonical decimal block height in the inclusive range 0 to 9223372036854775807.",
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+            "type": "string",
+            "x-integer-maximum": "9223372036854775807",
+            "x-integer-minimum": "0"
+          },
+          "isRootTarget": {
+            "type": "boolean"
+          },
+          "transactionHash": {
+            "$ref": "#/components/schemas/TxHash"
+          },
+          "wasInvoked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "transactionHash",
+          "blockHeight",
+          "isRootTarget",
+          "wasInvoked"
+        ],
+        "type": "object"
+      },
       "Admission": {
         "anyOf": [
           {
@@ -1922,6 +2009,15 @@
             "$ref": "#/components/schemas/DecimalU64",
             "description": "Metered work, not a fee or token burn."
           },
+          "invokedAddresses": {
+            "description": "Canonical entered-address evidence, retained across failed frames.",
+            "items": {
+              "$ref": "#/components/schemas/Base58_ContractAddress"
+            },
+            "maxItems": 1024,
+            "type": "array",
+            "uniqueItems": true
+          },
           "transactionHash": {
             "$ref": "#/components/schemas/TxHash"
           }
@@ -1930,6 +2026,7 @@
           "transactionHash",
           "blockHeight",
           "execution",
+          "invokedAddresses",
           "events",
           "gasUsed"
         ],
@@ -1957,7 +2054,7 @@
         "type": "object"
       },
       "TransactionRefPage": {
-        "description": "References for root-address history or one exact block. Request context\ndetermines ordering, membership and the meaning of the serving bounds.",
+        "description": "Transaction references for one exact block. Request context\ndetermines ordering, membership and the meaning of the serving bounds.",
         "properties": {
           "latestIndexedBlockHeight": {
             "description": "Canonical decimal block height in the inclusive range 0 to 9223372036854775807.",
@@ -2173,7 +2270,7 @@
   },
   "info": {
     "title": "Thruput JSON-RPC",
-    "version": "14.4.0"
+    "version": "15.0.0"
   },
   "methods": [
     {
@@ -2741,6 +2838,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/0/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/0/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -2749,6 +2855,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -3425,6 +3532,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/1/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/1/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -3433,6 +3549,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -4121,6 +4238,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/2/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/2/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -4129,6 +4255,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -4786,6 +4913,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/2/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/2/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -4794,6 +4930,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -5448,6 +5585,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/2/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/2/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -5456,6 +5602,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -6116,6 +6263,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/2/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/2/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -6124,6 +6280,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -6776,6 +6933,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/2/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/2/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -6784,6 +6950,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -7477,6 +7644,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/3/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/3/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -7485,6 +7661,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -8142,6 +8319,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/3/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/3/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -8150,6 +8336,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -8804,6 +8991,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/3/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/3/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -8812,6 +9008,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -9472,6 +9669,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/3/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/3/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -9480,6 +9686,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -10132,6 +10339,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/3/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/3/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -10140,6 +10356,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -10821,6 +11038,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/4/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/4/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -10829,6 +11055,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -11539,6 +11766,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/5/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/5/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -11547,6 +11783,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -12202,6 +12439,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/5/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/5/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -12210,6 +12456,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -12862,6 +13109,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/5/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/5/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -12870,6 +13126,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -13521,6 +13778,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/5/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/5/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -13529,6 +13795,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -14188,6 +14455,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/5/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/5/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -14196,6 +14472,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -14844,6 +15121,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/5/x-data-schema/TransactionInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/5/x-data-schema/TransactionInvalid/definitions/TxHash"
                 }
@@ -14852,6 +15138,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -15515,6 +15802,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/5/x-data-schema/TransactionRejected/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/5/x-data-schema/TransactionRejected/definitions/TxHash"
                 }
@@ -15523,6 +15819,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -16228,6 +16525,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/6/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/6/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -16236,6 +16542,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -16893,6 +17200,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/6/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/6/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -16901,6 +17217,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -17555,6 +17872,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/6/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/6/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -17563,6 +17889,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -18223,6 +18550,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/6/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/6/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -18231,6 +18567,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -18883,6 +19220,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/6/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/6/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -18891,6 +19237,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -19607,6 +19954,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/7/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/7/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -19615,6 +19971,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -20265,6 +20622,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/7/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/7/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -20273,6 +20639,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -20927,6 +21294,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/7/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/7/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -20935,6 +21311,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -21595,6 +21972,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/7/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/7/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -21603,6 +21989,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -22255,6 +22642,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/7/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/7/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -22263,6 +22659,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -22972,6 +23369,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/8/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/8/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -22980,6 +23386,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -23637,6 +24044,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/8/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/8/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -23645,6 +24061,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -24299,6 +24716,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/8/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/8/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -24307,6 +24733,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -24967,6 +25394,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/8/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/8/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -24975,6 +25411,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -25627,6 +26064,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/8/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/8/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -25635,6 +26081,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -26399,6 +26846,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/9/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/9/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -26407,6 +26863,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -27064,6 +27521,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/9/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/9/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -27072,6 +27538,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -27726,6 +28193,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/9/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/9/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -27734,6 +28210,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -28394,6 +28871,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/9/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/9/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -28402,6 +28888,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -29054,6 +29541,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/9/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/9/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -29062,6 +29558,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -29719,6 +30216,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/9/x-data-schema/StateHeightUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/9/x-data-schema/StateHeightUnavailable/definitions/TxHash"
                 }
@@ -29727,6 +30233,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -30494,6 +31001,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/10/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/10/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -30502,6 +31018,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -31159,6 +31676,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/10/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/10/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -31167,6 +31693,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -31821,6 +32348,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/10/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/10/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -31829,6 +32365,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -32489,6 +33026,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/10/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/10/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -32497,6 +33043,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -33149,6 +33696,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/10/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/10/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -33157,6 +33713,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -33814,6 +34371,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/10/x-data-schema/StateHeightUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/10/x-data-schema/StateHeightUnavailable/definitions/TxHash"
                 }
@@ -33822,6 +34388,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -34557,6 +35124,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/11/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/11/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -34565,6 +35141,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -35222,6 +35799,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/11/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/11/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -35230,6 +35816,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -35884,6 +36471,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/11/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/11/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -35892,6 +36488,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -36552,6 +37149,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/11/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/11/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -36560,6 +37166,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -37212,6 +37819,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/11/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/11/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -37220,6 +37836,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -37934,6 +38551,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/12/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/12/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -37942,6 +38568,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -38599,6 +39226,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/12/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/12/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -38607,6 +39243,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -39261,6 +39898,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/12/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/12/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -39269,6 +39915,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -39929,6 +40576,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/12/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/12/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -39937,6 +40593,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -40589,6 +41246,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/12/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/12/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -40597,6 +41263,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -41306,6 +41973,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/13/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/13/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -41314,6 +41990,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -41971,6 +42648,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/13/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/13/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -41979,6 +42665,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -42633,6 +43320,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/13/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/13/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -42641,6 +43337,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -43301,6 +43998,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/13/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/13/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -43309,6 +44015,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -43961,6 +44668,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/13/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/13/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -43969,6 +44685,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -44678,6 +45395,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/14/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/14/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -44686,6 +45412,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -45343,6 +46070,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/14/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/14/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -45351,6 +46087,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -46005,6 +46742,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/14/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/14/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -46013,6 +46759,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -46673,6 +47420,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/14/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/14/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -46681,6 +47437,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -47333,6 +48090,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/14/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/14/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -47341,6 +48107,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -48057,6 +48824,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/15/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/15/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -48065,6 +48841,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -48722,6 +49499,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/15/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/15/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -48730,6 +49516,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -49384,6 +50171,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/15/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/15/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -49392,6 +50188,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -50052,6 +50849,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/15/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/15/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -50060,6 +50866,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -50712,6 +51519,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/15/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/15/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -50720,6 +51536,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -51436,6 +52253,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/16/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/16/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -51444,6 +52270,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -52101,6 +52928,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/16/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/16/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -52109,6 +52945,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -52763,6 +53600,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/16/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/16/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -52771,6 +53617,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -53431,6 +54278,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/16/x-data-schema/ContractArtifactUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/16/x-data-schema/ContractArtifactUnavailable/definitions/TxHash"
                 }
@@ -53439,6 +54295,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -54089,6 +54946,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/16/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/16/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -54097,6 +54963,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -54749,6 +55616,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/16/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/16/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -54757,6 +55633,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -55498,6 +56375,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/17/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/17/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -55506,6 +56392,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -56163,6 +57050,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/17/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/17/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -56171,6 +57067,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -56825,6 +57722,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/17/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/17/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -56833,6 +57739,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -57493,6 +58400,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/17/x-data-schema/HistoryUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/17/x-data-schema/HistoryUnavailable/definitions/TxHash"
                 }
@@ -57501,6 +58417,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -58165,6 +59082,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/17/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/17/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -58173,6 +59099,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -58902,6 +59829,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/17/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/17/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -58910,6 +59846,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -59097,7 +60034,7 @@
           "$ref": "#/components/errors/BackendDataInvalid"
         }
       ],
-      "name": "getTransactionsByRootAddress",
+      "name": "getTransactionsByAddress",
       "paramStructure": "by-name",
       "params": [
         {
@@ -59135,10 +60072,10 @@
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/TransactionRefPage"
+          "$ref": "#/components/schemas/AddressTransactionPage"
         }
       },
-      "summary": "Read transactions whose root invocation targets the address, excluding internal calls and incoming transfers.",
+      "summary": "Read each transaction once when its root targets the address or its runtime frame entered. Relationship flags are execution evidence, not proof of call success or a transfer. Coverage is inclusive and pinned during pagination; missing history is an error.",
       "x-data-schema": {
         "BackendDataInvalid": {
           "$schema": "http://json-schema.org/draft-07/schema#",
@@ -59688,6 +60625,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/18/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/18/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -59696,6 +60642,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -60353,6 +61300,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/18/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/18/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -60361,6 +61317,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -61015,6 +61972,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/18/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/18/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -61023,6 +61989,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -61683,6 +62650,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/18/x-data-schema/HistoryUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/18/x-data-schema/HistoryUnavailable/definitions/TxHash"
                 }
@@ -61691,6 +62667,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -62355,6 +63332,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/18/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/18/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -62363,6 +63349,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -63092,6 +64079,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/18/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/18/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -63100,6 +64096,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -63212,7 +64209,7 @@
       },
       "x-params-schema": {
         "additionalProperties": false,
-        "description": "Transactions whose root invocation targets this address, including wallet accounts.",
+        "description": "Transactions that target this address at the root or entered its runtime.",
         "oneOf": [
           {
             "not": {
@@ -63861,6 +64858,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/19/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/19/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -63869,6 +64875,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -64526,6 +65533,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/19/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/19/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -64534,6 +65550,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -65188,6 +66205,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/19/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/19/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -65196,6 +66222,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -65856,6 +66883,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/19/x-data-schema/HistoryUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/19/x-data-schema/HistoryUnavailable/definitions/TxHash"
                 }
@@ -65864,6 +66900,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -66528,6 +67565,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/19/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/19/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -66536,6 +67582,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -67188,6 +68235,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/19/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/19/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -67196,6 +68252,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -67942,6 +68999,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/20/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/20/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -67950,6 +69016,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -68607,6 +69674,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/20/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/20/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -68615,6 +69691,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -69269,6 +70346,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/20/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/20/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -69277,6 +70363,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -69937,6 +71024,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/20/x-data-schema/HistoryUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/20/x-data-schema/HistoryUnavailable/definitions/TxHash"
                 }
@@ -69945,6 +71041,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -70609,6 +71706,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/20/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/20/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -70617,6 +71723,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -71346,6 +72453,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/20/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/20/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -71354,6 +72470,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -72111,6 +73228,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/21/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/21/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -72119,6 +73245,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -72769,6 +73896,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/21/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/21/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -72777,6 +73913,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -73424,6 +74561,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/21/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/21/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -73432,6 +74578,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -74078,6 +75225,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/21/x-data-schema/FundingAttemptStopped/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/21/x-data-schema/FundingAttemptStopped/definitions/TxHash"
                 }
@@ -74086,6 +75242,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -74709,6 +75866,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/21/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/21/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -74717,6 +75883,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -75362,6 +76529,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/21/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/21/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -75370,6 +76546,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -76114,6 +77291,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/22/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/22/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -76122,6 +77308,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -76772,6 +77959,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/22/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/22/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -76780,6 +77976,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -77427,6 +78624,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/22/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/22/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -77435,6 +78641,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -78081,6 +79288,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/22/x-data-schema/FundingAttemptStopped/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/22/x-data-schema/FundingAttemptStopped/definitions/TxHash"
                 }
@@ -78089,6 +79305,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -78712,6 +79929,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/22/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/22/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -78720,6 +79946,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -79365,6 +80592,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/22/x-data-schema/LocalFundingUnresolved/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/22/x-data-schema/LocalFundingUnresolved/definitions/TxHash"
                 }
@@ -79373,6 +80609,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -80002,6 +81239,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/22/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/22/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -80010,6 +81256,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -80731,6 +81978,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/23/x-data-schema/BackendDataInvalid/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/23/x-data-schema/BackendDataInvalid/definitions/TxHash"
                 }
@@ -80739,6 +81995,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -81396,6 +82653,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/23/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/23/x-data-schema/BackendTimeout/definitions/TxHash"
                 }
@@ -81404,6 +82670,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -82058,6 +83325,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/23/x-data-schema/BackendUnavailable/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/23/x-data-schema/BackendUnavailable/definitions/TxHash"
                 }
@@ -82066,6 +83342,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -82726,6 +84003,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/23/x-data-schema/InvalidParams/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/23/x-data-schema/InvalidParams/definitions/TxHash"
                 }
@@ -82734,6 +84020,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],
@@ -83386,6 +84673,15 @@
                   ],
                   "description": "Metered work, not a fee or token burn."
                 },
+                "invokedAddresses": {
+                  "description": "Canonical entered-address evidence, retained across failed frames.",
+                  "items": {
+                    "$ref": "#/methods/23/x-data-schema/Overloaded/definitions/Base58_ContractAddress"
+                  },
+                  "maxItems": 1024,
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "transactionHash": {
                   "$ref": "#/methods/23/x-data-schema/Overloaded/definitions/TxHash"
                 }
@@ -83394,6 +84690,7 @@
                 "transactionHash",
                 "blockHeight",
                 "execution",
+                "invokedAddresses",
                 "events",
                 "gasUsed"
               ],

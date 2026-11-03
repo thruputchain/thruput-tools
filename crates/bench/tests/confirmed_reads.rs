@@ -43,7 +43,7 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
     let method = request["method"].as_str().unwrap();
     let result = match method {
         "getVersionInfo" => {
-            json!({"wireFormat":"14.0.0","supportedMethods":["getTransactionReceipt","getTransactionStatus"],"implementation":"fixture","commitHash":"target-commit"})
+            json!({"wireFormat":"15.0.0","supportedMethods":["getTransactionReceipt","getTransactionStatus"],"implementation":"fixture","commitHash":"target-commit"})
         }
         "getNetworkInfo" => json!({"networkHash":NETWORK}),
         "getChainTip" => json!({"height":"7"}),
@@ -62,7 +62,7 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
             if count < state.missing_receipts {
                 Value::Null
             } else {
-                json!({"transactionHash":if count > 0 && state.invalid {NETWORK} else {HASH},"blockHeight":"7","execution":{"result":"fault"},"events":[],"gasUsed":"1500"})
+                json!({"transactionHash":if count > 0 && state.invalid {NETWORK} else {HASH},"blockHeight":"7","execution":{"result":"fault"},"invokedAddresses":[],"events":[],"gasUsed":"1500"})
             }
         }
         _ => panic!("unexpected method {method}"),

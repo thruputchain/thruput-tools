@@ -31,6 +31,52 @@ fn events() -> out::EventPage {
 }
 
 #[test]
+fn address_history_requires_relationships_and_complete_coverage() {
+    let request = input::AddressHistoryQuery {
+        address: Base58([1; 32].into()),
+        start: Some(input::HistoryStart::Ascending {
+            anchor: input::AscendingAnchor::AtHeight {
+                block_height: 9.into(),
+            },
+        }),
+        cursor: None,
+        limit: Some(2),
+    };
+    let page = out::AddressTransactionPage {
+        transactions: vec![out::AddressTransactionRef {
+            transaction_hash: TxHash(Base58([7; 32].into())),
+            block_height: 9.into(),
+            is_root_target: false,
+            was_invoked: true,
+        }],
+        next_cursor: None,
+        coverage: out::AddressHistoryCoverage {
+            from_block_height: 4.into(),
+            through_block_height: 12.into(),
+        },
+    };
+    validate_address_transaction_page(&request, &page, 256).unwrap();
+    let mut malformed = page.clone();
+    malformed.coverage.from_block_height = 0.into();
+    assert!(validate_address_transaction_page(&request, &malformed, 256).is_err());
+    let mut malformed = page.clone();
+    malformed.transactions[0].was_invoked = false;
+    assert!(validate_address_transaction_page(&request, &malformed, 256).is_err());
+    let mut malformed = page.clone();
+    malformed.coverage.through_block_height = 8.into();
+    assert!(validate_address_transaction_page(&request, &malformed, 256).is_err());
+    let mut malformed = page.clone();
+    malformed
+        .transactions
+        .push(malformed.transactions[0].clone());
+    assert!(validate_address_transaction_page(&request, &malformed, 256).is_err());
+    let mut malformed = page;
+    malformed.transactions.clear();
+    malformed.next_cursor = Some(HexBytes(vec![1]));
+    assert!(validate_address_transaction_page(&request, &malformed, 256).is_err());
+}
+
+#[test]
 fn direct_requests_require_exclusive_start_and_bounded_positive_limit() {
     let mut q = query();
     q.limit = None;
@@ -197,7 +243,15 @@ fn identities_cannot_repeat_at_different_heights() {
         oldest_indexed_block_height: 0.into(),
         latest_indexed_block_height: 10.into(),
     };
-    assert!(validate_refs(&refs, Some(events::IterationOrder::Ascending)).is_err());
+    assert!(
+        validate_refs(
+            refs.transactions
+                .iter()
+                .map(|item| (&item.block_height, &item.transaction_hash)),
+            Some(events::IterationOrder::Ascending)
+        )
+        .is_err()
+    );
 }
 
 fn invalid_param(result: &Result<(), RpcServerError>) -> bool {

@@ -52,7 +52,7 @@ pub(crate) fn rpc_error(error: &NativeRpcError) -> CliError {
             "preflightReason": "missingMethods", "missingMethods": methods,
         }),
         NativeRpcError::WireFormat { actual } => json!({
-            "preflightReason": "wireFormat", "actualWireFormat": actual, "expectedMajor": 14,
+            "preflightReason": "wireFormat", "actualWireFormat": actual, "expectedMajor": 15,
         }),
         NativeRpcError::InvalidExpiry { tip, offset } => json!({
             "preflightReason": "invalidExpiry", "blockHeight": tip.to_string(), "offset": offset.to_string(),

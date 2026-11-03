@@ -67,13 +67,13 @@ impl NativeHistoryPlane for StubBackend {
         Err(RpcServerError::NotImplemented("getEvents".into()))
     }
     #[tracing::instrument(skip_all)]
-    async fn native_root_transactions(
+    async fn native_address_transactions(
         &self,
         _context: RpcRequestContext,
-        _request: input::RootAddressQuery,
-    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        _request: input::AddressHistoryQuery,
+    ) -> Result<out::AddressTransactionPage, RpcServerError> {
         Err(RpcServerError::NotImplemented(
-            "getTransactionsByRootAddress".into(),
+            "getTransactionsByAddress".into(),
         ))
     }
     #[tracing::instrument(skip_all)]

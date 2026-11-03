@@ -129,7 +129,7 @@ pub const METHODS: &[&str] = &[
     "getContractArtifact",
     "getEffectiveContract",
     "getEvents",
-    "getTransactionsByRootAddress",
+    "getTransactionsByAddress",
     "getBlockByHeight",
     "getTransactionsByBlock",
     "faucet_requestAirdrop",
@@ -173,7 +173,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
             BACKEND_DATA_INVALID,
         ],
         "getEvents"
-        | "getTransactionsByRootAddress"
+        | "getTransactionsByAddress"
         | "getBlockByHeight"
         | "getTransactionsByBlock" => &[
             INVALID_PARAMS,
@@ -297,7 +297,7 @@ pub(super) fn kind_allowed(method: &str, kind: &str) -> bool {
         && (kind != "invalidCursor"
             || matches!(
                 method,
-                "getEvents" | "getTransactionsByRootAddress" | "getTransactionsByBlock"
+                "getEvents" | "getTransactionsByAddress" | "getTransactionsByBlock"
             ))
 }
 

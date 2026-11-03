@@ -111,6 +111,7 @@ impl NativeTransactionReadPlane for Backend {
             });
         }
         Ok(Some(out::TransactionReceipt {
+            invoked_addresses: vec![],
             transaction_hash: if self.corrupt_receipt {
                 TxHash(Base58([9; 32].into()))
             } else {

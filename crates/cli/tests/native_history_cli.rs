@@ -21,7 +21,7 @@ fn hash() -> String {
 fn server(method: &'static str, result: Result<Value, ErrorObjectOwned>) -> RecordingServer {
     RecordingServer::builder()
         .method("getVersionInfo", move |_| {
-            Ok(json!({"wireFormat":"14.0.0", "implementation":"test", "supportedMethods":[method]}))
+            Ok(json!({"wireFormat":"15.0.0", "implementation":"test", "supportedMethods":[method]}))
         })
         .method(method, move |_| result.clone())
         .start()
@@ -71,15 +71,12 @@ fn command(url: &str, args: &[&str], success: bool) -> Value {
 }
 
 fn root_page(cursor: &Value) -> Value {
-    json!({"transactions":[{"transactionHash":hash(),"blockHeight":"9007199254740993"}],"nextCursor":cursor,"oldestIndexedBlockHeight":"1","latestIndexedBlockHeight":"9007199254740993"})
+    json!({"transactions":[{"transactionHash":hash(),"blockHeight":"9007199254740993","isRootTarget":true,"wasInvoked":true}],"nextCursor":cursor,"coverage":{"fromBlockHeight":"1","throughBlockHeight":"9007199254740993"}})
 }
 
 #[test]
 fn root_history_uses_native_named_params_and_preserves_cli_report() {
-    let endpoint = server(
-        "getTransactionsByRootAddress",
-        Ok(root_page(&json!("0x0102"))),
-    );
+    let endpoint = server("getTransactionsByAddress", Ok(root_page(&json!("0x0102"))));
     let report = command(
         endpoint.url(),
         &["tx", "list", &address(), "--limit", "1"],
@@ -92,7 +89,7 @@ fn root_history_uses_native_named_params_and_preserves_cli_report() {
     {
         let recorded = endpoint.stop();
         assert_eq!(recorded.len(), 2);
-        assert_eq!(recorded[1].0, "getTransactionsByRootAddress");
+        assert_eq!(recorded[1].0, "getTransactionsByAddress");
         assert_eq!(
             recorded[1].1,
             json!({"address":address(),"limit":1,"start":{"order":"descending","anchor":{"kind":"atEnd"}}})
@@ -102,7 +99,7 @@ fn root_history_uses_native_named_params_and_preserves_cli_report() {
 
 #[test]
 fn continuation_forwards_cursor_without_start_and_maps_terminal_marker() {
-    let endpoint = server("getTransactionsByRootAddress", Ok(root_page(&Value::Null)));
+    let endpoint = server("getTransactionsByAddress", Ok(root_page(&Value::Null)));
     let report = command(
         endpoint.url(),
         &[
@@ -165,10 +162,7 @@ fn empty_event_page_keeps_continuation_and_topic_filters() {
 #[test]
 fn invalid_cursor_is_reported_without_retry_or_restart() {
     let error = json!({"kind":"invalidCursor"});
-    for (method, command_name) in [
-        ("getTransactionsByRootAddress", "tx"),
-        ("getEvents", "events"),
-    ] {
+    for (method, command_name) in [("getTransactionsByAddress", "tx"), ("getEvents", "events")] {
         let endpoint = server(
             method,
             Err(ErrorObjectOwned::owned(
@@ -194,11 +188,11 @@ fn invalid_cursor_is_reported_without_retry_or_restart() {
 #[test]
 fn oversized_native_root_page_fails_instead_of_truncating() {
     let endpoint = server(
-        "getTransactionsByRootAddress",
+        "getTransactionsByAddress",
         Ok(json!({"transactions":[
-            {"transactionHash":hash(),"blockHeight":"5"},
-            {"transactionHash":hash(),"blockHeight":"4"}
-        ],"nextCursor":null,"oldestIndexedBlockHeight":"1","latestIndexedBlockHeight":"5"})),
+            {"transactionHash":hash(),"blockHeight":"5","isRootTarget":true,"wasInvoked":true},
+            {"transactionHash":hash(),"blockHeight":"4","isRootTarget":true,"wasInvoked":true}
+        ],"nextCursor":null,"coverage":{"fromBlockHeight":"1","throughBlockHeight":"5"}})),
     );
     let report = command(
         endpoint.url(),
@@ -213,7 +207,7 @@ fn oversized_native_root_page_fails_instead_of_truncating() {
 fn empty_cursor_is_rejected_locally_without_starting_a_new_walk() {
     for (method, command_name, code) in [
         (
-            "getTransactionsByRootAddress",
+            "getTransactionsByAddress",
             "tx",
             "invalid_transaction_cursor",
         ),

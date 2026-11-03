@@ -2,7 +2,7 @@
 
 <!-- Generated from thruput-spec.json by tests/spec_snapshot.rs. Do not edit. -->
 
-Wire format `14.4.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
+Wire format `15.0.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
 
 This file lists all native methods. A server serves only the methods that its backends support; `getVersionInfo` lists them. For exact schemas, see [thruput-spec.json](thruput-spec.json).
 
@@ -28,7 +28,7 @@ This file lists all native methods. A server serves only the methods that its ba
 | [`getEffectiveContract`](#geteffectivecontract) | Resolve current committed-state contract selection for root or nested invocation. Explicit deployments take precedence; only root invocations use the network default. Does not authorize execution, include transaction-local deployments, or identify historical code. |
 | [`getContractArtifact`](#getcontractartifact) | Read complete canonical Contract XDR by hash. Availability does not prove deployment. |
 | [`getEvents`](#getevents) | Scan indexed events matching the supplied filters. |
-| [`getTransactionsByRootAddress`](#gettransactionsbyrootaddress) | Read transactions whose root invocation targets the address, excluding internal calls and incoming transfers. |
+| [`getTransactionsByAddress`](#gettransactionsbyaddress) | Read each transaction once when its root targets the address or its runtime frame entered. Relationship flags are execution evidence, not proof of call success or a transfer. Coverage is inclusive and pinned during pagination; missing history is an error. |
 | [`getBlockByHeight`](#getblockbyheight) | Read committed block metadata, or null when unavailable. |
 | [`getTransactionsByBlock`](#gettransactionsbyblock) | Read a page of transactions in a committed block. |
 | [`faucet_requestAirdrop`](#faucet_requestairdrop) | Request one faucet funding attempt. Receipt polling is a separate operation. |
@@ -355,9 +355,9 @@ Scan indexed events matching the supplied filters.
 | -32053 | `Overloaded` | `"overloaded"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
-### `getTransactionsByRootAddress`
+### `getTransactionsByAddress`
 
-Read transactions whose root invocation targets the address, excluding internal calls and incoming transfers.
+Read each transaction once when its root targets the address or its runtime frame entered. Relationship flags are execution evidence, not proof of call success or a transfer. Coverage is inclusive and pinned during pagination; missing history is an error.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -366,7 +366,7 @@ Read transactions whose root invocation targets the address, excluding internal 
 | `limit` | integer (uint32) | no | Omission selects the endpoint default; configured caps apply later. |
 | `start` | [`HistoryStart`](#historystart) | no |  |
 
-**Result:** [`TransactionRefPage`](#transactionrefpage)
+**Result:** [`AddressTransactionPage`](#addresstransactionpage)
 
 | Code | [Error](#errors) | Data `kind` |
 | --- | --- | --- |
@@ -498,6 +498,36 @@ The `kind` field identifies the shape of `data`.
 | -32602 | `InvalidParams` | Invalid params | `"invalidParams"` | `path?`: string, `reason?`: [`InvalidParamsReason`](#invalidparamsreason) |
 
 ## Types
+
+### `AddressHistoryCoverage`
+
+Inclusive contiguous range with complete retained invocation evidence.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `fromBlockHeight` | decimal string | yes | Canonical decimal block height in the inclusive range 0 to 9223372036854775807. |
+| `throughBlockHeight` | decimal string | yes | Canonical decimal block height in the inclusive range 0 to 9223372036854775807. |
+
+### `AddressTransactionPage`
+
+Deduplicated root-target and entered-address history within stated coverage.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `coverage` | [`AddressHistoryCoverage`](#addresshistorycoverage) | yes |  |
+| `nextCursor` | hex string \| null | yes |  |
+| `transactions` | [`AddressTransactionRef`](#addresstransactionref)[] | yes |  |
+
+### `AddressTransactionRef`
+
+Transaction membership for the queried address, not a per-call outcome.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `blockHeight` | decimal string | yes | Canonical decimal block height in the inclusive range 0 to 9223372036854775807. |
+| `isRootTarget` | boolean | yes |  |
+| `transactionHash` | [`TxHash`](#txhash) | yes |  |
+| `wasInvoked` | boolean | yes |  |
 
 ### `Admission`
 
@@ -1096,6 +1126,7 @@ A committed receipt. Existence does not imply successful execution.
 | `events` | [`EmittedEvent`](#emittedevent)[] | yes |  |
 | `execution` | [`ReceiptExecution`](#receiptexecution) | yes |  |
 | `gasUsed` | [`DecimalU64`](#decimalu64) | yes | Metered work, not a fee or token burn. |
+| `invokedAddresses` | [`Base58_ContractAddress`](#base58_contractaddress)[] (at most 1024) | yes | Canonical entered-address evidence, retained across failed frames. |
 | `transactionHash` | [`TxHash`](#txhash) | yes |  |
 
 ### `TransactionRef`
@@ -1109,7 +1140,7 @@ Committed transaction reference; contains neither its body nor execution.
 
 ### `TransactionRefPage`
 
-References for root-address history or one exact block. Request context determines ordering, membership and the meaning of the serving bounds.
+Transaction references for one exact block. Request context determines ordering, membership and the meaning of the serving bounds.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |

@@ -234,8 +234,8 @@ page_request!(
     filters: Vec<EventFilter>
 );
 page_request!(
-    /// Transactions whose root invocation targets this address, including wallet accounts.
-    RootAddressQuery, HistoryStart,
+    /// Transactions that target this address at the root or entered its runtime.
+    AddressHistoryQuery, HistoryStart,
     address: ContractAddress
 );
 page_request!(

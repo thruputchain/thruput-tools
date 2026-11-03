@@ -64,7 +64,7 @@ TransactionRef {
 }
 
 response_object! {
-/// References for root-address history or one exact block. Request context
+/// Transaction references for one exact block. Request context
 /// determines ordering, membership and the meaning of the serving bounds.
 TransactionRefPage {
     transactions: Vec<TransactionRef>,
@@ -82,3 +82,38 @@ TransactionRefPage {
 
 /// Exact-block pages share the reference shape, not range-walk checkpoints.
 pub type BlockTransactionPage = TransactionRefPage;
+
+response_object! {
+/// Transaction membership for the queried address, not a per-call outcome.
+AddressTransactionRef {
+    transaction_hash: TxHash,
+    #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]
+    #[schemars(schema_with = "height_schema")]
+    block_height: BlockHeight,
+    is_root_target: bool,
+    was_invoked: bool,
+}
+}
+
+response_object! {
+/// Inclusive contiguous range with complete retained invocation evidence.
+AddressHistoryCoverage {
+    #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]
+    #[schemars(schema_with = "height_schema")]
+    from_block_height: BlockHeight,
+    #[serde(serialize_with = "crate::decimal::serialize", deserialize_with = "read_height")]
+    #[schemars(schema_with = "height_schema")]
+    through_block_height: BlockHeight,
+}
+}
+
+response_object! {
+/// Deduplicated root-target and entered-address history within stated coverage.
+AddressTransactionPage {
+    transactions: Vec<AddressTransactionRef>,
+    #[serde(deserialize_with = "read_next_cursor")]
+    #[schemars(schema_with = "next_cursor_schema")]
+    next_cursor: Option<HexBytes>,
+    coverage: AddressHistoryCoverage,
+}
+}

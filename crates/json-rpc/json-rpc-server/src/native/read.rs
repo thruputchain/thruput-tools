@@ -3,7 +3,7 @@
 mod projection;
 mod service;
 pub use service::history::{
-    validate_block_transaction_page, validate_event_page, validate_root_transaction_page,
+    validate_address_transaction_page, validate_block_transaction_page, validate_event_page,
 };
 pub use service::{NativeReadCapabilities, NativeReadService};
 
@@ -39,11 +39,11 @@ pub trait NativeHistoryPlane: Send + Sync + 'static {
         context: RpcRequestContext,
         request: input::EventQuery,
     ) -> Result<out::EventPage, RpcServerError>;
-    async fn native_root_transactions(
+    async fn native_address_transactions(
         &self,
         context: RpcRequestContext,
-        request: input::RootAddressQuery,
-    ) -> Result<out::TransactionRefPage, RpcServerError>;
+        request: input::AddressHistoryQuery,
+    ) -> Result<out::AddressTransactionPage, RpcServerError>;
     async fn native_block_transactions(
         &self,
         context: RpcRequestContext,

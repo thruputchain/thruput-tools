@@ -124,6 +124,7 @@ async fn scenario(recorded: Arc<Recorded>) -> (Scenario, jsonrpsee::server::Serv
             // The wallet wraps the child's return, one buffer per child call.
             let wrapped = xdrs::cxs::encode(&vec![returned(calls[0].1)]).unwrap();
             Ok::<_, ErrorObjectOwned>(Some(TransactionReceipt {
+                invoked_addresses: vec![],
                 transaction_hash: hash,
                 block_height: 3.into(),
                 execution: ReceiptExecution::Return {

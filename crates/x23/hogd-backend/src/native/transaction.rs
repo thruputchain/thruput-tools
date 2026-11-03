@@ -122,6 +122,16 @@ pub fn receipt(
         block_height: height.clone(),
     };
     let decode = || {
+        if log.invoked_addresses.0.len()
+            > thruput_xdr::event::kMaxInvokedAddressesPerTransaction as usize
+            || log
+                .invoked_addresses
+                .0
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(invalid(Reason::InvalidEncoding, "noncanonical invoked addresses").into());
+        }
         let execution = execution(log.exec_result, log.root_output)?;
         let parsed = crate::event::parse_emitted_events(log.events, Some(tx_hash));
         if parsed.dropped != 0 {
@@ -140,6 +150,12 @@ pub fn receipt(
             transaction_hash: tx_hash,
             block_height: height,
             execution,
+            invoked_addresses: log
+                .invoked_addresses
+                .0
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             events,
             gas_used: log.gas_consumed,
         })

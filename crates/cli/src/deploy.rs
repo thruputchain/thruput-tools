@@ -1172,7 +1172,7 @@ mod tests {
             )
             .unwrap();
         module.register_method("getVersionInfo", |_, _, _| serde_json::json!({
-            "wireFormat":"14.0.0", "implementation":"test",
+            "wireFormat":"15.0.0", "implementation":"test",
             "supportedMethods":["sendTransaction", "getTransactionStatus", "getTransactionReceipt", "getNetworkInfo"]
         })).unwrap();
         module.register_method("getNetworkInfo", |_, _, _| serde_json::json!({"networkHash":thruput_json_rpc_types::NetworkHash::from(SHA256Hash::from([9;32]))})).unwrap();
@@ -1401,6 +1401,7 @@ mod tests {
 
     fn failed_receipt(abort_data: Option<HexBytes>) -> TransactionReceipt {
         TransactionReceipt {
+            invoked_addresses: vec![],
             transaction_hash: TxHash(Base58(SHA256Hash::from([0x11; 32]))),
             block_height: BlockHeight::from(1),
             execution: ReceiptExecution::Abort {

@@ -121,8 +121,8 @@ mod history;
 mod simulation;
 pub use funding::{AirdropRequest, FundAccountRequest};
 pub use history::{
-    AscendingAnchor, BlockPageRequest, BlockStart, DescendingAnchor, EventFilter, EventQuery,
-    HistoryStart, RootAddressQuery, TopicFilter,
+    AddressHistoryQuery, AscendingAnchor, BlockPageRequest, BlockStart, DescendingAnchor,
+    EventFilter, EventQuery, HistoryStart, TopicFilter,
 };
 pub use simulation::{
     AssumedAuth, Invocation, SimulateInvocationRequest, SimulateInvocationsRequest,

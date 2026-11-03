@@ -77,7 +77,7 @@ fn address() -> String {
 }
 
 fn discovery() -> Value {
-    json!({"wireFormat":"14.0.0","implementation":"test","supportedMethods":["simulateInvocation"]})
+    json!({"wireFormat":"15.0.0","implementation":"test","supportedMethods":["simulateInvocation"]})
 }
 
 fn simulation(output: &Value) -> Value {

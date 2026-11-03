@@ -264,6 +264,7 @@ mod tests {
 
     fn receipt(tx_hash: TxHash, return_data: Option<Vec<u8>>) -> TransactionReceipt {
         TransactionReceipt {
+            invoked_addresses: vec![],
             transaction_hash: tx_hash,
             block_height: BlockHeight::from(1),
             execution: ReceiptExecution::Return {

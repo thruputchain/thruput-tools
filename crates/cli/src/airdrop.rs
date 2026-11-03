@@ -1785,7 +1785,7 @@ mod tests {
             "transactionHash": thruput_encoding::encode(&[0x44;32]),
             "blockHeight": "43", "execution": { "result":"abort",
                 "abortData": format!("0x{}",hex::encode(erc20_too_large_abort())) },
-            "events":[], "gasUsed":"1500",
+            "invokedAddresses":[], "events":[], "gasUsed":"1500",
         }))
         .unwrap()
     }

@@ -379,7 +379,7 @@ mod tests {
         async fn get_transactions_by_address(
             &self,
             _arg0: AddressTransactionQuery,
-        ) -> Result<TransactionRefPageResult, ProgramError> {
+        ) -> Result<thruput_indexer::AddressTransactionRefPageResult, ProgramError> {
             panic!("bug: status tests should not query transactions by address")
         }
 
@@ -1206,6 +1206,7 @@ mod tests {
                     },
                 },
                 events: TxEventLog {
+                    invoked_addresses: VecM(vec![]),
                     tx_hash: [7; 32].into(),
                     exec_result: ExecResult::ExecResultOK,
                     root_output: InvocationFrameOutput::Return {

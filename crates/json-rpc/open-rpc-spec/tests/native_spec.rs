@@ -118,7 +118,7 @@ fn request(name: &str) -> Value {
         "getEvents" => {
             json!({"filters": [{"addresses": [ADDRESS]}], "start": {"order": "ascending", "anchor": {"kind": "atBeginning"}}})
         }
-        "getTransactionsByRootAddress" => {
+        "getTransactionsByAddress" => {
             json!({"address": ADDRESS, "start": {"order": "descending", "anchor": {"kind": "atHeight", "blockHeight": "9007199254740993"}}})
         }
         "getBlockByHeight" => json!({"blockHeight": "812"}),
@@ -163,7 +163,10 @@ fn result(name: &str) -> Value {
         "getEvents" => {
             json!({"events": [], "nextCursor": null, "oldestIndexedBlockHeight": "0", "latestIndexedBlockHeight": "812"})
         }
-        "getTransactionsByRootAddress" | "getTransactionsByBlock" => {
+        "getTransactionsByAddress" => {
+            json!({"transactions": [], "nextCursor": null, "coverage": {"fromBlockHeight": "1", "throughBlockHeight": "812"}})
+        }
+        "getTransactionsByBlock" => {
             json!({"transactions": [], "nextCursor": null, "oldestIndexedBlockHeight": "0", "latestIndexedBlockHeight": "812"})
         }
         "getBlockByHeight" => json!({
@@ -193,14 +196,14 @@ fn result(name: &str) -> Value {
 }
 
 fn receipt() -> Value {
-    json!({"transactionHash": ADDRESS, "blockHeight": "812", "execution": {"result": "return", "returnData": "0x"}, "events": [], "gasUsed": "9007199254740993"})
+    json!({"transactionHash": ADDRESS, "blockHeight": "812", "execution": {"result": "return", "returnData": "0x"}, "invokedAddresses": [ADDRESS], "events": [], "gasUsed": "9007199254740993"})
 }
 
 #[test]
 fn native_contract_is_the_canonical_serving_artifact() {
     assert_eq!(native::build_spec(), build_spec());
     assert_eq!(build_spec()["info"]["version"], WIRE_FORMAT_VERSION);
-    assert_eq!(WIRE_FORMAT_VERSION, "14.4.0");
+    assert_eq!(WIRE_FORMAT_VERSION, "15.0.0");
 }
 
 #[test]

@@ -8,6 +8,30 @@ use crate::{BlockHeight, ContractAddress, hex::HexBytes, transaction::TxHash};
 /// Maximum canonical Transaction XDR returned by an input read (4 MiB).
 pub const MAX_TRANSACTION_INPUT_BYTES: usize = 4 * 1024 * 1024;
 
+fn invoked_addresses_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut schema = <Vec<ContractAddress>>::json_schema(generator);
+    schema.insert(
+        "maxItems".into(),
+        thruput_xdr::event::kMaxInvokedAddressesPerTransaction.into(),
+    );
+    schema.insert("uniqueItems".into(), true.into());
+    schema
+}
+
+fn read_invoked_addresses<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<ContractAddress>, D::Error> {
+    let addresses = Vec::<ContractAddress>::deserialize(deserializer)?;
+    if addresses.len() > thruput_xdr::event::kMaxInvokedAddressesPerTransaction as usize
+        || addresses.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+    {
+        return Err(serde::de::Error::custom(
+            "invokedAddresses must be bounded and strictly ordered by raw address bytes",
+        ));
+    }
+    Ok(addresses)
+}
+
 fn transaction_input_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     let mut schema = hex_schema(generator);
     schema.insert(
@@ -196,6 +220,10 @@ TransactionReceipt {
     #[schemars(schema_with = "height_schema")]
     block_height: BlockHeight,
     execution: ReceiptExecution,
+    /// Canonical entered-address evidence, retained across failed frames.
+    #[serde(deserialize_with = "read_invoked_addresses")]
+    #[schemars(schema_with = "invoked_addresses_schema")]
+    invoked_addresses: Vec<ContractAddress>,
     events: Vec<EmittedEvent>,
     /// Metered work, not a fee or token burn.
     #[serde(with = "crate::decimal")]

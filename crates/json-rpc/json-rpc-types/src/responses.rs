@@ -157,6 +157,7 @@ macro_rules! scalar_data {
 scalar_data!(
     String,
     u32,
+    bool,
     i32,
     u64,
     i128,

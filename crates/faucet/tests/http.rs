@@ -1600,7 +1600,7 @@ fn poll_timeout(tx_hash: TxHash, status: Option<TransactionStatus>) -> airdrop::
 fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
     serde_json::from_value(
         serde_json::json!({"transactionHash":tx_hash, "blockHeight":"42",
-        "execution":{"result":"return","returnData":"0x"}, "events":[], "gasUsed":"1500"}),
+        "execution":{"result":"return","returnData":"0x"}, "invokedAddresses":[], "events":[], "gasUsed":"1500"}),
     )
     .unwrap()
 }

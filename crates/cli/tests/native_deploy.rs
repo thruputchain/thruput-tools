@@ -208,7 +208,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
     let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", server.local_addr().unwrap());
     let mut module = RpcModule::new(state.clone());
-    module.register_method("getVersionInfo", |_, _, _| json!({"wireFormat":"14.0.0", "implementation":"test", "supportedMethods":["getVersionInfo","getBalance","getNetworkInfo","getChainTip","sendTransaction","getTransactionStatus","getTransactionReceipt"]})).unwrap();
+    module.register_method("getVersionInfo", |_, _, _| json!({"wireFormat":"15.0.0", "implementation":"test", "supportedMethods":["getVersionInfo","getBalance","getNetworkInfo","getChainTip","sendTransaction","getTransactionStatus","getTransactionReceipt"]})).unwrap();
     module
         .register_method(
             "getTransactionStatus",
@@ -256,7 +256,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
         let signed = signed(state.submissions.lock().unwrap().first().unwrap());
         let (hash, address) = identity(&signed);
         let returned = format!("0x{}", hex::encode(thruput_encoding::decode_fixed::<32>(&address).unwrap()));
-        let mut receipt = json!({"transactionHash":hash,"blockHeight":"43","execution":{"result":"return","returnData":returned},"events":[],"gasUsed":"99"});
+        let mut receipt = json!({"transactionHash":hash,"blockHeight":"43","execution":{"result":"return","returnData":returned},"invokedAddresses":[],"events":[],"gasUsed":"99"});
         match state.outcome {
             Outcome::ReceiptHashMismatch => receipt["transactionHash"] = json!(thruput_encoding::encode(&[0xbb; 32])),
             Outcome::MissingReturn => { receipt["execution"].as_object_mut().unwrap().remove("returnData"); },

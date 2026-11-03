@@ -153,11 +153,11 @@ impl thruput_json_rpc_server::native::read::NativeHistoryPlane for GatewayBacken
         handlers::native_history::events(&self.ctx, context, request).await
     }
     #[tracing::instrument(skip_all, fields(address = ?request.address, limit = ?request.limit, has_cursor = request.cursor.is_some()))]
-    async fn native_root_transactions(
+    async fn native_address_transactions(
         &self,
         context: RpcRequestContext,
-        request: input::RootAddressQuery,
-    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        request: input::AddressHistoryQuery,
+    ) -> Result<out::AddressTransactionPage, RpcServerError> {
         let context = self.bounded_context(context);
         handlers::native_history::root_transactions(&self.ctx, context, request).await
     }

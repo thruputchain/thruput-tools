@@ -373,7 +373,7 @@ mod tests {
         let hash = thruput_json_rpc_types::NetworkHashText::from([0xaa; 32]).to_string();
         let admission = json!({"transactionHash":hash,"admission":"future"});
         let status = json!({"status":"future","proof":"retained"});
-        let receipt = json!({"transactionHash":hash,"blockHeight":"1","execution":{"result":"future","proof":"retained"},"events":[],"gasUsed":"1"});
+        let receipt = json!({"transactionHash":hash,"blockHeight":"1","execution":{"result":"future","proof":"retained"},"invokedAddresses":[],"events":[],"gasUsed":"1"});
         for (raw, error) in [
             (
                 admission.clone(),

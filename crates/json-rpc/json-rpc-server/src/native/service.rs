@@ -57,7 +57,7 @@ impl NativeCapabilities {
             | "getTransactionInput"
             | "getBlockByHeight"
             | "getEvents"
-            | "getTransactionsByRootAddress"
+            | "getTransactionsByAddress"
             | "getTransactionsByBlock" => self.indexer,
             "getTransactionStatus" => self.indexer && self.scheduler,
             "getChainTip"
@@ -218,8 +218,8 @@ macro_rules! dispatch {
     (get_events, $s:expr, $r:expr) => {
         $s.reads.get_events($r).await
     };
-    (get_transactions_by_root_address, $s:expr, $r:expr) => {
-        $s.reads.get_transactions_by_root_address($r).await
+    (get_transactions_by_address, $s:expr, $r:expr) => {
+        $s.reads.get_transactions_by_address($r).await
     };
     (get_transactions_by_block, $s:expr, $r:expr) => {
         $s.reads.get_transactions_by_block($r).await

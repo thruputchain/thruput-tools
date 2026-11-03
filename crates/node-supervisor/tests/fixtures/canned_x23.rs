@@ -104,6 +104,7 @@ pub fn committed_set() -> CommittedSet {
             height: BlockHeight::from(height),
             tx: dummy_proposed_transaction(),
             events: TxEventLog {
+                invoked_addresses: VecM(vec![]),
                 tx_hash: SHA256Hash::from(hash),
                 exec_result: ExecResult::ExecResultOK,
                 root_output: InvocationFrameOutput::Return {

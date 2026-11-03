@@ -625,6 +625,7 @@ fn serve_receipts(module: &mut RpcModule<Arc<State>>) {
                 ))
             };
             Ok(Some(TransactionReceipt {
+                invoked_addresses: vec![],
                 transaction_hash: if matches!(*state.outcome.lock().unwrap(), Outcome::ReceiptHash)
                 {
                     TxHash(Base58([9; 32].into()))

@@ -412,9 +412,9 @@ async fn history(
     let root = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let page = rpc
-                .request::<output::TransactionRefPage, _>(
-                    "getTransactionsByRootAddress",
-                    NamedParams(input::RootAddressQuery {
+                .request::<output::AddressTransactionPage, _>(
+                    "getTransactionsByAddress",
+                    NamedParams(input::AddressHistoryQuery {
                         address: sender,
                         start: Some(input::HistoryStart::Ascending {
                             anchor: input::AscendingAnchor::AtBeginning {},
@@ -424,7 +424,7 @@ async fn history(
                     }),
                 )
                 .await?;
-            if page.latest_indexed_block_height >= *height {
+            if page.coverage.through_block_height >= *height {
                 break Ok::<_, jsonrpsee::core::ClientError>(page);
             }
             tokio::time::sleep(Duration::from_millis(20)).await;

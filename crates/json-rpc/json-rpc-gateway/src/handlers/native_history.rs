@@ -6,7 +6,7 @@ use thruput_hogd_backend::native::history as decode;
 use thruput_json_rpc_server::{
     RpcRequestContext, RpcServerError,
     native::read::{
-        validate_block_transaction_page, validate_event_page, validate_root_transaction_page,
+        validate_address_transaction_page, validate_block_transaction_page, validate_event_page,
     },
 };
 use thruput_json_rpc_types::{requests as input, responses as out};
@@ -46,15 +46,15 @@ pub async fn events(
 pub async fn root_transactions(
     ctx: &GatewayContext,
     context: RpcRequestContext,
-    request: input::RootAddressQuery,
-) -> Result<out::TransactionRefPage, RpcServerError> {
+    request: input::AddressHistoryQuery,
+) -> Result<out::AddressTransactionPage, RpcServerError> {
     let client = ctx
         .indexer
         .read()
         .await
         .clone()
         .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
-    let query = decode::root_query(&request)?;
+    let query = decode::address_query(&request)?;
     timed_backend_call(
         &ctx.metrics,
         HealthBackend::Indexer,
@@ -66,8 +66,12 @@ pub async fn root_transactions(
                 .get_transactions_by_address(&query)
                 .await
                 .map(|result| {
-                    let page = decode::transaction_page(result)?;
-                    validate_root_transaction_page(&request, &page, ctx.config.max_cursor_bytes)?;
+                    let page = decode::address_transaction_page(result)?;
+                    validate_address_transaction_page(
+                        &request,
+                        &page,
+                        ctx.config.max_cursor_bytes,
+                    )?;
                     Ok(page)
                 })
         },

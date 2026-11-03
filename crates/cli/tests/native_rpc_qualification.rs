@@ -284,7 +284,7 @@ async fn check_history(
         },
     };
     let output::DecodedResponse::Known(root) = native
-        .get_transactions_by_root_address(input::RootAddressQuery {
+        .get_transactions_by_address(input::AddressHistoryQuery {
             address: Base58(PubkeyAccount::from_public_key_bytes(fixture.owner, 0).address()),
             start: Some(start.clone()),
             cursor: None,
@@ -307,15 +307,22 @@ async fn check_history(
     else {
         return Err(std::io::Error::other("unsupported block history response").into());
     };
-    for page in [root, block] {
-        require(
-            page.transactions.len() == 1
-                && page.transactions[0].transaction_hash == receipt.transaction_hash
-                && page.transactions[0].block_height == receipt.block_height
-                && page.next_cursor.is_none(),
-            "CLI receipt disagrees with native transaction history",
-        )?;
-    }
+    require(
+        root.transactions.len() == 1
+            && root.transactions[0].transaction_hash == receipt.transaction_hash
+            && root.transactions[0].block_height == receipt.block_height
+            && root.transactions[0].is_root_target
+            && root.transactions[0].was_invoked
+            && root.next_cursor.is_none(),
+        "CLI receipt disagrees with native address history",
+    )?;
+    require(
+        block.transactions.len() == 1
+            && block.transactions[0].transaction_hash == receipt.transaction_hash
+            && block.transactions[0].block_height == receipt.block_height
+            && block.next_cursor.is_none(),
+        "CLI receipt disagrees with native block history",
+    )?;
     let output::DecodedResponse::Known(events) = native
         .get_events(input::EventQuery {
             filters: vec![input::EventFilter {

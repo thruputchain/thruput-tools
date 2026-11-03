@@ -7,9 +7,27 @@ use thruput_signing::{
 };
 use thruput_xdr::{PROTOCOL_VERSION, contract::ContractEntrypointID};
 
+fn print_bootstrap_accounts(seed: &str) -> Result<(), serde_json::Error> {
+    let signer = derive_dev_account_signer(&format!("thruput-firehose:{seed}"), 0);
+    let allocation = thruput_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+        thruput_json_rpc_types::base58::Base58(signer.verifying_key_bytes().into()),
+        "1000000000000",
+    );
+    println!("{}", serde_json::to_string(&[allocation])?);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|arg| arg == "--bootstrap-accounts") {
+        let seed = args
+            .get(2)
+            .filter(|seed| !seed.is_empty())
+            .ok_or("usage: submit_traffic --bootstrap-accounts FIXTURE_SEED")?;
+        print_bootstrap_accounts(seed)?;
+        return Ok(());
+    }
     let path = args
         .get(1)
         .ok_or("usage: submit_traffic RUNTIME_MANIFEST COUNT NONCE_START [FIXTURE_SEED]")?;

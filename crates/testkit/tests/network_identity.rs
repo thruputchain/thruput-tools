@@ -10,7 +10,7 @@ async fn endpoint_serving_another_network_is_rejected() {
     let url = format!("http://{}", server.local_addr().unwrap());
     let mut module = RpcModule::new(());
     module.register_method("getVersionInfo", |_, (), _| Ok::<_, ErrorObjectOwned>(serde_json::json!({
-        "wireFormat": "14.0.0", "softwareVersion": "test", "implementation": "test",
+        "wireFormat": "15.0.0", "softwareVersion": "test", "implementation": "test",
         "supportedMethods": ["getNetworkInfo", "sendTransaction", "getTransactionStatus", "getTransactionReceipt", "dev_fundAccount"]
     }))).unwrap();
 

@@ -24,7 +24,7 @@ use crate::tx_json::{
 use crate::tx_utils::format_tx_hash;
 use crate::{CliError, Print};
 
-const ROOT_HISTORY_WARNING: &str = "history includes root invocations only; incoming wallet-wrapped transfers may not appear for recipients";
+const ADDRESS_HISTORY_WARNING: &str = "history includes root targets and entered runtime addresses; asset transfers may not invoke the recipient";
 
 /// Inspect a transaction's public status and committed receipt without waiting.
 pub fn show(
@@ -140,8 +140,8 @@ pub fn list(
         cmd,
         vec![Finding {
             level: FindingLevel::Warn,
-            code: "root_invocation_history_only",
-            message: ROOT_HISTORY_WARNING.into(),
+            code: "address_history_not_asset_ledger",
+            message: ADDRESS_HISTORY_WARNING.into(),
             hint: Some(Cow::Borrowed(
                 "do not treat this page as a complete incoming or outgoing asset ledger",
             )),
@@ -303,7 +303,7 @@ fn print_show(
 }
 
 fn print_list(target_input: &str, address: &str, page: &TransactionRefPage, print: &Print) {
-    print.warn(ROOT_HISTORY_WARNING);
+    print.warn(ADDRESS_HISTORY_WARNING);
     if print.is_quiet() {
         return;
     }

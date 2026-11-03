@@ -381,7 +381,7 @@ async fn walk_root(
             expected[0].block_height.clone()
         }
     };
-    let mut query = input::RootAddressQuery {
+    let mut query = input::AddressHistoryQuery {
         address,
         start: Some(start(order, height)),
         cursor: None,
@@ -391,8 +391,8 @@ async fn walk_root(
     let mut cursors = Vec::new();
     for _ in 0..MAX_PAGES {
         let page = rpc
-            .request::<output::TransactionRefPage, _>(
-                "getTransactionsByRootAddress",
+            .request::<output::AddressTransactionPage, _>(
+                "getTransactionsByAddress",
                 NamedParams(query.clone()),
             )
             .await?;
@@ -418,7 +418,7 @@ async fn walk_root(
 #[derive(Clone)]
 struct SavedCursors {
     events: input::EventQuery,
-    root: input::RootAddressQuery,
+    root: input::AddressHistoryQuery,
     block: input::BlockPageRequest,
 }
 
@@ -438,7 +438,7 @@ async fn save_cursors(
         .await?
         .next_cursor;
     events.start = None;
-    let mut root = input::RootAddressQuery {
+    let mut root = input::AddressHistoryQuery {
         address: faucet,
         start: Some(start(
             IterationOrder::Ascending,
@@ -448,8 +448,8 @@ async fn save_cursors(
         limit: Some(1),
     };
     root.cursor = rpc
-        .request::<output::TransactionRefPage, _>(
-            "getTransactionsByRootAddress",
+        .request::<output::AddressTransactionPage, _>(
+            "getTransactionsByAddress",
             NamedParams(root.clone()),
         )
         .await?
@@ -487,8 +487,8 @@ async fn continuation_pages(rpc: &HttpClient, saved: &SavedCursors) -> Result<se
         .request::<output::EventPage, _>("getEvents", NamedParams(saved.events.clone()))
         .await?;
     let mut root = rpc
-        .request::<output::TransactionRefPage, _>(
-            "getTransactionsByRootAddress",
+        .request::<output::AddressTransactionPage, _>(
+            "getTransactionsByAddress",
             NamedParams(saved.root.clone()),
         )
         .await?;
@@ -555,8 +555,8 @@ async fn require_coverage_errors(rpc: &HttpClient, saved: SavedCursors) -> Resul
             .ok_or_else(|| {
                 std::io::Error::other("lost coverage unexpectedly returned a successful page")
             })?,
-        rpc.request::<output::TransactionRefPage, _>(
-            "getTransactionsByRootAddress",
+        rpc.request::<output::AddressTransactionPage, _>(
+            "getTransactionsByAddress",
             NamedParams(saved.root),
         )
         .await
@@ -576,7 +576,7 @@ async fn require_coverage_errors(rpc: &HttpClient, saved: SavedCursors) -> Resul
     ];
     for (method, error) in [
         "getEvents",
-        "getTransactionsByRootAddress",
+        "getTransactionsByAddress",
         "getTransactionsByBlock",
     ]
     .into_iter()
@@ -687,9 +687,9 @@ async fn check_restored(
     )?;
     for rpc in [local, remote] {
         let page = rpc
-            .request::<output::TransactionRefPage, _>(
-                "getTransactionsByRootAddress",
-                NamedParams(input::RootAddressQuery {
+            .request::<output::AddressTransactionPage, _>(
+                "getTransactionsByAddress",
+                NamedParams(input::AddressHistoryQuery {
                     address: faucet,
                     start: Some(start(
                         IterationOrder::Ascending,
@@ -701,8 +701,8 @@ async fn check_restored(
             )
             .await?;
         require(
-            page.latest_indexed_block_height == receipts[0].block_height
-                && page.latest_indexed_block_height < receipts.last().unwrap().block_height,
+            page.coverage.through_block_height == receipts[0].block_height
+                && page.coverage.through_block_height < receipts.last().unwrap().block_height,
             "snapshot did not restore lower indexed coverage",
         )?;
     }

@@ -95,7 +95,7 @@ fn valid_request(method: &str) -> Value {
         "getEvents" => {
             json!({"filters": [{"addresses": [address()]}], "start": {"order": "ascending", "anchor": {"kind": "atBeginning"}}})
         }
-        "getTransactionsByRootAddress" => {
+        "getTransactionsByAddress" => {
             json!({"address": address(), "start": {"order": "descending", "anchor": {"kind": "atHeight", "blockHeight": "9007199254740993"}}})
         }
         "getBlockByHeight" => json!({"blockHeight": "9223372036854775807"}),
@@ -265,7 +265,7 @@ fn history_cross_field_rules_match_schema() {
     );
     for method in [
         "getEvents",
-        "getTransactionsByRootAddress",
+        "getTransactionsByAddress",
         "getTransactionsByBlock",
     ] {
         let original = valid_request(method);

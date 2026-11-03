@@ -93,7 +93,7 @@ fn has_future_reason(data: &err::ErrorData) -> bool {
 fn receipt() -> Value {
     json!({"transactionHash": HASH, "blockHeight": "42", "execution": {
         "result": "return", "returnData": "0x"
-    }, "events": [], "gasUsed": "9007199254740993"})
+    }, "invokedAddresses": [], "events": [], "gasUsed": "9007199254740993"})
 }
 
 fn cases() -> Vec<(&'static str, i32, Value)> {
@@ -181,7 +181,7 @@ fn all_kinds_codes_and_declared_methods_have_consistent_schemas() {
     }
     assert!(err::method_error_codes("futureMethod").is_none());
     assert!(err::method_data_schema("getBalance", -32031).is_none());
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.4.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "15.0.0");
 }
 
 #[test]

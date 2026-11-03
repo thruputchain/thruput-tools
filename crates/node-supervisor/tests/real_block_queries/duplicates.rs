@@ -274,9 +274,9 @@ async fn history(
     })
     .await??;
     let root = rpc
-        .request::<output::TransactionRefPage, _>(
-            "getTransactionsByRootAddress",
-            NamedParams(input::RootAddressQuery {
+        .request::<output::AddressTransactionPage, _>(
+            "getTransactionsByAddress",
+            NamedParams(input::AddressHistoryQuery {
                 address: transfer.sender,
                 start: Some(input::HistoryStart::Ascending {
                     anchor: input::AscendingAnchor::AtBeginning {},
@@ -294,7 +294,7 @@ async fn history(
         "root history did not retain exactly one original commitment",
     )?;
     require(
-        root.latest_indexed_block_height >= *latest,
+        root.coverage.through_block_height >= *latest,
         "history has not indexed the replay blocks",
     )?;
     event_history(rpc, transfer, expected, latest).await?;

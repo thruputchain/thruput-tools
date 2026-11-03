@@ -131,7 +131,7 @@ async fn server_with_stalled_send(
                     calls.lock().unwrap().push((method, request.clone()));
                     match method {
                         "getVersionInfo" => Ok(json!({
-                            "wireFormat":"14.0.0",
+                            "wireFormat":"15.0.0",
                             "implementation":"test",
                             "supportedMethods":METHODS,
                         })),

@@ -122,14 +122,34 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
     async fn get_transactions_by_address(
         &self,
         query: AddressTransactionQuery,
-    ) -> Result<TransactionRefPageResult, ProgramError> {
+    ) -> Result<thruput_indexer::AddressTransactionRefPageResult, ProgramError> {
         use thruput_indexer::IndexerQueryOutcome as Outcome;
+        use thruput_indexer::{
+            AddressTransactionRef, AddressTransactionRefPage, AddressTransactionRefPageResult,
+        };
         if query.limit >= 10 {
-            return Ok(TransactionRefPageResult::IndexerQueryOk {
-                page: history_page(query.limit),
+            let page = history_page(query.limit);
+            return Ok(AddressTransactionRefPageResult::IndexerQueryOk {
+                page: AddressTransactionRefPage {
+                    refs: VecM(
+                        page.refs
+                            .0
+                            .into_iter()
+                            .map(|item| AddressTransactionRef {
+                                tx_hash: item.tx_hash,
+                                height: item.height,
+                                is_root_target: true,
+                                was_invoked: true,
+                            })
+                            .collect(),
+                    ),
+                    cursor: page.cursor,
+                    oldest_block: page.oldest_block,
+                    latest_block: page.latest_block,
+                },
             });
         }
-        Ok(TransactionRefPageResult::Default {
+        Ok(AddressTransactionRefPageResult::Default {
             outcome: if query.limit == 1 {
                 Outcome::IndexerQueryInvalidCursor.0
             } else {
@@ -279,7 +299,7 @@ async fn check_native_history(ctx: &Arc<GatewayContext>, health: &crate::health:
         cursor: Some(HexBytes(vec![1, 2, 3])),
         limit: Some(limit),
     };
-    let root = |limit| input::RootAddressQuery {
+    let root = |limit| input::AddressHistoryQuery {
         address: thruput_xdr::types::ContractAddress::from([9; 32]).into(),
         start: None,
         cursor: Some(HexBytes(vec![1, 2, 3])),
@@ -298,7 +318,7 @@ async fn check_native_history(ctx: &Arc<GatewayContext>, health: &crate::health:
             .await
             .unwrap_err(),
         backend
-            .native_root_transactions(context(), root(1))
+            .native_address_transactions(context(), root(1))
             .await
             .unwrap_err(),
         backend
@@ -317,7 +337,7 @@ async fn check_native_history(ctx: &Arc<GatewayContext>, health: &crate::health:
             .await
             .unwrap_err(),
         backend
-            .native_root_transactions(context(), root(2))
+            .native_address_transactions(context(), root(2))
             .await
             .unwrap_err(),
         backend
@@ -374,7 +394,7 @@ async fn check_native_history_page_metrics(
             cursor: cursor.clone(),
             limit,
         };
-        let root = input::RootAddressQuery {
+        let root = input::AddressHistoryQuery {
             address,
             start: None,
             cursor: cursor.clone(),
@@ -394,7 +414,7 @@ async fn check_native_history_page_metrics(
             (
                 "root",
                 backend
-                    .native_root_transactions(context(), root)
+                    .native_address_transactions(context(), root)
                     .await
                     .map(|_| ()),
             ),

@@ -21,6 +21,7 @@ fn log(result: ExecResult, output: InvocationFrameOutput) -> TxEventLog {
         exec_result: result,
         root_output: output,
         gas_consumed: u64::MAX,
+        invoked_addresses: VecM(vec![]),
         events: VecM(vec![]),
     }
 }
@@ -34,6 +35,30 @@ fn outputs() -> [InvocationFrameOutput; 3] {
         },
         InvocationFrameOutput::Fault,
     ]
+}
+
+#[test]
+fn failed_receipts_preserve_canonical_invocation_membership() {
+    let mut value = log(
+        ExecResult::ExecResultTxRootFrameReverted,
+        outputs()[1].clone(),
+    );
+    value.invoked_addresses = VecM(vec![[1; 32].into(), [2; 32].into()]);
+    let decoded = receipt(hash(), 42.into(), value).unwrap();
+    assert_eq!(decoded.invoked_addresses.len(), 2);
+    assert_eq!(decoded.invoked_addresses[0].0, [1; 32].into());
+    assert_eq!(decoded.invoked_addresses[1].0, [2; 32].into());
+    assert!(decoded.events.is_empty());
+}
+
+#[test]
+fn malformed_membership_rejects_the_receipt_but_retains_identity() {
+    for addresses in [vec![[2; 32], [1; 32]], vec![[1; 32], [1; 32]]] {
+        let mut value = log(ExecResult::ExecResultOK, outputs()[0].clone());
+        value.invoked_addresses = VecM(addresses.into_iter().map(Into::into).collect());
+        let error = receipt(hash(), 42.into(), value).unwrap_err();
+        assert_eq!(error.observation.unwrap().transaction_hash, hash());
+    }
 }
 fn reason(error: &NativeReadError, expected: Reason) {
     assert!(

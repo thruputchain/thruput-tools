@@ -502,6 +502,7 @@ mod tests {
             Network::offline(),
             &attempt,
             TransactionReceipt {
+                invoked_addresses: vec![],
                 transaction_hash: tx_hash,
                 block_height: BlockHeight::from(7),
                 execution: ReceiptExecution::Return {
@@ -529,6 +530,7 @@ mod tests {
     fn deployment_validation_retains_conflicting_commitment_and_return_bytes() {
         let expected = TxHash(Base58(SHA256Hash::from([1; 32])));
         let observed = TransactionReceipt {
+            invoked_addresses: vec![],
             transaction_hash: expected,
             block_height: 7.into(),
             execution: ReceiptExecution::Return {

@@ -227,56 +227,81 @@ pub fn validate_event_page(
     Ok(())
 }
 
-fn validate_refs(
-    result: &out::TransactionRefPage,
+fn validate_refs<'a>(
+    references: impl Iterator<
+        Item = (
+            &'a BlockHeight,
+            &'a thruput_json_rpc_types::transaction::TxHash,
+        ),
+    > + Clone,
     order: Option<events::IterationOrder>,
 ) -> Result<(), RpcServerError> {
     let mut hashes = std::collections::BTreeSet::new();
-    for item in &result.transactions {
-        let hash: &[u8] = item.transaction_hash.0.0.as_ref();
+    for (_, transaction_hash) in references.clone() {
+        let hash: &[u8] = transaction_hash.0.0.as_ref();
         if !hashes.insert(hash) {
             return Err(invalid("history page repeats a transaction"));
         }
     }
-    let comparisons = result.transactions.windows(2).map(|pair| {
-        let left: &[u8] = pair[0].transaction_hash.0.0.as_ref();
-        let right: &[u8] = pair[1].transaction_hash.0.0.as_ref();
-        (&pair[0].block_height, left).cmp(&(&pair[1].block_height, right))
-    });
+    let comparisons = references
+        .clone()
+        .zip(references.skip(1))
+        .map(|(left, right)| {
+            let left_hash: &[u8] = left.1.0.0.as_ref();
+            let right_hash: &[u8] = right.1.0.0.as_ref();
+            (left.0, left_hash).cmp(&(right.0, right_hash))
+        });
     if !ordered(comparisons, order) {
         return Err(invalid("history references are not strictly ordered"));
     }
     Ok(())
 }
 
-/// Validate a root-address page before recording backend success.
+/// Validate an address-membership page before recording backend success.
 /// The request limit must already contain the effective page limit.
-pub fn validate_root_transaction_page(
-    request: &input::RootAddressQuery,
-    result: &out::TransactionRefPage,
+pub fn validate_address_transaction_page(
+    request: &input::AddressHistoryQuery,
+    result: &out::AddressTransactionPage,
     max_cursor_bytes: usize,
 ) -> Result<(), RpcServerError> {
     page(
         result.transactions.len(),
         result.next_cursor.as_ref(),
-        &result.oldest_indexed_block_height,
-        &result.latest_indexed_block_height,
+        &result.coverage.from_block_height,
+        &result.coverage.through_block_height,
         request.cursor.as_ref(),
         request.limit,
         max_cursor_bytes,
     )?;
-    retained_anchor(request.start.as_ref(), &result.oldest_indexed_block_height)?;
+    retained_anchor(request.start.as_ref(), &result.coverage.from_block_height)?;
+    if *result.coverage.from_block_height < 1 {
+        return Err(invalid("address history coverage cannot include genesis"));
+    }
+    if result.transactions.is_empty() && result.next_cursor.is_some() {
+        return Err(invalid("empty address page has a continuation"));
+    }
+    if let Some(start) = &request.start
+        && anchor(start)?.is_some_and(|height| height > &result.coverage.through_block_height)
+    {
+        return Err(invalid("address anchor is above indexed coverage"));
+    }
     if result.transactions.iter().any(|item| {
         !in_range(
             &item.block_height,
-            &result.oldest_indexed_block_height,
-            &result.latest_indexed_block_height,
+            &result.coverage.from_block_height,
+            &result.coverage.through_block_height,
             request.start.as_ref(),
-        )
+        ) || (!item.is_root_target && !item.was_invoked)
     }) {
         return Err(invalid("reference does not satisfy its history range"));
     }
-    validate_refs(result, request.start.as_ref().and_then(direction))?;
+    validate_refs(
+        result
+            .transactions
+            .iter()
+            .map(|item| (&item.block_height, &item.transaction_hash)),
+        request.start.as_ref().and_then(direction),
+    )?;
     Ok(())
 }
 
@@ -318,7 +343,13 @@ pub fn validate_block_transaction_page(
     {
         return Err(invalid("invalid exact-block reference page"));
     }
-    validate_refs(result, request.start.as_ref().map(|start| start.order))?;
+    validate_refs(
+        result
+            .transactions
+            .iter()
+            .map(|item| (&item.block_height, &item.transaction_hash)),
+        request.start.as_ref().map(|start| start.order),
+    )?;
     Ok(())
 }
 
@@ -346,12 +377,12 @@ impl<C, R: NativeHistoryPlane, V> NativeReadService<C, R, V> {
         .await
     }
 
-    /// Read root-address references without claiming internal-call or transfer history.
+    /// Read deduplicated root-target and entered-address history within coverage.
     #[tracing::instrument(skip_all)]
-    pub async fn get_transactions_by_root_address(
+    pub async fn get_transactions_by_address(
         &self,
-        mut request: input::RootAddressQuery,
-    ) -> RpcResult<out::TransactionRefPage> {
+        mut request: input::AddressHistoryQuery,
+    ) -> RpcResult<out::AddressTransactionPage> {
         let context = self.context();
         self.within(context, async {
             prepare(
@@ -366,9 +397,9 @@ impl<C, R: NativeHistoryPlane, V> NativeReadService<C, R, V> {
             }
             let result = self
                 .state
-                .native_root_transactions(context, request.clone())
+                .native_address_transactions(context, request.clone())
                 .await?;
-            validate_root_transaction_page(&request, &result, self.config.max_cursor_bytes)?;
+            validate_address_transaction_page(&request, &result, self.config.max_cursor_bytes)?;
             Ok(result)
         })
         .await

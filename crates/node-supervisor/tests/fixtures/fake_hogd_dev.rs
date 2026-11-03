@@ -24,8 +24,8 @@ use thruput_indexer::{
     AddressTransactionQuery, EventPage, EventPageResult, EventQuery,
     IndexerBlockExplorer_IndexerBlockExplorer1,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-    TransactionPage, TransactionPageResult, TransactionQuery, TransactionRefPage,
-    TransactionRefPageResult, TxInfoResult,
+    TransactionPage, TransactionPageResult, TransactionQuery, TransactionRefPageResult,
+    TxInfoResult,
 };
 use thruput_json_rpc_types::base58::Base58;
 use thruput_json_rpc_types::protocol_token::protocol_text;
@@ -1623,17 +1623,18 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     async fn get_transactions_by_address(
         &self,
         _arg0: AddressTransactionQuery,
-    ) -> Result<TransactionRefPageResult, ProgramError> {
+    ) -> Result<thruput_indexer::AddressTransactionRefPageResult, ProgramError> {
+        use thruput_indexer::{AddressTransactionRefPage, AddressTransactionRefPageResult};
         if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
         }
         // No canned per-address dataset; report an exhausted stream.
-        Ok(TransactionRefPageResult::IndexerQueryOk {
-            page: TransactionRefPage {
+        Ok(AddressTransactionRefPageResult::IndexerQueryOk {
+            page: AddressTransactionRefPage {
                 refs: VecM(vec![]),
                 cursor: BytesM(vec![]),
                 latest_block: BlockHeight::from(CANNED_HEIGHT_B),
-                oldest_block: BlockHeight::from(0_i64),
+                oldest_block: BlockHeight::from(1_i64),
             },
         })
     }

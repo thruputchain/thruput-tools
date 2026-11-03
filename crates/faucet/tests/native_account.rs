@@ -120,7 +120,7 @@ async fn hosted_airdrops_use_native_authentication_and_distinct_transaction_nonc
         .unwrap();
     module.register_method("getVersionInfo", |params, _, _| {
         let _: requests::EmptyRequest = params.parse()?;
-        Ok::<_, ErrorObjectOwned>(serde_json::json!({"wireFormat":"14.0.0", "implementation":"test",
+        Ok::<_, ErrorObjectOwned>(serde_json::json!({"wireFormat":"15.0.0", "implementation":"test",
             "supportedMethods":["getNetworkInfo","getChainTip","sendTransaction","getTransactionReceipt","getTransactionStatus"]}))
     }).unwrap();
     module
@@ -192,7 +192,7 @@ fn submitter_rejects_address_of_another_account_nonce() {
 async fn hosted_receipt_wait_validates_native_identity_execution_and_events() {
     let hash = TxHash(Base58([0x22; 32].into()));
     let receipt = serde_json::json!({
-        "transactionHash":hash, "blockHeight":"42", "gasUsed":"7", "events":[],
+        "transactionHash":hash, "blockHeight":"42", "gasUsed":"7", "invokedAddresses":[], "events":[],
         "execution":{"result":"return", "returnData":"0x0102"}
     });
     let value = Arc::new(Mutex::new(receipt.clone()));
@@ -201,7 +201,7 @@ async fn hosted_receipt_wait_validates_native_identity_execution_and_events() {
     let mut module = RpcModule::new(value.clone());
     module.register_method("getVersionInfo", |params, _, _| {
         let _: requests::EmptyRequest = params.parse()?;
-        Ok::<_, ErrorObjectOwned>(serde_json::json!({"wireFormat":"14.0.0", "implementation":"test",
+        Ok::<_, ErrorObjectOwned>(serde_json::json!({"wireFormat":"15.0.0", "implementation":"test",
             "supportedMethods":["getNetworkInfo","getChainTip","sendTransaction","getTransactionReceipt","getTransactionStatus"]}))
     }).unwrap();
     module

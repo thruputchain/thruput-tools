@@ -46,7 +46,7 @@ pub enum NativeRpcError {
         #[source]
         source: Box<NativeClientError>,
     },
-    #[error("incompatible native RPC wire format: {actual}; expected major 14")]
+    #[error("incompatible native RPC wire format: {actual}; expected major 15")]
     WireFormat { actual: String },
     #[error("native RPC endpoint does not advertise required methods: {methods:?}")]
     MissingMethods { methods: Vec<String> },
@@ -76,7 +76,7 @@ fn known<T>(
     }
 }
 
-/// Require native wire major 14 and every caller-selected method before use.
+/// Require native wire major 15 and every caller-selected method before use.
 /// Discovery is queried once; there is no legacy-name fallback. Missing or
 /// malformed discovery fields are incompatible discovery errors retaining the
 /// original cause; transport outages remain ordinary call failures.
@@ -146,7 +146,7 @@ fn compatible_wire_format(value: &str) -> bool {
         };
         *component = number;
     }
-    parts.next().is_none() && version[0] == 14
+    parts.next().is_none() && version[0] == 15
 }
 
 /// Verify signing identity against an independently configured network hash.

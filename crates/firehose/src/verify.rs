@@ -14,7 +14,7 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 pub(crate) fn verify(pulled: &EventIndexerPulledBlock) -> Result<(), Error> {
     let payload = &pulled.block.payload;
     let value = &payload.consensus_value;
-    if payload.format_version != 2 || *value.proposal_header.block_height < 0 {
+    if payload.format_version != 3 || *value.proposal_header.block_height < 0 {
         return Err(invalid("unsupported payload format or negative height"));
     }
     if encode(&pulled.block.identity.consensus_hash)? != digest(&encode(value)?) {
@@ -25,6 +25,15 @@ pub(crate) fn verify(pulled: &EventIndexerPulledBlock) -> Result<(), Error> {
     }
     let mut txs = Vec::with_capacity(payload.tx_bodies.len());
     for (event, body) in payload.event_logs.iter().zip(payload.tx_bodies.iter()) {
+        if event.invoked_addresses.len()
+            > thruput_xdr::event::kMaxInvokedAddressesPerTransaction as usize
+            || event
+                .invoked_addresses
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(invalid("noncanonical invoked addresses"));
+        }
         let hash = digest(&encode(&body.signed_tx.tx)?);
         if encode(&event.tx_hash)? != hash {
             return Err(invalid("transaction body hash mismatch"));
@@ -72,5 +81,24 @@ mod tests {
                 .to_string()
                 .contains("duplicate transaction hash")
         );
+    }
+
+    #[test]
+    fn rejects_noncanonical_invocation_membership() {
+        let hex: String = include_str!("../tests/fixtures/bootstrap.hex")
+            .split_whitespace()
+            .collect();
+        let block: EventIndexerPulledBlock = xdrs::txs::decode(&hex::decode(hex).unwrap()).unwrap();
+        for addresses in [vec![[2; 32], [1; 32]], vec![[1; 32], [1; 32]]] {
+            let mut malformed = block.clone();
+            malformed.block.payload.event_logs.0[0].invoked_addresses.0 =
+                addresses.into_iter().map(Into::into).collect();
+            assert!(
+                verify(&malformed)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("noncanonical invoked addresses")
+            );
+        }
     }
 }

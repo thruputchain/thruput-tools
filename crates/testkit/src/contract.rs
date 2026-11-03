@@ -569,6 +569,7 @@ mod tests {
 
     fn receipt(return_data: Option<Vec<u8>>) -> TransactionReceipt {
         TransactionReceipt {
+            invoked_addresses: vec![],
             transaction_hash: TxHash(Base58(SHA256Hash::from([1; 32]))),
             block_height: BlockHeight::from(1),
             execution: ReceiptExecution::Return {

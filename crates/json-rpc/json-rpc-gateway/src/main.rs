@@ -743,7 +743,7 @@ mod tests {
                 "getTransactionStatus",
                 "getBlockByHeight",
                 "getEvents",
-                "getTransactionsByRootAddress",
+                "getTransactionsByAddress",
                 "getTransactionsByBlock",
             ] {
                 assert_eq!(methods.contains(&method), mask & 1 != 0, "{method}: {mask}");

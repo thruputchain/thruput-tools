@@ -56,8 +56,10 @@ macro_rules! native_methods {
             get_contract_artifact("getContractArtifact", named, plain): $crate::types::requests::ContractArtifactQuery => $crate::types::responses::ContractArtifactResult;
             /// Scan indexed events matching the supplied filters.
             get_events("getEvents", named, plain): $crate::types::requests::EventQuery => $crate::types::responses::EventPage;
-            /// Read transactions whose root invocation targets the address, excluding internal calls and incoming transfers.
-            get_transactions_by_root_address("getTransactionsByRootAddress", named, plain): $crate::types::requests::RootAddressQuery => $crate::types::responses::TransactionRefPage;
+            /// Read each transaction once when its root targets the address or its runtime frame entered.
+            /// Relationship flags are execution evidence, not proof of call success or a transfer.
+            /// Coverage is inclusive and pinned during pagination; missing history is an error.
+            get_transactions_by_address("getTransactionsByAddress", named, plain): $crate::types::requests::AddressHistoryQuery => $crate::types::responses::AddressTransactionPage;
             /// Read committed block metadata, or null when unavailable.
             get_block_by_height("getBlockByHeight", named, plain): $crate::types::requests::BlockQuery => $crate::types::responses::BlockResult;
             /// Read a page of transactions in a committed block.

@@ -281,13 +281,13 @@ impl thruput_json_rpc_server::native::read::NativeHistoryPlane for HogdDevReadBa
         .await
     }
     #[tracing::instrument(skip_all, fields(address = ?request.address, limit = ?request.limit, has_cursor = request.cursor.is_some()))]
-    async fn native_root_transactions(
+    async fn native_address_transactions(
         &self,
         context: RpcRequestContext,
-        request: thruput_json_rpc_types::requests::RootAddressQuery,
-    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        request: thruput_json_rpc_types::requests::AddressHistoryQuery,
+    ) -> Result<out::AddressTransactionPage, RpcServerError> {
         within_request_deadline(context, async {
-            let query = decode::history::root_query(&request)?;
+            let query = decode::history::address_query(&request)?;
             let result = self
                 .indexer
                 .get_transactions_by_address(&query)
@@ -295,7 +295,7 @@ impl thruput_json_rpc_server::native::read::NativeHistoryPlane for HogdDevReadBa
                 .map_err(|error| {
                     RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {error}"))
                 })?;
-            decode::history::transaction_page(result)
+            decode::history::address_transaction_page(result)
         })
         .await
     }
@@ -343,13 +343,13 @@ impl NativeHistoryPlane for HogdDevStorageReadBackend {
         Err(RpcServerError::NotImplemented("getEvents".into()))
     }
     #[tracing::instrument(skip_all)]
-    async fn native_root_transactions(
+    async fn native_address_transactions(
         &self,
         _context: RpcRequestContext,
-        _request: input::RootAddressQuery,
-    ) -> Result<out::TransactionRefPage, RpcServerError> {
+        _request: input::AddressHistoryQuery,
+    ) -> Result<out::AddressTransactionPage, RpcServerError> {
         Err(RpcServerError::NotImplemented(
-            "getTransactionsByRootAddress".into(),
+            "getTransactionsByAddress".into(),
         ))
     }
     #[tracing::instrument(skip_all)]

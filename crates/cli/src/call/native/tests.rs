@@ -73,6 +73,7 @@ fn prepared() -> PreparedCall {
 }
 fn receipt(prepared: &PreparedCall, execution: ReceiptExecution) -> TransactionReceipt {
     TransactionReceipt {
+        invoked_addresses: vec![],
         transaction_hash: prepared.signed.tx_hash(),
         block_height: BlockHeight::from(9_007_199_254_740_993),
         execution,
@@ -85,7 +86,7 @@ fn receipt(prepared: &PreparedCall, execution: ReceiptExecution) -> TransactionR
     }
 }
 fn discovery() -> Value {
-    json!({"wireFormat":"14.0.0","supportedMethods":REQUIRED_METHODS,"implementation":"test"})
+    json!({"wireFormat":"15.0.0","supportedMethods":REQUIRED_METHODS,"implementation":"test"})
 }
 fn network_result() -> Value {
     json!({"networkHash":NetworkHash::from(network().into_inner())})
@@ -372,7 +373,7 @@ async fn uncertain_submission_preserves_original_error_and_does_not_poll_or_retr
 async fn unsupported_receipt_preserves_raw_result_and_commitment() {
     let prepared = prepared();
     let hash = prepared.signed.tx_hash();
-    let raw = json!({"transactionHash":hash,"blockHeight":"42","execution":{"result":"future","diagnostic":[1,2]},"events":[],"gasUsed":"1","extra":true});
+    let raw = json!({"transactionHash":hash,"blockHeight":"42","execution":{"result":"future","diagnostic":[1,2]},"invokedAddresses":[],"events":[],"gasUsed":"1","extra":true});
     let (client, _, handle, _) = endpoint(vec![
         ("getVersionInfo", Ok(discovery())),
         ("getNetworkInfo", Ok(network_result())),

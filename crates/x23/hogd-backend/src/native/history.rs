@@ -115,8 +115,8 @@ pub fn event_query(value: &input::EventQuery) -> Result<wire::EventQuery, RpcSer
 }
 
 /// Convert a validated root-address request. The indexer owns cursor binding.
-pub fn root_query(
-    value: &input::RootAddressQuery,
+pub fn address_query(
+    value: &input::AddressHistoryQuery,
 ) -> Result<wire::AddressTransactionQuery, RpcServerError> {
     let (order, anchor) = position(value.start.as_ref())?;
     Ok(wire::AddressTransactionQuery {
@@ -217,7 +217,7 @@ pub fn event_page(value: wire::EventPageResult) -> Result<out::EventPage, RpcSer
     })
 }
 
-/// Project root-address or exact-block references without weakening failures.
+/// Project exact-block references without weakening failures.
 pub fn transaction_page(
     value: wire::TransactionRefPageResult,
 ) -> Result<out::TransactionRefPage, RpcServerError> {
@@ -244,6 +244,53 @@ pub fn transaction_page(
         next_cursor: next_cursor(page.cursor),
         oldest_indexed_block_height: page.oldest_block,
         latest_indexed_block_height: page.latest_block,
+    })
+}
+
+/// Project committed address membership, keeping coverage and relationship evidence.
+pub fn address_transaction_page(
+    value: wire::AddressTransactionRefPageResult,
+) -> Result<out::AddressTransactionPage, RpcServerError> {
+    let page = match value {
+        wire::AddressTransactionRefPageResult::IndexerQueryOk { page } => page,
+        wire::AddressTransactionRefPageResult::Default { outcome } => {
+            return Err(query_error(outcome));
+        }
+        _ => {
+            return Err(invalid(
+                Reason::UnsupportedValue,
+                "unknown address-page result",
+            ));
+        }
+    };
+    if page
+        .refs
+        .0
+        .iter()
+        .any(|item| !item.is_root_target && !item.was_invoked)
+    {
+        return Err(invalid(
+            Reason::InvalidEncoding,
+            "address reference has no relationship",
+        ));
+    }
+    Ok(out::AddressTransactionPage {
+        transactions: page
+            .refs
+            .0
+            .into_iter()
+            .map(|value| out::AddressTransactionRef {
+                transaction_hash: TxHash(Base58(value.tx_hash)),
+                block_height: value.height,
+                is_root_target: value.is_root_target,
+                was_invoked: value.was_invoked,
+            })
+            .collect(),
+        next_cursor: next_cursor(page.cursor),
+        coverage: out::AddressHistoryCoverage {
+            from_block_height: page.oldest_block,
+            through_block_height: page.latest_block,
+        },
     })
 }
 

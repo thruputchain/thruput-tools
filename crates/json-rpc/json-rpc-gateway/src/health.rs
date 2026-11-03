@@ -1661,7 +1661,7 @@ mod tests {
         async fn get_transactions_by_address(
             &self,
             _query: AddressTransactionQuery,
-        ) -> Result<TransactionRefPageResult, ProgramError> {
+        ) -> Result<thruput_indexer::AddressTransactionRefPageResult, ProgramError> {
             panic!("probe isolation test should only issue transaction lookups")
         }
 
@@ -2016,7 +2016,7 @@ mod tests {
         async fn get_transactions_by_address(
             &self,
             _query: AddressTransactionQuery,
-        ) -> Result<TransactionRefPageResult, ProgramError> {
+        ) -> Result<thruput_indexer::AddressTransactionRefPageResult, ProgramError> {
             panic!("lifecycle test should not query transactions by address")
         }
 
@@ -2297,7 +2297,7 @@ mod tests {
         async fn get_transactions_by_address(
             &self,
             _query: AddressTransactionQuery,
-        ) -> Result<TransactionRefPageResult, ProgramError> {
+        ) -> Result<thruput_indexer::AddressTransactionRefPageResult, ProgramError> {
             panic!("reconnect test should not issue indexer data RPCs")
         }
 

@@ -61,7 +61,7 @@ core_results! {
     artifact("getContractArtifact"): req::ContractArtifactQuery => res::ContractArtifactResult,
     effective("getEffectiveContract"): req::EffectiveContractQuery => res::EffectiveContractResult,
     events("getEvents"): req::EventQuery => res::EventPage,
-    root("getTransactionsByRootAddress"): req::RootAddressQuery => res::TransactionRefPage,
+    address("getTransactionsByAddress"): req::AddressHistoryQuery => res::AddressTransactionPage,
     block("getBlockByHeight"): req::BlockQuery => res::BlockResult,
     block_transactions("getTransactionsByBlock"): req::BlockPageRequest => res::BlockTransactionPage,
 }
@@ -85,7 +85,7 @@ fn invocation() -> Value {
     json!({"output": {"result": "return", "returnData": "0x"}, "events": [event()], "gasUsed": "9007199254740993"})
 }
 fn receipt() -> Value {
-    json!({"transactionHash": identifier(), "blockHeight": "42", "execution": {"result": "return", "returnData": "0x"}, "events": [event()], "gasUsed": "9007199254740993"})
+    json!({"transactionHash": identifier(), "blockHeight": "42", "execution": {"result": "return", "returnData": "0x"}, "invokedAddresses": [identifier()], "events": [event()], "gasUsed": "9007199254740993"})
 }
 fn costs() -> Value {
     json!({"baseDataItemCost": "1", "bytestringCostPerByte": "2", "baseContractDeploymentCost": "3",
@@ -140,7 +140,11 @@ fn valid(method: &str) -> Value {
             json!({"events": [{"transactionHash": identifier(), "blockHeight": "42", "sequenceNumber": 0, "event": event()}],
             "nextCursor": "0x01ab", "oldestIndexedBlockHeight": "0", "latestIndexedBlockHeight": "43"})
         }
-        "getTransactionsByRootAddress" | "getTransactionsByBlock" => {
+        "getTransactionsByAddress" => {
+            json!({"transactions": [{"transactionHash": identifier(), "blockHeight": "42", "isRootTarget": false, "wasInvoked": true}],
+            "nextCursor": null, "coverage": {"fromBlockHeight": "1", "throughBlockHeight": "43"}})
+        }
+        "getTransactionsByBlock" => {
             json!({"transactions": [{"transactionHash": identifier(), "blockHeight": "42"}],
             "nextCursor": null, "oldestIndexedBlockHeight": "0", "latestIndexedBlockHeight": "43"})
         }
@@ -192,7 +196,7 @@ fn all_core_results_have_known_schemas_and_roundtrip_without_legacy_fields() {
     for method in ["getTransactionReceipt", "getBlockByHeight"] {
         check(method, &Value::Null, Some(true), true);
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.4.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "15.0.0");
 }
 
 #[test]
@@ -247,7 +251,7 @@ fn nullable_members_are_required_and_absence_is_not_inferred() {
         ("getStorage", "item"),
         ("getRegisteredAuth", "configuration"),
         ("getEvents", "nextCursor"),
-        ("getTransactionsByRootAddress", "nextCursor"),
+        ("getTransactionsByAddress", "nextCursor"),
         ("getTransactionsByBlock", "nextCursor"),
     ] {
         let mut value = valid(method);

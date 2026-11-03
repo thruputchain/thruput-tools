@@ -90,11 +90,11 @@ fn all_range_anchors_keep_the_requested_direction() {
             pagination::BlockAnchor::AnchorAtHeight { height: 4.into() },
         ),
     ] {
-        let request: input::RootAddressQuery = serde_json::from_value(json!({
+        let request: input::AddressHistoryQuery = serde_json::from_value(json!({
             "address":address(), "start": start, "limit": 4
         }))
         .unwrap();
-        let query = root_query(&request).unwrap();
+        let query = address_query(&request).unwrap();
         assert_eq!(query.address, address().0);
         assert_eq!(query.anchor, anchor);
         assert_eq!(
@@ -115,7 +115,7 @@ fn continuations_forward_cursor_bytes_verbatim() {
         "filters": [{"addresses": [address()]}], "cursor": "0x00ff1200", "limit": 13
     }))
     .unwrap();
-    let root: input::RootAddressQuery = serde_json::from_value(json!({
+    let root: input::AddressHistoryQuery = serde_json::from_value(json!({
         "address": address(), "cursor": "0x00ff1200", "limit": 13
     }))
     .unwrap();
@@ -124,7 +124,7 @@ fn continuations_forward_cursor_bytes_verbatim() {
     }))
     .unwrap();
     assert_eq!(event_query(&event).unwrap().cursor.0, vec![0, 255, 18, 0]);
-    assert_eq!(root_query(&root).unwrap().cursor.0, vec![0, 255, 18, 0]);
+    assert_eq!(address_query(&root).unwrap().cursor.0, vec![0, 255, 18, 0]);
     let query = block_query(&block);
     assert_eq!(query.cursor.0, vec![0, 255, 18, 0]);
     assert_eq!(query.height, 99.into());
@@ -229,6 +229,42 @@ fn empty_nonterminal_pages_remain_nonterminal() {
         );
         assert_eq!(page.oldest_indexed_block_height, 2.into());
         assert_eq!(page.latest_indexed_block_height, 20.into());
+    }
+}
+
+#[test]
+fn address_pages_preserve_relationships_and_coverage() {
+    for (is_root_target, was_invoked) in
+        [(true, false), (false, true), (true, true), (false, false)]
+    {
+        let result =
+            address_transaction_page(wire::AddressTransactionRefPageResult::IndexerQueryOk {
+                page: wire::AddressTransactionRefPage {
+                    refs: VecM(vec![wire::AddressTransactionRef {
+                        tx_hash: [7; 32].into(),
+                        height: 9.into(),
+                        is_root_target,
+                        was_invoked,
+                    }]),
+                    cursor: BytesM(vec![1, 2]),
+                    oldest_block: 4.into(),
+                    latest_block: 12.into(),
+                },
+            });
+        if !is_root_target && !was_invoked {
+            assert!(matches!(
+                result,
+                Err(RpcServerError::BackendDataInvalid { .. })
+            ));
+            continue;
+        }
+        let page = result.unwrap();
+        assert_eq!(page.transactions.len(), 1);
+        assert_eq!(page.transactions[0].is_root_target, is_root_target);
+        assert_eq!(page.transactions[0].was_invoked, was_invoked);
+        assert_eq!(page.coverage.from_block_height, 4.into());
+        assert_eq!(page.coverage.through_block_height, 12.into());
+        assert_eq!(page.next_cursor, Some(HexBytes(vec![1, 2])));
     }
 }
 

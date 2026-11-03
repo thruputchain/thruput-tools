@@ -646,7 +646,7 @@ async fn check_discovery(native: &NativeClient<HttpClient>) -> TestResult {
         "getTransactionReceipt",
         "getBlockByHeight",
         "getEvents",
-        "getTransactionsByRootAddress",
+        "getTransactionsByAddress",
         "getTransactionsByBlock",
     ];
     expected_methods.sort_unstable();
@@ -787,7 +787,7 @@ async fn check_root_history(
     recipient: ContractAddress,
     receipts: [&output::TransactionReceipt; 2],
 ) -> TestResult {
-    let mut root_query = input::RootAddressQuery {
+    let mut root_query = input::AddressHistoryQuery {
         address: sender,
         start: Some(history_start()),
         cursor: None,
@@ -795,7 +795,7 @@ async fn check_root_history(
     };
     let first = known(
         native
-            .get_transactions_by_root_address(root_query.clone())
+            .get_transactions_by_address(root_query.clone())
             .await?,
     )?;
     require(
@@ -810,16 +810,16 @@ async fn check_root_history(
     root_query.cursor = Some(cursor);
     let mut changed = root_query.clone();
     changed.address = recipient;
-    require_invalid_cursor(native.get_transactions_by_root_address(changed).await)?;
+    require_invalid_cursor(native.get_transactions_by_address(changed).await)?;
     root_query.limit = Some(10);
-    let rest = known(native.get_transactions_by_root_address(root_query).await?)?;
+    let rest = known(native.get_transactions_by_address(root_query).await?)?;
     require(
         rest.transactions.len() == 1
             && rest.transactions[0].transaction_hash == receipts[1].transaction_hash
             && rest.next_cursor.is_none(),
         "root continuation duplicated or omitted a transaction, or ignored a changed limit",
     )?;
-    let mut descending = input::RootAddressQuery {
+    let mut descending = input::AddressHistoryQuery {
         address: sender,
         start: Some(input::HistoryStart::Descending {
             anchor: input::DescendingAnchor::AtEnd {},
@@ -829,7 +829,7 @@ async fn check_root_history(
     };
     let last = known(
         native
-            .get_transactions_by_root_address(descending.clone())
+            .get_transactions_by_address(descending.clone())
             .await?,
     )?;
     require(
@@ -841,7 +841,7 @@ async fn check_root_history(
     descending.cursor = Some(last.next_cursor.ok_or_else(|| {
         std::io::Error::other("descending root history omitted its continuation")
     })?);
-    let previous = known(native.get_transactions_by_root_address(descending).await?)?;
+    let previous = known(native.get_transactions_by_address(descending).await?)?;
     require(
         previous.transactions.len() == 1
             && previous.transactions[0].transaction_hash == receipts[0].transaction_hash
@@ -850,7 +850,7 @@ async fn check_root_history(
     )?;
     let incoming = known(
         native
-            .get_transactions_by_root_address(input::RootAddressQuery {
+            .get_transactions_by_address(input::AddressHistoryQuery {
                 address: recipient,
                 start: Some(history_start()),
                 cursor: None,

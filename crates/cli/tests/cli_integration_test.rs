@@ -11697,6 +11697,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
         "transactionHash": hash,
         "blockHeight": "42",
         "execution": { "result": "return", "returnData": "0x0506" },
+        "invokedAddresses": [],
         "events": [event.clone()],
         "gasUsed": "1500",
     });
@@ -11756,6 +11757,7 @@ fn tx_show_committed_height_handles_indexer_catching_up() {
                     "transactionHash": hash,
                     "blockHeight": "42",
                     "execution": { "result": "return", "returnData": "0x" },
+                    "invokedAddresses": [],
                     "events": [],
                     "gasUsed": "1500",
                 })
@@ -11848,6 +11850,7 @@ fn tx_show_human_output_includes_raw_committed_receipt_data() {
             "transactionHash": hash,
             "blockHeight": "43",
             "execution": { "result": "abort", "abortData": "0xeeff" },
+            "invokedAddresses": [],
             "events": [event],
             "gasUsed": "1500",
         }))),
@@ -11963,6 +11966,7 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
             "transactionHash": hash,
             "blockHeight": "52",
             "execution": { "result": "return", "returnData": "0x" },
+            "invokedAddresses": [],
             "events": [],
             "gasUsed": "1500",
         }))),
@@ -11981,6 +11985,7 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
         stdout["data"]["receipt"],
         serde_json::json!({
             "transactionHash":hash, "blockHeight":"52", "gasUsed":"1500",
+            "invokedAddresses": [],
             "execution":{"result":"return","returnData":"0x"}, "events":[],
         })
     );
@@ -12064,6 +12069,7 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
                 "transactionHash": thruput_encoding::encode(&[0xef; 32]),
                 "blockHeight": "61",
                 "execution": { "result": "return", "returnData": "0x" },
+                "invokedAddresses": [],
                 "events": [],
                 "gasUsed": "1500",
             }),
@@ -12074,6 +12080,7 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
                 "transactionHash": hash,
                 "blockHeight": "62",
                 "execution": { "result": "return", "returnData": "0x" },
+                "invokedAddresses": [],
                 "events": [],
                 "gasUsed": "1500",
             }),
@@ -12370,7 +12377,7 @@ fn tx_show_receipt_survives_failed_or_unsupported_status_lookup() {
     ] {
         let tmp = TempDir::new().unwrap();
         let hash = thruput_encoding::encode(&[0xab; 32]);
-        let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","events":[],"execution":{"result":"return","returnData":"0x0102"}});
+        let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","invokedAddresses":[],"events":[],"execution":{"result":"return","returnData":"0x0102"}});
         let (rpc_url, server) =
             spawn_tx_show_rpc(&hash, status, Some(RpcReply::Result(receipt.clone())));
         let output = thruput()
@@ -12440,7 +12447,7 @@ fn tx_show_keeps_observed_advisory_status_with_an_authoritative_receipt() {
     ] {
         let tmp = TempDir::new().unwrap();
         let hash = thruput_encoding::encode(&[0xab; 32]);
-        let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","events":[],"execution":{"result":"return","returnData":"0x"}});
+        let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","invokedAddresses":[],"events":[],"execution":{"result":"return","returnData":"0x"}});
         let (url, server) = spawn_tx_show_rpc(
             &hash,
             RpcReply::Result(status.clone()),
@@ -12468,7 +12475,7 @@ fn tx_show_keeps_observed_advisory_status_with_an_authoritative_receipt() {
 fn tx_show_human_discloses_receipt_derived_status_after_lookup_failure() {
     let tmp = TempDir::new().unwrap();
     let hash = thruput_encoding::encode(&[0xab; 32]);
-    let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","events":[],"execution":{"result":"return","returnData":"0x"}});
+    let receipt = serde_json::json!({"transactionHash":hash,"blockHeight":"42","gasUsed":"1","invokedAddresses":[],"events":[],"execution":{"result":"return","returnData":"0x"}});
     let (url, server) = spawn_tx_show_rpc(
         &hash,
         RpcReply::Error(-32050, "scheduler offline"),
@@ -12561,12 +12568,11 @@ fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
     });
     let page = serde_json::json!({
         "transactions": [
-            { "transactionHash": first_hash, "blockHeight": "90" },
-            { "transactionHash": second_hash, "blockHeight": "80" },
+            { "transactionHash": first_hash, "blockHeight": "90", "isRootTarget": true, "wasInvoked": true },
+            { "transactionHash": second_hash, "blockHeight": "80", "isRootTarget": false, "wasInvoked": true },
         ],
         "nextCursor": "0xaabb",
-        "latestIndexedBlockHeight": "100",
-        "oldestIndexedBlockHeight": "7",
+        "coverage": { "fromBlockHeight": "7", "throughBlockHeight": "100" },
     });
     let (rpc_url, rpc_server) = spawn_tx_list_rpc(expected_query, RpcReply::Result(page));
 
@@ -12598,8 +12604,8 @@ fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
         stdout["warnings"],
         serde_json::json!([{
             "level": "warn",
-            "code": "root_invocation_history_only",
-            "message": "history includes root invocations only; incoming wallet-wrapped transfers may not appear for recipients",
+            "code": "address_history_not_asset_ledger",
+            "message": "history includes root targets and entered runtime addresses; asset transfers may not invoke the recipient",
             "hint": "do not treat this page as a complete incoming or outgoing asset ledger",
         }])
     );
@@ -12639,8 +12645,7 @@ fn tx_list_continuation_forwards_cursor_and_endpoint_owned_limit() {
         RpcReply::Result(serde_json::json!({
             "transactions": [],
             "nextCursor": "0x0102",
-            "latestIndexedBlockHeight": "100",
-            "oldestIndexedBlockHeight": "0",
+            "coverage": { "fromBlockHeight": "1", "throughBlockHeight": "100" },
         })),
     );
 
@@ -12680,12 +12685,11 @@ fn tx_list_rejects_page_larger_than_requested_limit() {
         }),
         RpcReply::Result(serde_json::json!({
             "transactions": [
-                { "transactionHash": thruput_encoding::encode(&[0x66; 32]), "blockHeight": "2" },
-                { "transactionHash": thruput_encoding::encode(&[0x67; 32]), "blockHeight": "1" },
+                { "transactionHash": thruput_encoding::encode(&[0x66; 32]), "blockHeight": "2", "isRootTarget": true, "wasInvoked": true },
+                { "transactionHash": thruput_encoding::encode(&[0x67; 32]), "blockHeight": "1", "isRootTarget": true, "wasInvoked": true },
             ],
             "nextCursor": null,
-            "latestIndexedBlockHeight": "2",
-            "oldestIndexedBlockHeight": "0",
+            "coverage": { "fromBlockHeight": "1", "throughBlockHeight": "2" },
         })),
     );
 
@@ -12713,7 +12717,7 @@ fn tx_list_rejects_page_larger_than_requested_limit() {
         stderr["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("native root history exceeded the requested page limit")
+            .contains("native address history exceeded the requested page limit")
     );
     assert_eq!(stderr["error"]["details"]["requestedLimit"], 1);
 }
@@ -12732,8 +12736,7 @@ fn tx_list_accepts_empty_exhausted_page() {
         RpcReply::Result(serde_json::json!({
             "transactions": [],
             "nextCursor": null,
-            "latestIndexedBlockHeight": "9",
-            "oldestIndexedBlockHeight": "2",
+            "coverage": { "fromBlockHeight": "2", "throughBlockHeight": "9" },
         })),
     );
 
@@ -12763,8 +12766,7 @@ fn tx_list_human_output_marks_exhausted_empty_page() {
         RpcReply::Result(serde_json::json!({
             "transactions": [],
             "nextCursor": null,
-            "latestIndexedBlockHeight": "9",
-            "oldestIndexedBlockHeight": "2",
+            "coverage": { "fromBlockHeight": "2", "throughBlockHeight": "9" },
         })),
     );
 
@@ -12804,8 +12806,7 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
             RpcReply::Result(serde_json::json!({
                 "transactions": [],
                 "nextCursor": null,
-                "latestIndexedBlockHeight": "1",
-                "oldestIndexedBlockHeight": "0",
+                "coverage": { "fromBlockHeight": "1", "throughBlockHeight": "1" },
             })),
         );
         match target_kind {
@@ -12981,8 +12982,7 @@ fn tx_list_human_output_marks_sparse_page_and_reusable_cursor() {
         RpcReply::Result(serde_json::json!({
             "transactions": [],
             "nextCursor": "0xcafe",
-            "latestIndexedBlockHeight": "20",
-            "oldestIndexedBlockHeight": "3",
+            "coverage": { "fromBlockHeight": "3", "throughBlockHeight": "20" },
         })),
     );
 
@@ -12996,8 +12996,8 @@ fn tx_list_human_output_marks_sparse_page_and_reusable_cursor() {
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("root invocations only"));
-    assert!(stderr.contains("incoming wallet-wrapped transfers may not appear"));
+    assert!(stderr.contains("root targets and entered runtime addresses"));
+    assert!(stderr.contains("asset transfers may not invoke the recipient"));
     assert!(!stderr.contains("target:"));
     assert!(stderr.contains(&format!("address: {address}")));
     assert!(stderr.contains("transactions: none in this page"));
@@ -13031,10 +13031,9 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
             "limit": 50,
         }),
         RpcReply::Result(serde_json::json!({
-            "transactions": [{ "transactionHash": tx_hash, "blockHeight": "18" }],
+            "transactions": [{ "transactionHash": tx_hash, "blockHeight": "18", "isRootTarget": true, "wasInvoked": true }],
             "nextCursor": null,
-            "latestIndexedBlockHeight": "20",
-            "oldestIndexedBlockHeight": "3",
+            "coverage": { "fromBlockHeight": "3", "throughBlockHeight": "20" },
         })),
     );
 
@@ -14722,15 +14721,12 @@ fn spawn_tx_list_rpc(
     response: RpcReply,
 ) -> (String, MockServer) {
     let server = rpc_mock()
-        .method("getTransactionsByRootAddress", move |_| {
+        .method("getTransactionsByAddress", move |_| {
             response.clone().into_result()
         })
         .start();
     recorded_mock(server, move |script| {
-        assert_eq!(
-            script.expect("getTransactionsByRootAddress"),
-            expected_query
-        );
+        assert_eq!(script.expect("getTransactionsByAddress"), expected_query);
     })
 }
 
@@ -14922,6 +14918,7 @@ fn spawn_airdrop_rpc_response(
     });
     let receipt = serde_json::json!({
         "transactionHash":hash, "blockHeight":"42", "gasUsed":"1", "events":[],
+        "invokedAddresses": [],
         "execution":{"result":"return","returnData":"0x"},
     });
     let server = rpc_mock()
@@ -15008,7 +15005,7 @@ fn local_funding_rpc(
         Err(rpc_error(-32050, "receipt read unavailable"))
     } else {
         Ok(
-            serde_json::json!({ "transactionHash":tx_hash,"blockHeight":"43","gasUsed":"1500","execution":{"result":"return","returnData":"0x"},"events":[] }),
+            serde_json::json!({ "transactionHash":tx_hash,"blockHeight":"43","gasUsed":"1500","execution":{"result":"return","returnData":"0x"},"invokedAddresses":[],"events":[] }),
         )
     };
     let faucet_rpc = rpc_address_from_hex_fixture(faucet);
@@ -15446,6 +15443,7 @@ fn spawn_transfer_rpc(
                     },
                     "blockHeight": "43",
                     "execution": execution,
+                    "invokedAddresses": [],
                     "events": events,
                     "gasUsed": "1500",
                 })),
@@ -15833,10 +15831,10 @@ fn rpc_mock() -> RecordingServerBuilder {
 
 fn version_info() -> serde_json::Value {
     serde_json::json!({
-        "wireFormat":"14.0.0", "implementation":"fixture",
+        "wireFormat":"15.0.0", "implementation":"fixture",
         "supportedMethods":["getVersionInfo","getNetworkInfo","getChainTip","getChainConfig",
             "getBalance","getStorage","getContractDeployment","getContractArtifact","simulateInvocation","sendTransaction",
-            "getTransactionStatus","getTransactionReceipt","getTransactionsByRootAddress",
+            "getTransactionStatus","getTransactionReceipt","getTransactionsByAddress",
             "getTransactionsByBlock","getEvents","faucet_requestAirdrop","dev_fundAccount"]
     })
 }
@@ -16032,6 +16030,7 @@ fn spawn_view_rpc_inner_with_events(
     let mut result = serde_json::json!({
         "stateBlockHeight": "12",
         "gasUsed": "4321",
+        "invokedAddresses": [],
     });
     result["output"] = output;
     result["events"] = events;
@@ -16379,6 +16378,7 @@ fn sample_deploy_receipt(height: i64) -> serde_json::Value {
         "transactionHash": mock_tx_hash(),
         "blockHeight": height.to_string(),
         "execution": { "result": "return", "returnData": format!("0x{}", "bb".repeat(32)) },
+        "invokedAddresses": [],
         "events": [],
         "gasUsed": "1500",
     })
@@ -16386,6 +16386,7 @@ fn sample_deploy_receipt(height: i64) -> serde_json::Value {
 
 fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
+        "invokedAddresses": [],
         "transactionHash": mock_tx_hash(),
         "blockHeight": height.to_string(),
         "execution": { "result": "fault" },
@@ -16404,6 +16405,7 @@ fn sample_insufficient_funding_deploy_receipt(height: i64) -> serde_json::Value 
         "transactionHash": mock_tx_hash(),
         "blockHeight": height.to_string(),
         "execution": { "result": "abort", "abortData": format!("0x{}", hex::encode(abort_data)) },
+        "invokedAddresses": [],
         "events": [],
         "gasUsed": "1500",
     })
@@ -16417,6 +16419,7 @@ fn sample_call_receipt(height: i64) -> serde_json::Value {
         "transactionHash": mock_tx_hash(),
         "blockHeight": height.to_string(),
         "execution": { "result": "return", "returnData": "0x0102" },
+        "invokedAddresses": [],
         "events": [{
             "address": contract_address,
             "topics": [format!("0x{}", "22".repeat(32))],
@@ -16428,6 +16431,7 @@ fn sample_call_receipt(height: i64) -> serde_json::Value {
 
 fn sample_deterministic_error_call_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
+        "invokedAddresses": [],
         "transactionHash": mock_tx_hash(),
         "blockHeight": height.to_string(),
         "execution": { "result": "fault" },
@@ -16438,6 +16442,7 @@ fn sample_deterministic_error_call_receipt(height: i64) -> serde_json::Value {
 
 fn sample_reverted_call_receipt(height: i64, abort_hex: &str) -> serde_json::Value {
     serde_json::json!({
+        "invokedAddresses": [],
         "transactionHash": mock_tx_hash(),
         "blockHeight": height.to_string(),
         "execution": { "result": "abort", "abortData": abort_hex },

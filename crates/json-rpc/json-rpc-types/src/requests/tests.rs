@@ -101,7 +101,7 @@ fn simulation_rejects_aliases_nulls_and_nested_unknowns() {
 fn history_requires_exclusive_start_or_cursor_and_strict_anchors() {
     let initial =
         json!({"address":address(),"start":{"order":"ascending","anchor":{"kind":"atBeginning"}}});
-    accepts::<RootAddressQuery>(initial.clone());
+    accepts::<AddressHistoryQuery>(initial.clone());
     for anchor in [
         json!({"kind":"atEnd"}),
         json!({"kind":"atBeginning","blockHeight":"1"}),
@@ -109,19 +109,19 @@ fn history_requires_exclusive_start_or_cursor_and_strict_anchors() {
     ] {
         let mut request = initial.clone();
         request["start"]["anchor"] = anchor;
-        rejects::<RootAddressQuery>(request);
+        rejects::<AddressHistoryQuery>(request);
     }
     let mut both = initial.clone();
     both["cursor"] = json!("0xaa");
-    rejects::<RootAddressQuery>(both);
-    rejects::<RootAddressQuery>(json!({"address":address()}));
+    rejects::<AddressHistoryQuery>(both);
+    rejects::<AddressHistoryQuery>(json!({"address":address()}));
     for cursor in [json!("0x"), Value::Null, json!("0xA0"), json!("0x1")] {
-        rejects::<RootAddressQuery>(json!({"address":address(),"cursor":cursor}));
+        rejects::<AddressHistoryQuery>(json!({"address":address(),"cursor":cursor}));
     }
     for limit in [json!(0), Value::Null, json!("1")] {
         let mut request = initial.clone();
         request["limit"] = limit;
-        rejects::<RootAddressQuery>(request);
+        rejects::<AddressHistoryQuery>(request);
     }
     accepts::<BlockPageRequest>(json!({"blockHeight":"0","start":{"order":"descending"}}));
     rejects::<BlockPageRequest>(
