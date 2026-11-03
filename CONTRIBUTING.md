@@ -34,3 +34,18 @@ the private channel in [SECURITY.md](SECURITY.md).
 Unless explicitly stated otherwise, contributions are submitted under this
 repository's [Apache-2.0 license](LICENSE). Submit only material you have the
 right to contribute and preserve third-party notices and attribution.
+
+## Dependency updates
+
+[Dependabot](.github/dependabot.yml) checks Rust, npm, and GitHub Actions
+dependencies weekly. Routine third-party version updates wait until a release
+is at least seven days old. First-party packages and shared actions are exempt
+so coordinated Thruput releases can proceed without that delay.
+
+The cooldown controls Dependabot's version selection. Security-update PRs can
+open immediately and still need the usual review and CI checks. See
+[GitHub's cooldown documentation](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown).
+
+For manual updates, follow the same waiting period. Record the reason for an
+urgent security-fix exception in the PR. Publication age for manual updates is
+checked during review; CI continues to run the existing dependency policy checks.
