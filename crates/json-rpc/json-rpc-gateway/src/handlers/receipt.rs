@@ -174,8 +174,8 @@ async fn scheduler_transaction_outcomes(
                 .unwrap_or(Some(Err(rpc_driver::RpcError::SystemError)))
                 .ok_or(())
         } else {
-            // ReplaceConnection isolates cancellation to this lookup connection;
-            // a spent request budget is not evidence that the scheduler is unhealthy.
+            // MultiplexPool leaves the connection usable after a timed-out call;
+            // its late reply is discarded.
             guard.abort().await;
             Err(())
         };
