@@ -1755,7 +1755,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         // cannot decode. Named definitions are resolved so a token nested in
         // a struct or union the event refers to is caught too.
         for field in event.topics.iter().chain(event.fields.iter()) {
-            if type_carries_signed_token(&field.ty, &type_def_index, &mut BTreeSet::new()) {
+            if type_carries_signed_token(&field.ty, &type_def_index) {
                 return Err(CliError::TsBindingsFailed(format!(
                     "{event_label} field \"{}\" carries a signed token, which events cannot log",
                     spec_string_text(&field.name)?
@@ -2219,55 +2219,44 @@ fn event_topic_type(ty: &ContractType) -> String {
 }
 
 /// Whether `ty` contains a signed token anywhere, resolving named definitions
-/// through `type_defs`. `visiting` holds the names on the current path, so a
-/// recursive definition terminates: a token inside it is found on the first
-/// visit or not at all.
+/// through `type_defs`. Visit each named definition once per search. A work
+/// list bounds stack use even when named references form a long chain.
 fn type_carries_signed_token(
     ty: &ContractType,
     type_defs: &BTreeMap<&ContractSpecId, &ContractTypeDef>,
-    visiting: &mut BTreeSet<ContractSpecId>,
 ) -> bool {
-    match ty {
-        ContractType::SignedToken { .. } => true,
-        ContractType::Option { option_inner } => {
-            type_carries_signed_token(option_inner, type_defs, visiting)
-        }
-        ContractType::Vector { vector } => {
-            type_carries_signed_token(&vector.element, type_defs, visiting)
-        }
-        ContractType::Array { array } => {
-            type_carries_signed_token(&array.element, type_defs, visiting)
-        }
-        ContractType::Tuple { tuple } => tuple
-            .iter()
-            .any(|item| type_carries_signed_token(item, type_defs, visiting)),
-        ContractType::Named { named } => {
-            if !visiting.insert(named.clone()) {
-                return false;
-            }
-            let found = match type_defs.get(named) {
-                Some(ContractTypeDef::TypeDefStruct { struct_def }) => struct_def
-                    .fields
-                    .iter()
-                    .any(|field| type_carries_signed_token(&field.ty, type_defs, visiting)),
-                Some(ContractTypeDef::TypeDefUnion { union_def }) => {
-                    union_def.cases.iter().any(|case| match &case.case_type {
-                        ContractUnionCaseType::UnionCaseTuple { tuple } => tuple
-                            .iter()
-                            .any(|item| type_carries_signed_token(item, type_defs, visiting)),
-                        ContractUnionCaseType::UnionCaseStruct { struct_fields } => struct_fields
-                            .iter()
-                            .any(|field| type_carries_signed_token(&field.ty, type_defs, visiting)),
-                        _ => false,
-                    })
+    let mut pending = vec![ty];
+    let mut visited = BTreeSet::new();
+    while let Some(ty) = pending.pop() {
+        match ty {
+            ContractType::SignedToken { .. } => return true,
+            ContractType::Option { option_inner } => pending.push(option_inner),
+            ContractType::Vector { vector } => pending.push(&vector.element),
+            ContractType::Array { array } => pending.push(&array.element),
+            ContractType::Tuple { tuple } => pending.extend(tuple.iter()),
+            ContractType::Named { named } if visited.insert(named) => match type_defs.get(named) {
+                Some(ContractTypeDef::TypeDefStruct { struct_def }) => {
+                    pending.extend(struct_def.fields.iter().map(|field| &field.ty));
                 }
-                _ => false,
-            };
-            visiting.remove(named);
-            found
+                Some(ContractTypeDef::TypeDefUnion { union_def }) => {
+                    for case in union_def.cases.iter() {
+                        match &case.case_type {
+                            ContractUnionCaseType::UnionCaseTuple { tuple } => {
+                                pending.extend(tuple.iter());
+                            }
+                            ContractUnionCaseType::UnionCaseStruct { struct_fields } => {
+                                pending.extend(struct_fields.iter().map(|field| &field.ty));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
         }
-        _ => false,
     }
+    false
 }
 
 fn ts_property_key(name: &str) -> Result<String, CliError> {
@@ -2609,6 +2598,105 @@ mod tests {
     }
 
     #[test]
+    fn generates_events_with_shared_named_type_graphs() {
+        let mut spec = spec_with_events();
+        let definitions: Vec<_> = (0..60)
+            .map(|level| {
+                let ty = if level == 0 {
+                    ContractType::U64
+                } else {
+                    ContractType::Named {
+                        named: spec_id(&format!("Node{}", level - 1)),
+                    }
+                };
+                ContractTypeDef::TypeDefStruct {
+                    struct_def: ContractStructDef {
+                        name: spec_id(&format!("Node{level}")),
+                        fields: vec![
+                            ContractField {
+                                name: spec_string("left"),
+                                ty: ty.clone(),
+                            },
+                            ContractField {
+                                name: spec_string("right"),
+                                ty,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                }
+            })
+            .collect();
+        spec.type_defs = definitions.try_into().unwrap();
+        let mut event = ping_event_def();
+        event.fields = vec![ContractField {
+            name: spec_string("tree"),
+            ty: ContractType::Named {
+                named: spec_id("Node59"),
+            },
+        }]
+        .try_into()
+        .unwrap();
+        spec.events = vec![event].try_into().unwrap();
+        // Named references are leaves in the wire-format depth check.
+        let bytes = xdrs::txs::encode(&spec).unwrap();
+        let mut spec = crate::contract_spec::load_contract_spec_from_xdr(&bytes).unwrap();
+        generate_ts_bindings(&spec, "shared.spec.xdr").unwrap();
+
+        let mut definitions = spec.type_defs.to_vec();
+        let ContractTypeDef::TypeDefStruct { struct_def } = &mut definitions[0] else {
+            unreachable!();
+        };
+        let mut fields = struct_def.fields.to_vec();
+        fields[0].ty = ContractType::SignedToken {
+            signed_token_preimage: thruput_contract_spec::ContractSignedTokenPreimage {
+                preimage_type: None,
+            },
+        };
+        struct_def.fields = fields.try_into().unwrap();
+        spec.type_defs = definitions.try_into().unwrap();
+        assert!(
+            generate_ts_bindings(&spec, "shared.spec.xdr")
+                .unwrap_err()
+                .to_string()
+                .contains("carries a signed token")
+        );
+    }
+
+    #[test]
+    fn event_token_check_handles_long_named_cycles() {
+        let definitions: Vec<_> = (0..10_000)
+            .map(|level| ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_id(&format!("Node{level}")),
+                    fields: vec![ContractField {
+                        name: spec_string("next"),
+                        ty: ContractType::Named {
+                            named: spec_id(&format!("Node{}", (level + 1) % 10_000)),
+                        },
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            })
+            .collect();
+        let index = definitions
+            .iter()
+            .map(|def| match def {
+                ContractTypeDef::TypeDefStruct { struct_def } => (&struct_def.name, def),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert!(!type_carries_signed_token(
+            &ContractType::Named {
+                named: spec_id("Node0")
+            },
+            &index,
+        ));
+    }
+
+    #[test]
     fn event_token_check_terminates_on_recursive_named_types() {
         // `Node { next: Node | null }` refers to itself; the walk must stop
         // rather than recurse forever, and a token-free cycle must pass.
@@ -2635,7 +2723,6 @@ mod tests {
                 named: spec_id("Node"),
             },
             &index,
-            &mut BTreeSet::new(),
         ));
     }
 
