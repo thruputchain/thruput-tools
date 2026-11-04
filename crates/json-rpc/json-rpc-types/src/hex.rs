@@ -4,8 +4,8 @@
 //! lowercase hex strings (e.g., `"0xa1b2c3"`). Typed identifiers and
 //! cryptographic values use the wrappers in [`crate::base58`].
 //!
-//! See "Wire format conventions" in the
-//! [gateway system design](https://github.com/thruputchain/thruput-tools/blob/main/docs/gateway/system-design.md).
+//! The generated [JSON-RPC reference](https://github.com/thruputchain/thruput-tools/blob/main/crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.md)
+//! specifies each field's encoding.
 
 use std::borrow::Cow;
 use std::fmt;

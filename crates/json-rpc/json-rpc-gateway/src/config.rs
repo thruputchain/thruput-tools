@@ -321,8 +321,8 @@ pub struct GatewayConfig {
     /// Total lookup admission remains fixed at 68, including executing requests.
     pub scheduler_lookup_pool_size: SchedulerLookupPoolSize,
 
-    /// Connections per x23 data pool (1..=64, default 4); see "x23 data
-    /// pools" in `docs/gateway/system-design.md`.
+    /// Connections per x23 data pool (1..=64, default 4).
+    /// Connections are multiplexed; call admission is bounded separately.
     pub x23_multiplex_connections: X23MultiplexConnections,
 
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).

@@ -10,8 +10,8 @@ when users interact.
 
 See the crate's rustdoc (`cargo doc -p thruput-testkit --open`, or
 [`src/lib.rs`](src/lib.rs)) for usage and examples, and the
-[testkit design notes](../../docs/testkit/DESIGN.md) for its ownership and
-timing model.
+[architecture guide](../../docs/architecture.md#choosing-a-test-tool) for how
+testkit relates to the other test tools.
 
 The live tests in `tests/contract_smoke.rs` cover atomic initialization,
 registration and hash-only deployment, calls, manual blocks, and recovery
