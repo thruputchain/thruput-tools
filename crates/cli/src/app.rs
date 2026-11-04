@@ -1700,8 +1700,19 @@ impl WalletCommand {
 enum CodegenCommand {
     /// Generate TypeScript bindings
     Ts {
-        /// Path to a .spec.xdr file
-        source: std::path::PathBuf,
+        /// Path to a .spec.xdr or .rv32a file
+        #[arg(required_unless_present = "address", conflicts_with_all = ["address", "profile", "rpc_url"])]
+        source: Option<std::path::PathBuf>,
+        /// Contract alias, Z StrKey, or direct base58 address
+        #[allow(clippy::doc_markdown)]
+        #[arg(long)]
+        address: Option<String>,
+        /// Config profile to use for onchain generation
+        #[arg(long, requires = "address")]
+        profile: Option<String>,
+        /// Override the active profile's RPC URL
+        #[arg(long, requires = "address")]
+        rpc_url: Option<String>,
         /// Output file path (default: stdout)
         #[arg(long, short)]
         output: Option<std::path::PathBuf>,
@@ -1717,9 +1728,32 @@ impl CodegenCommand {
 
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         match self {
-            Self::Ts { source, output } => {
-                crate::codegen_cmd::run(&source, output.as_deref(), ctx.cmd_name, &ctx.print)
-            }
+            Self::Ts {
+                source,
+                address,
+                profile,
+                rpc_url,
+                output,
+            } => match (source, address) {
+                (Some(source), None) => {
+                    crate::codegen_cmd::run(&source, output.as_deref(), ctx.cmd_name, &ctx.print)
+                }
+                (None, Some(address)) => crate::codegen_cmd::run_onchain(
+                    &address,
+                    output.as_deref(),
+                    &invocation_cwd()?,
+                    profile.as_deref(),
+                    &crate::config::ProfileOverrides {
+                        rpc_url,
+                        ..Default::default()
+                    },
+                    ctx.cmd_name,
+                    &ctx.print,
+                ),
+                _ => Err(CliError::CodegenFailed(
+                    "provide exactly one source file or --address".into(),
+                )),
+            },
         }
     }
 }

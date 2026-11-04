@@ -748,6 +748,27 @@ With `--output`, only `available` succeeds; every other status returns an error
 without creating or replacing the output file, even when combined with `--json`.
 The deployment is current state, not a historical execution record.
 
+### `thruput codegen ts`
+
+Generate TypeScript bindings from a local spec or an onchain contract:
+
+```sh
+thruput codegen ts counter.spec.xdr --output bindings.ts
+thruput codegen ts counter.rv32a --output bindings.ts
+thruput codegen ts --address my-counter --profile local --output bindings.ts
+thruput codegen ts --address <base58-address> --rpc-url http://127.0.0.1:9545 --output bindings.ts
+```
+
+Provide exactly one file or `--address`. Addresses accept the same aliases,
+base58 addresses, and Z StrKeys as `inspect`. Onchain generation uses the
+selected profile and the same artifact retrieval and verification as `inspect`.
+It requires a supported embedded spec; an absent deployment, native contract,
+missing spec, or unsupported format or schema returns an error before writing.
+
+Without `--output`, bindings go to stdout. With `--json`, the result contains
+`source` and either `typescript` or the output path. For an onchain source,
+`source` is the resolved base58 address. Output files are replaced if they exist.
+
 ### `thruput storage`
 
 Read one latest committed raw storage item via `getStorage`.

@@ -6,6 +6,7 @@ use crate::codec::spec_string_text;
 use crate::{CliError, Print};
 
 mod bounded;
+pub(crate) mod onchain;
 
 /// Canonical TXS/XDR `ContractSpec` schema embedded in RV32 v6 artifacts.
 pub const ARTIFACT_SPEC_SCHEMA_VERSION: u32 = 1;

@@ -4574,6 +4574,201 @@ fn node_rejects_ramdb_size_without_a_recognized_unit() {
 }
 
 #[test]
+fn codegen_requires_exactly_one_source() {
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    for args in [
+        vec!["codegen", "ts"],
+        vec!["codegen", "ts", "counter.spec.xdr", "--address", &address],
+        vec![
+            "codegen",
+            "ts",
+            "counter.spec.xdr",
+            "--rpc-url",
+            "http://localhost:1",
+        ],
+    ] {
+        let output = thruput().args(args).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+}
+
+fn codegen_artifact_response(data: Vec<u8>) -> (serde_json::Value, serde_json::Value) {
+    use sha2::{Digest, Sha256};
+    use thruput_xdr::contract::{Contract, ContractBlob, ContractType};
+
+    let size = data.len();
+    let bytes = xdrs::txs::encode(&Contract::kRv32 {
+        rv32_contract: ContractBlob {
+            data: data.try_into().unwrap(),
+        },
+    })
+    .unwrap();
+    let hash = thruput_encoding::encode(&Sha256::digest(&bytes));
+    (
+        serde_json::json!({ "hash": hash, "size": size, "contractType": ContractType::kRv32.0 }),
+        serde_json::json!({ "hash": hash, "contractXdr": format!("0x{}", hex::encode(bytes)) }),
+    )
+}
+
+fn codegen_rpc(
+    address: &str,
+    deployment: serde_json::Value,
+    artifact: serde_json::Value,
+) -> (String, MockServer<()>) {
+    let address = address.to_owned();
+    let expected_address = address.clone();
+    let hash = deployment["hash"].clone();
+    let deployed = !deployment.is_null();
+    let server = rpc_mock()
+        .method("getContractDeployment", move |_| {
+            Ok(serde_json::json!({
+                "address": address, "stateBlockHeight": "12", "deployment": deployment,
+            }))
+        })
+        .method("getContractArtifact", move |_| Ok(artifact.clone()))
+        .start();
+    recorded_mock(server, move |script| {
+        assert_eq!(
+            script.expect("getContractDeployment")["address"],
+            expected_address
+        );
+        if deployed {
+            assert_eq!(script.expect("getContractArtifact")["hash"], hash);
+        }
+    })
+}
+
+#[test]
+fn codegen_onchain_matches_local_bindings_for_stdout_json_and_file() {
+    let tmp = TempDir::new().unwrap();
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    let source = tmp.path().join("counter.rv32a");
+    let spec = xdrs::txs::decode(include_bytes!(
+        "../fixtures/codegen/typed_contract.spec.xdr"
+    ))
+    .unwrap();
+    let data = artifact_with_spec(&spec);
+    std::fs::write(&source, &data).unwrap();
+    let local = thruput()
+        .args(["codegen", "ts"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(local.status.success());
+    let expected = String::from_utf8(local.stdout)
+        .unwrap()
+        .replace("counter.rv32a", &address);
+    let output_path = tmp.path().join("bindings.ts");
+
+    for mode in ["stdout", "json", "file"] {
+        let (deployment, artifact) = codegen_artifact_response(data.clone());
+        let (rpc_url, server) = codegen_rpc(&address, deployment, artifact);
+        let mut command = thruput();
+        command.args(["codegen", "ts"]).current_dir(tmp.path());
+        if mode == "file" {
+            std::fs::write(tmp.path().join("thruput.toml"), format!(
+                "[profile.bindings]\nrpc_url = '{rpc_url}'\n[profile.bindings.contracts]\ncounter = '{address}'\n"
+            )).unwrap();
+            command.args(["--address", "counter", "--profile", "bindings"]);
+        } else {
+            command.args(["--address", &address, "--rpc-url", &rpc_url]);
+        }
+        if mode != "stdout" {
+            command.arg("--json");
+        }
+        if mode == "file" {
+            command.arg("--output").arg(&output_path);
+        }
+        let output = command.output().unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if mode == "stdout" {
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+        } else {
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["command"], "codegen.ts");
+            assert_eq!(result["data"]["source"], address);
+            if mode == "json" {
+                assert_eq!(result["data"]["typescript"], expected);
+            } else {
+                assert_eq!(std::fs::read_to_string(&output_path).unwrap(), expected);
+                assert_eq!(result["data"]["output"], output_path.to_str().unwrap());
+            }
+        }
+    }
+}
+
+#[test]
+fn codegen_onchain_failures_preserve_existing_output() {
+    let tmp = TempDir::new().unwrap();
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    let output_path = tmp.path().join("bindings.ts");
+    std::fs::write(&output_path, "existing bindings").unwrap();
+    let (deployment, mut corrupted) = codegen_artifact_response(spec_artifact_fixture());
+    corrupted["contractXdr"] = serde_json::json!("0x00");
+    let (absent_deployment, absent_artifact) = codegen_artifact_response(
+        thruput_rv32_artifact::build_artifact(&[0; 4], &[], 0, 16).unwrap(),
+    );
+    let (unknown_deployment, unknown_artifact) = codegen_artifact_response(
+        thruput_rv32_artifact::build_artifact_with_spec(
+            &[0; 4],
+            &[],
+            0,
+            16,
+            Some(thruput_rv32_artifact::ArtifactSpec {
+                schema_version: 99,
+                bytes: &[1],
+            }),
+        )
+        .unwrap(),
+    );
+    for (deployment, artifact, error) in [
+        (
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            "notDeployed",
+        ),
+        (absent_deployment, absent_artifact, "absent"),
+        (unknown_deployment, unknown_artifact, "unsupportedSchema"),
+        (deployment, corrupted, "hash mismatch"),
+    ] {
+        let (rpc_url, server) = codegen_rpc(&address, deployment, artifact);
+        let output = thruput()
+            .args([
+                "--json",
+                "codegen",
+                "ts",
+                "--address",
+                &address,
+                "--rpc-url",
+                &rpc_url,
+                "--output",
+            ])
+            .arg(&output_path)
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert!(
+            report["error"]["message"].as_str().unwrap().contains(error),
+            "{report}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&output_path).unwrap(),
+            "existing bindings"
+        );
+    }
+}
+
+#[test]
 fn codegen_rv32_artifact_reads_embedded_spec() {
     let tmp = TempDir::new().unwrap();
     let artifact = tmp.path().join("counter.rv32a");
