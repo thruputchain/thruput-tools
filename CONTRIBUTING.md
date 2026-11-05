@@ -39,7 +39,7 @@ right to contribute and preserve third-party notices and attribution.
 
 [Dependabot](.github/dependabot.yml) checks Rust, npm, and GitHub Actions
 dependencies weekly. Routine third-party version updates wait until a release
-is at least seven days old. First-party packages and shared actions are exempt
+is at least eight days old. First-party packages and shared actions are exempt
 so coordinated Thruput releases can proceed without that delay.
 
 The cooldown controls Dependabot's version selection. Security-update PRs can
