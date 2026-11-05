@@ -14,7 +14,7 @@ jobs:
     name: Check dependency policy
     permissions:
       contents: read
-    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@085c15757c61dace378749b0f399685888c99a0e
     with:
       runs-on: namespace-profile-hogd-linux-2604
       checks: advisories
@@ -27,6 +27,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-    uses: thruputchain/actions/.github/workflows/rust-advisory-issue.yml@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+    uses: thruputchain/actions/.github/workflows/rust-advisory-issue.yml@085c15757c61dace378749b0f399685888c99a0e
     with:
       runs-on: namespace-profile-hogd-linux-2604
