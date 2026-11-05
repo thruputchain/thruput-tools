@@ -1,108 +1,68 @@
-# Releases
+# Publish a release
 
-This procedure is for maintainers with access to the release workflows and
-publishing credentials. Building or contributing to the repository does not
-require publishing a release.
+This procedure is for maintainers with release workflow and publishing access.
+See the [changelog](../CHANGELOG.md) for upgrade notes.
 
-See the [changelog](../CHANGELOG.md) for upgrade notes and breaking API changes.
+## Prepare and publish
 
-Run the **Release package** GitHub Actions workflow for a normal release.
-Dispatch it with `dry-run` to run every check without tagging or publishing.
-Always dispatch from `main`. To resume an older release, set `release-ref` to
-its existing `vX.Y.Z` tag; the workflow checks that the selected commit belongs
-to reviewed `main` history before building or publishing it.
+1. Bump the workspace version in [Cargo.toml](../Cargo.toml) and align internal
+   dependency pins. SDK and protocol pins must already exist on crates.io.
+   Check the generated project's SDK pin in
+   [scaffold.rs](../crates/cli/src/scaffold.rs) and refresh `Cargo.lock` after
+   dependency changes.
+2. Merge the version change through a PR and let CI pass.
+3. Dispatch **Release package** ([publish.yml](../.github/workflows/publish.yml))
+   from `main` with `dry-run` enabled. This runs checks without tagging or
+   publishing.
+4. Dispatch it again from `main` without `dry-run` to publish. The workflow
+   creates the version tag, publishes crates, dispatches binary packaging, and
+   tests the published CLI with generated projects.
 
-- [`publish.yml`](../.github/workflows/publish.yml) publishes the Rust crates to
-  crates.io, the CLI among them as `thruput` (`crates/cli`). It creates and
-  pushes the matching `vX.Y.Z` tag, then dispatches binary packaging. Smoke tests then install that published CLI and
-  build and test both generated templates from crates.io alone.
-- [`release.yml`](../.github/workflows/release.yml) packages native binaries.
-  `publish.yml` dispatches it for releases; it also checks packaging on PRs
-  that change release inputs. Do not dispatch it directly for normal releases.
-- [`yank.yml`](../.github/workflows/yank.yml) yanks or restores one version of
-  every published crate.
+To resume a partial release, dispatch the same workflow from `main` with
+`release-ref` set to the existing `vX.Y.Z` tag. The selected source must belong to
+`main` history. Do not push release tags manually or change existing tags.
 
-Before release, bump the workspace version in `Cargo.toml` and keep internal
-workspace dependency pins aligned. Do not manually push `v*` tags. Existing
-release tags cannot be changed or deleted. The `release` environment admits
-only workflow runs from `main`; selecting a resume tag changes the checked-out
-source, not the workflow ref.
-For this supported release/resume path, binary packaging runs its workflow
-definition from `main`, checks out the selected tag, and requires the `release`
-environment before creating the GitHub Release. Resuming through `publish.yml`
-does not run the older tag's workflow definition.
+[release.yml](../.github/workflows/release.yml) packages binaries and creates the
+GitHub Release. Let `publish.yml` dispatch it. Its workflow definition runs from
+`main` and checks out the selected tag.
+[yank.yml](../.github/workflows/yank.yml) yanks or restores a version across the
+published crates.
 
-Historical tags retain their original workflow files. The updated workflow
-checks do not prevent a repository writer from dispatching an older definition
-that lacks those guards. Restrict historical workflow execution separately
-when enforcing the same release boundary; immutable tags alone do not prevent
-workflow execution.
+These guards apply to the current workflows. Historical tags keep their original
+workflow definitions; restricting their execution requires separate repository
+controls.
 
-The SDK and protocol crates are exact pins in `Cargo.toml`, and generated
-projects pin the SDK version in `crates/cli/src/scaffold.rs`. Each pinned
-version must already be on crates.io: refresh `Cargo.lock` after moving a
-pin.
+## Publishing credentials
 
-## crates.io credentials
+Existing crates use crates.io trusted publishing through GitHub OIDC. Each
+crate's trusted publisher must name this repository, `publish.yml`, and the
+`release` environment.
 
-Publishing uses crates.io trusted publishing: the `publish` job exchanges its
-GitHub OIDC token for a short-lived crates.io token, so existing crates need no
-stored token. The job runs in the `release` environment, and each crate's
-trusted publisher names this repository, `publish.yml` and that environment,
-so only runs the environment admits can publish.
+Keep these tokens in the `release` environment when needed:
 
-- `CRATESIO_CREATE_PACKAGE_TOKEN` creates crates that are not on crates.io yet,
-  registers their trusted publisher, and invites `CRATE_OWNERS`. It needs the
-  `publish-new`, `trusted-publishing` and `change-owners` scopes. Keep it a
-  secret of the `release` environment, and remove it once every crate exists.
-- `CRATESIO_YANK_TOKEN` is for `yank.yml`: trusted publishing tokens cannot
-  yank. It needs the `yank` scope and also belongs to the `release`
-  environment.
+- `CRATESIO_CREATE_PACKAGE_TOKEN`: creates new crates, registers trusted
+  publishers, and adds `CRATE_OWNERS`. It needs `publish-new`, `trusted-publishing`,
+  and `change-owners` scopes. Remove and revoke it once all crates exist.
+- `CRATESIO_YANK_TOKEN`: used by `yank.yml`, with the `yank` scope. Trusted
+  publishing tokens cannot yank.
 
-crates.io creates five new crates in a burst, then one every ten minutes, so
-a release that creates every crate here takes about three hours.
+## Binary artifacts and symbols
 
-Release assets:
+The [release workflow matrix](../.github/workflows/release.yml) defines the
+binaries and target platforms. Each binary archive includes a README and license.
+`SHA256SUMS` covers the binaries and their `-debuginfo.tar.gz` companions.
 
-```text
-<linux-app>-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
-<linux-app>-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz
-thruput-vX.Y.Z-aarch64-apple-darwin.tar.gz
-SHA256SUMS
+Linux companions contain split debug files under
+`usr/lib/debug/.build-id/`. Install one with:
+
+```sh
+sudo tar -C / -xzf /path/to/binary-debuginfo.tar.gz
 ```
 
-Each binary archive also has a `<binary-archive-base>-debuginfo.tar.gz`
-companion covered by `SHA256SUMS` (28 archives total).
+Alternatively, extract it elsewhere and point the profiler or debugger at that
+`usr/lib/debug` tree. Match symbols to the binary's GNU build ID. The macOS
+companion contains a `thruput.dSYM` bundle; its binary is signed ad hoc and is not
+notarized.
 
-- The trailing `-debuginfo` prevents it matching binary selectors ending in the
-  target or `-znver5`.
-- Linux binaries retain `.symtab` and carry a GNU debuglink. Their split debug
-  files are rooted at `usr/lib/debug/.build-id/<xx>/<rest>.debug`, using the
-  binary's GNU build-id.
-- The macOS companion contains a `thruput.dSYM` bundle. Its binary is stripped
-  of debug information and re-signed ad hoc.
-- Release builds include line tables and force frame pointers.
-
-Install the Linux debuginfo companion with
-`sudo tar -C / -xzf <archive>-debuginfo.tar.gz` to place its files under
-`/usr/lib/debug/.build-id/<xx>/<rest>.debug`, the default build-id debug root
-for gdb, perf, and eBPF profilers. Alternatively, extract it elsewhere and point
-the tool's debug-file directory at the extracted `usr/lib/debug` tree.
-
-Linux apps are `hog-gateway`, `thruput`, `rv32-lower`, `thruput-faucet`,
-`hog-firehose-store`, and `hog-firehose-serve`. Each archive contains one app
-binary plus `README.md` and `LICENSE`. `hog-gateway`, `thruput-faucet`,
-`hog-firehose-store`, and `hog-firehose-serve` are binary release artifacts
-only; `thruput-rv32-lower` is also a published crate/library. macOS
-releases currently target Apple Silicon and include only the `thruput` CLI,
-which links the RV32 lowerer in-process. The macOS binary is ad-hoc signed but
-not notarized, so macOS may require explicit approval after download.
-
-## AMD server gateway artifact
-
-Linux releases additionally publish
-`hog-gateway-v<VERSION>-x86_64-unknown-linux-gnu-znver5.tar.gz`, covered by the
-release `SHA256SUMS`. This gateway is compiled with `target-cpu=znver5` for
-qualified AMD Zen 5 servers (for example EC2 C8a/M8a). Packaging must select it
-explicitly and validate it on a Zen 5 host before deployment. Portable gateway,
-CLI, faucet, and macOS artifacts keep their existing CPU targets.
+Gateway archives with a `-znver5` suffix require AMD Zen 5 hosts. Select them
+explicitly and validate them on that CPU before deployment.

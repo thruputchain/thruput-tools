@@ -1,188 +1,85 @@
-# Local node and runtime manifests
+# Connect a gateway to a local node
 
-The runtime manifest is the handoff from a running backend to the tools that
-connect to it. Bootstrap describes requested initial state; the runtime manifest
-describes what actually started. The supervisor verifies readiness before
-serving the public JSON-RPC interface.
+A runtime manifest describes a running backend's service endpoints, network
+identity, and public bootstrap accounts. The local node emits its path after
+startup. A standalone gateway can use it to connect to the same backend.
 
-The process boundary keeps execution, auth, mempool, and chain state in
-`hog-devnode`. Rust owns child lifecycle and the public RPC facade. This avoids
-reimplementing node semantics in a development-only backend.
+For CLI installation and a first contract, use the [repository README](../../README.md).
 
-## Fast smoke
+## Start the node and gateway
 
-From the repository root, with a compatible runtime:
+Build the gateway from the repository root:
+
+```sh
+cargo build --locked -p thruput-json-rpc-gateway --bin hog-gateway
+```
+
+In one terminal, start a local node and save its startup report:
+
+```sh
+thruput --json node --ramdb-bytes 1073741824 \
+  --block-driver interval --block-interval-ms 500 > /tmp/thruput-node.json
+```
+
+This uses an installed runtime bundle. For a runtime built from source, pass
+`--hog-devnode-binary /absolute/path/to/hog-devnode`. Leave the node running.
+Interval block production allows submissions through the separate gateway;
+instant mode is triggered by submissions through the local node's own RPC.
+
+After the startup report appears, run this from the repository root in another
+terminal. It requires `jq`:
+
+```sh
+RUNTIME_MANIFEST=$(jq -er '.data.runtimeManifest.path' /tmp/thruput-node.json)
+target/debug/hog-gateway --runtime-manifest "$RUNTIME_MANIFEST" \
+  --listen 127.0.0.1:9546
+```
+
+The gateway serves public RPC at `http://127.0.0.1:9546`. Use the
+[CLI reference](../../crates/cli/README.md#thruput-node) for persistence, runtime
+selection, and bootstrap allocations. Stop both foreground processes with Ctrl-C.
+
+## Run a smoke test
+
+With a compatible runtime, run:
 
 ```sh
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
-The script starts a local node, reads its runtime manifest, exercises the CLI
-endpoint, starts a standalone gateway, and repeats the benchmark checks there.
-See [benchmark scenarios](bench-scenarios.md) for heavier runs and saved results.
+The script creates disposable benchmark accounts, starts a node and gateway, and
+checks both endpoints. See [benchmark scenarios](bench-scenarios.md) for longer
+runs and saved results. Write benchmarks need fixture keys with matching public
+bootstrap allocations; the manifest contains no private keys. Use the script to
+create these fixtures.
 
-## History and duplicate-submission qualification
-
-Build `hog-gateway` from this checkout, then run the real-runtime tests:
-
-```sh
-cargo build --locked -p thruput-json-rpc-gateway --bin hog-gateway
-THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
-THRUPUT_GATEWAY_BINARY=/absolute/path/to/hog-gateway \
-  cargo test --locked -p thruput-node-supervisor --test real_block_queries -- --ignored --test-threads=1
-```
-
-The tests compare local RPC and a standalone gateway using the same runtime
-manifest. They exercise persistent history, sparse event scans beyond the runtime's
-candidate cap, and cursors replayed after restoring a stopped node's earlier
-snapshot. Duplicate-submission tests repeat identical signed bytes before and
-after commitment, check one transfer and stable commitment evidence, and recover
-by hash after losing an admitted submission's HTTP response. CI runs the tests
-against the CLI catalog's default runtime. This covers local processes and real
-index data; physical I/O faults, mixed-load acceptance and the final hosted
-runtime composition remain separate. These tests do not enable SDK redispatch.
-
-## Manual local loop
-
-Use an installed CLI or build the binaries from this checkout. A write benchmark
-must own fixture keys and supply their public initial allocations. Prepare
-`bench-accounts.json` with keys derived from the benchmark namespace
-`thruput-bench:benchmark-fixtures-v1`; each account seed is SHA-256 of that
-namespace followed by `:account-N`. The smoke script shows the executable setup.
-These deterministic keys are disposable fixtures. In one terminal:
-
-```sh
-thruput --json node --bootstrap-accounts ./bench-accounts.json --hog-devnode-binary /absolute/path/to/hog-devnode \
-  --block-driver interval --block-interval-ms 500 > /tmp/groundhog-node.json
-```
-
-Leave that process running. Interval block production matters when submitting
-through a separate gateway: instant mode is triggered by the local node's own
-RPC submit path. Wait for startup JSON before reading it in another terminal:
-
-```sh
-RUNTIME_MANIFEST=$(jq -er '.data.runtimeManifest.path' /tmp/groundhog-node.json)
-hog-gateway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
-```
-
-Leave the gateway running too. In a third terminal:
-
-```sh
-RUNTIME_MANIFEST=$(jq -er '.data.runtimeManifest.path' /tmp/groundhog-node.json)
-thruput-bench --url http://127.0.0.1:9546 \
-  --runtime-manifest "$RUNTIME_MANIFEST" --account-seed benchmark-fixtures-v1 \
-  --method sendTransaction --accounts 3 --rate 3 --duration 2 --force
-```
-
-This submits real test transactions. `--force` explicitly authorizes the submit
-benchmark; JSON or non-interactive output does not provide consent. Read-only
-benchmark methods do not need submission confirmation.
-
-The node writes its endpoint and manifest path into global `local_runtime_state`.
-Profiles with `network = "local"` consume that state; startup does not rewrite
-the selected profile. Scripts can pass an explicit runtime manifest or use
-`THRUPUT_RUNTIME_MANIFEST`. Resolution and override precedence live in
-[CLI configuration](../../crates/cli/src/config/project.rs).
-
-## Readiness and trust
-
-`hog-devnode` reports a bounded stdout readiness pointer to a manifest and its
-hash. The supervisor verifies the file and schema before connecting. Readiness
-includes the producer's recovered/fresh chain state; directory existence alone
-is not evidence of recovery. Ordinary child logs go to stderr and are forwarded
-through Rust tracing, leaving stdout available for startup protocol.
-
-Local runtime and bootstrap manifests use schema 5; the readiness pointer uses
-schema 4. Network hashes, public keys, addresses, storage-cost model hashes and
-the readiness manifest checksum use unprefixed, case-sensitive base58. Selectors
-and opaque payloads retain hex. Local data-directory metadata uses schema 5;
-older directories require their original runtime and tools or a fresh directory.
-Local accounts have public keys, addresses and initial raw allocations,
-with no derivation seed or account indices. The supervisor owns the private
-faucet key; users and harnesses own their signing keys. Hosted Futurenet retains its
-separate schema-4 deterministic adapter. Every native account has nonce zero and
-an address matching its public key. Bootstrap metadata contains the storage cost
-model; native wallets need no RV32 artifact.
-
-The manifest carries bound endpoints, network identity, and bootstrap account
-metadata. Do not construct a runnable manifest by copying an example's ports,
-wallet addresses, or hashes. These are properties of the running producer.
-The checked-in [runtime](examples/runtime-manifest.hogd-dev.example.json) and
-[bootstrap](examples/bootstrap-manifest.local-dev.example.json) JSON examples
-illustrate the schema; tests may also use their exact bytes as fixtures.
-
-`schedulerGateway` names the public-submit service. `scheduler` names internal
-coordinator control. A missing public-submit endpoint cannot be repaired by
-substituting the coordinator endpoint.
-
-A direct configured manifest path has no readiness-pointer hash to verify.
-Gateway and benchmark tools treat it as trusted local configuration and validate
-its bounded contents. Do not expose these files as a public discovery mechanism.
-
-Schema definitions and parsing are in
-[runtime_manifest.rs](../../crates/json-rpc/json-rpc-types/src/runtime_manifest.rs)
-and [bootstrap_manifest.rs](../../crates/json-rpc/json-rpc-types/src/bootstrap_manifest.rs).
-The supervisor's validation and process protocol are in
-[hogd_dev.rs](../../crates/node-supervisor/src/hogd_dev.rs).
-
-## Native RPC qualification
-
-The example starts an ephemeral node with the native wire-14 API. It requires a
-compatible real runtime:
+For history and duplicate-submission checks through both servers, build the
+gateway as above, then run:
 
 ```sh
 THRUPUT_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
-  cargo run -p thruput-node-supervisor --locked --example native_rpc_qualification
+THRUPUT_GATEWAY_BINARY="$PWD/target/debug/hog-gateway" \
+  cargo test --locked -p thruput-node-supervisor --test real_block_queries \
+  -- --ignored --test-threads=1
 ```
 
-The endpoint uses loopback and an operating-system assigned port. Query
-`getVersionInfo` for the configured methods. History requires runtime and bindings
-from the same protocol revision, including typed cursor outcomes. Ctrl-C stops the
-listener and runtime. The example checks API behavior, not production capacity;
-if the runtime exits early, stop the example with Ctrl-C.
+The [tests](../../crates/node-supervisor/tests/real_block_queries.rs) define the
+cases covered. These checks need a real runtime and local process access; see
+the [README prerequisites](../../README.md#contributing).
 
-Build the CLI with `cargo build -p thruput`. Use the printed URL for reads:
+## Manifest ownership
 
-```sh
-target/debug/thruput tx list ADDRESS --rpc-url RPC_URL --json
-target/debug/thruput events list ADDRESS --rpc-url RPC_URL --json
-```
+Bootstrap input requests initial state; the runtime manifest reports what
+started. Use the producer's manifest. Copying example ports, addresses, or hashes
+does not produce a working configuration.
 
-Each command fetches one newest-first page. Continue with `--cursor` and the same
-address and filters. RPC pages use nullable `nextCursor`; CLI v2 page reports use
-an empty cursor as their terminal marker. An empty event page with a nonempty
-cursor is not exhausted.
+The supervisor verifies the child's readiness pointer and manifest before
+serving RPC. A manifest passed directly to a gateway is trusted local
+configuration; it has no readiness-pointer checksum to verify. Keep it private.
+The scheduler submit endpoint and coordinator control endpoint are distinct.
 
-## State and shutdown
-
-Without `--data-dir`, the node is ephemeral. With a persistent directory, startup
-and shutdown must preserve exclusive ownership of that chain's state. The
-supervisor records process ownership, requests graceful shutdown, and escalates
-only when the child group does not exit. Dropping a handle is not equivalent to
-awaiting shutdown. An interrupted shutdown must not release ownership as though
-all descendants were confirmed stopped.
-
-Use the [CLI node reference](../../crates/cli/README.md#thruput-node) for
-runtime selection, logging, persistence, and supported overrides. The lifecycle
-implementation is in [process.rs](../../crates/node-supervisor/src/process.rs)
-and [pid_file.rs](../../crates/node-supervisor/src/pid_file.rs).
-
-`thruput node --init-network-hash` selects a new chain's bootstrap signing domain.
-Distinct ports alone do not create distinct networks. Omission initializes zero for
-a new chain; a restart loads the identity from the existing chain-bound funding
-journal. Initialized directories reject the initialization flag, including a matching
-hash. The supervisor checks runtime and scheduler identities against the initialized
-or recovered identity. Use the emitted manifest with its matching RPC URL
-for signing/funding consumers; see the CLI reference for the two-node example.
-
-Older local runtimes and state directories require their original runtime and tooling. A native
-runtime refuses old metadata before opening the database and preserves the data.
-Use a new data directory for an ordinary-account chain; saved legacy wallet identities remain
-explicit CLI bindings. Consumer and catalog promotion must follow publication of
-the matching native producer.
-
-The chain directory also owns a private faucet credential and retained funding
-journal. Missing, corrupt or mismatched private state fails startup. Dump/restore
-preserves both files and their private permissions. The supervisor and runtime
-retain one exclusive chain-directory lock through startup and shutdown.
+For schemas and validation, read
+[runtime_manifest.rs](../../crates/json-rpc/json-rpc-types/src/runtime_manifest.rs),
+[bootstrap_manifest.rs](../../crates/json-rpc/json-rpc-types/src/bootstrap_manifest.rs),
+and the [readiness implementation](../../crates/node-supervisor/src/hogd_dev.rs).
