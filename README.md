@@ -151,7 +151,7 @@ Use feature branches and pull requests. Use typed `thiserror` errors, no
 behavior, and state what you verified.
 
 - [Workspace architecture](docs/architecture.md): component boundaries and source map.
-- [Documentation index](docs/README.md): design rationale and operating guides.
+- [Documentation index](docs/README.md): references and operating guides.
 - [Release instructions](docs/releases.md): publishing and binary artifacts.
 - [Bundled documentation maintenance](docs/bundled-documentation.md): updating
   the developer guide shipped with the CLI.

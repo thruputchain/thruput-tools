@@ -1,46 +1,33 @@
-# Inspecting firehose records
+# Inspect firehose records
 
-`hog-firehose-store` archives each committed block as one XDR-encoded
-`EventIndexerPulledBlock` file. The `inspect_record` example in
-[`crates/firehose`](../../crates/firehose/README.md) decodes those files offline
-and reports what is in them.
+`hog-firehose-store` archives committed blocks as XDR files. The `inspect_record`
+example decodes them offline and reports sizes, transactions, senders, and events.
 
 ## Get a record
 
-A firehose subscription with `{"from":"height","height":H}` returns the exact
-stored record: the notification's `record` field is the archived XDR,
-hex-encoded. This works only for heights inside serve's `--request-window`
-(default 42,428 blocks) and records at or below `--max-record-bytes`
-(default 4 MiB).
+A firehose subscription with `{"from":"height","height":H}` returns the archived
+XDR as hex in the notification's `record` field. Requests are limited by serve's
+`--request-window` and `--max-record-bytes` options. For larger or older retained
+records, copy `<archive>/<20-digit height>.xdr` from the store host.
 
-Larger or older retained records must be copied from the store's archive
-directory on the host, where each block is `<archive>/<20-digit height>.xdr`.
+See the [firehose guide](../../crates/firehose/README.md) for subscriptions and
+archive operations.
 
 ## Run the inspector
 
-Records decode only with the XDR of the protocol that produced them. Build the
-example from the tools release the network runs, which is the same version the
-firehose binaries are pinned to.
+Use a tools checkout with XDR definitions compatible with the producer. From its
+repository root:
 
 ```sh
-cargo run -p thruput-firehose --example inspect_record --offline -- /path/to/00000000000000000001.xdr
-# Use --text for an indented report; --json (one object per file) is the default.
+cargo run --locked -p thruput-firehose --example inspect_record -- \
+  /path/to/00000000000000000001.xdr
 ```
 
-## What the report contains
+The default output is one JSON object per file. Add `--text` for an indented
+report. Selectors and topics are reported as hex identifiers without inferred
+names. Auth variants without a derivable sender report a null sender.
 
-- Encoded byte sizes split into consensus value, event logs and transaction
-  bodies, with transaction size distribution and histogram.
-- Per transaction: invoked contract and selector, auth claim, signature scheme,
-  gas limit, nonce, expiry and execution outcome.
-- Senders: pubkey-signature senders are derived offline from their auth
-  preimages, with counts, shares of all transactions, nonce ranges, and
-  self-invocation counts. Auth variants without a derivable preimage report a
-  null sender and their auth variant.
-- Event counts by emitting contract and topic, and success and failure counts.
-
-Transactions have no operation-kind union, and selectors and topics are
-reported as hexadecimal identifiers without inferred names.
-
-The inspector is a decoder and analyser, not a commitment audit; use the store's
-`verify` command to audit an archive.
+The inspector decodes records; it does not verify commitments or signatures.
+Use `hog-firehose-store verify` to check archive consistency. See the
+[inspector source](../../crates/firehose/examples/inspect_record.rs) for report
+fields and the firehose guide for the store's verification limits.
