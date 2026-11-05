@@ -88,24 +88,24 @@ thruput-cli-macros = { path = "crates/cli-macros", version = "=0.43.0" }
 # These crates define or encode the protocol schema. Keep them exact and update
 # them as one qualified release family so published binaries cannot float to an
 # incompatible patch release.
-thruput-xdr = { version = "=0.63.0", features = ["serde", "xdrs", "schema"] }
-thruput-indexer = { version = "=0.63.0", features = ["serde"] }
-thruput-node-rpc = { version = "=0.63.0" }
-thruput-db-gateway = { version = "=0.63.0" }
-thruput-view = { version = "=0.63.0" }
-thruput-scp = { version = "=0.63.0" }
-thruput-trace = { version = "=0.63.0" }
+thruput-xdr = { version = "=0.64.0", features = ["serde", "xdrs", "schema"] }
+thruput-indexer = { version = "=0.64.0", features = ["serde"] }
+thruput-node-rpc = { version = "=0.64.0" }
+thruput-db-gateway = { version = "=0.64.0" }
+thruput-view = { version = "=0.64.0" }
+thruput-scp = { version = "=0.64.0" }
+thruput-trace = { version = "=0.64.0" }
 # --- sdk-rs (crates.io) ---
 # The SDK crates release as one version line, and the standard interfaces as
 # another. Keep each exact and move it as a family.
-thruput-spec-tool = { version = "=0.58.0" }
-thruput-contract-util = { version = "=0.58.0" }
-thruput-domain-separator = { version = "=0.58.0" }
-thruput-contract-spec = { version = "=0.58.0" }
-thruput-u256 = { version = "=0.58.0" }
-thruput-erc20-if = { version = "=0.1.71" }
-thruput-erc20-permit-if = { version = "=0.1.71" }
-thruput-sdk = { version = "=0.58.0" }
+thruput-spec-tool = { version = "=0.59.0" }
+thruput-contract-util = { version = "=0.59.0" }
+thruput-domain-separator = { version = "=0.59.0" }
+thruput-contract-spec = { version = "=0.59.0" }
+thruput-u256 = { version = "=0.59.0" }
+thruput-erc20-if = { version = "=0.1.72" }
+thruput-erc20-permit-if = { version = "=0.1.72" }
+thruput-sdk = { version = "=0.59.0" }
 
 # --- xdrs (crates.io, published as thruput-*) ---
 # The XDR codec is the exception: caret, so an xdrs patch release reaches this
