@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 8
+      exclude:
+        - "thruput-*"
     open-pull-requests-limit: 3
     groups:
       rust-dependencies:
@@ -14,6 +18,10 @@ updates:
       - /scripts/scaffold-app
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 8
+      exclude:
+        - "@thruputchain/*"
     open-pull-requests-limit: 3
     groups:
       javascript-dependencies:
@@ -22,6 +30,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 8
+      exclude:
+        - "thruputchain/*"
     open-pull-requests-limit: 3
     groups:
       actions:

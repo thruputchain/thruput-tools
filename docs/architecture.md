@@ -1,73 +1,104 @@
-# Workspace architecture
+# System architecture
 
-This workspace connects contract developers and applications to Thruput.
-It owns the public JSON-RPC interface and the off-chain development tools.
-The `hogd` repository owns execution and chain state; the protocol repositories
-own the binary wire definitions and their language bindings.
+This workspace contains Thruput's off-chain tools and public JSON-RPC interface.
+Contract developers use the CLI to build, test, and deploy contracts. Applications
+use RPC clients or generated contract bindings to call them.
 
-## One public API, two ways to serve it
+The `hogd` repository owns execution and chain state. The SDK owns contract APIs,
+guest startup, and linker scripts. The protocol repositories define shared data
+types in XDR and provide language bindings. This workspace uses `thruput-xdr`.
+
+## From application to runtime
 
 ```mermaid
 flowchart LR
-    C[CLI / application / test harness] -->|JSON-RPC| G[Production gateway]
+    C[CLI / application / test harness] -->|JSON-RPC| G[Standalone gateway]
     C -->|JSON-RPC| L[Local node supervisor]
     G -->|x23| H[Managed hogd services]
     L -->|x23| D[Owned hog-devnode process]
 ```
 
-The production gateway connects to separately managed backend services. The
-local supervisor starts one `hog-devnode` process and connects to the services
-that it advertises. Both use the same public server and the same hogd response
-mapping. Local tests therefore exercise the public interface without a validator
-deployment or a second RPC API.
+The gateway connects to separately managed backend services. The local supervisor
+starts a `hog-devnode` process and connects to the services it advertises. Both
+use the same public server and backend response mapping. Local integration tests
+exercise that API against the real runtime.
 
-The subprocess boundary keeps runtime state, auth, scheduling, and execution in
-`hogd`, their owner. The tools do not copy those semantics into Rust or link the
-runtime through a C ABI. The supervisor owns startup, readiness, logs, and
-shutdown. See [runtime manifests](gateway/runtime-manifest.md)
-for the handoff and [gateway design](gateway/system-design.md) for RPC behavior.
+x23 is hogd's internal RPC transport. Applications use JSON-RPC.
 
-## The contract development path
+The public server implements RPC methods against backend traits. Shared adapters
+translate hogd results. The gateway owns its connections, admission limits,
+deadlines, and recovery. The supervisor also owns child startup, readiness, logs,
+and shutdown. A [runtime manifest](gateway/runtime-manifest.md) carries the local
+service endpoints and network identity between tools.
 
-The CLI scaffolds a Rust project, builds it with the project's pinned toolchain,
-and lowers the ELF into an RV32 artifact. The build embeds the canonical contract
-spec outside guest memory and exports JSON/XDR sidecars. Invocation and TypeScript
-bindings use the embedded spec; sidecars are exports, not fallback metadata.
-Deploys, calls, and onchain inspection use the public JSON-RPC interface.
+Backend services divide the work: the scheduler admits transactions, the indexer
+serves committed history, the database gateway reads state, and the view gateway
+simulates calls. Coordinator control is used for local block production.
+Execution and transaction validity remain in hogd; public traffic limits belong
+to the gateway.
 
-A build does not read chain state, so it cannot decide whether a chain will
-admit the contract. Signing identifies the network and wallet; the runtime decides
-admission and execution. See [CLI design](cli/design.md)
-and [RV32 design](rv32/design.md).
+See the generated [JSON-RPC reference](../crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.md)
+for method behavior and encodings. The wire version is independent of the tools'
+release version; `getVersionInfo` reports the endpoint's version and methods.
+
+## From contract source to invocation
+
+The CLI creates a Rust project and builds it with the project's pinned toolchain.
+The RV32 lowerer converts the ELF into a contract artifact. The build embeds the
+canonical contract spec outside guest memory and exports JSON/XDR sidecars.
+Invocation and TypeScript bindings use the embedded spec; sidecars are exports,
+not fallback metadata. Deploys, calls, and onchain inspection use public RPC.
+
+The artifact library defines the Rust format implementation shared by the CLI
+and standalone lowerer. Instruction and data memory use separate address spaces;
+the lowerer preserves the data addresses chosen by the linker. Guest code
+dispatches contract methods. Artifact changes must agree with the SDK's linker
+and startup code and hogd's loader.
+
+Builds run without chain state. Submission checks use the target chain's
+configuration, and hogd decides admission and execution. The signing library
+constructs transactions; the CLI selects keys, wallets, and profiles. The
+embeddable client provides invocation without CLI configuration or process
+supervision. Generated TypeScript bindings use `@thruputchain/client`.
+
+The toolchain library installs the devnode bundle from a pinned catalog and
+checks its downloaded contents. Runtime lookup is local; installation is
+explicit. The supervisor runs the bundle as a child process.
 
 ## Choosing a test tool
 
-| Tool | Question it answers |
+| Tool | Use it to test |
 | --- | --- |
-| `thruput test` | Does this project's contract pass executor-backed tests? |
-| `thruput test --integration` | Does the project work through a real local node? |
-| `thruput-testkit` | Do several application actors interact correctly? |
-| `thruput-bench` | How does a specific RPC workload perform under controlled load? |
+| `thruput test` | A contract through the executor-backed project test runner |
+| `thruput test --integration` | A project through a real local node |
+| `thruput-testkit` | Several application actors and their interactions |
+| `thruput-bench` | An RPC workload under controlled load |
 
-See the [testkit design](testkit/DESIGN.md) for its ownership and timing model.
-A benchmark result describes the measured workload and environment, not network
-capacity.
+Testkit owns actor coordination and can start a local node or attach to an
+existing endpoint. Seeded accounts and randomness make inputs repeatable; they
+do not make concurrent execution deterministic. Use messages and observed chain
+results to order dependent actions. See its [Rustdoc](../crates/testkit/src/lib.rs)
+for examples.
 
-## Where to read the code
+## Source map
 
-| Concern | Start here |
+| Area | Start here |
 | --- | --- |
-| Method definitions and wire version | [json-rpc-api](../crates/json-rpc/json-rpc-api/src/lib.rs) |
-| Payloads and errors | [json-rpc-types](../crates/json-rpc/json-rpc-types/src/lib.rs) |
-| Shared public server | [json-rpc-server](../crates/json-rpc/json-rpc-server/src/native/service.rs) |
+| Public methods and wire version | [json-rpc-api](../crates/json-rpc/json-rpc-api/src/lib.rs) |
+| Payloads and codecs | [json-rpc-types](../crates/json-rpc/json-rpc-types/src/lib.rs) |
+| Shared RPC server | [json-rpc-server](../crates/json-rpc/json-rpc-server/src/native/service.rs) |
 | Backend response mapping | [hogd-backend](../crates/x23/hogd-backend/src/lib.rs) |
-| Production service wiring | [gateway](../crates/json-rpc/json-rpc-gateway/src/main.rs) |
+| Internal transport | [x23-transport](../crates/x23/x23-transport/src/lib.rs) |
+| Standalone gateway | [gateway](../crates/json-rpc/json-rpc-gateway/README.md) |
 | Local runtime lifecycle | [node-supervisor](../crates/node-supervisor/src/lib.rs) |
-| CLI commands | [CLI](../crates/cli/src/app.rs) |
-| Embeddable invocation | [client](../crates/client/src/lib.rs) |
-| Signing and wallet transactions | [signing](../crates/signing/src/lib.rs) |
+| CLI commands and configuration | [app.rs](../crates/cli/src/app.rs), [config](../crates/cli/src/config/mod.rs) |
+| Terminal output and prompts | [print.rs](../crates/cli/src/print.rs) |
+| Invocation and signing | [client](../crates/client/README.md), [signing](../crates/signing/src/lib.rs) |
+| Runtime installation | [toolchain](../crates/toolchain/src/lib.rs) |
+| Artifact format and lowering | [format.rs](../crates/rv32/artifact/src/format.rs), [lowerer](../crates/rv32/lower/src/lib.rs) |
+| Application tests | [testkit](../crates/testkit/README.md) |
+| Committed-block streaming | [firehose](../crates/firehose/README.md) |
+| Hosted funding service | [faucet](../crates/faucet/README.md) |
 
-[Cargo.toml](../Cargo.toml) lists the complete workspace. The
-[JSON-RPC reference](../crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.md)
-and its [OpenRPC document](../crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.json)
-are generated from the API and payload types. Integrate against them.
+[Cargo.toml](../Cargo.toml) lists all crates. The [crate layout](../crates/README.md)
+explains their directory groups.

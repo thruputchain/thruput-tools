@@ -1,41 +1,30 @@
-# Thruput documentation
+# Developer documentation
 
-Start with the [workspace architecture](architecture.md) for the system's shape
-and a map into the source. The [repository README](../README.md) covers setup
-and the first local contract loop.
+Start with the [repository README](../README.md) to install the tools and run a
+contract locally. Read the [architecture guide](architecture.md) for component
+relationships, repository boundaries, and a source map.
 
-## Design and rationale
+## References
 
-Read the guide for the area you are changing:
+- [CLI commands](../crates/cli/README.md)
+- [JSON-RPC methods, types, and errors](../crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.md)
+- [Contract client](../crates/client/README.md)
+- [Application testkit](../crates/testkit/README.md)
 
-- [Gateway](gateway/system-design.md): public RPC, backend boundaries, admission,
-  and why the local node shares the server implementation.
-- [CLI](cli/design.md): configuration, wallet identity, build artifacts, and
-  managed runtime acquisition.
-- [RV32](rv32/design.md): the ELF-to-artifact boundary and memory layout choices.
-- [Testkit](testkit/DESIGN.md): concurrent application tests and their relationship
-  to the single-project integration loop.
+## Operating guides
 
-## Operating the tools
+- [Connect a gateway to a local node](gateway/runtime-manifest.md)
+- [Run and compare benchmarks](gateway/bench-scenarios.md)
+- [Measure transaction-status misses](gateway/lookup-bench.md)
+- [Check gateway health and metrics](gateway/observability-smoke-test.md)
+- [Inspect firehose records](firehose/inspecting-records.md)
 
-- [CLI reference](../crates/cli/README.md)
-- [Testkit](../crates/testkit/README.md)
-- [Local node, gateway, and runtime manifests](gateway/runtime-manifest.md)
-- [Benchmark scenarios and comparisons](gateway/bench-scenarios.md)
-- [Transaction-status miss benchmark](gateway/lookup-bench.md)
-- [Gateway health and observability checks](gateway/observability-smoke-test.md)
-- [Inspecting firehose records](firehose/inspecting-records.md)
-- [Releases](releases.md)
-- [Bundled documentation maintenance](bundled-documentation.md)
+## Maintenance
 
-## What belongs here
+- [Publish a release](releases.md)
+- [Update the CLI's bundled documentation](bundled-documentation.md)
 
-Code, tests, generated schemas, and executable examples are the source of truth
-for implementation. Keep prose that explains why the system has its shape, how
-components relate, or how to operate it. Link to the owning source instead of
-copying types, defaults, algorithms, or command inventories.
-
-Keep proposals labelled and separate from current behavior. When work ships,
-retain only the rationale that will help a later contributor; remove the plan,
-completion checklist, and session or release evidence. Git history preserves
-those records. An archive directory is not a second documentation lifecycle.
+Keep setup in the repository README, API behavior beside the code, and regression
+expectations in tests. Use this directory for system context and operating
+procedures. Link to source for types, defaults, and algorithms. Remove completed
+plans and release evidence; Git history retains them.
