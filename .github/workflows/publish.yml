@@ -190,7 +190,7 @@ jobs:
           scripts/smoke-managed-toolchain.sh
 
       - name: Publish dry run
-        uses: thruputchain/actions/cargo-publish-dry-run@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+        uses: thruputchain/actions/cargo-publish-dry-run@085c15757c61dace378749b0f399685888c99a0e
         with:
           registry-name: crates-io
           packages: ${{ env.PACKAGES }}
@@ -199,7 +199,7 @@ jobs:
       # version bump.
       - name: Check release
         id: check
-        uses: thruputchain/actions/crates-io-publish@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+        uses: thruputchain/actions/crates-io-publish@085c15757c61dace378749b0f399685888c99a0e
         with:
           mode: check
           packages: ${{ env.PACKAGES }}
@@ -208,14 +208,14 @@ jobs:
       - name: Tag release
         id: tag
         if: ${{ !inputs.dry-run && steps.check.outputs.release == 'true' }}
-        uses: thruputchain/actions/cargo-release-tag@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+        uses: thruputchain/actions/cargo-release-tag@085c15757c61dace378749b0f399685888c99a0e
         with:
           packages: ${{ env.PACKAGES }}
           github-token: ${{ github.token }}
 
       - name: Publish
         if: ${{ !inputs.dry-run && steps.check.outputs.release == 'true' }}
-        uses: thruputchain/actions/crates-io-publish@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+        uses: thruputchain/actions/crates-io-publish@085c15757c61dace378749b0f399685888c99a0e
         with:
           mode: publish
           packages: ${{ env.PACKAGES }}
