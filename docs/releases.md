@@ -32,6 +32,21 @@ These guards apply to the current workflows. Historical tags keep their original
 workflow definitions; restricting their execution requires separate repository
 controls.
 
+## GH-554 producer release
+
+Version 0.44.0 supplies the v6 contract producer needed to build the matching
+runtime. Its default managed runtime is not compatible with the new protocol.
+
+After maintainer approval and qualification against the candidate runtime, set
+`producer-release: true` for both the dry run and publication. This one-time
+option accepts only version 0.44.0 and skips only managed-runtime startup.
+Catalog downloads, checksums, package checks, and published-project host tests
+still run. Record the expected cross-repository CI failures in the release PR.
+
+Use this release to build the runtime. It is not a qualified local-node stack.
+The aligned tools release must pin the published v6 runtime and a matching SDK
+test executor, pass all runtime checks, and remove this exception.
+
 ## Publishing credentials
 
 Existing crates use crates.io trusted publishing through GitHub OIDC. Each

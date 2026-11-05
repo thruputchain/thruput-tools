@@ -1,19 +1,22 @@
 # Changelog
 
-## 0.43.0
+## 0.44.0 — v6 producer release
 
-### 0.43.0 release preparation
-
-- Produce RV32 v6 artifacts with canonical onchain specs. Published tools 0.42.0
+- Produce RV32 v6 artifacts with canonical onchain specs. Published tools 0.43.0
   produce v5 and cannot build fixtures for the v6-only runtime.
 - The v6 runtime cannot execute committed v5 contracts: loading one returns
   `Unrecoverable`. Rebuild and redeploy contracts on a compatible fresh network.
   An existing futurenet needs a separately approved reset; installing new tools
   does not migrate its stored contracts.
-- Release remains blocked on compatible published protocol bindings and a v6
-  hogd release. The managed runtime catalog still points to v0.1.31; update its
-  version and verified asset digests only after the matching release exists.
-  Qualify the exact CLI/runtime pair before enabling v6 production use.
+- Read deployed specs with `thruput inspect` and generate TypeScript bindings
+  with `thruput codegen ts --address <address> --output bindings.ts`.
+- Use protocol crates 0.64.0, SDK 0.59.0, and interfaces 0.1.72.
+- This producer release builds the matching v6 runtime. The default managed
+  runtime and SDK test executor are not v6-compatible. Local-node commands and
+  `thruput test` require the subsequent aligned runtime/SDK/tools releases.
+  See [release instructions](docs/releases.md#gh-554-producer-release).
+
+## 0.43.0
 
 - Generated counter applications and the faucet frontend install their npm
   dependencies from the public registry without a GitHub token.
