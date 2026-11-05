@@ -15,8 +15,8 @@
 //!   3. `thruput-rv32-artifact` — pack the v5 header + sections, then
 //!      self-verify.
 //!
-//! See the [architecture guide](https://github.com/thruputchain/thruput-tools/blob/main/docs/architecture.md#from-contract-source-to-invocation)
-//! for the build and invocation flow.
+//! See `docs/architecture.md` ("From contract source to invocation") for the
+//! build and invocation flow.
 
 pub mod elf;
 pub mod error;

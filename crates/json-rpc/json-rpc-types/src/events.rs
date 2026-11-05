@@ -254,7 +254,7 @@ pub struct EventQuery {
 /// `topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.
 /// `num_topics` (0–3) determines the split point. Max total 1024 bytes.
 ///
-/// See the [backend decoder](https://github.com/thruputchain/thruput-tools/blob/main/crates/x23/hogd-backend/src/event.rs) for validation.
+/// See `crates/x23/hogd-backend/src/event.rs` for validation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EmittedEvent {

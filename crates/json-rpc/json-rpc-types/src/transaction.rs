@@ -15,8 +15,8 @@ pub struct TxHash(pub SHA256Hash);
 /// Lightweight transaction status from the mempool and indexer.
 ///
 /// Pending reports mempool presence; Committed reports scheduler success or an indexed record.
-/// The native API's [status sequencer](https://github.com/thruputchain/thruput-tools/blob/main/crates/x23/hogd-backend/src/native/transaction/status.rs)
-/// combines scheduler and indexer reads.
+/// The native API's status sequencer combines scheduler and indexer reads.
+/// See `crates/x23/hogd-backend/src/native/transaction/status.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 #[serde(tag = "status", rename_all = "camelCase")]

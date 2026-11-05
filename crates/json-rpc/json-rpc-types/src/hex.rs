@@ -4,8 +4,8 @@
 //! lowercase hex strings (e.g., `"0xa1b2c3"`). Typed identifiers and
 //! cryptographic values use the wrappers in [`crate::base58`].
 //!
-//! The generated [JSON-RPC reference](https://github.com/thruputchain/thruput-tools/blob/main/crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.md)
-//! specifies each field's encoding.
+//! The generated JSON-RPC reference specifies each field's encoding. See
+//! `crates/json-rpc/open-rpc-spec/snapshots/thruput-spec.md`.
 
 use std::borrow::Cow;
 use std::fmt;
