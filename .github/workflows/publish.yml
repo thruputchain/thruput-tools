@@ -38,10 +38,6 @@ on:
         description: 'Run publish checks only; skip tagging, publishing and the binary release'
         type: boolean
         default: false
-      producer-release:
-        description: 'GH-554: release 0.44.0 producer tools before the matching runtime (managed startup is not qualified)'
-        type: boolean
-        default: false
       release-ref:
         description: 'Existing vX.Y.Z tag to resume; dispatch this workflow from main'
         type: string
@@ -130,17 +126,6 @@ jobs:
           fi
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      # One-time format-transition exception. Remove with the aligned release.
-      - name: Validate producer release version
-        if: ${{ inputs.producer-release }}
-        run: |
-          version=$(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[] | select(.name == "thruput") | .version')
-          if [ "$version" != 0.44.0 ]; then
-            echo '::error::the GH-554 producer exception is limited to 0.44.0'
-            exit 1
-          fi
-          echo '::warning::producer-only qualification: the default managed runtime is not compatible; the aligned release must restore startup qualification'
-
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
@@ -200,7 +185,6 @@ jobs:
           grep -q '^test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/public-bundle-tests.log"
 
       - name: Verify managed toolchain startup with a fresh cache
-        if: ${{ !inputs.producer-release }}
         run: |
           python3 --version
           scripts/smoke-managed-toolchain.sh

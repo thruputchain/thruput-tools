@@ -32,20 +32,19 @@ These guards apply to the current workflows. Historical tags keep their original
 workflow definitions; restricting their execution requires separate repository
 controls.
 
-## GH-554 producer release
+## GH-554 format transition
 
-Version 0.44.0 supplies the v6 contract producer needed to build the matching
-runtime. Its default managed runtime is not compatible with the new protocol.
+Release hogd with temporary v5/v6 support first, using published tools 0.43.0
+to build its contracts. Publish the matching test executor and Rust SDK next.
 
-After maintainer approval and qualification against the candidate runtime, set
-`producer-release: true` for both the dry run and publication. This one-time
-option accepts only version 0.44.0 and skips only managed-runtime startup.
-Catalog downloads, checksums, package checks, and published-project host tests
-still run. Record the expected cross-repository CI failures in the release PR.
+Before publishing tools 0.44.0, pin that runtime and its verified asset digests
+in the managed-runtime catalog, and update the scaffold SDK pin. Pass normal
+CI and publication checks against those published dependencies. The earlier
+producer-only publication exception is withdrawn.
 
-Use this release to build the runtime. It is not a qualified local-node stack.
-The aligned tools release must pin the published v6 runtime and a matching SDK
-test executor, pass all runtime checks, and remove this exception.
+Upgrade and verify devnet before deploying v6 contracts or shipping explorer.
+Existing v5 contracts remain executable. Removing v5 support and designing an
+extensible header are separate decisions.
 
 ## Publishing credentials
 

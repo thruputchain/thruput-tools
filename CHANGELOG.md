@@ -1,20 +1,16 @@
 # Changelog
 
-## 0.44.0 — v6 producer release
+## 0.44.0 — v6 contract artifacts (unreleased)
 
 - Produce RV32 v6 artifacts with canonical onchain specs. Published tools 0.43.0
   produce v5 and cannot build fixtures for the v6-only runtime.
-- The v6 runtime cannot execute committed v5 contracts: loading one returns
-  `Unrecoverable`. Rebuild and redeploy contracts on a compatible fresh network.
-  An existing futurenet needs a separately approved reset; installing new tools
-  does not migrate its stored contracts.
+- The matching runtime accepts both v5 and v6 during the rollout. Existing v5
+  contracts remain executable; upgrade all validators before deploying v6.
 - Read deployed specs with `thruput inspect` and generate TypeScript bindings
   with `thruput codegen ts --address <address> --output bindings.ts`.
 - Use protocol crates 0.64.0, SDK 0.59.0, and interfaces 0.1.72.
-- This producer release builds the matching v6 runtime. The default managed
-  runtime and SDK test executor are not v6-compatible. Local-node commands and
-  `thruput test` require the subsequent aligned runtime/SDK/tools releases.
-  See [release instructions](docs/releases.md#gh-554-producer-release).
+- Publication waits for the compatible hogd, SDK test executor, and aligned
+  catalog/SDK pins. See [release instructions](docs/releases.md#gh-554-format-transition).
 
 ## 0.43.0
 
