@@ -551,7 +551,7 @@ mod tests {
                 .unwrap();
             let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
             assert_eq!(response["result"]["supportedMethods"], json!(registered));
-            assert_eq!(response["result"]["wireFormat"], "14.1.1");
+            assert_eq!(response["result"]["wireFormat"], "14.2.0");
         }
         faucet.abort();
     }

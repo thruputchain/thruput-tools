@@ -129,6 +129,7 @@ fn cases() -> Vec<(&'static str, i32, Value)> {
         ("getBalance", -32050, json!({"kind": "backendUnavailable"})),
         ("getBalance", -32051, json!({"kind": "backendTimeout"})),
         ("getBalance", -32053, json!({"kind": "overloaded"})),
+        ("getBalance", -32055, json!({"kind": "rateLimited"})),
         (
             "getTransactionReceipt",
             -32054,
@@ -139,9 +140,9 @@ fn cases() -> Vec<(&'static str, i32, Value)> {
 
 #[test]
 fn all_kinds_codes_and_declared_methods_have_consistent_schemas() {
-    assert_eq!(err::ERROR_INFOS.len(), 11);
+    assert_eq!(err::ERROR_INFOS.len(), 12);
     let unique: std::collections::BTreeSet<_> = err::ERROR_INFOS.iter().map(|v| v.code).collect();
-    assert_eq!(unique.len(), 11);
+    assert_eq!(unique.len(), 12);
     assert_eq!(err::METHODS.len(), 20);
     for method in err::METHODS {
         let codes = err::method_error_codes(method).unwrap();
@@ -176,7 +177,34 @@ fn all_kinds_codes_and_declared_methods_have_consistent_schemas() {
     }
     assert!(err::method_error_codes("futureMethod").is_none());
     assert!(err::method_data_schema("getBalance", -32031).is_none());
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.1.1");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.2.0");
+}
+
+#[test]
+fn gateway_rate_limit_data_has_typed_decimal_retry_delay_and_preserves_raw_error() {
+    let data = json!({"kind": "rateLimited", "retryAfterMs": "123"});
+    for method in ["getBalance", "sendTransaction"] {
+        agrees(method, err::codes::RATE_LIMITED, data.clone(), true);
+        assert!(matches!(
+            known(method, err::codes::RATE_LIMITED, data.clone()),
+            err::ErrorData::RateLimited {
+                retry_after_ms: Some(123)
+            }
+        ));
+        agrees(
+            method,
+            err::codes::RATE_LIMITED,
+            json!({"kind":"rateLimited", "retryAfterMs":123}),
+            false,
+        );
+        agrees(method, err::codes::RATE_LIMITED, json!({}), false);
+        agrees(
+            method,
+            err::codes::RATE_LIMITED,
+            json!({"kind":"rateLimited", "admission":"notAttempted"}),
+            false,
+        );
+    }
 }
 
 #[test]
@@ -497,6 +525,7 @@ fn retry_delays_follow_native_domains() {
         (-32050, "backendUnavailable"),
         (-32051, "backendTimeout"),
         (-32053, "overloaded"),
+        (-32055, "rateLimited"),
     ] {
         for value in [json!("0"), json!(u64::MAX.to_string())] {
             agrees(
@@ -542,7 +571,9 @@ fn optional_fields_reject_explicit_null() {
                 "receipt",
             ],
             "localFundingUnresolved" => vec!["cause"],
-            "backendUnavailable" | "backendTimeout" | "overloaded" => vec!["retryAfterMs"],
+            "backendUnavailable" | "backendTimeout" | "overloaded" | "rateLimited" => {
+                vec!["retryAfterMs"]
+            }
             "backendDataInvalid" => vec!["reason", "observation"],
             _ => vec![],
         };

@@ -48,6 +48,9 @@ pub mod codes {
     /// "the request never reached the backend, retrying is safe."
     pub const OVERLOADED: i32 = -32053;
 
+    /// The client exceeded its request budget before reaching a backend.
+    pub const RATE_LIMITED: i32 = -32055;
+
     /// All documented Thruput JSON-RPC error codes.
     pub const ALL: &[i32] = &[
         INVALID_PARAMS,
@@ -61,6 +64,7 @@ pub mod codes {
         BACKEND_TIMEOUT,
         NOT_IMPLEMENTED,
         OVERLOADED,
+        RATE_LIMITED,
     ];
 }
 
@@ -174,6 +178,12 @@ pub const ERROR_INFOS: &[RpcErrorInfo] = &[
             "The gateway or backend is overloaded and rejected the request ",
             "before it reached side-effecting backend execution."
         ),
+    },
+    RpcErrorInfo {
+        name: "RateLimited",
+        code: codes::RATE_LIMITED,
+        message: "Rate limited",
+        description: "The client exceeded its request budget. Retry after data.retryAfterMs milliseconds. The request never reached a backend.",
     },
 ];
 
@@ -290,6 +300,7 @@ pub const fn outcome_for_code(code: i32) -> &'static str {
         codes::VIEW_HEIGHT_UNAVAILABLE => "view_height_unavailable",
         codes::NOT_IMPLEMENTED | -32601 => "not_implemented",
         codes::OVERLOADED | -32006 | -32009 => "overloaded",
+        codes::RATE_LIMITED => "rate_limited",
         _ => "internal_error",
     }
 }

@@ -81,8 +81,14 @@ impl Fixture {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
         drop(listener);
+        let log = self
+            .directory
+            .path()
+            .join(format!("gateway-{}.log", self.starts));
         self.gateway = Some(
             tokio::process::Command::new(binary)
+                .arg("--config")
+                .arg(super::unthrottled_gateway_config(&log)?)
                 .arg("--runtime-manifest")
                 .arg(node.hogd_readiness().manifest_path.as_ref().unwrap())
                 .arg("--listen")
@@ -90,11 +96,7 @@ impl Fixture {
                 .arg("--scheduler-reconnect-grace-ms")
                 .arg("0")
                 .stdout(std::process::Stdio::null())
-                .stderr(std::fs::File::create(
-                    self.directory
-                        .path()
-                        .join(format!("gateway-{}.log", self.starts)),
-                )?)
+                .stderr(std::fs::File::create(&log)?)
                 .kill_on_drop(true)
                 .spawn()?,
         );
