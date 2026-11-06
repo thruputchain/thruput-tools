@@ -19,8 +19,8 @@ fn v6_header_layout_and_field_values() {
 
     assert_eq!(&artifact[..8], b"GHRV32A1");
     assert_eq!(read_u32(&artifact, 8), 6, "format_version");
-    assert_eq!(read_u32(&artifact, 12), 136, "header_bytes");
-    assert_eq!(HEADER_BYTES, 136);
+    assert_eq!(read_u32(&artifact, 12), 128, "header_bytes");
+    assert_eq!(HEADER_BYTES, 128);
     assert_eq!(
         read_u32(&artifact, 28),
         3,
@@ -42,14 +42,14 @@ fn v6_header_layout_and_field_values() {
         sha256(&memory).as_slice(),
         "initial_memory digest"
     );
-    assert_eq!(&artifact[128..136], &[0; 8], "absent spec");
-    assert_eq!(&artifact[136..144], &code, "code section placement");
+    assert_eq!(&artifact[128..136], &code, "code section placement");
     assert_eq!(
-        &artifact[144..],
+        &artifact[136..139],
         &memory,
         "initial_memory section placement"
     );
-    assert_eq!(artifact.len(), 136 + 8 + 3);
+    assert_eq!(&artifact[139..], &[0; 4], "empty XDR extension list");
+    assert_eq!(artifact.len(), 128 + 8 + 3 + 4);
 
     verify_artifact(&artifact).expect("self-verifies");
 }
@@ -62,9 +62,13 @@ fn verify_rejects_trailing_bytes_and_truncation() {
     let mut padded = artifact.clone();
     padded.push(0);
     let err = verify_artifact(&padded).expect_err("trailing byte should reject");
-    assert!(err.to_string().contains("non-canonical"), "got: {err}");
+    assert!(err.to_string().contains("trailing bytes"), "got: {err}");
 
+    // Cutting into the extension list, or into the sections before it.
     let truncated = &artifact[..artifact.len() - 1];
+    let err = verify_artifact(truncated).expect_err("truncation should reject");
+    assert!(err.to_string().contains("truncated"), "got: {err}");
+    let truncated = &artifact[..artifact.len() - 5];
     let err = verify_artifact(truncated).expect_err("truncation should reject");
     assert!(err.to_string().contains("non-canonical"), "got: {err}");
 }
@@ -172,13 +176,18 @@ fn declared_sizes_reads_the_header_and_nothing_else() {
         declared_sizes(&artifact)
     );
 
-    // Not a v6 artifact: too short, wrong magic, or another format version.
+    // v5 headers have the same layout and remain readable.
+    let mut v5 = artifact.clone();
+    v5[8..12].copy_from_slice(&5u32.to_le_bytes());
+    assert_eq!(declared_sizes(&v5), declared_sizes(&artifact));
+
+    // Not a readable artifact: too short, wrong magic, or another format version.
     assert_eq!(declared_sizes(&artifact[..HEADER_BYTES - 1]), None);
     let mut bad_magic = artifact.clone();
     bad_magic[0] ^= 0xff;
     assert_eq!(declared_sizes(&bad_magic), None);
     let mut other_version = artifact.clone();
-    other_version[8..12].copy_from_slice(&5u32.to_le_bytes());
+    other_version[8..12].copy_from_slice(&7u32.to_le_bytes());
     assert_eq!(declared_sizes(&other_version), None);
     assert_eq!(declared_sizes(&[]), None);
 }

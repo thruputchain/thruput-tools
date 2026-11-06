@@ -5,12 +5,18 @@
 //! fingerprint, the writer, and the validator.
 
 pub mod error;
+pub mod extension;
 pub mod format;
 
 pub use error::{ArtifactError, Result};
+pub use extension::{
+    ArtifactExtension, ArtifactSpec, EXTENSION_KIND_CONTRACT_SPEC, decode_spec_extension,
+    encode_spec_extension,
+};
 pub use format::{
-    ArtifactSpec, DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, DeclaredSizes, FORMAT_FINGERPRINT,
-    FORMAT_VERSION, HEADER_BYTES, INSTRUCTION_BYTES, MAGIC, artifact_spec, build_artifact,
-    build_artifact_with_spec, compute_format_fingerprint, declared_sizes, sha256, sha256_hex,
-    verify_artifact,
+    DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, DeclaredSizes, FORMAT_FINGERPRINT,
+    FORMAT_VERSION, HEADER_BYTES, INSTRUCTION_BYTES, LEGACY_FORMAT_VERSION_V5, MAGIC,
+    READABLE_FORMAT_VERSIONS, artifact_extensions, artifact_spec, build_artifact,
+    build_artifact_with_extensions, build_artifact_with_spec, compute_format_fingerprint,
+    declared_sizes, sha256, sha256_hex, verify_artifact,
 };

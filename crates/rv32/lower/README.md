@@ -56,8 +56,8 @@ The lowerer:
    alloc sections, no relocations, …) and materializes the code plus the
    initial-memory high-water prefix. v4 dispatch lives in the guest, so no
    symbol scanning is needed and stripped release builds are valid inputs.
-3. Packs the v6 header, code, and initial memory with an absent spec; hashes the
-   code and initial-memory sections; and validates the artifact.
+3. Packs the v6 header, code, initial memory, and an empty extension list;
+   hashes the code and initial-memory sections; and validates the artifact.
 
 ## Library
 

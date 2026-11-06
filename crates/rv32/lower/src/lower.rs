@@ -98,8 +98,9 @@ pub const FINAL_SPEC_SECTION: &str = "thruputspecv2";
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Lowered {
-    /// The complete spec-less v6 artifact bytes (`.rv32a`). The SDK build
-    /// pipeline adds its canonical spec outside the guest memory image.
+    /// The complete v6 artifact bytes (`.rv32a`), with no extensions. The SDK
+    /// build pipeline adds its canonical spec as an extension, outside the
+    /// guest memory image.
     pub artifact: Vec<u8>,
     /// The contract code (`.text`) section.
     pub code: Vec<u8>,
