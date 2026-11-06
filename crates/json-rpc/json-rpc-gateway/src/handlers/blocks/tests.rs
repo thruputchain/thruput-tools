@@ -160,8 +160,8 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
     }
 }
 
-// All pages decode successfully. Their query-dependent defects must be counted
-// as backend errors before the shared service can reject them a second time.
+// All pages decode successfully. Their query-dependent defects must still be
+// rejected by the caller even though the raw backend reply counts as success.
 fn history_page(case: u32) -> thruput_indexer::TransactionRefPage {
     let hashes = match case {
         13 => (0..14).collect(), // More rows than the requested limit.
@@ -185,7 +185,7 @@ fn history_page(case: u32) -> thruput_indexer::TransactionRefPage {
 }
 
 #[tokio::test]
-async fn block_metrics_count_rejected_values_and_pages_as_errors() {
+async fn block_metrics_count_raw_replies_before_caller_validation() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let mut services = ServiceMap::new();
@@ -257,7 +257,7 @@ async fn check_native_blocks(ctx: &Arc<GatewayContext>, health: &crate::health::
         Err(RpcServerError::BackendUnavailable(_))
     ));
     let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
-    for (outcome, count) in [("ok", 2), ("error", 3)] {
+    for (outcome, count) in [("ok", 4), ("error", 1)] {
         assert!(metrics.contains(&format!(
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"get_block_by_height\",outcome=\"{outcome}\"}} {count}\n"
         )), "{metrics}");
@@ -342,10 +342,11 @@ async fn check_native_history(ctx: &Arc<GatewayContext>, health: &crate::health:
     ));
     let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
     for (operation, outcome, count) in [
-        ("get_events", "error", 3),
+        ("get_events", "ok", 2),
+        ("get_events", "error", 1),
         ("get_events", "timeout", 1),
-        ("get_transactions_by_address", "error", 2),
-        ("get_transactions_by_block", "error", 2),
+        ("get_transactions_by_address", "ok", 2),
+        ("get_transactions_by_block", "ok", 2),
     ] {
         assert!(metrics.contains(&format!(
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"{operation}\",outcome=\"{outcome}\"}} {count}\n"
@@ -417,17 +418,21 @@ async fn check_native_history_page_metrics(
         }
     }
     let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
-    // Include the typed-outcome calls made earlier using this context.
+    // Include the typed-outcome calls made earlier using this context. Raw
+    // replies count as success even when caller-side decoding rejects a page.
     for (operation, outcome, count) in [
-        ("get_events", "ok", 1),
-        ("get_events", "error", 7),
-        ("get_transactions_by_address", "ok", 1),
-        ("get_transactions_by_address", "error", 6),
-        ("get_transactions_by_block", "ok", 1),
-        ("get_transactions_by_block", "error", 6),
+        ("get_events", "ok", 7),
+        ("get_events", "error", 1),
+        ("get_transactions_by_address", "ok", 7),
+        ("get_transactions_by_block", "ok", 7),
     ] {
         assert!(metrics.contains(&format!(
             "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"{operation}\",outcome=\"{outcome}\"}} {count}\n"
+        )), "{metrics}");
+    }
+    for operation in ["get_transactions_by_address", "get_transactions_by_block"] {
+        assert!(!metrics.contains(&format!(
+            "groundhog_gateway_backend_requests_total{{backend=\"indexer\",operation=\"{operation}\",outcome=\"error\"}}"
         )), "{metrics}");
     }
 }

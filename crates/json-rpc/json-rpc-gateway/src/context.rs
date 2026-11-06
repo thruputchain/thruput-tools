@@ -175,6 +175,8 @@ impl Drop for AbortTaskOnDrop {
 /// the client out of the lock before making RPC calls, so the read
 /// guard is not held across `.await`.
 pub struct GatewayContext {
+    /// Direct backend concurrency bounds, shared across callers.
+    pub(crate) lanes: crate::lanes::BackendLanes,
     /// The protocol token this gateway offers at intro: the configured
     /// override when there is one, otherwise this build's own. Resolved once
     /// at construction, so nothing downstream re-parses operator text.
@@ -384,6 +386,7 @@ impl GatewayContext {
 
         Self {
             scheduler,
+            lanes: crate::lanes::BackendLanes::new(&config.admission, &metrics),
             scheduler_lookup_admission: Arc::new(Semaphore::new(SCHEDULER_LOOKUP_MAX_OUTSTANDING)),
             scheduler_lookup_execution: Arc::new(Semaphore::new(
                 config.scheduler_lookup_pool_size.get(),

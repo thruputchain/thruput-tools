@@ -1,3 +1,4 @@
+pub(crate) mod lanes;
 mod lookup;
 pub(crate) use lookup::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
@@ -124,6 +125,7 @@ pub struct GatewayMetrics {
 }
 
 struct MetricsInner {
+    lanes: lanes::LaneMetrics,
     lookup: lookup::LookupMetrics,
     registry: Registry,
     gather_lock: Mutex<()>,
@@ -152,6 +154,9 @@ struct MetricsInner {
 }
 
 impl GatewayMetrics {
+    pub(crate) fn lanes(&self) -> &lanes::LaneMetrics {
+        &self.inner.lanes
+    }
     pub(crate) fn scheduler_lookup(&self) -> &lookup::LookupMetrics {
         &self.inner.lookup
     }
@@ -166,6 +171,7 @@ impl GatewayMetrics {
         commit_hash: Option<&'static str>,
     ) -> prometheus::Result<Self> {
         let registry = Registry::new();
+        let lanes = lanes::LaneMetrics::new(&registry)?;
         let lookup = lookup::LookupMetrics::new(&registry)?;
         let health_status = GaugeVec::new(
             Opts::new(
@@ -364,6 +370,7 @@ impl GatewayMetrics {
         Ok(Self {
             inner: Arc::new(MetricsInner {
                 lookup,
+                lanes,
                 registry,
                 gather_lock: Mutex::new(()),
                 health_status,
