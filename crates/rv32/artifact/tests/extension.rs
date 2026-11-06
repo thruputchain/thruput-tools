@@ -134,6 +134,31 @@ fn reader_rejects_a_malformed_spec_body_but_not_the_container() {
 }
 
 #[test]
+fn reader_rejects_inner_spec_padding_but_not_the_container() {
+    let mut body = be(&[1, 1]);
+    body.extend_from_slice(&[0xaa, 0, 0, 1]);
+    let artifact = with_extensions(&[ArtifactExtension {
+        kind: EXTENSION_KIND_CONTRACT_SPEC,
+        body: &body,
+    }]);
+    verify_artifact(&artifact).unwrap();
+    let error = artifact_spec(&artifact).unwrap_err();
+    assert!(error.to_string().contains("nonzero XDR padding"), "{error}");
+}
+
+#[test]
+fn reader_rejects_inner_spec_trailing_bytes_but_not_the_container() {
+    let body = be(&[1, 0, 0]);
+    let artifact = with_extensions(&[ArtifactExtension {
+        kind: EXTENSION_KIND_CONTRACT_SPEC,
+        body: &body,
+    }]);
+    verify_artifact(&artifact).unwrap();
+    let error = artifact_spec(&artifact).unwrap_err();
+    assert!(error.to_string().contains("trailing bytes"), "{error}");
+}
+
+#[test]
 fn every_truncation_is_rejected() {
     let artifact = with_spec(SPEC);
     for end in 0..artifact.len() {
