@@ -1,5 +1,11 @@
 # Thruput Developer Tools
 
+[Website](https://www.thruput.network/) ·
+[Developer docs](https://www.thruput.network/docs/) ·
+[Community discussions](https://github.com/thruputchain/thruput-docs/discussions) ·
+[Discord: #thruput](https://discord.com/channels/897514728459468821/1564948118162898954)
+([join server](https://discord.gg/stellardev))
+
 This repository contains Thruput's off-chain tools: the `thruput` CLI,
 JSON-RPC gateway and clients, signing and RV32 build libraries, hosted faucet,
 and local development, simulation, and benchmark harnesses. The node runtime
