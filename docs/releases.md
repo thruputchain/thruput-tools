@@ -38,10 +38,12 @@ The agreed sequence is producer-first. Qualify the combined candidate tools and
 hogd before publishing. v6 uses a 128-byte header followed by code, initial memory,
 and an XDR extension list. Existing v5 contracts remain readable and executable.
 
-1. Publish the v6 producer tools. The current workflow still requires managed
-   runtime startup, and required CI checks use older published dependencies.
-   Prepare a reviewed, scoped exception for those dependency failures before
-   publishing; the current workflow does not yet provide that exception.
+1. Publish the v6 producer tools after review. For 0.44.0 only, the default-off
+   `producer-release` input skips managed-runtime startup in both the dry run
+   and publication. Catalog downloads, checksums, package checks, and published
+   host-project tests still run. Required branch checks are unchanged: landing
+   the producer with known dependency failures still needs a maintainer-approved
+   merge exception.
 2. Pin the published producer in hogd and publish the compatible runtime,
    generator, and test executor. Release the Rust SDK with that executor.
 3. Pin the runtime and verified asset digests in the tools catalog and update

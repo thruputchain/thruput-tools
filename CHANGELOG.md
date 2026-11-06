@@ -10,8 +10,8 @@
   with `thruput codegen ts --address <address> --output bindings.ts`.
 - Use protocol crates 0.64.0, SDK 0.59.0, and interfaces 0.1.72.
 - Stage producer publication before the compatible runtime and executor, then
-  release aligned catalog/SDK pins. The scoped producer-release exception is
-  still pending. See [release instructions](docs/releases.md#gh-554-format-transition).
+  release aligned catalog/SDK pins. A default-off 0.44.0-only publication option
+  skips managed startup. See [release instructions](docs/releases.md#gh-554-format-transition).
 
 ## 0.43.0
 
