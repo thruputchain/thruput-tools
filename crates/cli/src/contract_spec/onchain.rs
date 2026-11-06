@@ -99,7 +99,8 @@ fn inspect_artifact(
             if bytes.len() < 12 || bytes[..8] != thruput_rv32_artifact::MAGIC {
                 return Err(invalid("invalid RV32 artifact header"));
             }
-            if bytes[8..12] != thruput_rv32_artifact::FORMAT_VERSION.to_le_bytes() {
+            let version = u32::from_le_bytes(bytes[8..12].try_into().expect("bug: 4-byte slice"));
+            if !thruput_rv32_artifact::READABLE_FORMAT_VERSIONS.contains(&version) {
                 return Ok(("unsupportedFormat", None));
             }
             let Some(embedded) = thruput_rv32_artifact::artifact_spec(bytes)
@@ -214,9 +215,22 @@ mod tests {
     }
 
     #[test]
+    fn reads_v5_contracts_as_having_no_spec() {
+        let mut data = build_artifact(&[0; 4], &[], 0, 16).unwrap();
+        // A v5 body ends after initial memory, with no extension list.
+        data.truncate(data.len() - 4);
+        data[8..12].copy_from_slice(&5_u32.to_le_bytes());
+        let (deployment, artifact) = response(data);
+        assert_eq!(
+            inspect_artifact(&deployment, &artifact).unwrap(),
+            ("absent", None)
+        );
+    }
+
+    #[test]
     fn preserves_identity_for_unknown_formats_but_rejects_bad_magic() {
         let mut data = build_artifact(&[0; 4], &[], 0, 16).unwrap();
-        data[8..12].copy_from_slice(&5_u32.to_le_bytes());
+        data[8..12].copy_from_slice(&7_u32.to_le_bytes());
         let (deployment, artifact) = response(data.clone());
         assert_eq!(
             inspect_artifact(&deployment, &artifact).unwrap(),

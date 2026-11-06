@@ -34,17 +34,24 @@ controls.
 
 ## GH-554 format transition
 
-Release hogd with temporary v5/v6 support first, using published tools 0.43.0
-to build its contracts. Publish the matching test executor and Rust SDK next.
+The agreed sequence is producer-first. Qualify the combined candidate tools and
+hogd before publishing. v6 uses a 128-byte header followed by code, initial memory,
+and an XDR extension list. Existing v5 contracts remain readable and executable.
 
-Before publishing tools 0.44.0, pin that runtime and its verified asset digests
-in the managed-runtime catalog, and update the scaffold SDK pin. Pass normal
-CI and publication checks against those published dependencies. The earlier
-producer-only publication exception is withdrawn.
+1. Publish the v6 producer tools. The current workflow still requires managed
+   runtime startup, and required CI checks use older published dependencies.
+   Prepare a reviewed, scoped exception for those dependency failures before
+   publishing; the current workflow does not yet provide that exception.
+2. Pin the published producer in hogd and publish the compatible runtime,
+   generator, and test executor. Release the Rust SDK with that executor.
+3. Pin the runtime and verified asset digests in the tools catalog and update
+   the scaffold SDK pin. Remove the temporary exception and publish a new aligned
+   tools release with normal CI and publication checks passing.
+4. Align the TypeScript packages and qualify the exact published stack. Upgrade
+   and verify the network before deploying v6 contracts or shipping explorer.
 
-Upgrade and verify devnet before deploying v6 contracts or shipping explorer.
-Existing v5 contracts remain executable. Removing v5 support and designing an
-extensible header are separate decisions.
+New optional metadata kinds need no format change. Execution changes still need
+an explicit compatibility and activation plan. Preserve existing network state.
 
 ## Publishing credentials
 

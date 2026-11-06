@@ -743,7 +743,8 @@ JSON schema version 1 reports `specStatus` as `available`, `absent`, `native`,
 `notDeployed`, `unsupportedSchema`, or `unsupportedFormat`. Without `--output`,
 all six statuses return success. Unsupported schemas and artifact formats retain
 the verified deployment details, with `spec: null`. An unavailable artifact or
-malformed response returns an error. Native contracts have no embedded RV32 spec.
+malformed response returns an error. Native contracts and contracts deployed as
+v5 artifacts have no embedded RV32 spec.
 With `--output`, only `available` succeeds; every other status returns an error
 without creating or replacing the output file, even when combined with `--json`.
 The deployment is current state, not a historical execution record.
