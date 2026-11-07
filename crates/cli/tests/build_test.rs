@@ -522,6 +522,68 @@ fn build_json_lists_a_typescript_codegen_refusal_under_warnings() {
     );
 }
 
+#[test]
+#[serial]
+fn build_without_spec_emits_artifact_and_skips_bindings() {
+    let tmp = TempDir::new().unwrap();
+    let project_root = fs::canonicalize(tmp.path()).unwrap();
+    let fake_bin = write_demo_contract_rv32(&project_root, &[]);
+    fs::write(
+        project_root.join("fixture.elf"),
+        support::minimal_rv32_elf(),
+    )
+    .unwrap();
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = EnvGuard::set("PATH", fake_bin.as_os_str());
+
+    let result = thruput_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &[],
+        &thruput_cli::artifacts::ArtifactOptions::default(),
+        None,
+        None,
+        &["ts".into()],
+        &thruput_cli::Print::quiet(),
+    )
+    .unwrap();
+    let artifact = fs::read(result.rv32).unwrap();
+    thruput_rv32_artifact::verify_artifact(&artifact).unwrap();
+    assert!(
+        thruput_rv32_artifact::artifact_spec(&artifact)
+            .unwrap()
+            .is_none()
+    );
+    assert!(result.spec_json.is_none());
+    assert!(result.spec_xdr.is_none());
+    assert!(result.bindings_ts.is_none());
+}
+
+#[test]
+#[serial]
+fn build_with_malformed_spec_fails_instead_of_omitting_it() {
+    let tmp = TempDir::new().unwrap();
+    let project_root = fs::canonicalize(tmp.path()).unwrap();
+    let fake_bin = write_demo_contract_rv32(&project_root, &[0xff; 16]);
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = EnvGuard::set("PATH", fake_bin.as_os_str());
+
+    let result = thruput_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &[],
+        &thruput_cli::artifacts::ArtifactOptions::default(),
+        None,
+        None,
+        &[],
+        &thruput_cli::Print::quiet(),
+    );
+    assert!(matches!(result, Err(thruput_cli::CliError::SpecFailed(_))));
+    assert!(
+        !project_root
+            .join("target/thruput/demo_contract_rv32.rv32a")
+            .exists()
+    );
+}
+
 /// Build `demo-contract-rv32` through a stand-in cargo that emits an ELF
 /// carrying `raw_spec`, without requesting any bindings.
 fn build_demo_contract_rv32(raw_spec: &[u8]) -> thruput_cli::build::BuildResult {

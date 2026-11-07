@@ -340,10 +340,11 @@ thruput build -- --verbose   # pass extra args to cargo
 
 The RV32 target uses the built-in `thruput-rv32-lower` library (v4 dispatch
 lives in the guest, so stripped release builds are valid), then writes
-`target/thruput/<package>.rv32a`, build metadata, and `.spec.json` / `.spec.xdr`
-contract-spec sidecars. The canonical spec is also embedded in the v6 artifact,
-outside guest memory and covered by the contract hash. Supported builds and
-deployments require it; the low-level lowerer can emit spec-less artifacts.
+`target/thruput/<package>.rv32a` and build metadata. When the contract contains
+a spec, the build embeds it in the v6 artifact and exports `.spec.json` /
+`.spec.xdr` sidecars. The embedded spec is outside guest memory and covered by
+the contract hash. Builds accept contracts without specs, but reject malformed
+specs. CLI deployments still require an embedded spec.
 
 In a multi-contract Cargo workspace, keep `thruput.toml`,
 `rust-toolchain.toml`, and `.cargo/` at the workspace root so members share the

@@ -533,17 +533,18 @@ pub fn build_rv32_project(
         Err(error) => return Err(error.into()),
     }
     print.phase("Finalizing contract spec...");
-    let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?
-        .ok_or_else(|| CliError::SpecFailed("contract build requires a contract spec; use the low-level lowerer for custom spec-less artifacts".into()))?;
+    let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?;
     lowered.artifact = thruput_rv32_artifact::build_artifact_with_spec(
         &lowered.code,
         &lowered.initial_memory,
         lowered.initial_memory_start,
         lowered.memory_bytes,
-        Some(thruput_rv32_artifact::ArtifactSpec {
-            schema_version: crate::contract_spec::ARTIFACT_SPEC_SCHEMA_VERSION,
-            bytes: &finalized.xdr_bytes,
-        }),
+        finalized
+            .as_ref()
+            .map(|spec| thruput_rv32_artifact::ArtifactSpec {
+                schema_version: crate::contract_spec::ARTIFACT_SPEC_SCHEMA_VERSION,
+                bytes: &spec.xdr_bytes,
+            }),
     )
     .map_err(thruput_rv32_lower::LowerError::from)?;
     thruput_rv32_artifact::verify_artifact(&lowered.artifact)
@@ -566,22 +567,29 @@ pub fn build_rv32_project(
         return Err(error.into());
     }
 
-    let spec_json = Some(finalized.json_path);
-    let spec_xdr = Some(finalized.xdr_path);
+    let spec_json = finalized.as_ref().map(|spec| spec.json_path.clone());
+    let spec_xdr = finalized.as_ref().map(|spec| spec.xdr_path.clone());
     let source_name = rv32
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
     let mut warnings = Vec::new();
     let bindings_ts = if bindings.iter().any(|binding| binding == "ts") {
-        print.phase("Generating TypeScript bindings...");
-        let ts_path = rv32.with_extension("ts");
-        let ts = crate::codegen::generate_ts_bindings(&finalized.spec, source_name)?;
-        fs::write(&ts_path, ts.as_bytes())?;
-        print.status(format_args!("Wrote {}", ts_path.display()));
-        Some(ts_path)
+        if let Some(ref finalized) = finalized {
+            print.phase("Generating TypeScript bindings...");
+            let ts_path = rv32.with_extension("ts");
+            let ts = crate::codegen::generate_ts_bindings(&finalized.spec, source_name)?;
+            fs::write(&ts_path, ts.as_bytes())?;
+            print.status(format_args!("Wrote {}", ts_path.display()));
+            Some(ts_path)
+        } else {
+            print.warn("no contract spec found — skipping TypeScript bindings");
+            None
+        }
     } else {
-        if let Some(warning) = ts_bindings_warning(&finalized.spec, source_name) {
+        if let Some(ref finalized) = finalized
+            && let Some(warning) = ts_bindings_warning(&finalized.spec, source_name)
+        {
             print.warn(&warning.message);
             warnings.push(warning);
         }
