@@ -243,6 +243,17 @@ async fn lookup_transaction_info(
     .await
 }
 
+/// Read retained canonical input through the existing bounded indexer transport.
+pub async fn native_transaction_input(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    hash: TxHash,
+) -> Result<native_out::TransactionInputResult, NativeReadError> {
+    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
+    let result = indexed_transaction_info(ctx, deadline, hash).await?;
+    native_transaction::input_lookup(hash, result)
+}
+
 /// Strict native receipt projection using the existing indexer transport.
 #[tracing::instrument(level = "debug", skip_all, fields(?tx_hash))]
 pub async fn native_transaction_receipt(

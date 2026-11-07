@@ -83,8 +83,46 @@ fn write_contract_toml(workspace_root: &std::path::Path) {
 
 fn write_opaque_rv32_artifact(root: &std::path::Path) -> std::path::PathBuf {
     let path = root.join("test.rv32a");
-    std::fs::write(&path, b"rv32-artifact").unwrap();
+    std::fs::write(&path, spec_artifact_fixture()).unwrap();
     path
+}
+
+fn spec_artifact_fixture() -> Vec<u8> {
+    let spec = thruput_contract_spec::ContractSpec {
+        interfaces: vec![thruput_contract_spec::ContractSpecInterface {
+            name: "Counter".try_into().unwrap(),
+            vers: "0.1.0".try_into().unwrap(),
+            throws: vec![].try_into().unwrap(),
+            methods: vec![].try_into().unwrap(),
+        }]
+        .try_into()
+        .unwrap(),
+        type_defs: vec![].try_into().unwrap(),
+        events: vec![].try_into().unwrap(),
+    };
+    artifact_with_spec(&spec)
+}
+
+fn artifact_with_spec(spec: &thruput_contract_spec::ContractSpec) -> Vec<u8> {
+    let bytes = xdrs::txs::encode(spec).unwrap();
+    thruput_rv32_artifact::build_artifact_with_spec(
+        &[0; 4],
+        &[],
+        0,
+        65536,
+        Some(thruput_rv32_artifact::ArtifactSpec {
+            schema_version: 1,
+            bytes: &bytes,
+        }),
+    )
+    .unwrap()
+}
+
+fn spec_elf_fixture() -> Vec<u8> {
+    support::minimal_rv32_elf_with_section(
+        thruput_spec_tool::RAW_SECTION_NAME,
+        &support::minimal_contract_spec_raw(),
+    )
 }
 
 fn write_bundle_manifest(path: &std::path::Path, version: &str, source_commit: &str) {
@@ -4536,21 +4574,220 @@ fn node_rejects_ramdb_size_without_a_recognized_unit() {
 }
 
 #[test]
-fn codegen_rv32_artifact_points_to_spec_sidecar() {
+fn codegen_requires_exactly_one_source() {
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    for args in [
+        vec!["codegen", "ts"],
+        vec!["codegen", "ts", "counter.spec.xdr", "--address", &address],
+        vec![
+            "codegen",
+            "ts",
+            "counter.spec.xdr",
+            "--rpc-url",
+            "http://localhost:1",
+        ],
+    ] {
+        let output = thruput().args(args).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+}
+
+fn codegen_artifact_response(data: Vec<u8>) -> (serde_json::Value, serde_json::Value) {
+    use sha2::{Digest, Sha256};
+    use thruput_xdr::contract::{Contract, ContractBlob, ContractType};
+
+    let size = data.len();
+    let bytes = xdrs::txs::encode(&Contract::kRv32 {
+        rv32_contract: ContractBlob {
+            data: data.try_into().unwrap(),
+        },
+    })
+    .unwrap();
+    let hash = thruput_encoding::encode(&Sha256::digest(&bytes));
+    (
+        serde_json::json!({ "hash": hash, "size": size, "contractType": ContractType::kRv32.0 }),
+        serde_json::json!({ "hash": hash, "contractXdr": format!("0x{}", hex::encode(bytes)) }),
+    )
+}
+
+fn codegen_rpc(
+    address: &str,
+    deployment: serde_json::Value,
+    artifact: serde_json::Value,
+) -> (String, MockServer<()>) {
+    let address = address.to_owned();
+    let expected_address = address.clone();
+    let hash = deployment["hash"].clone();
+    let deployed = !deployment.is_null();
+    let server = rpc_mock()
+        .method("getContractDeployment", move |_| {
+            Ok(serde_json::json!({
+                "address": address, "stateBlockHeight": "12", "deployment": deployment,
+            }))
+        })
+        .method("getContractArtifact", move |_| Ok(artifact.clone()))
+        .start();
+    recorded_mock(server, move |script| {
+        assert_eq!(
+            script.expect("getContractDeployment")["address"],
+            expected_address
+        );
+        if deployed {
+            assert_eq!(script.expect("getContractArtifact")["hash"], hash);
+        }
+    })
+}
+
+#[test]
+fn codegen_onchain_matches_local_bindings_for_stdout_json_and_file() {
+    let tmp = TempDir::new().unwrap();
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    let source = tmp.path().join("counter.rv32a");
+    let spec = xdrs::txs::decode(include_bytes!(
+        "../fixtures/codegen/typed_contract.spec.xdr"
+    ))
+    .unwrap();
+    let data = artifact_with_spec(&spec);
+    std::fs::write(&source, &data).unwrap();
+    let local = thruput()
+        .args(["codegen", "ts"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(local.status.success());
+    let expected = String::from_utf8(local.stdout)
+        .unwrap()
+        .replace("counter.rv32a", &address);
+    let output_path = tmp.path().join("bindings.ts");
+
+    for mode in ["stdout", "json", "file"] {
+        let (deployment, artifact) = codegen_artifact_response(data.clone());
+        let (rpc_url, server) = codegen_rpc(&address, deployment, artifact);
+        let mut command = thruput();
+        command.args(["codegen", "ts"]).current_dir(tmp.path());
+        if mode == "file" {
+            std::fs::write(tmp.path().join("thruput.toml"), format!(
+                "[profile.bindings]\nrpc_url = '{rpc_url}'\n[profile.bindings.contracts]\ncounter = '{address}'\n"
+            )).unwrap();
+            command.args(["--address", "counter", "--profile", "bindings"]);
+        } else {
+            command.args(["--address", &address, "--rpc-url", &rpc_url]);
+        }
+        if mode != "stdout" {
+            command.arg("--json");
+        }
+        if mode == "file" {
+            command.arg("--output").arg(&output_path);
+        }
+        let output = command.output().unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if mode == "stdout" {
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+        } else {
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["command"], "codegen.ts");
+            assert_eq!(result["data"]["source"], address);
+            if mode == "json" {
+                assert_eq!(result["data"]["typescript"], expected);
+            } else {
+                assert_eq!(std::fs::read_to_string(&output_path).unwrap(), expected);
+                assert_eq!(result["data"]["output"], output_path.to_str().unwrap());
+            }
+        }
+    }
+}
+
+#[test]
+fn codegen_onchain_failures_preserve_existing_output() {
+    let tmp = TempDir::new().unwrap();
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    let output_path = tmp.path().join("bindings.ts");
+    std::fs::write(&output_path, "existing bindings").unwrap();
+    let (deployment, mut corrupted) = codegen_artifact_response(spec_artifact_fixture());
+    corrupted["contractXdr"] = serde_json::json!("0x00");
+    let (absent_deployment, absent_artifact) = codegen_artifact_response(
+        thruput_rv32_artifact::build_artifact(&[0; 4], &[], 0, 16).unwrap(),
+    );
+    let (unknown_deployment, unknown_artifact) = codegen_artifact_response(
+        thruput_rv32_artifact::build_artifact_with_spec(
+            &[0; 4],
+            &[],
+            0,
+            16,
+            Some(thruput_rv32_artifact::ArtifactSpec {
+                schema_version: 99,
+                bytes: &[1],
+            }),
+        )
+        .unwrap(),
+    );
+    for (deployment, artifact, error) in [
+        (
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            "notDeployed",
+        ),
+        (absent_deployment, absent_artifact, "absent"),
+        (unknown_deployment, unknown_artifact, "unsupportedSchema"),
+        (deployment, corrupted, "hash mismatch"),
+    ] {
+        let (rpc_url, server) = codegen_rpc(&address, deployment, artifact);
+        let output = thruput()
+            .args([
+                "--json",
+                "codegen",
+                "ts",
+                "--address",
+                &address,
+                "--rpc-url",
+                &rpc_url,
+                "--output",
+            ])
+            .arg(&output_path)
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert!(
+            report["error"]["message"].as_str().unwrap().contains(error),
+            "{report}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&output_path).unwrap(),
+            "existing bindings"
+        );
+    }
+}
+
+#[test]
+fn codegen_rv32_artifact_reads_embedded_spec() {
     let tmp = TempDir::new().unwrap();
     let artifact = tmp.path().join("counter.rv32a");
-    std::fs::write(&artifact, b"rv32-artifact").unwrap();
+    std::fs::write(&artifact, spec_artifact_fixture()).unwrap();
 
     let output = thruput()
         .args(["codegen", "ts", artifact.to_str().unwrap()])
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(&tmp.path().join("counter.spec.xdr").display().to_string()),
-        "expected adjacent sidecar path, got: {stderr}"
+        !stderr.contains(".spec.xdr"),
+        "embedded spec must not require a sidecar: {stderr}"
     );
 }
 
@@ -4716,7 +4953,7 @@ fn prepare_integration_startup_fixture(tmp: &TempDir) -> (std::path::PathBuf, St
         .join("riscv32im-unknown-none-elf/release")
         .join("demo_contract");
     let elf_fixture = tmp.path().join("fixture.elf");
-    std::fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    std::fs::write(&elf_fixture, spec_elf_fixture()).unwrap();
     let metadata_json = serde_json::json!({
         "workspace_root": tmp.path(),
         "target_directory": target_dir,
@@ -4880,7 +5117,7 @@ fn prepare_failed_rv32_test_fixture(tmp: &TempDir) -> std::path::PathBuf {
         .path()
         .join("target/riscv32im-unknown-none-elf/release/demo_contract");
     let elf_fixture = tmp.path().join("fixture.elf");
-    std::fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    std::fs::write(&elf_fixture, spec_elf_fixture()).unwrap();
     let metadata_json = serde_json::json!({
         "workspace_root": tmp.path(),
         "target_directory": tmp.path().join("target"),
@@ -5006,7 +5243,7 @@ fn test_rv32_harness_receives_target_dir_and_preserves_legacy_config() {
     let raw_dir = target_dir.join("riscv32im-unknown-none-elf/release");
     let raw_elf = raw_dir.join("demo_contract");
     let elf_fixture = tmp.path().join("fixture.elf");
-    std::fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    std::fs::write(&elf_fixture, spec_elf_fixture()).unwrap();
     let metadata_json = serde_json::json!({
         "workspace_root": tmp.path(),
         "target_directory": target_dir,
@@ -5258,7 +5495,7 @@ fn write_deploy_workspace(root: &std::path::Path) -> (std::path::PathBuf, std::p
 
     let artifact = root.join("target/thruput/counter.rv32a");
     std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
-    std::fs::write(&artifact, b"rv32-counter").unwrap();
+    std::fs::write(&artifact, spec_artifact_fixture()).unwrap();
     (member, artifact)
 }
 
@@ -5675,7 +5912,10 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
         stdout["data"]["artifactPath"].as_str().unwrap(),
         rv32_path.to_string_lossy()
     );
-    assert_eq!(stdout["data"]["artifactBytes"], "13");
+    assert_eq!(
+        stdout["data"]["artifactBytes"],
+        spec_artifact_fixture().len().to_string()
+    );
     assert!(
         thruput_encoding::decode_fixed::<32>(stdout["data"]["predictedAddress"].as_str().unwrap())
             .is_ok()
@@ -5768,7 +6008,7 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
 
     let artifact_path = project.join("target/thruput/demo_contract.rv32a");
     std::fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
-    std::fs::write(&artifact_path, b"rv32-auto").unwrap();
+    std::fs::write(&artifact_path, spec_artifact_fixture()).unwrap();
 
     let output = thruput()
         .args(["--json", "deploy", "--dry-run"])
@@ -5797,7 +6037,10 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
             .unwrap()
             .to_string_lossy()
     );
-    assert_eq!(stdout["data"]["artifactBytes"], "9");
+    assert_eq!(
+        stdout["data"]["artifactBytes"],
+        spec_artifact_fixture().len().to_string()
+    );
     assert_eq!(
         signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
         "rv32"
@@ -9766,6 +10009,50 @@ fn storage_json_reads_latest_item() {
 }
 
 #[test]
+fn inspect_json_reports_absent_deployment_without_artifact_lookup() {
+    let tmp = TempDir::new().unwrap();
+    let address = thruput_encoding::encode(&[0x11; 32]);
+    let response_address = address.clone();
+    let server = rpc_mock()
+        .method("getContractArtifact", |_| {
+            panic!("absent deployment must not fetch an artifact")
+        })
+        .method("getContractDeployment", move |_| {
+            Ok(serde_json::json!({
+                "address": response_address,
+                "stateBlockHeight": "12",
+                "deployment": null,
+            }))
+        })
+        .start();
+    let expected_address = address.clone();
+    let (rpc_url, server) = recorded_mock(server, move |script| {
+        assert_eq!(
+            script.expect("getContractDeployment")["address"],
+            expected_address
+        );
+    });
+    write_project_config_with_dummy_alice_wallet(tmp.path(), &rpc_url);
+    let output = thruput()
+        .args(["--json", "inspect", &address])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"], "inspect");
+    assert_eq!(report["data"]["specStatus"], "notDeployed");
+    assert_eq!(report["data"]["stateBlockHeight"], "12");
+    assert!(report["data"]["spec"].is_null());
+}
+
+#[test]
 fn balance_json_uses_default_wallet_when_target_is_omitted() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -10759,7 +11046,6 @@ fn write_counter_with_exception_spec(project: &std::path::Path, selector: u64) {
     std::fs::write(project.join("lib.rs"), "").unwrap();
     let artifacts = project.join("target/thruput");
     std::fs::create_dir_all(&artifacts).unwrap();
-    std::fs::write(artifacts.join("counter.rv32a"), b"test-artifact").unwrap();
     let spec = ContractSpec {
         interfaces: vec![ContractSpecInterface {
             name: "Counter".try_into().unwrap(),
@@ -10784,11 +11070,7 @@ fn write_counter_with_exception_spec(project: &std::path::Path, selector: u64) {
         type_defs: vec![].try_into().unwrap(),
         events: vec![].try_into().unwrap(),
     };
-    std::fs::write(
-        artifacts.join("counter.spec.xdr"),
-        xdrs::txs::encode(&spec).unwrap(),
-    )
-    .unwrap();
+    std::fs::write(artifacts.join("counter.rv32a"), artifact_with_spec(&spec)).unwrap();
 }
 
 #[test]
@@ -15748,7 +16030,7 @@ fn version_info() -> serde_json::Value {
     serde_json::json!({
         "wireFormat":"14.0.0", "implementation":"fixture",
         "supportedMethods":["getVersionInfo","getNetworkInfo","getChainTip","getChainConfig",
-            "getBalance","getStorage","simulateInvocation","sendTransaction",
+            "getBalance","getStorage","getContractDeployment","getContractArtifact","simulateInvocation","sendTransaction",
             "getTransactionStatus","getTransactionReceipt","getTransactionsByRootAddress",
             "getTransactionsByBlock","getEvents","faucet_requestAirdrop","dev_fundAccount"]
     })

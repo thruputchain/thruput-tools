@@ -89,6 +89,13 @@ impl NativeSubmitPlane for Backend {
 }
 #[async_trait]
 impl NativeTransactionReadPlane for Backend {
+    async fn native_input(
+        &self,
+        _: RpcRequestContext,
+        _: TxHash,
+    ) -> Result<out::TransactionInputResult, NativeReadError> {
+        Ok(out::TransactionInputResult::Unavailable {})
+    }
     async fn native_receipt(
         &self,
         _: RpcRequestContext,

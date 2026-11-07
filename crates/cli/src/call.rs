@@ -333,7 +333,7 @@ pub(crate) fn resolve_artifact_call(
         });
     }
     let spec = crate::contract_spec::load_artifact_contract_spec(artifact)?.ok_or_else(||
-        CliError::SpecFailed("initializer requires the selected artifact's current .spec.xdr sidecar; rebuild it or supply an explicit entrypoint".into()))?;
+        CliError::SpecFailed("initializer requires the selected artifact's embedded spec; rebuild with `thruput build` or supply an explicit entrypoint".into()))?;
     let metadata = thruput_client::codec::resolve_spec_method(&spec, method)?.ok_or_else(|| {
         CliError::SpecFailed(format!(
             "initializer method `{method}` is absent from the selected artifact's spec"
@@ -1109,6 +1109,22 @@ mod tests {
         assert_eq!(filtered[0].interface_name, "Counter");
     }
 
+    fn write_spec_artifact(path: &Path, spec: &thruput_contract_spec::ContractSpec) {
+        let bytes = xdrs::txs::encode(spec).unwrap();
+        let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+            &[0; 4],
+            &[],
+            0,
+            64,
+            Some(thruput_rv32_artifact::ArtifactSpec {
+                schema_version: 1,
+                bytes: &bytes,
+            }),
+        )
+        .unwrap();
+        std::fs::write(path, artifact).unwrap();
+    }
+
     #[test]
     #[serial]
     fn select_package_reads_the_explicit_target_dir() {
@@ -1119,12 +1135,7 @@ mod tests {
         let rv32 = custom_target.join("thruput").join("demo_contract.rv32a");
         std::fs::create_dir_all(rv32.parent().expect("bug: rv32 parent should exist"))
             .expect("bug: custom target dir should be created");
-        std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
-        std::fs::write(
-            rv32.with_extension("spec.xdr"),
-            xdrs::txs::encode(&sample_contract_spec()).expect("bug: spec should encode"),
-        )
-        .expect("bug: rv32 spec sidecar should be written");
+        write_spec_artifact(&rv32, &sample_contract_spec());
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
@@ -1155,18 +1166,12 @@ mod tests {
         let rv32 = custom_target.join("thruput").join("demo_contract.rv32a");
         std::fs::create_dir_all(rv32.parent().expect("bug: rv32 parent should exist"))
             .expect("bug: custom target dir should be created");
-        std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
-        std::fs::write(
-            rv32.with_extension("spec.xdr"),
-            xdrs::txs::encode(&sample_multi_interface_contract_spec())
-                .expect("bug: spec should encode"),
-        )
-        .expect("bug: rv32 spec sidecar should be written");
+        write_spec_artifact(&rv32, &sample_multi_interface_contract_spec());
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
         let err = resolve_spec_method(&project_root, "get", None, &artifacts)
-            .expect_err("bug: ambiguous sidecar interface matches should fail");
+            .expect_err("bug: ambiguous embedded interface matches should fail");
         assert_eq!(
             err.to_string(),
             "method `get` matches multiple interfaces in the contract spec: Counter \
@@ -1176,7 +1181,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn resolves_and_encodes_erc20_methods_from_rv32_spec_sidecar() {
+    fn resolves_and_encodes_erc20_methods_from_embedded_spec() {
         let project = create_temp_project("erc20");
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
@@ -1184,17 +1189,12 @@ mod tests {
         let rv32 = custom_target.join("thruput").join("erc20.rv32a");
         std::fs::create_dir_all(rv32.parent().expect("bug: rv32 parent should exist"))
             .expect("bug: custom target dir should be created");
-        std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
-        std::fs::write(
-            rv32.with_extension("spec.xdr"),
-            xdrs::txs::encode(&sample_erc20_contract_spec()).expect("bug: spec should encode"),
-        )
-        .expect("bug: rv32 spec sidecar should be written");
+        write_spec_artifact(&rv32, &sample_erc20_contract_spec());
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
         let resolved = resolve_call(&project_root, "mint", None, &artifacts)
-            .expect("bug: mint should resolve from the rv32 spec sidecar");
+            .expect("bug: mint should resolve from the embedded spec");
         let receiver_hex = thruput_encoding::encode(&[4; 32]);
         let encoded = encode_calldata(
             &[receiver_hex.clone(), "55".into()],
@@ -1212,7 +1212,7 @@ mod tests {
         );
 
         let total_supply = resolve_call(&project_root, "total_supply", None, &artifacts)
-            .expect("bug: total_supply should resolve from the rv32 spec sidecar");
+            .expect("bug: total_supply should resolve from the embedded spec");
         let return_data = xdrs::cxs::encode(&0_u128).expect("bug: u128 should encode");
         assert_eq!(
             decode_return_value(&return_data, total_supply.metadata.as_ref()),

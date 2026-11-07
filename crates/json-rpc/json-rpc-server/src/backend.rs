@@ -108,6 +108,8 @@ pub struct ValidatedTransaction {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct TipReading {
+    /// Chain-configured root fallback, read with this tip. None means unavailable.
+    pub default_wallet: Option<thruput_json_rpc_types::responses::ContractDeployment>,
     /// Chain state that advances with each commit; what `getChainTip` returns.
     pub tip: ChainTip,
     /// Network config the tip carries.
@@ -122,10 +124,21 @@ impl TipReading {
     /// Pair a chain tip with the network config read alongside it.
     pub fn new(tip: ChainTip, network_config: NetworkConfig) -> Self {
         Self {
+            default_wallet: None,
             tip,
             network_config,
             execution: None,
         }
+    }
+
+    /// Attach the configured root fallback returned with this tip.
+    #[must_use]
+    pub fn with_default_wallet(
+        mut self,
+        wallet: thruput_json_rpc_types::responses::ContractDeployment,
+    ) -> Self {
+        self.default_wallet = Some(wallet);
+        self
     }
 
     /// Attach the execution rules returned with this tip.

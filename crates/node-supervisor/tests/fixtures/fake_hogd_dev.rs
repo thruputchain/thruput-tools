@@ -1387,6 +1387,14 @@ struct FakeDbGateway {
 
 #[allow(refining_impl_trait)]
 impl DbGateway_DbGateway1 for FakeDbGateway {
+    async fn dbgateway_get_contract(
+        &self,
+        _: thruput_xdr::types::SHA256Hash,
+    ) -> Result<thruput_db_gateway::DbGatewayContractResult, rpc_driver::ProgramError> {
+        Ok(thruput_db_gateway::DbGatewayContractResult::Default {
+            error: thruput_node_rpc::RPCError::kRPCNotFound.0,
+        })
+    }
     async fn dbgateway_get_config(
         &self,
     ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {

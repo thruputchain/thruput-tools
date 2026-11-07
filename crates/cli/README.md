@@ -340,8 +340,11 @@ thruput build -- --verbose   # pass extra args to cargo
 
 The RV32 target uses the built-in `thruput-rv32-lower` library (v4 dispatch
 lives in the guest, so stripped release builds are valid), then writes
-`target/thruput/<package>.rv32a`, build metadata, and `.spec.json` / `.spec.xdr`
-contract-spec sidecars.
+`target/thruput/<package>.rv32a` and build metadata. When the contract contains
+a spec, the build embeds it in the v6 artifact and exports `.spec.json` /
+`.spec.xdr` sidecars. The embedded spec is outside guest memory and covered by
+the contract hash. Builds accept contracts without specs, but reject malformed
+specs. CLI deployments still require an embedded spec.
 
 In a multi-contract Cargo workspace, keep `thruput.toml`,
 `rust-toolchain.toml`, and `.cargo/` at the workspace root so members share the
@@ -654,7 +657,7 @@ require more funds.
 
 `--init <METHOD>` optionally initializes the new contract in the same transaction.
 Repeat `--init-arg <VALUE>` for typed arguments using the selected artifact's
-current `.spec.xdr` sidecar, or use an explicit entrypoint with raw hex calldata.
+embedded spec, or use an explicit entrypoint with raw hex calldata.
 `--init-gas-limit` sets the child-call budget. The initializer sees the wallet as
 caller; its return data is discarded. Any failure rolls back funding, deployment
 and initializer state. Contracts remain responsible for guarding later calls to
@@ -714,6 +717,59 @@ Saved wallet names take precedence over aliases and keys. Native bindings retain
 nonce; legacy bindings retain their saved address. Caller resolution uses public
 metadata, so cached metadata does not require usable private key bytes. Omitting
 `--from` leaves the simulated caller unset, even when a default wallet is selected.
+
+### `thruput inspect`
+
+Read a deployed contract and its embedded spec from the node:
+
+```sh
+thruput inspect my-counter
+thruput inspect <base58-address> --rpc-url http://127.0.0.1:9545
+thruput inspect <base58-address> --json
+thruput inspect <base58-address> --output counter.spec.json
+```
+
+The command uses `getContractDeployment` and `getContractArtifact`. It checks
+the complete Contract XDR hash, canonical encoding, deployment type, and size
+before reading the embedded spec. It does not use a local spec or sidecar.
+
+The default output shows one card with deployment details, methods, events,
+errors, and other custom types. Method effects appear only when declared.
+`--json` returns the complete structured result.
+`--output FILE` writes only the complete spec as pretty JSON, matching the build's
+`.spec.json` format, and replaces the file if it exists. It can be combined with
+`--json`. If no embedded spec is available, export fails without writing a file.
+
+JSON schema version 1 reports `specStatus` as `available`, `absent`, `native`,
+`notDeployed`, `unsupportedSchema`, or `unsupportedFormat`. Without `--output`,
+all six statuses return success. Unsupported schemas and artifact formats retain
+the verified deployment details, with `spec: null`. An unavailable artifact or
+malformed response returns an error. Native contracts and contracts deployed as
+v5 artifacts have no embedded RV32 spec.
+With `--output`, only `available` succeeds; every other status returns an error
+without creating or replacing the output file, even when combined with `--json`.
+The deployment is current state, not a historical execution record.
+
+### `thruput codegen ts`
+
+Generate TypeScript bindings from a local spec or an onchain contract:
+
+```sh
+thruput codegen ts counter.spec.xdr --output bindings.ts
+thruput codegen ts counter.rv32a --output bindings.ts
+thruput codegen ts --address my-counter --profile local --output bindings.ts
+thruput codegen ts --address <base58-address> --rpc-url http://127.0.0.1:9545 --output bindings.ts
+```
+
+Provide exactly one file or `--address`. Addresses accept the same aliases,
+base58 addresses, and Z StrKeys as `inspect`. Onchain generation uses the
+selected profile and the same artifact retrieval and verification as `inspect`.
+It requires a supported embedded spec; an absent deployment, native contract,
+missing spec, or unsupported format or schema returns an error before writing.
+
+Without `--output`, bindings go to stdout. With `--json`, the result contains
+`source` and either `typescript` or the output path. For an onchain source,
+`source` is the resolved base58 address. Output files are replaced if they exist.
 
 ### `thruput storage`
 

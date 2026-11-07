@@ -372,6 +372,21 @@ impl Print {
         self.summary_report(title, items, std::iter::empty());
     }
 
+    /// Render a card with selected unlabelled rows styled as section headings.
+    pub(crate) fn sectioned_card(
+        &self,
+        title: &str,
+        items: &[(String, String)],
+        headings: &[usize],
+    ) {
+        if self.quiet || self.json {
+            return;
+        }
+        let mut output = report::Report::new(self.output_policy());
+        output.card_with_headings(title, items, headings);
+        self.write_report(output);
+    }
+
     /// Render a summary card followed by width-aware findings and hints.
     pub(crate) fn summary_report<'a>(
         &self,

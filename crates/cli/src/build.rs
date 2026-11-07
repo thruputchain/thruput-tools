@@ -502,7 +502,7 @@ pub fn build_rv32_project(
 
     print.phase("Lowering RV32 ELF...");
     let elf_bytes = fs::read(&elf)?;
-    let lowered = thruput_rv32_lower::lower_with(
+    let mut lowered = thruput_rv32_lower::lower_with(
         &elf_bytes,
         &thruput_rv32_lower::LowerOptions {
             memory_bytes: layout.memory_bytes(),
@@ -525,6 +525,30 @@ pub fn build_rv32_project(
             lowered.initial_memory_start
         ));
     }
+    // Invalidate the prior build before publishing new sidecars. A failed spec
+    // finalization must not leave an old artifact looking like this build's output.
+    match fs::remove_file(&rv32) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    print.phase("Finalizing contract spec...");
+    let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?;
+    lowered.artifact = thruput_rv32_artifact::build_artifact_with_spec(
+        &lowered.code,
+        &lowered.initial_memory,
+        lowered.initial_memory_start,
+        lowered.memory_bytes,
+        finalized
+            .as_ref()
+            .map(|spec| thruput_rv32_artifact::ArtifactSpec {
+                schema_version: crate::contract_spec::ARTIFACT_SPEC_SCHEMA_VERSION,
+                bytes: &spec.xdr_bytes,
+            }),
+    )
+    .map_err(thruput_rv32_lower::LowerError::from)?;
+    thruput_rv32_artifact::verify_artifact(&lowered.artifact)
+        .map_err(thruput_rv32_lower::LowerError::from)?;
     let lower_metadata_doc =
         thruput_rv32_lower::render_metadata(&thruput_rv32_lower::MetadataInput {
             elf: &elf_bytes,
@@ -543,10 +567,8 @@ pub fn build_rv32_project(
         return Err(error.into());
     }
 
-    print.phase("Checking for contract spec...");
-    let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?;
-    let spec_json = finalized.as_ref().map(|f| f.json_path.clone());
-    let spec_xdr = finalized.as_ref().map(|f| f.xdr_path.clone());
+    let spec_json = finalized.as_ref().map(|spec| spec.json_path.clone());
+    let spec_xdr = finalized.as_ref().map(|spec| spec.xdr_path.clone());
     let source_name = rv32
         .file_name()
         .and_then(|name| name.to_str())

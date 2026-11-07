@@ -19,7 +19,9 @@ use super::invalid;
 use crate::receipt::tx_hash_to_wire;
 
 mod diagnostic;
+mod input;
 mod status;
+pub use input::input_lookup;
 pub use status::sequence_status;
 
 fn valid_height(height: &BlockHeight) -> Result<(), NativeReadError> {

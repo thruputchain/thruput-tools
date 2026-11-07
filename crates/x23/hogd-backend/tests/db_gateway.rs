@@ -94,6 +94,26 @@ fn db_snapshot_rejects_wrong_network_and_uncommitted_tip() {
     ));
 }
 
+#[test]
+fn tip_reading_preserves_native_and_rv32_default_contract_identity() {
+    for (contract_type, contract_size) in [(ContractType::kNative, 0), (ContractType::kRv32, 6421)]
+    {
+        let mut config = db_config();
+        config.tip.default_wallet = DeployedContractHash {
+            hash: [7; 32].into(),
+            contract_type,
+            contract_size,
+        };
+        let reading =
+            tip_reading("test", DbGatewayConfigResult::kRPCNone { config }, None).unwrap();
+        let wallet = reading.default_wallet.unwrap();
+        assert_eq!(*reading.tip.height, 1);
+        assert_eq!(wallet.hash.0, SHA256Hash::from([7; 32]));
+        assert_eq!(wallet.contract_type, contract_type.0);
+        assert_eq!(wallet.size, contract_size);
+    }
+}
+
 /// A configuration reading committed at height 1 on network `[0x41; 32]`.
 fn db_config() -> DbGatewayConfig {
     let hash = |byte: u8| SHA256Hash::from([byte; 32]);

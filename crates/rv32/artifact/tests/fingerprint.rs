@@ -6,8 +6,8 @@ use thruput_rv32_artifact::{FORMAT_FINGERPRINT, compute_format_fingerprint};
 
 #[test]
 fn fingerprint_is_pinned() {
-    assert_eq!(compute_format_fingerprint(), 0xc5f0_0a7d_4451_045e);
-    assert_eq!(FORMAT_FINGERPRINT, 0xc5f0_0a7d_4451_045e);
+    assert_eq!(compute_format_fingerprint(), 0x0e33_6ac8_e466_02e1);
+    assert_eq!(FORMAT_FINGERPRINT, 0x0e33_6ac8_e466_02e1);
 }
 
 #[test]

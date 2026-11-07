@@ -1675,6 +1675,12 @@ mod tests {
 
     #[allow(refining_impl_trait)]
     impl DbGateway_DbGateway1 for SaturatedDbGateway {
+        async fn dbgateway_get_contract(
+            &self,
+            _: thruput_xdr::types::SHA256Hash,
+        ) -> Result<thruput_db_gateway::DbGatewayContractResult, rpc_driver::ProgramError> {
+            panic!("bug: health test should not issue artifact reads")
+        }
         async fn dbgateway_get_config(
             &self,
         ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
@@ -2026,6 +2032,12 @@ mod tests {
 
     #[allow(refining_impl_trait)]
     impl DbGateway_DbGateway1 for LifecycleDbGateway {
+        async fn dbgateway_get_contract(
+            &self,
+            _: thruput_xdr::types::SHA256Hash,
+        ) -> Result<thruput_db_gateway::DbGatewayContractResult, rpc_driver::ProgramError> {
+            panic!("bug: health test should not issue artifact reads")
+        }
         async fn dbgateway_get_config(
             &self,
         ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {

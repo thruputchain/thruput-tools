@@ -17,6 +17,7 @@ description = "Shared hogd x23 backend adapters and XDR-to-JSON-RPC mapping for 
 workspace = true
 
 [dependencies]
+sha2 = { workspace = true }
 thruput-json-rpc-server = { workspace = true }
 thruput-json-rpc-types = { workspace = true }
 thruput-trace = { workspace = true }

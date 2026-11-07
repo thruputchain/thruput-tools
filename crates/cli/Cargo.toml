@@ -35,7 +35,7 @@ thruput-build-info = { workspace = true }
 thruput-bundle-identity = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["unbounded_depth"] }
 schemars = { workspace = true }
 toml = { workspace = true }
 unicode-width = { workspace = true }

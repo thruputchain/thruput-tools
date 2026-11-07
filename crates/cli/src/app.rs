@@ -236,6 +236,8 @@ enum Command {
                       and `thruput view` for sandboxed contract \
                       simulation.")]
     Storage(StorageArgs),
+    /// Read a deployed contract and its embedded spec from the chain
+    Inspect(InspectArgs),
     /// Start a local development node
     #[command(
         long_about = "Start a local development node \
@@ -312,6 +314,7 @@ impl Command {
             Self::Balance(..) => "balance",
             Self::View(..) => "view",
             Self::Storage(..) => "storage",
+            Self::Inspect(..) => "inspect",
             Self::Node(..) => "node",
             Self::Docs(args) => match args.command {
                 Some(DocsCommand::Export { .. }) => "docs export",
@@ -357,6 +360,7 @@ impl Command {
             Self::Balance(args) => args.run(ctx),
             Self::View(args) => args.run(ctx),
             Self::Storage(args) => args.run(ctx),
+            Self::Inspect(args) => args.run(ctx),
             Self::Node(args) => args.run(ctx),
             Self::Chain { command } => command.run(ctx),
             Self::Keys { command } => command.run(ctx),
@@ -1066,6 +1070,35 @@ struct StorageArgs {
     target_args: RpcTargetArgs,
 }
 
+#[derive(Args)]
+struct InspectArgs {
+    /// Contract alias, Z StrKey, or direct base58 address
+    #[allow(clippy::doc_markdown)]
+    address: String,
+    /// Write the complete embedded spec as JSON to this file
+    #[arg(long, value_name = "FILE")]
+    output: Option<std::path::PathBuf>,
+    /// Config profile to use
+    #[arg(long)]
+    profile: Option<String>,
+    #[command(flatten)]
+    target_args: RpcTargetArgs,
+}
+
+impl InspectArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        crate::inspect::run(
+            &self.address,
+            self.output.as_deref(),
+            &invocation_cwd()?,
+            self.profile.as_deref(),
+            &self.target_args.into(),
+            ctx.cmd_name,
+            &ctx.print,
+        )
+    }
+}
+
 impl StorageArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         crate::storage::run(
@@ -1667,8 +1700,19 @@ impl WalletCommand {
 enum CodegenCommand {
     /// Generate TypeScript bindings
     Ts {
-        /// Path to a .spec.xdr file
-        source: std::path::PathBuf,
+        /// Path to a .spec.xdr or .rv32a file
+        #[arg(required_unless_present = "address", conflicts_with_all = ["address", "profile", "rpc_url"])]
+        source: Option<std::path::PathBuf>,
+        /// Contract alias, Z StrKey, or direct base58 address
+        #[allow(clippy::doc_markdown)]
+        #[arg(long)]
+        address: Option<String>,
+        /// Config profile to use for onchain generation
+        #[arg(long, requires = "address")]
+        profile: Option<String>,
+        /// Override the active profile's RPC URL
+        #[arg(long, requires = "address")]
+        rpc_url: Option<String>,
         /// Output file path (default: stdout)
         #[arg(long, short)]
         output: Option<std::path::PathBuf>,
@@ -1684,9 +1728,32 @@ impl CodegenCommand {
 
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         match self {
-            Self::Ts { source, output } => {
-                crate::codegen_cmd::run(&source, output.as_deref(), ctx.cmd_name, &ctx.print)
-            }
+            Self::Ts {
+                source,
+                address,
+                profile,
+                rpc_url,
+                output,
+            } => match (source, address) {
+                (Some(source), None) => {
+                    crate::codegen_cmd::run(&source, output.as_deref(), ctx.cmd_name, &ctx.print)
+                }
+                (None, Some(address)) => crate::codegen_cmd::run_onchain(
+                    &address,
+                    output.as_deref(),
+                    &invocation_cwd()?,
+                    profile.as_deref(),
+                    &crate::config::ProfileOverrides {
+                        rpc_url,
+                        ..Default::default()
+                    },
+                    ctx.cmd_name,
+                    &ctx.print,
+                ),
+                _ => Err(CliError::CodegenFailed(
+                    "provide exactly one source file or --address".into(),
+                )),
+            },
         }
     }
 }

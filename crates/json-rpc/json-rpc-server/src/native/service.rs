@@ -54,13 +54,20 @@ impl NativeCapabilities {
             "getVersionInfo" | "getNetworkInfo" | "getServerLimits" => true,
             "sendTransaction" => self.scheduler,
             "getTransactionReceipt"
+            | "getTransactionInput"
             | "getBlockByHeight"
             | "getEvents"
             | "getTransactionsByRootAddress"
             | "getTransactionsByBlock" => self.indexer,
             "getTransactionStatus" => self.indexer && self.scheduler,
-            "getChainTip" | "getChainConfig" | "getStorage" | "getBalance"
-            | "getRegisteredAuth" => self.db,
+            "getChainTip"
+            | "getChainConfig"
+            | "getStorage"
+            | "getBalance"
+            | "getRegisteredAuth"
+            | "getContractDeployment"
+            | "getEffectiveContract"
+            | "getContractArtifact" => self.db,
             "simulateInvocation" | "simulateInvocations" => self.simulation,
             "faucet_requestAirdrop" => matches!(
                 self.funding,
@@ -235,6 +242,15 @@ macro_rules! dispatch {
     (get_registered_auth, $s:expr, $r:expr) => {
         $s.reads.get_registered_auth($r).await
     };
+    (get_contract_deployment, $s:expr, $r:expr) => {
+        $s.reads.get_contract_deployment($r).await
+    };
+    (get_effective_contract, $s:expr, $r:expr) => {
+        $s.reads.get_effective_contract($r).await
+    };
+    (get_contract_artifact, $s:expr, $r:expr) => {
+        $s.reads.get_contract_artifact($r).await
+    };
     (simulate_invocation, $s:expr, $r:expr) => {
         $s.reads.simulate_invocation($r).await
     };
@@ -249,6 +265,9 @@ macro_rules! dispatch {
     };
     (get_transaction_receipt, $s:expr, $r:expr) => {
         $s.transactions.get_transaction_receipt($r).await
+    };
+    (get_transaction_input, $s:expr, $r:expr) => {
+        $s.transactions.get_transaction_input($r).await
     };
     (request_airdrop, $s:expr, $r:expr) => {
         $s.funding.request_airdrop($r).await

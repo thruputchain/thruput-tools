@@ -34,6 +34,8 @@ macro_rules! native_methods {
             get_transaction_status("getTransactionStatus", named, plain): $crate::types::requests::TransactionQuery => $crate::types::responses::TransactionStatus;
             /// Read indexed execution, or null when no receipt is available.
             get_transaction_receipt("getTransactionReceipt", named, plain): $crate::types::requests::TransactionQuery => $crate::types::responses::ReceiptResult;
+            /// Read retained committed Transaction XDR. Unavailable does not prove nonexecution.
+            get_transaction_input("getTransactionInput", named, plain): $crate::types::requests::TransactionQuery => $crate::types::responses::TransactionInputResult;
             /// Simulate an invocation without committing state.
             simulate_invocation("simulateInvocation", named, plain): $crate::types::requests::SimulateInvocationRequest => $crate::types::responses::SimulationResult;
             /// Simulate a batch against one state snapshot.
@@ -44,6 +46,14 @@ macro_rules! native_methods {
             get_balance("getBalance", named, plain): $crate::types::requests::AddressQuery => $crate::types::responses::BalanceResult;
             /// Read registered authorization at an address.
             get_registered_auth("getRegisteredAuth", named, plain): $crate::types::requests::AddressQuery => $crate::types::responses::RegisteredAuthResult;
+            /// Read the deployed contract identity at a committed snapshot.
+            get_contract_deployment("getContractDeployment", named, plain): $crate::types::requests::AddressQuery => $crate::types::responses::ContractDeploymentResult;
+            /// Resolve current committed-state contract selection for root or nested invocation.
+            /// Explicit deployments take precedence; only root invocations use the network default.
+            /// Does not authorize execution, include transaction-local deployments, or identify historical code.
+            get_effective_contract("getEffectiveContract", named, plain): $crate::types::requests::EffectiveContractQuery => $crate::types::responses::EffectiveContractResult;
+            /// Read complete canonical Contract XDR by hash. Availability does not prove deployment.
+            get_contract_artifact("getContractArtifact", named, plain): $crate::types::requests::ContractArtifactQuery => $crate::types::responses::ContractArtifactResult;
             /// Scan indexed events matching the supplied filters.
             get_events("getEvents", named, plain): $crate::types::requests::EventQuery => $crate::types::responses::EventPage;
             /// Read transactions whose root invocation targets the address, excluding internal calls and incoming transfers.

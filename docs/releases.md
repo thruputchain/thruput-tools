@@ -32,6 +32,29 @@ These guards apply to the current workflows. Historical tags keep their original
 workflow definitions; restricting their execution requires separate repository
 controls.
 
+## GH-554 format transition
+
+The agreed sequence is producer-first. Qualify the combined candidate tools and
+hogd before publishing. v6 uses a 128-byte header followed by code, initial memory,
+and an XDR extension list. Existing v5 contracts remain readable and executable.
+
+1. Publish the v6 producer tools after review. For 0.44.0 only, the default-off
+   `producer-release` input skips managed-runtime startup in both the dry run
+   and publication. Catalog downloads, checksums, package checks, and published
+   host-project tests still run. Required branch checks are unchanged: landing
+   the producer with known dependency failures still needs a maintainer-approved
+   merge exception.
+2. Pin the published producer in hogd and publish the compatible runtime,
+   generator, and test executor. Release the Rust SDK with that executor.
+3. Pin the runtime and verified asset digests in the tools catalog and update
+   the scaffold SDK pin. Remove the temporary exception and publish a new aligned
+   tools release with normal CI and publication checks passing.
+4. Align the TypeScript packages and qualify the exact published stack. Upgrade
+   and verify the network before deploying v6 contracts or shipping explorer.
+
+New optional metadata kinds need no format change. Execution changes still need
+an explicit compatibility and activation plan. Preserve existing network state.
+
 ## Publishing credentials
 
 Existing crates use crates.io trusted publishing through GitHub OIDC. Each

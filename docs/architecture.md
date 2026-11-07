@@ -44,15 +44,23 @@ release version; `getVersionInfo` reports the endpoint's version and methods.
 ## From contract source to invocation
 
 The CLI creates a Rust project and builds it with the project's pinned toolchain.
-The RV32 lowerer converts the ELF into a contract artifact. Interface metadata
-produces a `.spec.xdr` sidecar for codecs and generated bindings. Deploys and calls
-use public RPC.
+The RV32 lowerer converts the ELF into a contract artifact. The build embeds the
+canonical contract spec as an artifact extension, outside guest memory, and
+exports JSON/XDR sidecars.
+Invocation and TypeScript bindings use the embedded spec; sidecars are exports,
+not fallback metadata. Deploys, calls, and onchain inspection use public RPC.
 
 The artifact library defines the Rust format implementation shared by the CLI
 and standalone lowerer. Instruction and data memory use separate address spaces;
 the lowerer preserves the data addresses chosen by the linker. Guest code
 dispatches contract methods. Artifact changes must agree with the SDK's linker
 and startup code and hogd's loader.
+
+Artifact extensions are an XDR list (`Rv32ArtifactExtensions` in the protocol's
+`contract.x`) after initial memory, ordered by strictly ascending kind. The
+chain checks only that framing, so a new extension kind needs no runtime or
+format change. Readers accept v5 artifacts, which have no extensions, because
+contracts deployed in v5 stay on chain.
 
 Builds run without chain state. Submission checks use the target chain's
 configuration, and hogd decides admission and execution. The signing library

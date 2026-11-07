@@ -72,7 +72,14 @@ pub fn tip_reading(
         effective,
         (&config.storage_cost_model).into(),
     );
-    Ok(TipReading::new(tip, config.tip.network_config).with_execution(execution))
+    let wallet = config.tip.default_wallet;
+    Ok(TipReading::new(tip, config.tip.network_config)
+        .with_execution(execution)
+        .with_default_wallet(thruput_json_rpc_types::responses::ContractDeployment {
+            hash: thruput_json_rpc_types::base58::Base58(wallet.hash),
+            size: wallet.contract_size,
+            contract_type: wallet.contract_type.0,
+        }))
 }
 
 /// The storage key for one 32-byte contract-data slot.

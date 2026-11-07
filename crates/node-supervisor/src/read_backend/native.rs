@@ -44,8 +44,57 @@ async fn auth(
     })
     .await
 }
+
+async fn deployment(
+    client: &DbGateway_DbGateway1_Client,
+    context: RpcRequestContext,
+    address: ContractAddress,
+) -> Result<out::ContractDeploymentResult, RpcServerError> {
+    within_request_deadline(context, async {
+        let (height, item) = decode::single_item(
+            get_payload_from_db_gateway(client, address, StorageKey::Metadata).await?,
+        )?;
+        decode::contract_deployment(address, height, item)
+    })
+    .await
+}
+
+async fn artifact(
+    client: &DbGateway_DbGateway1_Client,
+    context: RpcRequestContext,
+    hash: thruput_json_rpc_types::SHA256Hash,
+) -> Result<out::ContractArtifactResult, RpcServerError> {
+    within_request_deadline(context, async {
+        let result = client
+            .dbgateway_get_contract(&hash.0)
+            .await
+            .map_err(|error| RpcServerError::BackendUnavailable(format!("DbGateway: {error}")))?;
+        decode::contract_artifact(hash, result)
+    })
+    .await
+}
 #[async_trait]
 impl NativeStatePlane for HogdDevReadBackend {
+    async fn native_contract_deployment(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<out::ContractDeploymentResult, RpcServerError> {
+        let client = self.db_gateway.as_ref().ok_or_else(|| {
+            RpcServerError::BackendUnavailable("DbGateway is not configured".into())
+        })?;
+        deployment(client, context, address).await
+    }
+    async fn native_contract_artifact(
+        &self,
+        context: RpcRequestContext,
+        hash: thruput_json_rpc_types::SHA256Hash,
+    ) -> Result<out::ContractArtifactResult, RpcServerError> {
+        let client = self.db_gateway.as_ref().ok_or_else(|| {
+            RpcServerError::BackendUnavailable("DbGateway is not configured".into())
+        })?;
+        artifact(client, context, hash).await
+    }
     #[tracing::instrument(skip_all)]
     async fn native_storage(
         &self,
@@ -72,6 +121,20 @@ impl NativeStatePlane for HogdDevReadBackend {
 }
 #[async_trait]
 impl NativeStatePlane for HogdDevStorageReadBackend {
+    async fn native_contract_deployment(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<out::ContractDeploymentResult, RpcServerError> {
+        deployment(&self.db_gateway, context, address).await
+    }
+    async fn native_contract_artifact(
+        &self,
+        context: RpcRequestContext,
+        hash: thruput_json_rpc_types::SHA256Hash,
+    ) -> Result<out::ContractArtifactResult, RpcServerError> {
+        artifact(&self.db_gateway, context, hash).await
+    }
     #[tracing::instrument(skip_all)]
     async fn native_storage(
         &self,
@@ -93,6 +156,16 @@ impl NativeStatePlane for HogdDevStorageReadBackend {
 
 #[async_trait]
 impl NativeTransactionReadPlane for HogdDevReadBackend {
+    async fn native_input(
+        &self,
+        context: RpcRequestContext,
+        hash: TxHash,
+    ) -> Result<out::TransactionInputResult, NativeReadError> {
+        within_native_read_deadline(context, async {
+            native_transaction::input_lookup(hash, self.transaction_info(hash).await?)
+        })
+        .await
+    }
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn native_receipt(
         &self,
@@ -142,6 +215,13 @@ impl NativeTransactionReadPlane for HogdDevReadBackend {
 
 #[async_trait]
 impl NativeTransactionReadPlane for HogdDevStorageReadBackend {
+    async fn native_input(
+        &self,
+        _: RpcRequestContext,
+        _: TxHash,
+    ) -> Result<out::TransactionInputResult, NativeReadError> {
+        Err(RpcServerError::NotImplemented("getTransactionInput".into()).into())
+    }
     #[tracing::instrument(skip_all)]
     async fn native_receipt(
         &self,

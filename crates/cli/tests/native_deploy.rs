@@ -28,12 +28,32 @@ struct Fixture {
     dir: TempDir,
 }
 impl Fixture {
+    fn write_spec(&self, spec: &thruput_contract_spec::ContractSpec) {
+        let bytes = xdrs::txs::encode(spec).unwrap();
+        let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+            &[0; 4],
+            &[],
+            0,
+            65536,
+            Some(thruput_rv32_artifact::ArtifactSpec {
+                schema_version: 1,
+                bytes: &bytes,
+            }),
+        )
+        .unwrap();
+        std::fs::write(self.dir.path().join("counter.rv32a"), artifact).unwrap();
+    }
+
     fn new(rpc: &str) -> Self {
         let fixture = Self {
             dir: TempDir::new().unwrap(),
         };
         std::fs::write(fixture.dir.path().join("thruput.toml"), format!("default_profile = 'default'\n[profile.default]\ndefault_key = 'owner'\nrpc_url = '{rpc}'\nnetwork_hash = '{NETWORK}'\n")).unwrap();
-        std::fs::write(fixture.dir.path().join("counter.rv32a"), b"test-artifact").unwrap();
+        fixture.write_spec(&thruput_contract_spec::ContractSpec {
+            interfaces: vec![].try_into().unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
+        });
         assert!(
             fixture
                 .command()
@@ -429,11 +449,7 @@ async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments()
         type_defs: vec![].try_into().unwrap(),
         events: vec![].try_into().unwrap(),
     };
-    std::fs::write(
-        fixture.dir.path().join("counter.spec.xdr"),
-        xdrs::txs::encode(&spec).unwrap(),
-    )
-    .unwrap();
+    fixture.write_spec(&spec);
     let output = fixture.deploy(&[
         "--fund",
         "5",
@@ -532,11 +548,7 @@ async fn native_deploy_decodes_the_prepared_initializer_spec() {
         type_defs: vec![].try_into().unwrap(),
         events: vec![].try_into().unwrap(),
     };
-    std::fs::write(
-        fixture.dir.path().join("counter.spec.xdr"),
-        xdrs::txs::encode(&spec).unwrap(),
-    )
-    .unwrap();
+    fixture.write_spec(&spec);
     let before = fixture.config();
     let output = fixture.deploy(&["--fund", "5", "--init", "initialize"]);
     assert!(!output.status.success());

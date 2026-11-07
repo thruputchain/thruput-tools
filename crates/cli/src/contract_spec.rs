@@ -5,6 +5,12 @@ use thruput_contract_spec::{ContractSpec, ContractSpecInterface};
 use crate::codec::spec_string_text;
 use crate::{CliError, Print};
 
+mod bounded;
+pub(crate) mod onchain;
+
+/// Canonical TXS/XDR `ContractSpec` schema embedded in RV32 v6 artifacts.
+pub const ARTIFACT_SPEC_SCHEMA_VERSION: u32 = 1;
+
 /// One registered interface in the contract spec.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InterfaceSpec {
@@ -24,6 +30,8 @@ fn spec_xdr_sidecar_path(artifact: &Path) -> PathBuf {
 
 /// XDR-decode raw bytes into a `ContractSpec`.
 pub fn load_contract_spec_from_xdr(bytes: &[u8]) -> Result<ContractSpec, CliError> {
+    bounded::check(bytes)
+        .map_err(|e| CliError::SpecFailed(format!("failed to decode .spec.xdr: {e}")))?;
     xdrs::txs::decode(bytes)
         .map_err(|e| CliError::SpecFailed(format!("failed to decode .spec.xdr: {e}")))
 }
@@ -31,7 +39,7 @@ pub fn load_contract_spec_from_xdr(bytes: &[u8]) -> Result<ContractSpec, CliErro
 /// Load a contract spec from a file, dispatching by extension.
 ///
 /// - `.xdr` — XDR-decodes the file contents and returns `Some`.
-/// - `.rv32a` — returns a targeted error naming the adjacent `.spec.xdr` sidecar.
+/// - `.rv32a` — validates the container and loads its embedded spec, if present.
 /// - Anything else — returns an error.
 pub fn load_contract_spec_from_file(path: &Path) -> Result<Option<ContractSpec>, CliError> {
     match path.extension().and_then(|e| e.to_str()) {
@@ -39,22 +47,37 @@ pub fn load_contract_spec_from_file(path: &Path) -> Result<Option<ContractSpec>,
             let bytes = std::fs::read(path)?;
             Ok(Some(load_contract_spec_from_xdr(&bytes)?))
         }
-        Some("rv32a") => Err(CliError::SpecFailed(format!(
-            "RV32 artifacts do not embed contract specs; pass the sidecar at {}",
-            spec_xdr_sidecar_path(path).display(),
-        ))),
+        Some("rv32a") => {
+            let bytes = std::fs::read(path)?;
+            load_artifact_spec_bytes(&bytes)
+        }
         _ => Err(CliError::SpecFailed(format!(
-            "unsupported file extension for contract spec: {}; expected .xdr",
+            "unsupported file extension for contract spec: {}; expected .xdr or .rv32a",
             path.display(),
         ))),
     }
 }
 
+/// Read a supported spec from validated artifact bytes. This does not authenticate
+/// an address-to-artifact association; callers use the enclosing contract hash.
+pub(crate) fn load_artifact_spec_bytes(bytes: &[u8]) -> Result<Option<ContractSpec>, CliError> {
+    let Some(spec) = thruput_rv32_artifact::artifact_spec(bytes)
+        .map_err(|error| CliError::SpecFailed(format!("invalid artifact: {error}; rebuild with `thruput build` using a toolchain compatible with the runtime")))?
+    else {
+        return Ok(None);
+    };
+    if spec.schema_version != ARTIFACT_SPEC_SCHEMA_VERSION {
+        return Err(CliError::SpecFailed(format!(
+            "unsupported embedded spec schema {}",
+            spec.schema_version
+        )));
+    }
+    load_contract_spec_from_xdr(spec.bytes).map(Some)
+}
+
 /// Load the contract spec produced by the default build for a Cargo package.
 ///
-/// RV32 stores its finalized spec in an XDR sidecar because the lowered
-/// `.rv32a` artifact has no embedded-spec section. The sidecar is current only
-/// when it is at least as new as the artifact.
+/// The embedded spec is authoritative; adjacent sidecars are exports only.
 pub fn load_built_contract_spec(
     target_dir: &Path,
     package_name: &str,
@@ -63,29 +86,13 @@ pub fn load_built_contract_spec(
     load_artifact_contract_spec(&rv32)
 }
 
-/// Load the adjacent spec only when it is at least as new as the selected artifact.
+/// Load the embedded spec from the selected artifact, if the artifact exists.
 pub(crate) fn load_artifact_contract_spec(
     artifact: &Path,
 ) -> Result<Option<ContractSpec>, CliError> {
-    let rv32_spec = spec_xdr_sidecar_path(artifact);
-    let Some(rv32_modified) = file_modified(artifact)? else {
-        return Ok(None);
-    };
-    let Some(rv32_spec_modified) = file_modified(&rv32_spec)? else {
-        return Ok(None);
-    };
-    if rv32_spec_modified < rv32_modified {
-        return Ok(None);
-    }
-    let bytes = std::fs::read(&rv32_spec)?;
-    load_contract_spec_from_xdr(&bytes).map(Some)
-}
-
-fn file_modified(path: &Path) -> Result<Option<std::time::SystemTime>, CliError> {
-    match std::fs::metadata(path) {
-        Ok(metadata) => metadata.modified().map(Some).map_err(Into::into),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err.into()),
+    match load_contract_spec_from_file(artifact) {
+        Err(CliError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        result => result,
     }
 }
 
@@ -222,6 +229,8 @@ fn interface_spec(interface: &ContractSpecInterface) -> Result<InterfaceSpec, Cl
 pub struct FinalizedSpec {
     /// The parsed contract spec.
     pub spec: ContractSpec,
+    /// Canonical bytes shared by the artifact and exported XDR sidecar.
+    pub xdr_bytes: Vec<u8>,
     /// Path to the `.spec.json` sidecar.
     pub json_path: PathBuf,
     /// Path to the `.spec.xdr` sidecar.
@@ -246,14 +255,19 @@ pub fn finalize_rv32_spec(
         return Ok(None);
     };
 
-    write_spec_sidecars(rv32_artifact, spec, print).map(Some)
+    encode_and_export_spec(rv32_artifact, spec, print).map(Some)
 }
 
-fn write_spec_sidecars(
+fn encode_and_export_spec(
     artifact: &Path,
     spec: ContractSpec,
     print: &Print,
 ) -> Result<FinalizedSpec, CliError> {
+    let xdr_bytes = xdrs::txs::encode(&spec)
+        .map_err(|e| CliError::SpecFailed(format!("failed to encode .spec.xdr: {e}")))?;
+    // Use the same schema-1 limits at build, deploy, inspect, and SDK discovery.
+    // Reject before publishing any sidecar or finalized artifact.
+    bounded::check(&xdr_bytes).map_err(|e| CliError::SpecFailed(e.to_string()))?;
     let spec_json_path = spec_json_sidecar_path(artifact);
 
     let json_str = thruput_spec_tool::render_spec_json(&spec);
@@ -263,8 +277,6 @@ fn write_spec_sidecars(
     print.status(format_args!("Wrote {}", spec_json_path.display()));
 
     let spec_xdr_path = spec_xdr_sidecar_path(artifact);
-    let xdr_bytes = xdrs::txs::encode(&spec)
-        .map_err(|e| CliError::SpecFailed(format!("failed to encode .spec.xdr: {e}")))?;
     std::fs::write(&spec_xdr_path, &xdr_bytes).map_err(|e| {
         CliError::Other(format!("failed to write {}: {e}", spec_xdr_path.display()))
     })?;
@@ -272,6 +284,7 @@ fn write_spec_sidecars(
 
     Ok(FinalizedSpec {
         spec,
+        xdr_bytes,
         json_path: spec_json_path,
         xdr_path: spec_xdr_path,
     })
@@ -317,13 +330,62 @@ mod tests {
     }
 
     #[test]
-    fn rv32_artifact_spec_error_points_to_xdr_sidecar() {
-        let error = load_contract_spec_from_file(Path::new("/tmp/demo.rv32a"))
-            .expect_err("bug: an RV32 artifact is not itself a contract spec");
+    fn build_rejects_unsupported_spec_before_exporting_sidecars() {
+        let mut ty = ContractType::Void;
+        for _ in 0..64 {
+            ty = ContractType::Option {
+                option_inner: Box::new(ty),
+            };
+        }
+        let spec = ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: "Demo".try_into().unwrap(),
+                vers: "1.0.0".try_into().unwrap(),
+                throws: vec![].try_into().unwrap(),
+                methods: vec![ContractSpecMethod {
+                    name: "get".try_into().unwrap(),
+                    args: vec![].try_into().unwrap(),
+                    return_type: ty,
+                    effect: None,
+                }]
+                .try_into()
+                .unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("demo.rv32a");
+        let error = super::encode_and_export_spec(&path, spec, &crate::Print::new(true, false))
+            .unwrap_err();
+        assert!(error.to_string().contains("nesting limit"));
+        assert!(!spec_json_sidecar_path(&path).exists());
+        assert!(!spec_xdr_sidecar_path(&path).exists());
+    }
 
+    #[test]
+    fn rv32_artifact_rejects_unknown_spec_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("demo.rv32a");
+        let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+            &[0; 4],
+            &[],
+            0,
+            64,
+            Some(thruput_rv32_artifact::ArtifactSpec {
+                schema_version: 99,
+                bytes: &[1],
+            }),
+        )
+        .unwrap();
+        std::fs::write(&path, artifact).unwrap();
+        let error = load_contract_spec_from_file(&path).unwrap_err();
         assert!(
-            error.to_string().contains("/tmp/demo.spec.xdr"),
-            "expected sidecar path in error, got: {error}"
+            error
+                .to_string()
+                .contains("unsupported embedded spec schema 99")
         );
     }
 
@@ -345,45 +407,51 @@ mod tests {
     }
 
     #[test]
-    fn built_contract_spec_loads_current_rv32_sidecar() {
+    fn built_contract_spec_uses_embedded_bytes_not_sidecar() {
         let rv32_spec = sample_contract_spec();
         let dir = tempfile::tempdir().expect("bug: temp dir should be created");
         let target_dir = dir.path();
         let output_dir = target_dir.join("thruput");
         std::fs::create_dir_all(&output_dir).expect("bug: output dir should be created");
         let rv32 = output_dir.join("demo_contract.rv32a");
-        std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
-        set_modified(&rv32, 10);
-        let rv32_spec_path = rv32.with_extension("spec.xdr");
-        std::fs::write(
-            &rv32_spec_path,
-            xdrs::txs::encode(&rv32_spec).expect("bug: rv32 spec should encode"),
+        let bytes = xdrs::txs::encode(&rv32_spec).unwrap();
+        let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+            &[0; 4],
+            &[],
+            0,
+            64,
+            Some(thruput_rv32_artifact::ArtifactSpec {
+                schema_version: 1,
+                bytes: &bytes,
+            }),
         )
-        .expect("bug: rv32 spec sidecar should be written");
-        set_modified(&rv32_spec_path, 10);
+        .unwrap();
+        std::fs::write(&rv32, artifact).unwrap();
+        let rv32_spec_path = rv32.with_extension("spec.xdr");
+        std::fs::write(&rv32_spec_path, b"unrelated invalid sidecar")
+            .expect("bug: rv32 spec sidecar should be written");
 
         let loaded = load_built_contract_spec(target_dir, "demo-contract")
-            .expect("bug: current rv32 sidecar should load")
-            .expect("bug: current rv32 sidecar spec should exist");
+            .expect("bug: embedded spec should load")
+            .expect("bug: embedded spec should exist");
         assert_eq!(loaded, rv32_spec);
     }
 
     #[test]
-    fn built_contract_spec_rejects_rv32_sidecar_older_than_artifact() {
+    fn spec_less_artifact_does_not_fall_back_to_sidecar() {
         let dir = tempfile::tempdir().expect("bug: temp dir should be created");
         let target_dir = dir.path();
         let output_dir = target_dir.join("thruput");
         std::fs::create_dir_all(&output_dir).expect("bug: output dir should be created");
         let rv32 = output_dir.join("demo_contract.rv32a");
-        std::fs::write(&rv32, b"new rv32 fixture").expect("bug: rv32 fixture should be written");
-        set_modified(&rv32, 20);
+        let artifact = thruput_rv32_artifact::build_artifact(&[0; 4], &[], 0, 64).unwrap();
+        std::fs::write(&rv32, artifact).unwrap();
         let rv32_spec_path = spec_xdr_sidecar_path(&rv32);
         std::fs::write(
             &rv32_spec_path,
             xdrs::txs::encode(&sample_contract_spec()).expect("bug: spec should encode"),
         )
         .expect("bug: stale rv32 spec sidecar should be written");
-        set_modified(&rv32_spec_path, 10);
 
         let loaded = load_built_contract_spec(target_dir, "demo-contract")
             .expect("bug: stale sidecar lookup should not error");
@@ -405,17 +473,6 @@ mod tests {
         assert!(!json.exists());
         assert!(!xdr.exists());
         remove_spec_sidecars(&artifact).expect("bug: removing absent sidecars should succeed");
-    }
-
-    fn set_modified(path: &Path, seconds_since_epoch: u64) {
-        let file = std::fs::File::options()
-            .write(true)
-            .open(path)
-            .expect("bug: fixture should open for timestamp update");
-        file.set_times(std::fs::FileTimes::new().set_modified(
-            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds_since_epoch),
-        ))
-        .expect("bug: fixture timestamp should update");
     }
 
     #[test]
@@ -584,6 +641,54 @@ mod tests {
         let xdr_bytes = xdrs::txs::encode(&spec).expect("bug: spec should encode");
         let loaded = load_contract_spec_from_xdr(&xdr_bytes).expect("bug: should decode");
         assert_eq!(loaded, spec);
+    }
+
+    #[test]
+    fn deeply_nested_artifact_returns_spec_error_in_subprocess() {
+        const CHILD: &str = "THRUPUT_TEST_DEEP_SPEC_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            // Construct wire bytes directly so the fixture itself needs no
+            // recursive construction, encoding, or drop.
+            let mut bytes = Vec::new();
+            for word in [1_u32, 0, 0, 0, 1, 0, 0] {
+                bytes.extend(word.to_be_bytes());
+            }
+            for _ in 0..20_000 {
+                bytes.extend(
+                    thruput_contract_spec::ContractTypeKind::Option
+                        .0
+                        .to_be_bytes(),
+                );
+            }
+            bytes.extend([0; 16]); // Void return leaf, no effect/typedefs/events.
+            let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+                &[0; 4],
+                &[],
+                0,
+                64,
+                Some(thruput_rv32_artifact::ArtifactSpec {
+                    schema_version: 1,
+                    bytes: &bytes,
+                }),
+            )
+            .unwrap();
+            let error = super::load_artifact_spec_bytes(&artifact).unwrap_err();
+            assert!(matches!(error, crate::CliError::SpecFailed(_)));
+            assert!(error.to_string().contains("type nesting limit"));
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "contract_spec::tests::deeply_nested_artifact_returns_spec_error_in_subprocess",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "child failed: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
     }
 
     #[test]
