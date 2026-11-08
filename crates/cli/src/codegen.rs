@@ -49,6 +49,9 @@ impl TsIdPath {
     }
 }
 
+// Bound recursive value rendering and namespace indentation separately from type depth.
+const MAX_NAMESPACE_DEPTH: usize = 64;
+
 /// Map a spec id onto its TypeScript path.
 ///
 /// The crate name's `-` becomes `_` and the major nests as its own segment, so
@@ -89,7 +92,14 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
     if segments.peek() == Some(&krate.as_str()) {
         segments.next();
     }
-    namespaces.extend(segments.map(escape_ts_name));
+    for segment in segments {
+        if namespaces.len() == MAX_NAMESPACE_DEPTH {
+            return Err(CliError::TsBindingsFailed(format!(
+                "spec namespace exceeds nesting limit ({MAX_NAMESPACE_DEPTH})"
+            )));
+        }
+        namespaces.push(escape_ts_name(segment));
+    }
 
     let path = TsIdPath {
         namespaces,
@@ -2378,6 +2388,39 @@ mod tests {
             major: spec_string("1"),
             module_path: spec_string("demo"),
             declared: spec_string(declared),
+        }
+    }
+
+    #[test]
+    fn codegen_bounds_namespace_depth_independently_of_type_depth() {
+        for (depth, accepted) in [(62, true), (63, false), (10_000, false)] {
+            let mut name = spec_id("Empty");
+            name.module_path = spec_string(&vec!["module"; depth].join("::"));
+            let spec = ContractSpec {
+                interfaces: vec![].try_into().unwrap(),
+                type_defs: vec![ContractTypeDef::TypeDefEnum {
+                    enum_def: ContractEnumDef {
+                        name,
+                        variants: vec![].try_into().unwrap(),
+                    },
+                }]
+                .try_into()
+                .unwrap(),
+                events: vec![].try_into().unwrap(),
+            };
+            let bytes = xdrs::txs::encode(&spec).unwrap();
+            let spec = crate::contract_spec::load_contract_spec_from_xdr(&bytes).unwrap();
+            let result = generate_ts_bindings(&spec, "namespace.spec.xdr");
+            if accepted {
+                result.unwrap();
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("namespace exceeds nesting limit")
+                );
+            }
         }
     }
 
