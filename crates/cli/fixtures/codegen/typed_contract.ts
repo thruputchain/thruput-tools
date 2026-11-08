@@ -30,7 +30,7 @@ export namespace demo {
     export interface ChangedEvent extends __gh_client_contract.DecodedContractEvent<
       "ChangedEvent",
       { "actor": __gh_protocol.ContractAddress; "request_id": __gh_client_contract.FixedBytes<32> },
-      { "previous_values": readonly [bigint, bigint]; "current_values": readonly [bigint, bigint]; "request_id": __gh_client_contract.FixedBytes<32> | null }
+      { "previous_values": __gh_client_contract.FixedArray<bigint, 2>; "current_values": __gh_client_contract.FixedArray<bigint, 2>; "request_id": __gh_client_contract.FixedBytes<32> | null }
     > {}
 
     export interface ChangedEventFilter {

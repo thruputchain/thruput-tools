@@ -299,22 +299,11 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
                 return Ok(format!("__gh_client_contract.FixedBytes<{}>", array.len));
             }
             let inner = ts_type_ref(element)?;
-            if array.len <= 3 {
-                let item = if inner.contains('|') {
-                    format!("({inner})")
-                } else {
-                    inner
-                };
-                Ok(format!(
-                    "readonly [{}]",
-                    vec![item; array.len as usize].join(", ")
-                ))
-            } else {
-                Ok(format!(
-                    "__gh_client_contract.FixedArray<{inner}, {}>",
-                    array.len
-                ))
-            }
+            // Render the element once; nested tuple expansion grows exponentially.
+            Ok(format!(
+                "__gh_client_contract.FixedArray<{inner}, {}>",
+                array.len
+            ))
         }
         ContractType::Tuple { tuple } => {
             let items: Vec<String> = tuple.iter().map(ts_type_ref).collect::<Result<_, _>>()?;
@@ -2901,6 +2890,31 @@ mod tests {
     }
 
     #[test]
+    fn nested_arrays_do_not_expand_generated_output() {
+        let mut ty = ContractType::U32;
+        for _ in 0..20 {
+            ty = ContractType::Array {
+                array: ContractArrayType {
+                    element: Box::new(ty),
+                    len: 3,
+                },
+            };
+        }
+        let mut methods = counter_spec_methods();
+        methods[0].return_type = ty;
+        let spec = counter_spec_with_methods(methods, false);
+        let bytes = xdrs::txs::encode(&spec).unwrap();
+        let spec = crate::contract_spec::load_contract_spec_from_xdr(&bytes).unwrap();
+        let output = generate_ts_bindings(&spec, "nested.spec.xdr").unwrap();
+        assert!(output.len() < 100_000);
+        assert!(output.contains(&format!(
+            "{}bigint{}",
+            "__gh_client_contract.FixedArray<".repeat(20),
+            ", 3>".repeat(20)
+        )));
+    }
+
+    #[test]
     fn maps_tuple_type() {
         let ty = ContractType::Tuple {
             tuple: vec![ContractType::U32, ContractType::String]
@@ -4567,12 +4581,12 @@ export type Result =
     }
 
     #[test]
-    fn expands_arrays_up_to_three_elements() {
+    fn maps_small_arrays_to_fixed_array() {
         for (len, expected) in [
-            (0, "readonly []"),
-            (1, "readonly [bigint]"),
-            (2, "readonly [bigint, bigint]"),
-            (3, "readonly [bigint, bigint, bigint]"),
+            (0, "__gh_client_contract.FixedArray<bigint, 0>"),
+            (1, "__gh_client_contract.FixedArray<bigint, 1>"),
+            (2, "__gh_client_contract.FixedArray<bigint, 2>"),
+            (3, "__gh_client_contract.FixedArray<bigint, 3>"),
         ] {
             let ty = ContractType::Array {
                 array: ContractArrayType {
