@@ -1713,6 +1713,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         .filter_map(|def| type_def_id(def).ok().map(|id| (id, def)))
         .collect();
     let mut event_signatures = BTreeMap::new();
+    let mut checked_event_types = BTreeSet::new();
     for event in spec.events.iter() {
         let event_label = declaration_label("event", &event.name)?;
         // Like a type def, an event declares itself inside its id's
@@ -1765,7 +1766,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         // cannot decode. Named definitions are resolved so a token nested in
         // a struct or union the event refers to is caught too.
         for field in event.topics.iter().chain(event.fields.iter()) {
-            if type_carries_signed_token(&field.ty, &type_def_index) {
+            if type_carries_signed_token(&field.ty, &type_def_index, &mut checked_event_types) {
                 return Err(CliError::TsBindingsFailed(format!(
                     "{event_label} field \"{}\" carries a signed token, which events cannot log",
                     spec_string_text(&field.name)?
@@ -2229,14 +2230,15 @@ fn event_topic_type(ty: &ContractType) -> String {
 }
 
 /// Whether `ty` contains a signed token anywhere, resolving named definitions
-/// through `type_defs`. Visit each named definition once per search. A work
-/// list bounds stack use even when named references form a long chain.
-fn type_carries_signed_token(
-    ty: &ContractType,
-    type_defs: &BTreeMap<&ContractSpecId, &ContractTypeDef>,
+/// through `type_defs`. Share visited definitions across event fields: a false
+/// result exhausts the reachable graph, and a true result stops validation.
+/// The work list also handles long chains and cycles without recursion.
+fn type_carries_signed_token<'a>(
+    ty: &'a ContractType,
+    type_defs: &BTreeMap<&ContractSpecId, &'a ContractTypeDef>,
+    visited: &mut BTreeSet<&'a ContractSpecId>,
 ) -> bool {
     let mut pending = vec![ty];
-    let mut visited = BTreeSet::new();
     while let Some(ty) = pending.pop() {
         match ty {
             ContractType::SignedToken { .. } => return true,
@@ -2731,12 +2733,21 @@ mod tests {
                 _ => unreachable!(),
             })
             .collect();
-        assert!(!type_carries_signed_token(
-            &ContractType::Named {
-                named: spec_id("Node0")
+        let fields: Vec<_> = (0..1_000)
+            .map(|level| ContractType::Named {
+                named: spec_id(&format!("Node{level}")),
+            })
+            .collect();
+        let mut visited = BTreeSet::new();
+        for field in &fields {
+            assert!(!type_carries_signed_token(field, &index, &mut visited));
+        }
+        let token = ContractType::SignedToken {
+            signed_token_preimage: thruput_contract_spec::ContractSignedTokenPreimage {
+                preimage_type: None,
             },
-            &index,
-        ));
+        };
+        assert!(type_carries_signed_token(&token, &index, &mut visited));
     }
 
     #[test]
@@ -2766,6 +2777,7 @@ mod tests {
                 named: spec_id("Node"),
             },
             &index,
+            &mut BTreeSet::new(),
         ));
     }
 
