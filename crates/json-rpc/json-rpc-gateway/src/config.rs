@@ -1,3 +1,6 @@
+mod client_admission;
+pub use client_admission::*;
+
 use std::{fmt, str::FromStr, time::Duration};
 
 use serde::{Deserialize, Serialize};
@@ -379,6 +382,9 @@ pub struct GatewayConfig {
 
     /// Request coalescing for `chainTip`.
     pub tip: TipConfig,
+
+    /// Per-client and per-connection public RPC admission policy.
+    pub client_admission: ClientAdmissionConfig,
 }
 
 impl Default for GatewayConfig {
@@ -420,6 +426,7 @@ impl Default for GatewayConfig {
             batch: AdaptiveBatchConfig::default(),
             storage: AdaptiveBatchConfig::default(),
             tip: TipConfig::default(),
+            client_admission: ClientAdmissionConfig::default(),
         }
     }
 }

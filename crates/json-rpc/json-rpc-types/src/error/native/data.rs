@@ -326,6 +326,17 @@ pub enum ErrorData {
         #[schemars(with = "SchedulerError")]
         error: Option<SchedulerError>,
     },
+    /// The client exceeded the gateway's request budget before backend work.
+    RateLimited {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "crate::decimal::option::serialize",
+            deserialize_with = "optional_delay"
+        )]
+        #[schemars(with = "crate::decimal::Decimal<u64>")]
+        retry_after_ms: Option<u64>,
+    },
     BackendDataInvalid {
         #[serde(
             default,

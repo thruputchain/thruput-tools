@@ -120,6 +120,7 @@ fn every_catalog_code_maps_to_bounded_outcome() {
         "backend_timeout",
         "view_height_unavailable",
         "overloaded",
+        "rate_limited",
         "internal_error",
     ];
 
@@ -147,6 +148,7 @@ fn outcome_mapping_is_exact() {
         (codes::BACKEND_TIMEOUT, "backend_timeout"),
         (codes::NOT_IMPLEMENTED, "not_implemented"),
         (codes::OVERLOADED, "overloaded"),
+        (codes::RATE_LIMITED, "rate_limited"),
         (-32700, "invalid_params"),
         (-32600, "invalid_params"),
         (-32601, "not_implemented"),
