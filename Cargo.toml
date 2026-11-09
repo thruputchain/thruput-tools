@@ -32,7 +32,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.43.0"
+version = "0.44.0"
 edition = "2024"
 # Keep in step with rust-toolchain.toml. Without this, `cargo install
 # thruput` on an older stable fails deep in dependency resolution with
@@ -62,57 +62,57 @@ zstd = "0.14.3"
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
-thruput-encoding = { path = "crates/encoding", version = "=0.43.0" }
-thruput-client = { path = "crates/client", version = "=0.43.0" }
-thruput-build-info = { path = "crates/build-info", version = "=0.43.0" }
-thruput-bundle-identity = { path = "crates/bundle-identity", version = "=0.43.0" }
-thruput-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.43.0" }
-thruput-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.43.0" }
-thruput-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.43.0" }
-thruput-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.43.0" }
-thruput-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.43.0" }
-thruput-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.43.0" }
-thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.43.0" }
-thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.43.0" }
-thruput-heap-profiling = { path = "crates/heap-profiling", version = "=0.43.0" }
-thruput-signing = { path = "crates/signing", version = "=0.43.0" }
-thruput-tx-validation = { path = "crates/tx-validation", version = "=0.43.0" }
-thruput-node-supervisor = { path = "crates/node-supervisor", version = "=0.43.0" }
-thruput-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.43.0" }
-thruput-rv32-lower = { path = "crates/rv32/lower", version = "=0.43.0" }
+thruput-encoding = { path = "crates/encoding", version = "=0.44.0" }
+thruput-client = { path = "crates/client", version = "=0.44.0" }
+thruput-build-info = { path = "crates/build-info", version = "=0.44.0" }
+thruput-bundle-identity = { path = "crates/bundle-identity", version = "=0.44.0" }
+thruput-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.44.0" }
+thruput-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.44.0" }
+thruput-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.44.0" }
+thruput-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.44.0" }
+thruput-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.44.0" }
+thruput-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.44.0" }
+thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.44.0" }
+thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.44.0" }
+thruput-heap-profiling = { path = "crates/heap-profiling", version = "=0.44.0" }
+thruput-signing = { path = "crates/signing", version = "=0.44.0" }
+thruput-tx-validation = { path = "crates/tx-validation", version = "=0.44.0" }
+thruput-node-supervisor = { path = "crates/node-supervisor", version = "=0.44.0" }
+thruput-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.44.0" }
+thruput-rv32-lower = { path = "crates/rv32/lower", version = "=0.44.0" }
 
-thruput-toolchain = { path = "crates/toolchain", version = "=0.43.0" }
-thruput-cli-macros = { path = "crates/cli-macros", version = "=0.43.0" }
+thruput-toolchain = { path = "crates/toolchain", version = "=0.44.0" }
+thruput-cli-macros = { path = "crates/cli-macros", version = "=0.44.0" }
 
 # --- protocol-rs (crates.io) ---
 # These crates define or encode the protocol schema. Keep them exact and update
 # them as one qualified release family so published binaries cannot float to an
 # incompatible patch release.
-thruput-xdr = { version = "=0.63.0", features = ["serde", "xdrs", "schema"] }
-thruput-indexer = { version = "=0.63.0", features = ["serde"] }
-thruput-node-rpc = { version = "=0.63.0" }
-thruput-db-gateway = { version = "=0.63.0" }
-thruput-view = { version = "=0.63.0" }
-thruput-scp = { version = "=0.63.0" }
-thruput-trace = { version = "=0.63.0" }
+thruput-xdr = { version = "=0.65.0", features = ["serde", "xdrs", "schema"] }
+thruput-indexer = { version = "=0.65.0", features = ["serde"] }
+thruput-node-rpc = { version = "=0.65.0" }
+thruput-db-gateway = { version = "=0.65.0" }
+thruput-view = { version = "=0.65.0" }
+thruput-scp = { version = "=0.65.0" }
+thruput-trace = { version = "=0.65.0" }
 # --- sdk-rs (crates.io) ---
 # The SDK crates release as one version line, and the standard interfaces as
 # another. Keep each exact and move it as a family.
-thruput-spec-tool = { version = "=0.58.0" }
-thruput-contract-util = { version = "=0.58.0" }
-thruput-domain-separator = { version = "=0.58.0" }
-thruput-contract-spec = { version = "=0.58.0" }
-thruput-u256 = { version = "=0.58.0" }
-thruput-erc20-if = { version = "=0.1.71" }
-thruput-erc20-permit-if = { version = "=0.1.71" }
-thruput-sdk = { version = "=0.58.0" }
+thruput-spec-tool = { version = "=0.60.1" }
+thruput-contract-util = { version = "=0.60.1" }
+thruput-domain-separator = { version = "=0.60.1" }
+thruput-contract-spec = { version = "=0.60.1" }
+thruput-u256 = { version = "=0.60.1" }
+thruput-erc20-if = { version = "=0.1.73" }
+thruput-erc20-permit-if = { version = "=0.1.73" }
+thruput-sdk = { version = "=0.60.1" }
 
 # --- xdrs (crates.io, published as thruput-*) ---
 # The XDR codec is the exception: caret, so an xdrs patch release reaches this
-# workspace without a release here. Cargo resolves the protocol's 0.16.x codec.
-xdrs = { package = "thruput-xdrs", version = "0.17.1", features = ["alloc"] }
-xdr-common = { package = "thruput-xdr-common", version = "0.17.1" }
-rpc_driver = { package = "thruput-rpc-driver", version = "=0.17.1" }
+# workspace without a release here. Cargo resolves the protocol's 0.18.x codec.
+xdrs = { package = "thruput-xdrs", version = "0.18.0", features = ["alloc"] }
+xdr-common = { package = "thruput-xdr-common", version = "0.18.0" }
+rpc_driver = { package = "thruput-rpc-driver", version = "=0.18.0" }
 
 # --- Async ---
 async-trait = "0.1"

@@ -12,11 +12,17 @@ pub fn invocation() -> Value {
 pub fn request(method: &str) -> Value {
     match method {
         "sendTransaction" => json!({"signedTransaction": "0x0102"}),
-        "getTransactionStatus" | "getTransactionReceipt" => json!({"transactionHash": address()}),
+        "getTransactionStatus" | "getTransactionReceipt" | "getTransactionInput" => {
+            json!({"transactionHash": address()})
+        }
         "simulateInvocation" => invocation(),
         "simulateInvocations" => json!({"invocations": [invocation()]}),
         "getStorage" => json!({"address": address(), "key": "0x0102"}),
-        "getBalance" | "getRegisteredAuth" => json!({"address": address()}),
+        "getBalance" | "getRegisteredAuth" | "getContractDeployment" => {
+            json!({"address": address()})
+        }
+        "getContractArtifact" => json!({"hash": address()}),
+        "getEffectiveContract" => json!({"address": address(), "context": "root"}),
         "getEvents" => {
             json!({"filters": [{"addresses": [address()]}], "start": {"order": "ascending", "anchor": {"kind": "atBeginning"}}})
         }
@@ -43,6 +49,14 @@ pub fn response(method: &str) -> Value {
     let event = json!({"address": address(), "topics": [format!("0x{}", "01".repeat(32))], "data": "0x0102"});
     let output = json!({"result": "return", "returnData": "0x0102"});
     match method {
+        "getTransactionInput" => json!({"status": "unavailable"}),
+        "getContractDeployment" => {
+            json!({"address": address(), "stateBlockHeight": "42", "deployment": null})
+        }
+        "getContractArtifact" => json!({"hash": address(), "contractXdr": "0x0000000300000000"}),
+        "getEffectiveContract" => {
+            json!({"address": address(), "context": "root", "stateBlockHeight": "42", "selection": null})
+        }
         "getVersionInfo" => {
             json!({"wireFormat": "14.0.0", "supportedMethods": ["incorrectServiceValue"], "implementation": "transport-test"})
         }

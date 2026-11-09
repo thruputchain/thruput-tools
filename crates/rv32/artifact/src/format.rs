@@ -1,4 +1,4 @@
-//! The Thruput RV32 **v5 artifact format**: constants, writer, and
+//! The Thruput RV32 **v6 artifact format**: constants, writer, and
 //! self-verifier.
 //!
 //! This is the single Rust source of truth for the on-disk format the hogd
@@ -20,12 +20,23 @@
 //! shadow. v5 also bumps the entry ABI to 3: `sp` is seeded to 0 and the
 //! guest owns stack placement (v2 seeded `sp` to the top of data memory).
 //!
+//! v6 keeps the v5 header unchanged (apart from `format_version`) and appends
+//! an extension list after initial memory: data the runtime never loads into
+//! guest memory, such as the contract spec. Adding an extension kind does not
+//! change the format. See [`crate::extension`] for the XDR definition and
+//! the rules the chain enforces. The enclosing `SHA256(XDR(Contract))`
+//! identity covers the extensions along with the rest of the artifact.
+//!
+//! Readers accept v5 too, since v5 contracts stay deployed after v6 ships: a
+//! v5 artifact reads as a v6 artifact with no extensions. Producers emit v6
+//! only.
+//!
 //! Header layout (little-endian, no padding, 128 bytes total):
 //!
 //! ```text
 //!   off  size  field
 //!     0     8  magic "GHRV32A1"
-//!     8     4  format_version          (5)
+//!     8     4  format_version          (6)
 //!    12     4  header_bytes            (128)
 //!    16     8  vm_profile_digest
 //!    24     4  flags                   (0)
@@ -41,15 +52,20 @@
 //!    96    32  sha256(initial_memory)
 //! ```
 //!
-//! Body: `header || code || initial_memory`. Section positions are implicit:
-//! code starts at `header_bytes`, `initial_memory` directly after code, and
-//! the file ends exactly at `header_bytes + code_size + initial_memory_size`
-//! — there are no stored file offsets (v5 dropped v4's redundant
-//! `code_offset` / `initial_memory_offset` fields).
+//! Body: `header || code || initial_memory || extensions`. Section positions
+//! are implicit: code starts at `header_bytes`, `initial_memory` directly
+//! after code, and `extensions` (the XDR-encoded `Rv32ArtifactExtensions`)
+//! runs from there exactly to the end of the file. There are no stored file
+//! offsets (v5 dropped v4's redundant `code_offset` / `initial_memory_offset`
+//! fields). A v5 body has no `extensions` and ends after `initial_memory`.
 
 use sha2::{Digest, Sha256};
 
 use crate::error::{Result, invalid, verify};
+use crate::extension::{
+    ArtifactExtension, ArtifactSpec, EXTENSION_KIND_CONTRACT_SPEC, decode_extensions,
+    decode_spec_extension, encode_extensions, encode_spec_extension,
+};
 
 /// Code (`.text`) bytes a chain admits in an attached artifact unless its
 /// configuration states otherwise: the protocol's `kDefaultMaxRv32CodeBytes`
@@ -70,9 +86,14 @@ pub const DEFAULT_MEMORY_BYTES: usize = 64 * 1024;
 pub const INSTRUCTION_BYTES: usize = 4;
 /// Artifact magic: `GHRV32A1`.
 pub const MAGIC: [u8; 8] = *b"GHRV32A1";
-/// Artifact format version.
-pub const FORMAT_VERSION: u32 = 5;
-/// Fixed header size in bytes.
+/// Artifact format version producers emit.
+pub const FORMAT_VERSION: u32 = 6;
+/// The last format version without an extension list. Readers still accept
+/// it because contracts deployed in it remain on chain.
+pub const LEGACY_FORMAT_VERSION_V5: u32 = 5;
+/// Format versions readers accept.
+pub const READABLE_FORMAT_VERSIONS: [u32; 2] = [LEGACY_FORMAT_VERSION_V5, FORMAT_VERSION];
+/// Fixed header size in bytes (the same in v5 and v6).
 pub const HEADER_BYTES: usize = 128;
 /// VM-profile digest the runtime validates the artifact against.
 pub const VM_PROFILE_DIGEST: u64 = 0x55c5_3a68_5f0e_b33d;
@@ -95,7 +116,7 @@ pub const GAS_SCHEDULE_DIGEST: u64 = 0x9183_17c2_1c46_bb60;
 /// Digest size of each section hash stamped into the artifact header.
 pub const DIGEST_BYTES: usize = 32;
 
-/// Fixed v5 header offsets.
+/// Fixed v6 header offsets.
 pub const FORMAT_VERSION_OFFSET: usize = 8;
 pub const HEADER_SIZE_OFFSET: usize = 12;
 pub const VM_PROFILE_OFFSET: usize = 16;
@@ -122,14 +143,14 @@ const _: () = assert!(INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES == HEADER_BYTE
 // cross-repo fingerprint check enforces. Do not "fix" to the canonical value.
 const FNV_OFFSET_BASIS: u64 = 1_469_598_103_934_665_603;
 const FNV_PRIME: u64 = 1_099_511_628_211;
-const FORMAT_FINGERPRINT_DOMAIN: &[u8] = b"groundhog.rv32.artifact.format.v5";
+const FORMAT_FINGERPRINT_DOMAIN: &[u8] = b"groundhog.rv32.artifact.format.v6";
 const SECTION_DIGEST_ALGORITHM: &[u8] = b"sha256";
-const CANONICAL_SECTION_ORDER: &[u8] = b"header|code|initial_memory";
+const CANONICAL_SECTION_ORDER: &[u8] = b"header|code|initial_memory|extensions";
 const FLAGS_REQUIRED_VALUE: u32 = 0;
 
-/// Pinned v5 artifact-format contract fingerprint. hogd pins the same value
+/// Pinned v6 artifact-format contract fingerprint. hogd pins the same value
 /// as `kArtifactFormatFingerprint` in `rv32/artifact.h`.
-pub const FORMAT_FINGERPRINT: u64 = 0xc5f0_0a7d_4451_045e;
+pub const FORMAT_FINGERPRINT: u64 = 0x0e33_6ac8_e466_02e1;
 const _: () = assert!(compute_format_fingerprint() == FORMAT_FINGERPRINT);
 
 const fn fnv_digest_byte(digest: u64, value: u8) -> u64 {
@@ -183,7 +204,7 @@ const fn fold_layout_field(
     format_fingerprint_u64(digest, size_name, size as u64)
 }
 
-/// Compute the v5 artifact-format contract fingerprint.
+/// Compute the v6 artifact-format contract fingerprint.
 #[must_use]
 pub const fn compute_format_fingerprint() -> u64 {
     compute_format_fingerprint_with_inputs(
@@ -238,7 +259,7 @@ pub const fn compute_format_fingerprint_with_domain(domain: &[u8]) -> u64 {
     )
 }
 
-// Intentionally a long, flat enumeration: it folds every runtime-validated v5
+// Intentionally a long, flat enumeration: it folds every runtime-validated v6
 // format fact in a fixed order. Splitting it would obscure the field list that
 // is the whole point of the fingerprint.
 #[allow(clippy::too_many_lines)]
@@ -384,6 +405,12 @@ const fn compute_format_fingerprint_with_inputs(
     digest = format_fingerprint_u64(digest, b"code_size_nonzero", 1);
     digest = format_fingerprint_u64(digest, b"initial_memory_start_plus_size_le_memory_bytes", 1);
     digest = format_fingerprint_u64(digest, b"initial_memory_start_zero_when_empty", 1);
+    // The extension list's framing rules. Individual kinds are not folded:
+    // adding one does not change the format.
+    digest = format_fingerprint_bytes(digest, b"extensions_encoding", b"xdr");
+    digest = format_fingerprint_u64(digest, b"extensions_kind_nonzero", 1);
+    digest = format_fingerprint_u64(digest, b"extensions_kind_strictly_ascending", 1);
+    digest = format_fingerprint_u64(digest, b"extensions_xdr_padding_zero", 1);
     digest = format_fingerprint_bytes(digest, b"canonical_section_order", canonical_section_order);
     digest = format_fingerprint_u64(digest, b"no_section_gaps_or_trailing_bytes", 1);
     digest
@@ -409,8 +436,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// Assemble a complete v5 artifact from the code section and the stored span
-/// of the data-memory image.
+/// Assemble a v6 artifact with no extensions from code and the stored
+/// data-memory span.
 ///
 /// `initial_memory` is staged at data address `initial_memory_start` — the
 /// runtime zero-fills `[0, base)` and `[base + initial_memory.len(),
@@ -424,6 +451,52 @@ pub fn build_artifact(
     initial_memory_start: usize,
     memory_bytes: usize,
 ) -> Result<Vec<u8>> {
+    build_artifact_with_extensions(
+        code,
+        initial_memory,
+        initial_memory_start,
+        memory_bytes,
+        &[],
+    )
+}
+
+/// Assemble a v6 artifact with an optional contract spec, carried as a
+/// [`EXTENSION_KIND_CONTRACT_SPEC`] extension.
+pub fn build_artifact_with_spec(
+    code: &[u8],
+    initial_memory: &[u8],
+    initial_memory_start: usize,
+    memory_bytes: usize,
+    spec: Option<ArtifactSpec<'_>>,
+) -> Result<Vec<u8>> {
+    let body = spec.map(encode_spec_extension).transpose()?;
+    let extensions: Vec<ArtifactExtension<'_>> = body
+        .as_deref()
+        .map(|body| ArtifactExtension {
+            kind: EXTENSION_KIND_CONTRACT_SPEC,
+            body,
+        })
+        .into_iter()
+        .collect();
+    build_artifact_with_extensions(
+        code,
+        initial_memory,
+        initial_memory_start,
+        memory_bytes,
+        &extensions,
+    )
+}
+
+/// Assemble a v6 artifact carrying `extensions`, which must be in strictly
+/// ascending, nonzero `kind` order.
+pub fn build_artifact_with_extensions(
+    code: &[u8],
+    initial_memory: &[u8],
+    initial_memory_start: usize,
+    memory_bytes: usize,
+    extensions: &[ArtifactExtension<'_>],
+) -> Result<Vec<u8>> {
+    let extensions = encode_extensions(extensions)?;
     // The loader rejects code_size == 0; refuse to emit such an artifact even
     // when called directly (not via `lower`).
     if code.is_empty() {
@@ -478,6 +551,7 @@ pub fn build_artifact(
     let mut artifact = header;
     artifact.extend_from_slice(code);
     artifact.extend_from_slice(initial_memory);
+    artifact.extend_from_slice(&extensions);
     Ok(artifact)
 }
 
@@ -493,13 +567,15 @@ pub struct DeclaredSizes {
     pub code_bytes: u32,
 }
 
-/// Read the sizes a v5 artifact header declares, without verifying the rest.
+/// Read the sizes a v5 or v6 artifact header declares, without verifying the
+/// rest.
 ///
-/// `None` when `artifact` does not carry a v5 header (too short, wrong magic,
-/// or another format version): such bytes are not an artifact this crate can
-/// speak for, and what to do with them is the caller's decision. The sizes
-/// are reported as stamped, so a header that disagrees with its body is
-/// reported as it is; [`verify_artifact`] checks the shape.
+/// `None` when `artifact` does not carry a readable header (too short, wrong
+/// magic, or a format version not in [`READABLE_FORMAT_VERSIONS`]): such
+/// bytes are not an artifact this crate can speak for, and what to do with
+/// them is the caller's decision. The sizes are reported as stamped, so a
+/// header that disagrees with its body is reported as it is;
+/// [`verify_artifact`] checks the shape.
 pub fn declared_sizes(artifact: &[u8]) -> Option<DeclaredSizes> {
     if artifact.len() < HEADER_BYTES || artifact[..MAGIC.len()] != MAGIC {
         return None;
@@ -511,7 +587,7 @@ pub fn declared_sizes(artifact: &[u8]) -> Option<DeclaredSizes> {
             .ok()
             .map(u32::from_le_bytes)
     };
-    if read_u32(FORMAT_VERSION_OFFSET)? != FORMAT_VERSION {
+    if !READABLE_FORMAT_VERSIONS.contains(&read_u32(FORMAT_VERSION_OFFSET)?) {
         return None;
     }
     Some(DeclaredSizes {
@@ -521,10 +597,48 @@ pub fn declared_sizes(artifact: &[u8]) -> Option<DeclaredSizes> {
 }
 
 /// Re-parse a freshly-written artifact and confirm magic, the format/ABI/gas
-/// stamps, the canonical section layout, and the two section digests. Cheap
-/// insurance against a writer regression slipping past until the C++ parser
-/// flags it.
+/// stamps, the canonical section layout, the two section digests, and the
+/// extension list's framing. Cheap insurance against a writer regression
+/// slipping past until the C++ parser flags it.
+///
+/// This is the producer check, so it accepts only [`FORMAT_VERSION`] and this
+/// build's gas schedule. Readers of deployed artifacts use
+/// [`artifact_extensions`] or [`artifact_spec`], which also accept v5.
 pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
+    let container = verify_container(artifact)?;
+    if container.format_version != FORMAT_VERSION {
+        return Err(verify(format!(
+            "format_version {} (producers emit {FORMAT_VERSION})",
+            container.format_version
+        )));
+    }
+    let gas_version = u32::from_le_bytes(
+        artifact[GAS_VERSION_OFFSET..GAS_VERSION_OFFSET + 4]
+            .try_into()
+            .expect("bug: verified header"),
+    );
+    let gas_digest = u64::from_le_bytes(
+        artifact[GAS_DIGEST_OFFSET..GAS_DIGEST_OFFSET + 8]
+            .try_into()
+            .expect("bug: verified header"),
+    );
+    if gas_version != GAS_TABLE_VERSION || gas_digest != GAS_SCHEDULE_DIGEST {
+        return Err(verify("gas schedule mismatch"));
+    }
+    if artifact[MEMORY_BYTES_OFFSET..MEMORY_BYTES_OFFSET + 4] == [0; 4] {
+        return Err(verify("memory_bytes out of range"));
+    }
+    Ok(())
+}
+
+/// What [`verify_container`] established about a structurally valid artifact.
+struct Container<'a> {
+    format_version: u32,
+    extensions: Vec<ArtifactExtension<'a>>,
+}
+
+// Readers validate the envelope, not the producer's execution settings.
+fn verify_container(artifact: &[u8]) -> Result<Container<'_>> {
     if artifact.len() < HEADER_BYTES {
         return Err(verify("artifact shorter than header"));
     }
@@ -549,11 +663,9 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
         )
     };
 
-    if read_u32(FORMAT_VERSION_OFFSET) != FORMAT_VERSION {
-        return Err(verify(format!(
-            "format_version {}",
-            read_u32(FORMAT_VERSION_OFFSET)
-        )));
+    let format_version = read_u32(FORMAT_VERSION_OFFSET);
+    if !READABLE_FORMAT_VERSIONS.contains(&format_version) {
+        return Err(verify(format!("format_version {format_version}")));
     }
     if read_u32(HEADER_SIZE_OFFSET) as usize != HEADER_BYTES {
         return Err(verify(format!(
@@ -570,11 +682,6 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     if read_u32(SYSCALL_ABI_OFFSET) != SYSCALL_ABI_VERSION {
         return Err(verify("syscall_abi mismatch"));
     }
-    if read_u32(GAS_VERSION_OFFSET) != GAS_TABLE_VERSION
-        || read_u64(GAS_DIGEST_OFFSET) != GAS_SCHEDULE_DIGEST
-    {
-        return Err(verify("gas schedule mismatch"));
-    }
     if read_u32(FLAGS_OFFSET) != FLAGS_REQUIRED_VALUE {
         return Err(verify("flags must be zero"));
     }
@@ -584,16 +691,13 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     let init_mem_size = read_u32(INITIAL_MEMORY_SIZE_OFFSET) as usize;
     let init_mem_start = read_u32(INITIAL_MEMORY_START_OFFSET) as usize;
 
-    // Canonical layout: the body is exactly header || code || initial_memory
+    // Canonical layout: header || code || initial_memory || extensions (v6)
     // with no gaps or trailing bytes, and the stored memory prefix fits the
     // declared data address space. This mirrors the structural acceptance set
     // the consensus C++ loader enforces, so the writer's self-check rejects
     // anything the loader would on shape alone. How large `code_size` and
     // `memory_bytes` may be is the deploying chain's configuration, checked
     // there rather than here.
-    if memory_bytes == 0 {
-        return Err(verify("memory_bytes out of range"));
-    }
     if code_size == 0 {
         return Err(verify("code size out of range"));
     }
@@ -614,22 +718,31 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
         ));
     }
     // Section positions are implicit: code at HEADER_BYTES, initial_memory
-    // directly after, and the file ends exactly there — no gaps, no trailing
-    // bytes. Checked math for the same 32-bit wrap reason as above.
-    let expected_len = HEADER_BYTES
+    // directly after. A v5 file ends there; a v6 file's extension list runs
+    // from there to the end. Checked math for the same 32-bit wrap reason as
+    // above.
+    let sections_end = HEADER_BYTES
         .checked_add(code_size)
         .and_then(|len| len.checked_add(init_mem_size))
         .ok_or_else(|| verify("non-canonical section layout"))?;
-    if expected_len != artifact.len() {
+    if sections_end > artifact.len() {
         return Err(verify("non-canonical section layout"));
     }
+    let extensions = if format_version == LEGACY_FORMAT_VERSION_V5 {
+        if sections_end != artifact.len() {
+            return Err(verify("non-canonical section layout"));
+        }
+        Vec::new()
+    } else {
+        decode_extensions(&artifact[sections_end..])?
+    };
 
     let code_dig = &artifact[CODE_DIGEST_OFFSET..CODE_DIGEST_OFFSET + DIGEST_BYTES];
     let mem_dig =
         &artifact[INITIAL_MEMORY_DIGEST_OFFSET..INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES];
 
     let code = &artifact[HEADER_BYTES..HEADER_BYTES + code_size];
-    let memory = &artifact[HEADER_BYTES + code_size..];
+    let memory = &artifact[HEADER_BYTES + code_size..sections_end];
 
     if sha256(code).as_slice() != code_dig {
         return Err(verify("code digest mismatch"));
@@ -638,5 +751,26 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
         return Err(verify("initial_memory digest mismatch"));
     }
 
-    Ok(())
+    Ok(Container {
+        format_version,
+        extensions,
+    })
+}
+
+/// Validate a v5 or v6 container and borrow its extensions, without
+/// interpreting any body. A v5 artifact has none. Callers must verify the
+/// enclosing contract hash to authenticate these bytes.
+pub fn artifact_extensions(artifact: &[u8]) -> Result<Vec<ArtifactExtension<'_>>> {
+    Ok(verify_container(artifact)?.extensions)
+}
+
+/// Validate a v5 or v6 container and borrow its contract spec, if it carries
+/// one. The spec's schema is not interpreted. Callers must verify the
+/// enclosing contract hash to authenticate these bytes.
+pub fn artifact_spec(artifact: &[u8]) -> Result<Option<ArtifactSpec<'_>>> {
+    artifact_extensions(artifact)?
+        .into_iter()
+        .find(|extension| extension.kind == EXTENSION_KIND_CONTRACT_SPEC)
+        .map(|extension| decode_spec_extension(extension.body))
+        .transpose()
 }

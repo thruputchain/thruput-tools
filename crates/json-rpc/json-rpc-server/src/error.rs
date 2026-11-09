@@ -43,6 +43,8 @@ pub enum RpcServerError {
     /// The backend cannot serve the historical range required by the request.
     #[error("history unavailable: {0}")]
     HistoryUnavailable(String),
+    #[error("contract artifact unavailable: {0}")]
+    ContractArtifactUnavailable(thruput_json_rpc_types::SHA256Hash),
 
     /// Backend is unavailable.
     #[error("backend unavailable: {0}")]
@@ -95,6 +97,9 @@ impl RpcServerError {
             | Self::BackendDataInvalid { .. }
             | Self::InvalidCursor(_)
             | Self::HistoryUnavailable(_) => codes::BACKEND_UNAVAILABLE,
+            Self::ContractArtifactUnavailable(_) => {
+                thruput_json_rpc_types::error::native::codes::CONTRACT_ARTIFACT_UNAVAILABLE
+            }
             Self::BackendTimeout => codes::BACKEND_TIMEOUT,
             Self::Overloaded(_) => codes::OVERLOADED,
             Self::NotImplemented(_) => codes::NOT_IMPLEMENTED,

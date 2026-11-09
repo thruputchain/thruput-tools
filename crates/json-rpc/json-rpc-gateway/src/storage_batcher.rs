@@ -290,6 +290,19 @@ impl StorageReadBatcher {
         thruput_hogd_backend::native::storage(answer.block_height, answer.item)
     }
 
+    /// Reserved deployment metadata uses the same committed, complete batch reads.
+    pub(crate) async fn native_contract_deployment(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<thruput_json_rpc_types::responses::ContractDeploymentResult, RpcServerError> {
+        let answer = self
+            .read_key(context, address, StorageKey::Metadata, address.0.as_ref())
+            .await?;
+        validate_native_answer(&answer)?;
+        thruput_hogd_backend::native::contract_deployment(address, answer.block_height, answer.item)
+    }
+
     /// Native authorization reads share queues but never accept a partial batch.
     pub(crate) async fn native_registered_auth(
         &self,

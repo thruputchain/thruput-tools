@@ -32,6 +32,25 @@ These guards apply to the current workflows. Historical tags keep their original
 workflow definitions; restricting their execution requires separate repository
 controls.
 
+## GH-554 format transition
+
+The agreed sequence is runtime-first. Qualify the combined candidate tools and
+hogd before publishing. v6 uses a 128-byte header followed by code, initial memory,
+and an XDR extension list. Existing v5 contracts remain readable and executable.
+
+1. Build the dual-format hogd runtime with published tools 0.43.0. Publish the
+   compatible runtime, generator, and test executor after review and green CI.
+2. Release the Rust SDK with that executor.
+3. Pin the runtime and verified asset digests in the tools catalog and update
+   the scaffold SDK pin. Require normal green CI before merging and publishing
+   tools 0.44.0. Managed-runtime startup remains a required publication check.
+4. Align the TypeScript packages and qualify the exact published stack. Upgrade
+   and verify the network before deploying v6 contracts or shipping explorer.
+
+New optional metadata kinds need no format change. Execution changes still need
+an explicit compatibility and activation plan. Preserve existing network state.
+Remove v5 support separately, after an approved reset or verified migration.
+
 ## Publishing credentials
 
 Existing crates use crates.io trusted publishing through GitHub OIDC. Each

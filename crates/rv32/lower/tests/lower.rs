@@ -357,8 +357,8 @@ fn lowers_a_minimal_contract() {
     // No data sections, so the stored initial-memory span is empty.
     assert_eq!(lowered.initial_memory.len(), 0);
     assert_eq!(lowered.initial_memory_start, 0);
-    // header (128) + code (32) + empty initial memory.
-    assert_eq!(lowered.artifact.len(), 128 + 32);
+    // header (128) + code (32) + empty initial memory + empty extension list (4).
+    assert_eq!(lowered.artifact.len(), 128 + 32 + 4);
     assert_eq!(&lowered.artifact[..8], b"GHRV32A1");
     verify_artifact(&lowered.artifact).expect("artifact self-verifies");
 }
@@ -389,8 +389,8 @@ fn copies_data_sections_into_the_memory_image() {
     // a prefix from address 0.
     assert_eq!(lowered.initial_memory_start, 0x100);
     assert_eq!(lowered.initial_memory, [0xDE, 0xAD, 0xBE, 0xEF]);
-    // header + code + the 4-byte span: no leading-zero shadow.
-    assert_eq!(lowered.artifact.len(), 128 + 32 + 4);
+    // header + code + the 4-byte span + empty extension list: no leading-zero shadow.
+    assert_eq!(lowered.artifact.len(), 128 + 32 + 4 + 4);
 }
 
 #[test]
@@ -741,7 +741,7 @@ fn stack_first_layout_stores_no_leading_zero_shadow() {
     let lowered = lower(&assemble(spec)).expect("lowers with stack-first layout");
     assert_eq!(lowered.initial_memory_start, 0x1008);
     assert_eq!(lowered.initial_memory, [0x11, 0x22, 0x33, 0x44]);
-    assert_eq!(lowered.artifact.len(), 128 + 32 + 4);
+    assert_eq!(lowered.artifact.len(), 128 + 32 + 4 + 4);
 }
 
 #[test]
@@ -985,14 +985,13 @@ fn verify_artifact_rejects_corrupted_code_digest() {
 
 #[test]
 fn verify_artifact_rejects_non_canonical_layout() {
-    // Section positions are implicit, so the only layout degree of freedom is
-    // total length: header + code_size + initial_memory_size must equal the
-    // file size exactly.
+    // Section positions are implicit: the extension list runs from the end of
+    // initial memory exactly to the end of the file.
     let lowered = lower(&assemble(happy_spec())).expect("lowers");
     let mut bytes = lowered.artifact.clone();
     bytes.push(0); // trailing byte
     let err = verify_artifact(&bytes).expect_err("should reject");
-    assert!(err.to_string().contains("non-canonical"));
+    assert!(err.to_string().contains("trailing bytes"), "got: {err}");
 }
 
 #[test]
@@ -1235,7 +1234,7 @@ fn a_high_data_section_stages_only_its_own_span() {
     .expect("lowers with a high data section");
     assert_eq!(lowered.initial_memory, [7, 0, 9]);
     assert_eq!(lowered.initial_memory_start, addr as usize + 1);
-    assert_eq!(lowered.artifact.len(), 128 + 32 + 3);
+    assert_eq!(lowered.artifact.len(), 128 + 32 + 3 + 4);
     verify_artifact(&lowered.artifact).expect("artifact self-verifies");
 }
 

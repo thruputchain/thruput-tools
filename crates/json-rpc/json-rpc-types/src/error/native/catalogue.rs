@@ -12,6 +12,8 @@ pub mod codes {
     pub const STATE_HEIGHT_UNAVAILABLE: i32 = -32012;
     /// The backend proved that required historical data cannot be served.
     pub const HISTORY_UNAVAILABLE: i32 = -32013;
+    /// Requested contract bytes are not available; no claim about prior existence.
+    pub const CONTRACT_ARTIFACT_UNAVAILABLE: i32 = -32014;
     /// The funding service stopped this attempt; this does not prove nonexecution.
     pub const FUNDING_ATTEMPT_STOPPED: i32 = -32030;
     /// Retained signed funding evidence without a resolved outcome.
@@ -28,6 +30,12 @@ pub mod codes {
 
 /// One component per numeric code; `InvalidParams` has two data refinements.
 pub const ERROR_INFOS: &[RpcErrorInfo] = &[
+    RpcErrorInfo {
+        name: "ContractArtifactUnavailable",
+        code: codes::CONTRACT_ARTIFACT_UNAVAILABLE,
+        message: "Contract artifact unavailable",
+        description: "Requested contract bytes are not available here; this does not distinguish never-existing from pruned content.",
+    },
     RpcErrorInfo {
         name: "InvalidParams",
         code: codes::INVALID_PARAMS,
@@ -111,11 +119,15 @@ pub const METHODS: &[&str] = &[
     "sendTransaction",
     "getTransactionStatus",
     "getTransactionReceipt",
+    "getTransactionInput",
     "simulateInvocation",
     "simulateInvocations",
     "getStorage",
     "getBalance",
     "getRegisteredAuth",
+    "getContractDeployment",
+    "getContractArtifact",
+    "getEffectiveContract",
     "getEvents",
     "getTransactionsByRootAddress",
     "getBlockByHeight",
@@ -134,6 +146,14 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
         STATE_HEIGHT_UNAVAILABLE, TRANSACTION_INVALID, TRANSACTION_REJECTED,
     };
     Some(match method {
+        "getContractArtifact" => &[
+            INVALID_PARAMS,
+            codes::CONTRACT_ARTIFACT_UNAVAILABLE,
+            BACKEND_UNAVAILABLE,
+            BACKEND_TIMEOUT,
+            OVERLOADED,
+            BACKEND_DATA_INVALID,
+        ],
         "getVersionInfo" | "getNetworkInfo" | "getServerLimits" => &[INVALID_PARAMS],
         "sendTransaction" => &[
             INVALID_PARAMS,
@@ -184,9 +204,12 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
         | "getChainConfig"
         | "getTransactionStatus"
         | "getTransactionReceipt"
+        | "getTransactionInput"
         | "getStorage"
         | "getBalance"
         | "getRegisteredAuth"
+        | "getContractDeployment"
+        | "getEffectiveContract"
         | "dev_getPendingTransactionCount" => &[
             INVALID_PARAMS,
             BACKEND_UNAVAILABLE,
@@ -210,6 +233,7 @@ pub(super) fn kind_code(kind: &str) -> Option<i32> {
         "transactionRejected" => TRANSACTION_REJECTED,
         "stateHeightUnavailable" => STATE_HEIGHT_UNAVAILABLE,
         "historyUnavailable" => HISTORY_UNAVAILABLE,
+        "contractArtifactUnavailable" => codes::CONTRACT_ARTIFACT_UNAVAILABLE,
         "fundingAttemptStopped" => FUNDING_ATTEMPT_STOPPED,
         "localFundingUnresolved" => LOCAL_FUNDING_UNRESOLVED,
         "backendUnavailable" => BACKEND_UNAVAILABLE,
@@ -285,6 +309,7 @@ pub const fn outcome_for_code(code: i32) -> &'static str {
         codes::TRANSACTION_REJECTED => "tx_rejected",
         codes::STATE_HEIGHT_UNAVAILABLE => "state_height_unavailable",
         codes::HISTORY_UNAVAILABLE => "history_unavailable",
+        codes::CONTRACT_ARTIFACT_UNAVAILABLE => "contract_artifact_unavailable",
         codes::FUNDING_ATTEMPT_STOPPED => "funding_attempt_stopped",
         codes::LOCAL_FUNDING_UNRESOLVED => "local_funding_unresolved",
         codes::BACKEND_UNAVAILABLE => "backend_unavailable",

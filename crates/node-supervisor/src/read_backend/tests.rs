@@ -422,6 +422,19 @@ struct FakeDbGateway {
 
 #[allow(refining_impl_trait)]
 impl DbGateway_DbGateway1 for FakeDbGateway {
+    async fn dbgateway_get_contract(
+        &self,
+        _: thruput_xdr::types::SHA256Hash,
+    ) -> Result<thruput_db_gateway::DbGatewayContractResult, rpc_driver::ProgramError> {
+        if matches!(self.mode, FakeDbGatewayMode::Found) {
+            return Ok(thruput_db_gateway::DbGatewayContractResult::kRPCNone {
+                contract_xdr: BytesM(vec![0, 0, 0, 3, 0, 0, 0, 3, 1, 2, 3, 0]),
+            });
+        }
+        Ok(thruput_db_gateway::DbGatewayContractResult::Default {
+            error: RPCError::kRPCNotFound.0,
+        })
+    }
     async fn dbgateway_get_config(
         &self,
     ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
@@ -933,6 +946,53 @@ async fn native_registered_auth_not_found_is_unconfigured_at_snapshot_height() {
     // Assert
     assert_eq!(*read.state_block_height, CANNED_STORAGE_HEIGHT);
     assert!(read.configuration.is_none());
+}
+
+#[tokio::test]
+async fn artifact_read_checks_identity_after_x23_transport() {
+    use sha2::{Digest, Sha256};
+    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+    let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::Found).await;
+    let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+    let bytes = vec![0, 0, 0, 3, 0, 0, 0, 3, 1, 2, 3, 0];
+    let hash = Base58(thruput_xdr::types::SHA256Hash::from(<[u8; 32]>::from(
+        Sha256::digest(&bytes),
+    )));
+    let result = backend
+        .native_contract_artifact(RpcRequestContext::unbounded(), hash)
+        .await
+        .unwrap();
+    assert_eq!(result.hash, hash);
+    assert_eq!(result.contract_xdr.0, bytes);
+    let wrong = Base58(thruput_xdr::types::SHA256Hash::from([0; 32]));
+    assert!(matches!(
+        backend
+            .native_contract_artifact(RpcRequestContext::unbounded(), wrong)
+            .await,
+        Err(RpcServerError::BackendDataInvalid { .. })
+    ));
+}
+
+#[tokio::test]
+async fn deployment_and_artifact_missing_have_distinct_results() {
+    let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+    let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::NotFound).await;
+    let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+    let result = backend
+        .native_contract_deployment(RpcRequestContext::unbounded(), canned_storage_address())
+        .await
+        .unwrap();
+    assert_eq!(*result.state_block_height, CANNED_STORAGE_HEIGHT);
+    assert!(result.deployment.is_none());
+    let hash = Base58(thruput_xdr::types::SHA256Hash::from([0; 32]));
+    assert!(matches!(
+        backend
+            .native_contract_artifact(RpcRequestContext::unbounded(), hash)
+            .await,
+        Err(RpcServerError::ContractArtifactUnavailable(_))
+    ));
 }
 
 #[tokio::test]

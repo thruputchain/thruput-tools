@@ -106,11 +106,15 @@ fn request(name: &str) -> Value {
         | "getServerLimits"
         | "dev_getPendingTransactionCount" => json!({}),
         "sendTransaction" => json!({"signedTransaction": "0x0102"}),
-        "getTransactionStatus" | "getTransactionReceipt" => json!({"transactionHash": ADDRESS}),
+        "getTransactionStatus" | "getTransactionReceipt" | "getTransactionInput" => {
+            json!({"transactionHash": ADDRESS})
+        }
         "simulateInvocation" => invocation(),
         "simulateInvocations" => json!({"invocations": [invocation()]}),
         "getStorage" => json!({"address": ADDRESS, "key": "0x01"}),
-        "getBalance" | "getRegisteredAuth" => json!({"address": ADDRESS}),
+        "getBalance" | "getRegisteredAuth" | "getContractDeployment" => json!({"address": ADDRESS}),
+        "getContractArtifact" => json!({"hash": ADDRESS}),
+        "getEffectiveContract" => json!({"address": ADDRESS, "context": "root"}),
         "getEvents" => {
             json!({"filters": [{"addresses": [ADDRESS]}], "start": {"order": "ascending", "anchor": {"kind": "atBeginning"}}})
         }
@@ -176,6 +180,14 @@ fn result(name: &str) -> Value {
             json!({"recipient": ADDRESS, "rawAmount": "1", "transactionHash": ADDRESS, "signedTransaction": "0x01"})
         }
         "dev_getPendingTransactionCount" => json!({"count": "9007199254740993"}),
+        "getContractDeployment" => {
+            json!({"address": ADDRESS, "stateBlockHeight": "42", "deployment": null})
+        }
+        "getContractArtifact" => json!({"hash": ADDRESS, "contractXdr": "0x0000000300000000"}),
+        "getEffectiveContract" => {
+            json!({"address": ADDRESS, "context": "nested", "stateBlockHeight": "42", "selection": null})
+        }
+        "getTransactionInput" => json!({"status": "unavailable"}),
         _ => panic!("missing result fixture: {name}"),
     }
 }
@@ -188,7 +200,7 @@ fn receipt() -> Value {
 fn native_contract_is_the_canonical_serving_artifact() {
     assert_eq!(native::build_spec(), build_spec());
     assert_eq!(build_spec()["info"]["version"], WIRE_FORMAT_VERSION);
-    assert_eq!(WIRE_FORMAT_VERSION, "14.1.1");
+    assert_eq!(WIRE_FORMAT_VERSION, "14.4.0");
 }
 
 #[test]
@@ -199,7 +211,7 @@ fn complete_method_map_has_strict_named_params_required_first_and_error_parity()
         .iter()
         .map(|m| m["name"].as_str().unwrap())
         .collect();
-    assert_eq!(methods.len(), 20);
+    assert_eq!(methods.len(), 24);
     assert_eq!(names, METHOD_NAMES.iter().copied().collect());
     assert_eq!(names, errors::METHODS.iter().copied().collect());
     for method in methods {

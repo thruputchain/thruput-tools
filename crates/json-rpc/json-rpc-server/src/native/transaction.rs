@@ -42,6 +42,11 @@ pub trait NativeSubmitPlane: Send + Sync + 'static {
 /// Transaction reads validated before lossy legacy projection.
 #[async_trait]
 pub trait NativeTransactionReadPlane: Send + Sync + 'static {
+    async fn native_input(
+        &self,
+        context: RpcRequestContext,
+        hash: TxHash,
+    ) -> Result<responses::TransactionInputResult, NativeReadError>;
     async fn native_receipt(
         &self,
         context: RpcRequestContext,

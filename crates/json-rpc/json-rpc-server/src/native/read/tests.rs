@@ -21,6 +21,8 @@ struct Backend {
     wrong_block_network: bool,
     history_refs: Option<out::TransactionRefPage>,
     history_error: Option<RpcServerError>,
+    deployment: Option<out::ContractDeployment>,
+    default_wallet: Option<out::ContractDeployment>,
 }
 impl Backend {
     async fn check(&self) -> Result<(), RpcServerError> {
@@ -39,7 +41,7 @@ impl Backend {
 impl ChainPlane for Backend {
     async fn chain_tip(&self, _: RpcRequestContext) -> Result<TipReading, RpcServerError> {
         self.check().await?;
-        Ok(TipReading::new(
+        let mut reading = TipReading::new(
             thruput_json_rpc_types::block::ChainTip {
                 height: 42.into(),
                 block_hash: thruput_json_rpc_types::base58::Base58(
@@ -51,7 +53,9 @@ impl ChainPlane for Backend {
                     params: xdr_common::VecM(vec![]),
                 },
             },
-        ))
+        );
+        reading.default_wallet = self.default_wallet.clone();
+        Ok(reading)
     }
     async fn pending_transaction_count(&self, _: RpcRequestContext) -> Result<u64, RpcServerError> {
         panic!("out of slice")
@@ -59,6 +63,26 @@ impl ChainPlane for Backend {
 }
 #[async_trait]
 impl NativeStatePlane for Backend {
+    async fn native_contract_deployment(
+        &self,
+        _: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<out::ContractDeploymentResult, RpcServerError> {
+        self.check().await?;
+        Ok(out::ContractDeploymentResult {
+            address,
+            state_block_height: self.height.unwrap_or(42).into(),
+            deployment: self.deployment.clone(),
+        })
+    }
+    async fn native_contract_artifact(
+        &self,
+        _: RpcRequestContext,
+        hash: thruput_json_rpc_types::SHA256Hash,
+    ) -> Result<out::ContractArtifactResult, RpcServerError> {
+        self.check().await?;
+        Err(RpcServerError::ContractArtifactUnavailable(hash))
+    }
     async fn native_storage(
         &self,
         _: RpcRequestContext,
@@ -137,6 +161,86 @@ impl NativeSimulationPlane for Backend {
     }
 }
 type Service = NativeReadService<Backend, Backend, Backend>;
+
+#[tokio::test]
+async fn effective_contract_respects_context_and_explicit_precedence() {
+    let address = invocation().address;
+    for contract_type in [1, 3] {
+        let wallet = out::ContractDeployment {
+            hash: thruput_json_rpc_types::base58::Base58([7; 32].into()),
+            size: if contract_type == 1 { 0 } else { 6421 },
+            contract_type,
+        };
+        for context in [
+            input::InvocationContext::Root,
+            input::InvocationContext::Nested,
+        ] {
+            for explicit in [false, true] {
+                let backend = Backend {
+                    deployment: explicit.then_some(wallet.clone()),
+                    default_wallet: Some(wallet.clone()),
+                    ..Backend::default()
+                };
+                let svc = service(
+                    backend,
+                    RpcServerConfig::default(),
+                    NativeReadCapabilities::new(true, false),
+                );
+                let result = svc
+                    .get_effective_contract(input::EffectiveContractQuery { address, context })
+                    .await
+                    .unwrap();
+                assert_eq!(result.address, address);
+                assert_eq!(*result.state_block_height, 42);
+                match result.selection {
+                    Some(out::EffectiveContract::ExplicitDeployment { contract }) => {
+                        assert!(explicit);
+                        assert_eq!(contract.hash, wallet.hash);
+                    }
+                    Some(out::EffectiveContract::NetworkDefault { contract }) => {
+                        assert!(!explicit);
+                        assert_eq!(context, input::InvocationContext::Root);
+                        assert_eq!(contract.hash, wallet.hash);
+                    }
+                    None => {
+                        assert!(!explicit);
+                        assert_eq!(context, input::InvocationContext::Nested);
+                    }
+                    other => panic!("unexpected selection: {other:?}"),
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn effective_contract_rejects_missing_or_mixed_snapshot_configuration() {
+    for height in [42, 43] {
+        let backend = Backend {
+            height: Some(height),
+            ..Backend::default()
+        };
+        let calls = backend.calls.clone();
+        let svc = service(
+            backend,
+            RpcServerConfig::default(),
+            NativeReadCapabilities::new(true, false),
+        );
+        let error = svc
+            .get_effective_contract(input::EffectiveContractQuery {
+                address: invocation().address,
+                context: input::InvocationContext::Root,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), -32050);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            if height == 42 { 2 } else { 6 }
+        );
+    }
+}
+
 fn service(
     backend: Backend,
     config: RpcServerConfig,
@@ -274,6 +378,33 @@ async fn typed_requests_enforce_bounds_before_backend_dispatch() {
     assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
     service.simulate_invocation(invocation()).await.unwrap();
     assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn contract_reads_distinguish_snapshot_absence_and_unavailable_content() {
+    let service = service(
+        Backend::default(),
+        RpcServerConfig::default(),
+        NativeReadCapabilities::new(true, false),
+    );
+    let address = invocation().address;
+    let deployment = service
+        .get_contract_deployment(input::AddressQuery { address })
+        .await
+        .unwrap();
+    assert_eq!(deployment.address, address);
+    assert_eq!(*deployment.state_block_height, 42);
+    assert!(deployment.deployment.is_none());
+    let hash =
+        thruput_json_rpc_types::base58::Base58(thruput_xdr::types::SHA256Hash::from([7; 32]));
+    let error = service
+        .get_contract_artifact(input::ContractArtifactQuery { hash })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), codes::CONTRACT_ARTIFACT_UNAVAILABLE);
+    let data: serde_json::Value = serde_json::from_str(error.data().unwrap().get()).unwrap();
+    assert_eq!(data["kind"], "contractArtifactUnavailable");
+    assert_eq!(data["hash"], hash.to_string());
 }
 #[tokio::test]
 async fn simulation_bounds_accept_values_equal_to_each_limit() {
@@ -447,6 +578,14 @@ impl crate::native::transaction::NativeSubmitPlane for Backend {
 }
 #[async_trait]
 impl crate::native::transaction::NativeTransactionReadPlane for Backend {
+    async fn native_input(
+        &self,
+        _: RpcRequestContext,
+        _: thruput_json_rpc_types::transaction::TxHash,
+    ) -> Result<out::TransactionInputResult, crate::native::transaction::NativeReadError> {
+        self.check().await?;
+        Ok(out::TransactionInputResult::Unavailable {})
+    }
     async fn native_receipt(
         &self,
         _: RpcRequestContext,
@@ -507,6 +646,7 @@ async fn assembly_registers_each_configured_plane_independently() {
         if indexer {
             expected.extend([
                 "getTransactionReceipt",
+                "getTransactionInput",
                 "getBlockByHeight",
                 "getEvents",
                 "getTransactionsByRootAddress",
@@ -523,6 +663,9 @@ async fn assembly_registers_each_configured_plane_independently() {
                 "getStorage",
                 "getBalance",
                 "getRegisteredAuth",
+                "getContractDeployment",
+                "getContractArtifact",
+                "getEffectiveContract",
             ]);
         }
         if simulation {
@@ -545,7 +688,7 @@ async fn assembly_registers_each_configured_plane_independently() {
             before["result"]["supportedMethods"],
             serde_json::json!(expected)
         );
-        assert_eq!(before["result"]["wireFormat"], "14.1.1");
+        assert_eq!(before["result"]["wireFormat"], "14.4.0");
         assert_eq!(before["result"]["implementation"], "test-build");
         assert!(before["result"].get("releaseVersion").is_none());
         assert!(before["result"].get("bundleManifestDigest").is_none());
@@ -626,9 +769,10 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
                 "getBlockByHeight",
                 "getTransactionStatus",
                 "getTransactionReceipt",
+                "getTransactionInput",
             ]);
             expected.sort_unstable();
-            assert_eq!(expected.len(), 17);
+            assert_eq!(expected.len(), 21);
         }
         let module = assembled_service(
             backend.clone(),
@@ -645,7 +789,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
             .request("getVersionInfo", ObjectParams::new())
             .await
             .unwrap();
-        assert_eq!(version["wireFormat"], "14.1.1");
+        assert_eq!(version["wireFormat"], "14.4.0");
         assert_eq!(version["supportedMethods"], serde_json::json!(expected));
         let limits: serde_json::Value = client
             .request("getServerLimits", ObjectParams::new())
@@ -771,7 +915,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
         handle.stop().unwrap();
         handle.stopped().await;
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.1.1");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.4.0");
 }
 
 #[test]

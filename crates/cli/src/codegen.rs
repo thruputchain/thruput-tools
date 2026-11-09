@@ -49,6 +49,9 @@ impl TsIdPath {
     }
 }
 
+// Bound recursive value rendering and namespace indentation separately from type depth.
+const MAX_NAMESPACE_DEPTH: usize = 64;
+
 /// Map a spec id onto its TypeScript path.
 ///
 /// The crate name's `-` becomes `_` and the major nests as its own segment, so
@@ -89,7 +92,14 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
     if segments.peek() == Some(&krate.as_str()) {
         segments.next();
     }
-    namespaces.extend(segments.map(escape_ts_name));
+    for segment in segments {
+        if namespaces.len() == MAX_NAMESPACE_DEPTH {
+            return Err(CliError::TsBindingsFailed(format!(
+                "spec namespace exceeds nesting limit ({MAX_NAMESPACE_DEPTH})"
+            )));
+        }
+        namespaces.push(escape_ts_name(segment));
+    }
 
     let path = TsIdPath {
         namespaces,
@@ -289,22 +299,11 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
                 return Ok(format!("__gh_client_contract.FixedBytes<{}>", array.len));
             }
             let inner = ts_type_ref(element)?;
-            if array.len <= 3 {
-                let item = if inner.contains('|') {
-                    format!("({inner})")
-                } else {
-                    inner
-                };
-                Ok(format!(
-                    "readonly [{}]",
-                    vec![item; array.len as usize].join(", ")
-                ))
-            } else {
-                Ok(format!(
-                    "__gh_client_contract.FixedArray<{inner}, {}>",
-                    array.len
-                ))
-            }
+            // Render the element once; nested tuple expansion grows exponentially.
+            Ok(format!(
+                "__gh_client_contract.FixedArray<{inner}, {}>",
+                array.len
+            ))
         }
         ContractType::Tuple { tuple } => {
             let items: Vec<String> = tuple.iter().map(ts_type_ref).collect::<Result<_, _>>()?;
@@ -1703,6 +1702,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         .filter_map(|def| type_def_id(def).ok().map(|id| (id, def)))
         .collect();
     let mut event_signatures = BTreeMap::new();
+    let mut checked_event_types = BTreeSet::new();
     for event in spec.events.iter() {
         let event_label = declaration_label("event", &event.name)?;
         // Like a type def, an event declares itself inside its id's
@@ -1755,7 +1755,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         // cannot decode. Named definitions are resolved so a token nested in
         // a struct or union the event refers to is caught too.
         for field in event.topics.iter().chain(event.fields.iter()) {
-            if type_carries_signed_token(&field.ty, &type_def_index, &mut BTreeSet::new()) {
+            if type_carries_signed_token(&field.ty, &type_def_index, &mut checked_event_types) {
                 return Err(CliError::TsBindingsFailed(format!(
                     "{event_label} field \"{}\" carries a signed token, which events cannot log",
                     spec_string_text(&field.name)?
@@ -2219,55 +2219,45 @@ fn event_topic_type(ty: &ContractType) -> String {
 }
 
 /// Whether `ty` contains a signed token anywhere, resolving named definitions
-/// through `type_defs`. `visiting` holds the names on the current path, so a
-/// recursive definition terminates: a token inside it is found on the first
-/// visit or not at all.
-fn type_carries_signed_token(
-    ty: &ContractType,
-    type_defs: &BTreeMap<&ContractSpecId, &ContractTypeDef>,
-    visiting: &mut BTreeSet<ContractSpecId>,
+/// through `type_defs`. Share visited definitions across event fields: a false
+/// result exhausts the reachable graph, and a true result stops validation.
+/// The work list also handles long chains and cycles without recursion.
+fn type_carries_signed_token<'a>(
+    ty: &'a ContractType,
+    type_defs: &BTreeMap<&ContractSpecId, &'a ContractTypeDef>,
+    visited: &mut BTreeSet<&'a ContractSpecId>,
 ) -> bool {
-    match ty {
-        ContractType::SignedToken { .. } => true,
-        ContractType::Option { option_inner } => {
-            type_carries_signed_token(option_inner, type_defs, visiting)
-        }
-        ContractType::Vector { vector } => {
-            type_carries_signed_token(&vector.element, type_defs, visiting)
-        }
-        ContractType::Array { array } => {
-            type_carries_signed_token(&array.element, type_defs, visiting)
-        }
-        ContractType::Tuple { tuple } => tuple
-            .iter()
-            .any(|item| type_carries_signed_token(item, type_defs, visiting)),
-        ContractType::Named { named } => {
-            if !visiting.insert(named.clone()) {
-                return false;
-            }
-            let found = match type_defs.get(named) {
-                Some(ContractTypeDef::TypeDefStruct { struct_def }) => struct_def
-                    .fields
-                    .iter()
-                    .any(|field| type_carries_signed_token(&field.ty, type_defs, visiting)),
-                Some(ContractTypeDef::TypeDefUnion { union_def }) => {
-                    union_def.cases.iter().any(|case| match &case.case_type {
-                        ContractUnionCaseType::UnionCaseTuple { tuple } => tuple
-                            .iter()
-                            .any(|item| type_carries_signed_token(item, type_defs, visiting)),
-                        ContractUnionCaseType::UnionCaseStruct { struct_fields } => struct_fields
-                            .iter()
-                            .any(|field| type_carries_signed_token(&field.ty, type_defs, visiting)),
-                        _ => false,
-                    })
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        match ty {
+            ContractType::SignedToken { .. } => return true,
+            ContractType::Option { option_inner } => pending.push(option_inner),
+            ContractType::Vector { vector } => pending.push(&vector.element),
+            ContractType::Array { array } => pending.push(&array.element),
+            ContractType::Tuple { tuple } => pending.extend(tuple.iter()),
+            ContractType::Named { named } if visited.insert(named) => match type_defs.get(named) {
+                Some(ContractTypeDef::TypeDefStruct { struct_def }) => {
+                    pending.extend(struct_def.fields.iter().map(|field| &field.ty));
                 }
-                _ => false,
-            };
-            visiting.remove(named);
-            found
+                Some(ContractTypeDef::TypeDefUnion { union_def }) => {
+                    for case in union_def.cases.iter() {
+                        match &case.case_type {
+                            ContractUnionCaseType::UnionCaseTuple { tuple } => {
+                                pending.extend(tuple.iter());
+                            }
+                            ContractUnionCaseType::UnionCaseStruct { struct_fields } => {
+                                pending.extend(struct_fields.iter().map(|field| &field.ty));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
         }
-        _ => false,
     }
+    false
 }
 
 fn ts_property_key(name: &str) -> Result<String, CliError> {
@@ -2389,6 +2379,39 @@ mod tests {
             major: spec_string("1"),
             module_path: spec_string("demo"),
             declared: spec_string(declared),
+        }
+    }
+
+    #[test]
+    fn codegen_bounds_namespace_depth_independently_of_type_depth() {
+        for (depth, accepted) in [(62, true), (63, false), (10_000, false)] {
+            let mut name = spec_id("Empty");
+            name.module_path = spec_string(&vec!["module"; depth].join("::"));
+            let spec = ContractSpec {
+                interfaces: vec![].try_into().unwrap(),
+                type_defs: vec![ContractTypeDef::TypeDefEnum {
+                    enum_def: ContractEnumDef {
+                        name,
+                        variants: vec![].try_into().unwrap(),
+                    },
+                }]
+                .try_into()
+                .unwrap(),
+                events: vec![].try_into().unwrap(),
+            };
+            let bytes = xdrs::txs::encode(&spec).unwrap();
+            let spec = crate::contract_spec::load_contract_spec_from_xdr(&bytes).unwrap();
+            let result = generate_ts_bindings(&spec, "namespace.spec.xdr");
+            if accepted {
+                result.unwrap();
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("namespace exceeds nesting limit")
+                );
+            }
         }
     }
 
@@ -2609,6 +2632,114 @@ mod tests {
     }
 
     #[test]
+    fn generates_events_with_shared_named_type_graphs() {
+        let mut spec = spec_with_events();
+        let definitions: Vec<_> = (0..60)
+            .map(|level| {
+                let ty = if level == 0 {
+                    ContractType::U64
+                } else {
+                    ContractType::Named {
+                        named: spec_id(&format!("Node{}", level - 1)),
+                    }
+                };
+                ContractTypeDef::TypeDefStruct {
+                    struct_def: ContractStructDef {
+                        name: spec_id(&format!("Node{level}")),
+                        fields: vec![
+                            ContractField {
+                                name: spec_string("left"),
+                                ty: ty.clone(),
+                            },
+                            ContractField {
+                                name: spec_string("right"),
+                                ty,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                }
+            })
+            .collect();
+        spec.type_defs = definitions.try_into().unwrap();
+        let mut event = ping_event_def();
+        event.fields = vec![ContractField {
+            name: spec_string("tree"),
+            ty: ContractType::Named {
+                named: spec_id("Node59"),
+            },
+        }]
+        .try_into()
+        .unwrap();
+        spec.events = vec![event].try_into().unwrap();
+        // Named references are leaves in the wire-format depth check.
+        let bytes = xdrs::txs::encode(&spec).unwrap();
+        let mut spec = crate::contract_spec::load_contract_spec_from_xdr(&bytes).unwrap();
+        generate_ts_bindings(&spec, "shared.spec.xdr").unwrap();
+
+        let mut definitions = spec.type_defs.to_vec();
+        let ContractTypeDef::TypeDefStruct { struct_def } = &mut definitions[0] else {
+            unreachable!();
+        };
+        let mut fields = struct_def.fields.to_vec();
+        fields[0].ty = ContractType::SignedToken {
+            signed_token_preimage: thruput_contract_spec::ContractSignedTokenPreimage {
+                preimage_type: None,
+            },
+        };
+        struct_def.fields = fields.try_into().unwrap();
+        spec.type_defs = definitions.try_into().unwrap();
+        assert!(
+            generate_ts_bindings(&spec, "shared.spec.xdr")
+                .unwrap_err()
+                .to_string()
+                .contains("carries a signed token")
+        );
+    }
+
+    #[test]
+    fn event_token_check_handles_long_named_cycles() {
+        let definitions: Vec<_> = (0..10_000)
+            .map(|level| ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_id(&format!("Node{level}")),
+                    fields: vec![ContractField {
+                        name: spec_string("next"),
+                        ty: ContractType::Named {
+                            named: spec_id(&format!("Node{}", (level + 1) % 10_000)),
+                        },
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            })
+            .collect();
+        let index = definitions
+            .iter()
+            .map(|def| match def {
+                ContractTypeDef::TypeDefStruct { struct_def } => (&struct_def.name, def),
+                _ => unreachable!(),
+            })
+            .collect();
+        let fields: Vec<_> = (0..1_000)
+            .map(|level| ContractType::Named {
+                named: spec_id(&format!("Node{level}")),
+            })
+            .collect();
+        let mut visited = BTreeSet::new();
+        for field in &fields {
+            assert!(!type_carries_signed_token(field, &index, &mut visited));
+        }
+        let token = ContractType::SignedToken {
+            signed_token_preimage: thruput_contract_spec::ContractSignedTokenPreimage {
+                preimage_type: None,
+            },
+        };
+        assert!(type_carries_signed_token(&token, &index, &mut visited));
+    }
+
+    #[test]
     fn event_token_check_terminates_on_recursive_named_types() {
         // `Node { next: Node | null }` refers to itself; the walk must stop
         // rather than recurse forever, and a token-free cycle must pass.
@@ -2756,6 +2887,31 @@ mod tests {
             ts_type_ref(&ty).unwrap(),
             "__gh_client_contract.FixedArray<bigint, 4>"
         );
+    }
+
+    #[test]
+    fn nested_arrays_do_not_expand_generated_output() {
+        let mut ty = ContractType::U32;
+        for _ in 0..20 {
+            ty = ContractType::Array {
+                array: ContractArrayType {
+                    element: Box::new(ty),
+                    len: 3,
+                },
+            };
+        }
+        let mut methods = counter_spec_methods();
+        methods[0].return_type = ty;
+        let spec = counter_spec_with_methods(methods, false);
+        let bytes = xdrs::txs::encode(&spec).unwrap();
+        let spec = crate::contract_spec::load_contract_spec_from_xdr(&bytes).unwrap();
+        let output = generate_ts_bindings(&spec, "nested.spec.xdr").unwrap();
+        assert!(output.len() < 100_000);
+        assert!(output.contains(&format!(
+            "{}bigint{}",
+            "__gh_client_contract.FixedArray<".repeat(20),
+            ", 3>".repeat(20)
+        )));
     }
 
     #[test]
@@ -4425,12 +4581,12 @@ export type Result =
     }
 
     #[test]
-    fn expands_arrays_up_to_three_elements() {
+    fn maps_small_arrays_to_fixed_array() {
         for (len, expected) in [
-            (0, "readonly []"),
-            (1, "readonly [bigint]"),
-            (2, "readonly [bigint, bigint]"),
-            (3, "readonly [bigint, bigint, bigint]"),
+            (0, "__gh_client_contract.FixedArray<bigint, 0>"),
+            (1, "__gh_client_contract.FixedArray<bigint, 1>"),
+            (2, "__gh_client_contract.FixedArray<bigint, 2>"),
+            (3, "__gh_client_contract.FixedArray<bigint, 3>"),
         ] {
             let ty = ContractType::Array {
                 array: ContractArrayType {

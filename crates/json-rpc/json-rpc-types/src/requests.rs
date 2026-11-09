@@ -79,6 +79,29 @@ macro_rules! object_enum {
 #[serde(deny_unknown_fields)]
 pub struct EmptyRequest {}
 
+/// Committed-state resolution only; transaction-local deployments are excluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum InvocationContext {
+    Root,
+    Nested,
+}
+
+object_request! {
+/// Select the contract for an invocation context, without executing or authorizing it.
+EffectiveContractQuery {
+    address: ContractAddress,
+    context: InvocationContext,
+}
+}
+
+object_request! {
+/// Select retained canonical contract bytes by their SHA-256 identity.
+ContractArtifactQuery {
+    hash: crate::SHA256Hash,
+}
+}
+
 object_request! {
 /// Select committed block metadata by a nonnegative signed-64 height.
 BlockQuery {

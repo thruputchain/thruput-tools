@@ -2,7 +2,7 @@
 
 <!-- Generated from thruput-spec.json by tests/spec_snapshot.rs. Do not edit. -->
 
-Wire format `14.1.1`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
+Wire format `14.4.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
 
 This file lists all native methods. A server serves only the methods that its backends support; `getVersionInfo` lists them. For exact schemas, see [thruput-spec.json](thruput-spec.json).
 
@@ -18,11 +18,15 @@ This file lists all native methods. A server serves only the methods that its ba
 | [`sendTransaction`](#sendtransaction) | Submit a signed envelope for authoritative admission. |
 | [`getTransactionStatus`](#gettransactionstatus) | Read retained transaction observations. |
 | [`getTransactionReceipt`](#gettransactionreceipt) | Read indexed execution, or null when no receipt is available. |
+| [`getTransactionInput`](#gettransactioninput) | Read retained committed Transaction XDR. Unavailable does not prove nonexecution. |
 | [`simulateInvocation`](#simulateinvocation) | Simulate an invocation without committing state. |
 | [`simulateInvocations`](#simulateinvocations) | Simulate a batch against one state snapshot. |
 | [`getStorage`](#getstorage) | Read serialized storage at an address. |
 | [`getBalance`](#getbalance) | Read native token balance and its state height. |
 | [`getRegisteredAuth`](#getregisteredauth) | Read registered authorization at an address. |
+| [`getContractDeployment`](#getcontractdeployment) | Read the deployed contract identity at a committed snapshot. |
+| [`getEffectiveContract`](#geteffectivecontract) | Resolve current committed-state contract selection for root or nested invocation. Explicit deployments take precedence; only root invocations use the network default. Does not authorize execution, include transaction-local deployments, or identify historical code. |
+| [`getContractArtifact`](#getcontractartifact) | Read complete canonical Contract XDR by hash. Availability does not prove deployment. |
 | [`getEvents`](#getevents) | Scan indexed events matching the supplied filters. |
 | [`getTransactionsByRootAddress`](#gettransactionsbyrootaddress) | Read transactions whose root invocation targets the address, excluding internal calls and incoming transfers. |
 | [`getBlockByHeight`](#getblockbyheight) | Read committed block metadata, or null when unavailable. |
@@ -155,6 +159,24 @@ Read indexed execution, or null when no receipt is available.
 | -32053 | `Overloaded` | `"overloaded"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
+### `getTransactionInput`
+
+Read retained committed Transaction XDR. Unavailable does not prove nonexecution.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `transactionHash` | [`TxHash`](#txhash) | yes |  |
+
+**Result:** [`TransactionInputResult`](#transactioninputresult)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
 ### `simulateInvocation`
 
 Simulate an invocation without committing state.
@@ -250,6 +272,62 @@ Read registered authorization at an address.
 | Code | [Error](#errors) | Data `kind` |
 | --- | --- | --- |
 | -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
+### `getContractDeployment`
+
+Read the deployed contract identity at a committed snapshot.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `address` | [`Base58_ContractAddress`](#base58_contractaddress) | yes |  |
+
+**Result:** [`ContractDeploymentResult`](#contractdeploymentresult)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
+### `getEffectiveContract`
+
+Resolve current committed-state contract selection for root or nested invocation. Explicit deployments take precedence; only root invocations use the network default. Does not authorize execution, include transaction-local deployments, or identify historical code.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `address` | [`Base58_ContractAddress`](#base58_contractaddress) | yes |  |
+| `context` | [`InvocationContext`](#invocationcontext) | yes |  |
+
+**Result:** [`EffectiveContractResult`](#effectivecontractresult)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
+### `getContractArtifact`
+
+Read complete canonical Contract XDR by hash. Availability does not prove deployment.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `hash` | [`Base58_SHA256Hash`](#base58_sha256hash) | yes |  |
+
+**Result:** [`ContractArtifactResult`](#contractartifactresult)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32014 | `ContractArtifactUnavailable` | `"contractArtifactUnavailable"` |
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
 | -32051 | `BackendTimeout` | `"backendTimeout"` |
 | -32053 | `Overloaded` | `"overloaded"` |
@@ -409,6 +487,7 @@ The `kind` field identifies the shape of `data`.
 | -32001 | `TransactionRejected` | Transaction rejected | `"transactionRejected"` | `admission`: `"notAttempted"` \| `"rejected"`, `error?`: [`SchedulerError`](#schedulererror), `reason?`: [`TransactionRejectedReason`](#transactionrejectedreason), `transactionHash?`: [`TxHash`](#txhash) |
 | -32012 | `StateHeightUnavailable` | Requested state height unavailable | `"stateHeightUnavailable"` | `observedStateBlockHeight`: decimal string, `requestedStateBlockHeight`: decimal string |
 | -32013 | `HistoryUnavailable` | History unavailable | `"historyUnavailable"` | `latestIndexedBlockHeight?`: decimal string, `oldestIndexedBlockHeight?`: decimal string, `reason?`: [`HistoryUnavailableReason`](#historyunavailablereason) |
+| -32014 | `ContractArtifactUnavailable` | Contract artifact unavailable | `"contractArtifactUnavailable"` | `hash`: [`Base58_SHA256Hash`](#base58_sha256hash) |
 | -32030 | `FundingAttemptStopped` | Funding attempt stopped | `"fundingAttemptStopped"` | fields of [`FundingAttemptStoppedData`](#fundingattemptstoppeddata) |
 | -32031 | `LocalFundingUnresolved` | Local funding unresolved | `"localFundingUnresolved"` | `cause?`: [`FundingCause`](#fundingcause), `signedTransaction`: hex string, `transactionHash`: [`TxHash`](#txhash) |
 | -32050 | `BackendUnavailable` | Backend unavailable | `"backendUnavailable"` | `admission?`: [`AttemptAdmission`](#attemptadmission), `error?`: [`SchedulerError`](#schedulererror), `retryAfterMs?`: [`DecimalU64`](#decimalu64), `serviceCode?`: [`ServiceCode`](#servicecode), `transactionHash?`: [`TxHash`](#txhash) |
@@ -611,6 +690,35 @@ Typed storage-conflict diagnostic, preserving the serialized key.
 | `code` | [`ConflictCode`](#conflictcode) | yes |  |
 | `key` | hex string | yes |  |
 
+### `ContractArtifactResult`
+
+Complete canonical XDR Contract bytes, including discriminant and padding. Content retrieval does not prove deployment or transaction commitment.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `contractXdr` | hex string | yes |  |
+| `hash` | [`Base58_SHA256Hash`](#base58_sha256hash) | yes |  |
+
+### `ContractDeployment`
+
+Stored deployment identity. Size is the artifact byte count, or zero for native code.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `contractType` | integer | yes |  |
+| `hash` | [`Base58_SHA256Hash`](#base58_sha256hash) | yes |  |
+| `size` | integer (uint32) | yes |  |
+
+### `ContractDeploymentResult`
+
+Deployment at a committed snapshot. Null means no deployment in this snapshot.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `address` | [`Base58_ContractAddress`](#base58_contractaddress) | yes |  |
+| `deployment` | [`ContractDeployment`](#contractdeployment) \| null | yes |  |
+| `stateBlockHeight` | decimal string | yes | Canonical decimal block height in the inclusive range 0 to 9223372036854775807. |
+
 ### `ContractRejectCode`
 
 Existing executor contract-rejection vocabulary.
@@ -641,6 +749,26 @@ A descending walk starts at retained end or an inclusive height.
 | --- | --- |
 | `"atEnd"` | none |
 | `"atHeight"` | `blockHeight`: decimal string |
+
+### `EffectiveContract`
+
+Explicit deployment takes precedence. Network defaults apply only to root invocations.
+
+| `source` | Other fields |
+| --- | --- |
+| `"explicitDeployment"` | `contract`: [`ContractDeployment`](#contractdeployment) |
+| `"networkDefault"` | `contract`: [`ContractDeployment`](#contractdeployment) |
+
+### `EffectiveContractResult`
+
+Current committed-state selection, not authorization or historical execution evidence. Null means no applicable contract in this context. Transaction-local deployments are excluded.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `address` | [`Base58_ContractAddress`](#base58_contractaddress) | yes |  |
+| `context` | [`InvocationContext`](#invocationcontext) | yes |  |
+| `selection` | [`EffectiveContract`](#effectivecontract) \| null | yes |  |
+| `stateBlockHeight` | decimal string | yes | Canonical decimal block height in the inclusive range 0 to 9223372036854775807. |
 
 ### `EmittedEvent`
 
@@ -740,6 +868,12 @@ One batch invocation; freshness belongs to the whole batch.
 | `gasLimit` | decimal string | no | Canonical decimal integer in the inclusive range 0 to 18446744073709551615. |
 
 The server rejects unknown fields.
+
+### `InvocationContext`
+
+Committed-state resolution only; transaction-local deployments are excluded.
+
+Type: `"root"` | `"nested"`
 
 ### `InvocationOutput`
 
@@ -942,6 +1076,15 @@ All topic positions must match; any listed value can match within a position. Om
 | `topic2` | hex string[] (at most 16) | no |  |
 
 The server rejects unknown fields.
+
+### `TransactionInputResult`
+
+Retained committed input. Unavailable does not prove nonexecution or nonexistence. The hash covers exactly transactionXdr, not signatures or proposal data. Availability says nothing about execution success. Bodies above 4 MiB are not served.
+
+| `status` | Other fields |
+| --- | --- |
+| `"available"` | `blockHeight`: decimal string, `transactionHash`: [`TxHash`](#txhash), `transactionXdr`: hex string |
+| `"unavailable"` | none |
 
 ### `TransactionReceipt`
 

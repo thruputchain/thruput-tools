@@ -467,6 +467,69 @@ fn found(events: TxEventLog, height: i64) -> TxInfoResult {
     }
 }
 
+fn retained_input() -> (TxHash, TxInfoResult, Vec<u8>) {
+    use sha2::{Digest, Sha256};
+    let mut value = found(
+        log(
+            ExecResult::ExecResultTxDeterministicError,
+            InvocationFrameOutput::Fault,
+        ),
+        42,
+    );
+    let TxInfoResult::TxInfoFound { info } = &mut value else {
+        unreachable!()
+    };
+    info.tx.signed_tx.tx.invocation.calldata = BytesM(vec![1, 2, 3]);
+    let bytes = xdrs::txs::encode(&info.tx.signed_tx.tx).unwrap();
+    let hash = TxHash(Base58(<[u8; 32]>::from(Sha256::digest(&bytes)).into()));
+    info.events.tx_hash = tx_hash_to_wire(hash);
+    (hash, value, bytes)
+}
+
+#[test]
+fn retained_input_preserves_exact_hash_preimage_even_for_failed_execution() {
+    let (hash, result, bytes) = retained_input();
+    let out::TransactionInputResult::Available {
+        transaction_hash,
+        block_height,
+        transaction_xdr,
+    } = input_lookup(hash, result).unwrap()
+    else {
+        panic!("expected retained input")
+    };
+    assert_eq!(transaction_hash, hash);
+    assert_eq!(*block_height, 42);
+    assert_eq!(transaction_xdr.0, bytes);
+}
+
+#[test]
+fn retained_input_rejects_body_substitution_despite_matching_receipt_hash() {
+    let (hash, mut result, _) = retained_input();
+    let TxInfoResult::TxInfoFound { info } = &mut result else {
+        unreachable!()
+    };
+    info.tx.signed_tx.tx.uniquifier.nonce += 1;
+    reason(
+        &input_lookup(hash, result).unwrap_err(),
+        Reason::InconsistentResult,
+    );
+}
+
+#[test]
+fn absent_retained_input_is_unavailable_not_evidence_of_nonexecution() {
+    assert!(matches!(
+        input_lookup(
+            hash(),
+            TxInfoResult::Default {
+                outcome: TxInfoOutcome::TxInfoNotFound.0
+            }
+        )
+        .unwrap(),
+        out::TransactionInputResult::Unavailable {}
+    ));
+    assert!(input_lookup(hash(), TxInfoResult::Default { outcome: 9999 }).is_err());
+}
+
 #[test]
 fn indexed_commitment_needs_identity_but_not_receipt_payload() {
     let input = found(malformed_log(), 42);

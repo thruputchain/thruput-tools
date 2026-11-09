@@ -10,6 +10,23 @@ use thruput_json_rpc_types::{requests as input, responses as out, transaction::T
 
 #[async_trait]
 impl NativeStatePlane for GatewayBackend {
+    async fn native_contract_deployment(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<out::ContractDeploymentResult, RpcServerError> {
+        self.ctx
+            .storage_batcher
+            .native_contract_deployment(self.bounded_context(context), address)
+            .await
+    }
+    async fn native_contract_artifact(
+        &self,
+        context: RpcRequestContext,
+        hash: thruput_json_rpc_types::SHA256Hash,
+    ) -> Result<out::ContractArtifactResult, RpcServerError> {
+        handlers::contracts::artifact(&self.ctx, self.bounded_context(context), hash).await
+    }
     #[tracing::instrument(skip_all)]
     async fn native_storage(
         &self,
@@ -64,6 +81,14 @@ impl NativeSimulationPlane for GatewayBackend {
 
 #[async_trait]
 impl NativeTransactionReadPlane for GatewayBackend {
+    async fn native_input(
+        &self,
+        context: RpcRequestContext,
+        hash: TxHash,
+    ) -> Result<out::TransactionInputResult, NativeReadError> {
+        handlers::receipt::native_transaction_input(&self.ctx, self.bounded_context(context), hash)
+            .await
+    }
     #[tracing::instrument(skip_all)]
     async fn native_receipt(
         &self,
