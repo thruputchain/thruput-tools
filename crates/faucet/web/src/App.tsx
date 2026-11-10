@@ -66,6 +66,7 @@ export function App() {
 
   function handleAddressChange(nextAddress: string) {
     setAddress(nextAddress)
+    setIsSuccess(false)
     if (fieldError) {
       setFieldError(null)
     }
