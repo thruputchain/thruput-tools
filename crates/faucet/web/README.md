@@ -1,6 +1,6 @@
 # Thruput Faucet Web
 
-Static React frontend for the Thruput Devnet faucet. It requests airdrops with
+Static React frontend for the Thruput Futurenet faucet. It requests airdrops with
 `@thruputchain/client`, through the JSON-RPC gateway's `faucet_requestAirdrop`
 method; the gateway forwards them to the Rust faucet service, which signs and
 submits.
@@ -15,10 +15,10 @@ pnpm install
 pnpm dev
 ```
 
-IBM Plex Sans and Mono font notices are in `public/font-licenses/` and are
+Inter and Inconsolata font notices are in `public/font-licenses/` and are
 copied into production builds alongside the font assets.
 
-The page uses the public Devnet gateway by default. Set `VITE_THRUPUT_RPC_URL`
+The page uses the public Futurenet gateway by default. Set `VITE_THRUPUT_RPC_URL`
 to use another gateway, for example a local `thruput node`:
 
 ```sh
@@ -54,7 +54,7 @@ The checked-in configuration selects Railpack, builds with pnpm, and checks
 
 Use `pnpm install --frozen-lockfile` to install the public dependencies.
 The page talks to the public
-Devnet gateway directly, which allows cross-origin requests; no signing key,
+Futurenet gateway directly, which allows cross-origin requests; no signing key,
 database or volume is needed. The hosted faucet continues to sign and submit
 airdrops.
 
@@ -69,5 +69,5 @@ pnpm install --frozen-lockfile
 VITE_THRUPUT_RPC_URL=https://rpc.example.com pnpm build
 ```
 
-Leave `VITE_THRUPUT_RPC_URL` unset to use the public Devnet gateway. Deploy
+Leave `VITE_THRUPUT_RPC_URL` unset to use the public Futurenet gateway. Deploy
 `dist/` to any static host.

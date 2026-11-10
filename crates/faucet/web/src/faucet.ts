@@ -3,7 +3,7 @@ import {
   FundingObservationError,
   NativeRpcError,
   createThruputClient,
-  devnet,
+  futurenet,
   formatUnits,
   fromBase58,
   parseAddress,
@@ -18,12 +18,12 @@ const pendingNonces = new Map<string, Uint8Array>()
 /** Connect to the RPC gateway; fails if it does not serve `faucet_requestAirdrop`. */
 export function connectFaucet() {
   const rpcUrl = import.meta.env.VITE_THRUPUT_RPC_URL?.trim() || undefined
-  return createThruputClient({ cluster: devnet({ rpcUrl }) })
+  return createThruputClient({ cluster: futurenet({ rpcUrl }) })
 }
 
 export type FaucetClient = Awaited<ReturnType<typeof connectFaucet>>
 
-/** Parse a C StrKey or base58 address, or return null when it is neither. */
+/** Parse a Thruput address, or return null when it is invalid. */
 export function parseRecipient(input: string) {
   try {
     return parseAddress(input.trim())

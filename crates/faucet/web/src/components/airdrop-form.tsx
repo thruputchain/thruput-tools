@@ -1,4 +1,5 @@
 import type { FormEvent } from "react"
+import { CheckIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -18,6 +19,7 @@ export function AirdropForm(props: {
   isLoadingMetadata: boolean
   isMetadataUnavailable: boolean
   isSubmitting: boolean
+  isSuccess: boolean
   onAddressChange: (address: string) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }) {
@@ -38,13 +40,15 @@ export function AirdropForm(props: {
               <div className="flex flex-col items-center gap-3 sm:flex-row">
                 <Input
                   id="address"
+                  name="address"
+                  className="h-11 text-base sm:text-base"
                   aria-label="Wallet address"
                   aria-describedby={isInvalid ? "address-error" : undefined}
                   value={props.address}
                   onChange={(event) =>
                     props.onAddressChange(event.target.value)
                   }
-                  placeholder="Wallet address (C...)"
+                  placeholder="Paste your wallet address"
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={isInvalid || undefined}
@@ -56,15 +60,21 @@ export function AirdropForm(props: {
                 />
                 <Button
                   type="submit"
+                  variant="default"
+                  size="default"
+                  aria-live="polite"
                   disabled={
                     props.isLoadingMetadata ||
                     props.isMetadataUnavailable ||
-                    props.isSubmitting
+                    props.isSubmitting ||
+                    props.isSuccess
                   }
                   className="w-full sm:w-auto"
                 >
                   {props.isLoadingMetadata || props.isSubmitting ? (
                     <Spinner data-icon="inline-start" />
+                  ) : props.isSuccess ? (
+                    <CheckIcon data-icon="inline-start" aria-hidden="true" />
                   ) : null}
                   {props.isLoadingMetadata
                     ? "Connecting..."
@@ -72,7 +82,9 @@ export function AirdropForm(props: {
                       ? "Faucet unavailable"
                       : props.isSubmitting
                         ? "Requesting..."
-                        : "Request airdrop"}
+                        : props.isSuccess
+                          ? "Funds sent"
+                          : "Request airdrop"}
                 </Button>
               </div>
               {props.fieldError ? (
