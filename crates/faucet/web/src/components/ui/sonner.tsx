@@ -8,7 +8,7 @@ export function Toaster(props: ToasterProps) {
       toastOptions={{
         classNames: {
           toast:
-            "group toast group-[.toaster]:bg-card group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:font-sans group-[.toaster]:shadow-none",
+            "group toast group-[.toaster]:bg-card group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:font-sans group-[.toaster]:shadow-none group-[.toaster]:data-[type=error]:bg-destructive group-[.toaster]:data-[type=error]:text-background group-[.toaster]:data-[type=error]:border-destructive",
           description: "group-[.toast]:text-muted-foreground",
         },
       }}

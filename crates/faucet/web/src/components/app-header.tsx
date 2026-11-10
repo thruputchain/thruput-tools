@@ -1,24 +1,38 @@
-import { ZapIcon } from "lucide-react"
+import { buttonVariants } from "@/components/ui/button"
 
 export function AppHeader() {
   return (
     <header className="border-b bg-background">
-      <div className="mx-auto flex min-h-20 max-w-5xl items-center px-4 py-3 sm:px-6 lg:min-h-22">
+      <nav
+        aria-label="Main navigation"
+        className="mx-auto flex min-h-20 max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:min-h-22"
+      >
         <a
           href="/"
           aria-label="Thruput Faucet homepage"
           className="flex min-h-12 items-center gap-2.5"
         >
-          <ZapIcon
-            className="size-6 shrink-0 fill-primary text-primary"
-            aria-hidden="true"
+          <img
+            src="/brand/stellar-dark.svg"
+            width="100"
+            height="25"
+            alt="Stellar"
+            className="w-20 shrink-0 sm:w-25"
           />
-          <span className="text-xl font-medium tracking-tight">THRUPUT</span>
-          <span className="ml-0.5 border-l pl-3 font-mono text-xs text-muted-foreground">
-            Faucet
-          </span>
+          <div className="border-l pl-3 text-lg font-medium sm:text-xl">
+            Thruput Faucet
+          </div>
         </a>
-      </div>
+        <a
+          href="https://thruput.network/docs/"
+          className={buttonVariants({
+            variant: "secondary",
+            className: "ml-auto max-sm:hidden",
+          })}
+        >
+          Read Thruput Docs
+        </a>
+      </nav>
     </header>
   )
 }

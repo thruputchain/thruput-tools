@@ -23,6 +23,13 @@ export function App() {
   const [metadataError, setMetadataError] = useState<string | null>(null)
   const [isLoadingMetadata, setIsLoadingMetadata] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isSuccess, setIsSuccess] = useState(false)
+
+  useEffect(() => {
+    if (!isSuccess) return
+    const timeout = window.setTimeout(() => setIsSuccess(false), 3000)
+    return () => window.clearTimeout(timeout)
+  }, [isSuccess])
 
   useEffect(() => {
     let isCurrent = true
@@ -59,6 +66,7 @@ export function App() {
 
   function handleAddressChange(nextAddress: string) {
     setAddress(nextAddress)
+    setIsSuccess(false)
     if (fieldError) {
       setFieldError(null)
     }
@@ -66,6 +74,7 @@ export function App() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (isSubmitting || isSuccess) return
 
     if (!client) {
       toast.error("The faucet is still connecting.")
@@ -73,7 +82,7 @@ export function App() {
     }
     const recipient = parseRecipient(address)
     if (!recipient) {
-      setFieldError("Enter a Thruput address (C... StrKey or base58).")
+      setFieldError("Enter a valid Thruput wallet address.")
       return
     }
 
@@ -82,6 +91,7 @@ export function App() {
 
     try {
       const result = await airdrop(client, recipient)
+      setIsSuccess(true)
       toast.success(
         `Sent ${formatNativeTokens(result.rawAmount)} native tokens`,
         {
@@ -96,7 +106,7 @@ export function App() {
   }
 
   return (
-    <div className="min-h-dvh bg-background text-foreground">
+    <div className="isolate min-h-dvh bg-background text-foreground">
       <AppHeader />
       <main className="mx-auto w-full max-w-5xl px-4 sm:px-6">
         <div className="mx-auto flex max-w-2xl flex-col items-center gap-8 py-12 sm:py-16">
@@ -122,13 +132,21 @@ export function App() {
             isLoadingMetadata={isLoadingMetadata}
             isMetadataUnavailable={!isLoadingMetadata && !client}
             isSubmitting={isSubmitting}
+            isSuccess={isSuccess}
             onAddressChange={handleAddressChange}
             onSubmit={handleSubmit}
           />
-          <p className="text-center text-sm text-muted-foreground">
+          <p className="text-center text-base/7 text-pretty text-muted-foreground sm:text-sm/6">
+            These tokens are for testing on Futurenet only and have no monetary
+            value. The faucet sets the amount per request and applies wallet
+            cooldowns and per-IP request limits. If you reach a limit, wait for
+            the retry time shown before requesting again. Futurenet can reset,
+            so balances may be cleared.
+          </p>
+          <p className="text-center text-base text-muted-foreground sm:text-sm">
             Request airdrops directly from the CLI -{" "}
             <a
-              href="https://docs.thruput.network/tools/faucet/"
+              href="https://thruput.network/docs/tools/faucet/"
               className="text-primary underline-offset-4 hover:underline"
             >
               Learn more
