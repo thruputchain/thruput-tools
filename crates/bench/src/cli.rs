@@ -64,6 +64,11 @@ pub(super) struct Cli {
     #[arg(long, requires = "seed_count")]
     pub(super) seed_nonce_start: Option<u64>,
 
+    /// Block expiry height for load transactions. Keep it near the tip on long-lived
+    /// chains: the replay cache retains every transaction until its expiry.
+    #[arg(long, default_value = "10000000")]
+    pub(super) block_expiry_height: i64,
+
     /// Total seed/import validation deadline in seconds, outside the measured window.
     #[arg(long, default_value = "120")]
     pub(super) setup_timeout_secs: u64,
