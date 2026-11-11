@@ -1,7 +1,6 @@
 allowBuilds:
   esbuild: true
+# Keep in sync with the npm cooldown in /.github/dependabot.yml.
+minimumReleaseAge: 11520 # 8 days, in minutes
 minimumReleaseAgeExclude:
-  - "@thruputchain/client@0.25.0"
-  - "@thruputchain/contract-spec@0.19.1"
-  - "@thruputchain/protocol@0.19.1"
-  - "@thruputchain/xdr@0.19.1"
+  - "@thruputchain/*" # first-party packages

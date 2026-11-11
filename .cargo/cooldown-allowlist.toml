@@ -1,15 +1,19 @@
-# Keep in sync with the [[allow.exact]] entries in ../cooldown.toml.
+# Allowlist for `cargo cooldown-check`.
+# Keep in sync with the [[allow.package]] and [[allow.exact]] entries in
+# ../cooldown.toml. Each [[allow.package]] entry here names one crate.
 
+# Exceptions for specific releases go here as [[allow.exact]] entries (crate,
+# version), matching ../cooldown.toml.
+
+# Exemptions for first-party (thruput-*) crates.
+
+# from thruputchain/xdrs
 [[allow.package]]
 crate = "thruput-xdrs"
 minutes = 0
 
 [[allow.package]]
-crate = "thruput-rpc-driver"
-minutes = 0
-
-[[allow.package]]
-crate = "thruput-rpc-api"
+crate = "thruput-xdr-common"
 minutes = 0
 
 [[allow.package]]
@@ -21,9 +25,14 @@ crate = "thruput-xdr-repr"
 minutes = 0
 
 [[allow.package]]
-crate = "thruput-xdr-common"
+crate = "thruput-rpc-api"
 minutes = 0
 
+[[allow.package]]
+crate = "thruput-rpc-driver"
+minutes = 0
+
+# from thruputchain/thruput-protocol-rs
 [[allow.package]]
 crate = "thruput-syscall"
 minutes = 0
@@ -72,6 +81,7 @@ minutes = 0
 crate = "thruput-view"
 minutes = 0
 
+# from thruputchain/thruput-sdk-rs
 [[allow.package]]
 crate = "thruput-event"
 minutes = 0
@@ -183,75 +193,3 @@ minutes = 0
 [[allow.package]]
 crate = "thruput-access-control"
 minutes = 0
-
-# Security fix for RUSTSEC-2026-0391
-[[allow.exact]]
-crate = "zstd"
-version = "0.14.3"
-
-# Security fix for RUSTSEC-2026-0410
-[[allow.exact]]
-crate = "zstd-sys"
-version = "2.1.2+zstd.1.5.7"
-
-# Security fix for RUSTSEC-2026-0406
-[[allow.exact]]
-crate = "zstd-safe"
-version = "8.2.0"
-
-[[allow.exact]]
-crate = "rustls"
-version = "0.23.46"
-
-# Security fixes for RUSTSEC-2026-0382 and RUSTSEC-2026-0383.
-[[allow.exact]]
-crate = "rustls-webpki"
-version = "0.103.16"
-
-[[allow.exact]]
-crate = "webpki-root-certs"
-version = "1.0.10"
-
-# Security fix for ctutils 0.4.3 and earlier (fixed in 0.4.4).
-[[allow.exact]]
-crate = "ctutils"
-version = "0.4.5"
-
-# Grandfathered versions ... (can remove after 2026 Nov 9)
-
-[[allow.exact]]
-crate = "jsonschema"
-version = "0.59.0"
-
-[[allow.exact]]
-crate = "jsonschema-regex"
-version = "0.59.0"
-
-[[allow.exact]]
-crate = "jsonschema-value"
-version = "0.59.0"
-
-[[allow.exact]]
-crate = "referencing"
-version = "0.59.0"
-
-[[allow.exact]]
-crate = "opentelemetry"
-version = "0.33.1"
-
-[[allow.exact]]
-crate = "opentelemetry-otlp"
-version = "0.33.1"
-
-[[allow.exact]]
-crate = "opentelemetry-proto"
-version = "0.33.1"
-
-[[allow.exact]]
-crate = "opentelemetry_sdk"
-version = "0.33.1"
-
-# Security fix for RUSTSEC-2026-0386 (AsyncFd constructors deprecated).
-[[allow.exact]]
-crate = "tokio"
-version = "1.53.3"

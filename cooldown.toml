@@ -1,31 +1,29 @@
-# Config for `cargo cooldown`
-# Keep in sync with .cargo/cooldown.toml and .cargo/cooldown-allowlist.toml
+# Config for `cargo cooldown`.
+# Keep in sync with .cargo/cooldown.toml, .cargo/cooldown-allowlist.toml, and
+# the cooldown settings in .github/dependabot.yml.
 
 [cooldown]
 incompatible-publish-age = "deny"
 lockfile-baseline = "ignore"
 
 [registry]
-global-min-publish-age = "15 days"
+global-min-publish-age = "8 days"
 
-# First-party crates that thruputchain/xdrs publishes to crates.io. They were
-# exempt while they came from the thruput registry; keep them exempt.
+# Exceptions for specific releases, such as an urgent security fix, go here as
+# [[allow.exact]] entries (crate, version) with a comment giving the reason.
+
+# Exemptions for first-party (thruput-*) crates.
 [[allow.package]]
 crates = [
+    # from thruputchain/xdrs
     "thruput-xdrs",
     "thruput-xdr-common",
     "thruput-xdr-derive",
     "thruput-xdr-repr",
     "thruput-rpc-api",
     "thruput-rpc-driver",
-]
-min-publish-age = "0"
 
-# First-party crates that thruputchain/thruput-protocol-rs publishes to
-# crates.io. They were exempt while they came from the thruput registry; keep
-# them exempt.
-[[allow.package]]
-crates = [
+    # from thruputchain/thruput-protocol-rs
     "thruput-syscall",
     "thruput-xdr-macros",
     "thruput-xdr",
@@ -38,13 +36,8 @@ crates = [
     "thruput-indexer",
     "thruput-db-gateway",
     "thruput-view",
-]
-min-publish-age = "0"
 
-# First-party crates that thruputchain/thruput-sdk-rs publishes to crates.io.
-# They were exempt while they came from the thruput registry; keep them exempt.
-[[allow.package]]
-crates = [
+    # from thruputchain/thruput-sdk-rs
     "thruput-event",
     "thruput-exn",
     "thruput-storage-cost",
@@ -75,75 +68,3 @@ crates = [
     "thruput-access-control",
 ]
 min-publish-age = "0"
-
-# Security fix for RUSTSEC-2026-0391
-[[allow.exact]]
-crate = "zstd"
-version = "0.14.3"
-
-# Security fix for RUSTSEC-2026-0410
-[[allow.exact]]
-crate = "zstd-sys"
-version = "2.1.2+zstd.1.5.7"
-
-# Security fix for RUSTSEC-2026-0406
-[[allow.exact]]
-crate = "zstd-safe"
-version = "8.2.0"
-
-[[allow.exact]]
-crate = "rustls"
-version = "0.23.46"
-
-# Security fixes for RUSTSEC-2026-0382 and RUSTSEC-2026-0383.
-[[allow.exact]]
-crate = "rustls-webpki"
-version = "0.103.16"
-
-[[allow.exact]]
-crate = "webpki-root-certs"
-version = "1.0.10"
-
-# Security fix for ctutils 0.4.3 and earlier (fixed in 0.4.4).
-[[allow.exact]]
-crate = "ctutils"
-version = "0.4.5"
-
-# Grandfathered versions ... (can remove after 2026 Nov 9)
-
-[[allow.exact]]
-crate = "jsonschema"
-version = "0.59.0"
-
-[[allow.exact]]
-crate = "jsonschema-regex"
-version = "0.59.0"
-
-[[allow.exact]]
-crate = "jsonschema-value"
-version = "0.59.0"
-
-[[allow.exact]]
-crate = "referencing"
-version = "0.59.0"
-
-[[allow.exact]]
-crate = "opentelemetry"
-version = "0.33.1"
-
-[[allow.exact]]
-crate = "opentelemetry-otlp"
-version = "0.33.1"
-
-[[allow.exact]]
-crate = "opentelemetry-proto"
-version = "0.33.1"
-
-[[allow.exact]]
-crate = "opentelemetry_sdk"
-version = "0.33.1"
-
-# Security fix for RUSTSEC-2026-0386 (AsyncFd constructors deprecated).
-[[allow.exact]]
-crate = "tokio"
-version = "1.53.3"
