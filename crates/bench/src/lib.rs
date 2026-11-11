@@ -337,10 +337,24 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             .ok_or(BenchError::MissingRuntimeManifest)?
             .network_hash
             .to_network_hash();
-        generate_tx_batch(batch_size, &accounts, &network_hash, 0)?
-            .into_iter()
-            .map(|tx| tx.hex)
-            .collect()
+        // Start load nonces at the current time so a rerun never replays an earlier run.
+        let nonce_start = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| BenchError::Setup(error.to_string()))?
+                .as_nanos(),
+        )
+        .map_err(|_| BenchError::Setup("current time does not fit a load nonce".into()))?;
+        generate_tx_batch(
+            batch_size,
+            &accounts,
+            &network_hash,
+            nonce_start,
+            cli.block_expiry_height,
+        )?
+        .into_iter()
+        .map(|tx| tx.hex)
+        .collect()
     } else {
         Vec::new()
     };
@@ -543,6 +557,8 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
                 .account_seed
                 .as_ref()
                 .map(|seed| thruput_json_rpc_types::hex::sha256_prefixed_hex(seed.as_bytes())),
+            block_expiry_height: (needs_transactions || cli.seed_count.is_some())
+                .then_some(cli.block_expiry_height),
             transaction_batch_size,
             max_skew_seconds: cli.max_skew,
             request_timeout_ms: cli.request_timeout_ms,
