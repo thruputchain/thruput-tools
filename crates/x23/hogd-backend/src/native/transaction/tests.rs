@@ -380,7 +380,9 @@ fn indexed_diagnostics_are_typed_and_unknown_values_are_errors() {
             },
             43,
         ),
-        TxInfoResult::Default { outcome: 9999 },
+        TxInfoResult::Default {
+            outcome: xdrs::XDRDiscriminant::from_discriminant(9999),
+        },
     ] {
         reason(
             &indexed_status(hash(), input.clone()).unwrap_err(),
@@ -403,7 +405,7 @@ fn indexed_diagnostics_are_typed_and_unknown_values_are_errors() {
         indexed_status(
             hash(),
             TxInfoResult::Default {
-                outcome: TxInfoOutcome::TxInfoNotFound.0
+                outcome: xdrs::XDRDiscriminant::from_discriminant(TxInfoOutcome::TxInfoNotFound.0)
             }
         )
         .unwrap()
@@ -413,7 +415,7 @@ fn indexed_diagnostics_are_typed_and_unknown_values_are_errors() {
         receipt_lookup(
             hash(),
             TxInfoResult::Default {
-                outcome: TxInfoOutcome::TxInfoNotFound.0
+                outcome: xdrs::XDRDiscriminant::from_discriminant(TxInfoOutcome::TxInfoNotFound.0)
             }
         )
         .unwrap()
@@ -521,13 +523,21 @@ fn absent_retained_input_is_unavailable_not_evidence_of_nonexecution() {
         input_lookup(
             hash(),
             TxInfoResult::Default {
-                outcome: TxInfoOutcome::TxInfoNotFound.0
+                outcome: xdrs::XDRDiscriminant::from_discriminant(TxInfoOutcome::TxInfoNotFound.0)
             }
         )
         .unwrap(),
         out::TransactionInputResult::Unavailable {}
     ));
-    assert!(input_lookup(hash(), TxInfoResult::Default { outcome: 9999 }).is_err());
+    assert!(
+        input_lookup(
+            hash(),
+            TxInfoResult::Default {
+                outcome: xdrs::XDRDiscriminant::from_discriminant(9999)
+            }
+        )
+        .is_err()
+    );
 }
 
 #[test]

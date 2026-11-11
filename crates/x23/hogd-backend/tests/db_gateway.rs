@@ -15,7 +15,7 @@ fn an_outer_batch_error_is_named_with_the_service() {
     let error = payload(
         "DbGateway",
         DbGatewayResult::Default {
-            error: RPCError::kRPCNotFound.0,
+            error: xdrs::XDRDiscriminant::from_discriminant(RPCError::kRPCNotFound.0),
         },
     )
     .unwrap_err();

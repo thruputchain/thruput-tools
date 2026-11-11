@@ -151,12 +151,18 @@ fn a_missing_tip_is_decoded_rather_than_named() {
         tip_answer(
             "scheduler",
             ExpectedDBTip::Default {
-                error: RPCError::kRPCNotFound.0,
+                error: xdrs::XDRDiscriminant::from_discriminant(RPCError::kRPCNotFound.0),
             },
         ),
         Ok(TipAnswer::NoCommittedBlock)
     ));
 
-    let error = tip_answer("scheduler", ExpectedDBTip::Default { error: 4242 }).unwrap_err();
+    let error = tip_answer(
+        "scheduler",
+        ExpectedDBTip::Default {
+            error: xdrs::XDRDiscriminant::from_discriminant(4242),
+        },
+    )
+    .unwrap_err();
     assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
 }

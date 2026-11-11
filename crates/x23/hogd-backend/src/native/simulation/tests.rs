@@ -190,11 +190,21 @@ fn snapshot_and_cardinality_are_validated_before_returning_results() {
 #[test]
 fn unknown_outcomes_are_invalid_data_and_execution_failures_are_results() {
     invalid_reason(
-        simulation(ViewGatewayResult::Default { outcome: 999 }, None),
+        simulation(
+            ViewGatewayResult::Default {
+                outcome: xdrs::XDRDiscriminant::from_discriminant(999),
+            },
+            None,
+        ),
         Reason::UnsupportedValue,
     );
     invalid_reason(
-        simulations(&query(), ViewGatewayBatchResult::Default { outcome: 999 }),
+        simulations(
+            &query(),
+            ViewGatewayBatchResult::Default {
+                outcome: xdrs::XDRDiscriminant::from_discriminant(999),
+            },
+        ),
         Reason::UnsupportedValue,
     );
     for output in [
@@ -255,7 +265,9 @@ fn known_batch_failures_preserve_their_causes() {
         assert!(matches!(
             simulations(
                 &query(),
-                ViewGatewayBatchResult::Default { outcome: outcome.0 }
+                ViewGatewayBatchResult::Default {
+                    outcome: xdrs::XDRDiscriminant::from_discriminant(outcome.0)
+                }
             ),
             Err(RpcServerError::BackendUnavailable(_))
         ));
@@ -264,7 +276,9 @@ fn known_batch_failures_preserve_their_causes() {
         simulations(
             &query(),
             ViewGatewayBatchResult::Default {
-                outcome: O::ViewGatewayBatchDeadlineExceeded.0
+                outcome: xdrs::XDRDiscriminant::from_discriminant(
+                    O::ViewGatewayBatchDeadlineExceeded.0
+                )
             }
         ),
         Err(RpcServerError::BackendTimeout)
@@ -276,7 +290,9 @@ fn known_batch_failures_preserve_their_causes() {
         assert!(matches!(
             simulations(
                 &query(),
-                ViewGatewayBatchResult::Default { outcome: outcome.0 }
+                ViewGatewayBatchResult::Default {
+                    outcome: xdrs::XDRDiscriminant::from_discriminant(outcome.0)
+                }
             ),
             Err(RpcServerError::InvalidParam(_))
         ));
