@@ -46,8 +46,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # It has no crates.io release, so pin the commit. Keep in sync with
-      # CONTRIBUTING.md.
+      # This tool has no crates.io release, so pin the commit. Keep in sync
+      # with CONTRIBUTING.md.
       - name: Install cargo-cooldown-check
         run: |
           cargo install --locked \

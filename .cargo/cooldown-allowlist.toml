@@ -1,6 +1,5 @@
 # Allowlist for `cargo cooldown-check`.
-# Keep in sync with the [[allow.package]] and [[allow.exact]] entries in
-# ../cooldown.toml. Each [[allow.package]] entry here names one crate.
+# Keep in sync with ../cooldown.toml.
 
 # Exceptions for specific releases go here as [[allow.exact]] entries (crate,
 # version), matching ../cooldown.toml.
