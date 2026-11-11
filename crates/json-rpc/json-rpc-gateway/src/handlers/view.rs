@@ -36,11 +36,21 @@ async fn batch_result(
     )?;
     let result = timed_backend_call(
         &ctx.metrics,
+        &ctx.lanes.view,
+        u32::try_from(query.calls.0.len()).unwrap_or(u32::MAX),
         HealthBackend::ViewGateway,
         "viewgateway_view_batch",
         VIEW_GATEWAY,
         deadline,
-        client.viewgateway_view_batch(&query),
+        {
+            let mut query = query.clone();
+            // Runs only once the lane is acquired: waiting spent part of the
+            // deadline, so hogd gets only the budget that remains.
+            async move {
+                query.budget_millis = remaining_budget_millis(deadline);
+                client.viewgateway_view_batch(&query).await
+            }
+        },
         // Expected refusals are healthy backend round trips, even though the
         // public response remains an error for the caller.
         |result| match result {
@@ -60,19 +70,36 @@ async fn batch_result(
     Ok((query, result?))
 }
 
+/// Milliseconds left before `deadline`, at least 1 because hogd rejects a zero
+/// budget. `timed_backend_call` refuses calls whose deadline has already passed.
+fn remaining_budget_millis(deadline: Instant) -> u32 {
+    u32::try_from(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis(),
+    )
+    .unwrap_or(u32::MAX)
+    .max(1)
+}
+
 async fn view_result_from_client(
     client: &thruput_view::ViewGateway_ViewGateway1_Client,
     metrics: &GatewayMetrics,
+    lane: &crate::lanes::Lane,
     query: &TransactionViewQuery,
     deadline: Instant,
 ) -> Result<ViewGatewayResult, RpcServerError> {
+    let client = client.clone();
+    let query = query.clone();
     let result = timed_backend_call(
         metrics,
+        lane,
+        1,
         HealthBackend::ViewGateway,
         "viewgateway_view",
         VIEW_GATEWAY,
         deadline,
-        client.viewgateway_view(query),
+        async move { client.viewgateway_view(&query).await },
         // A rejected request is the caller's error, not the backend's: the
         // backend answered correctly, so it counts as a healthy round trip.
         |result| {
@@ -115,6 +142,7 @@ pub async fn native_simulate(
     let result = view_result_from_client(
         &client,
         &ctx.metrics,
+        &ctx.lanes.view,
         &query,
         backend_deadline(context, timeout)?,
     )
@@ -161,6 +189,14 @@ mod tests {
     use xdr_common::{BytesM, VecM};
 
     use super::*;
+
+    #[test]
+    fn batch_budget_is_what_remains_at_dispatch() {
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let budget = remaining_budget_millis(deadline);
+        assert!((1..=500).contains(&budget), "{budget}");
+        assert_eq!(remaining_budget_millis(Instant::now()), 1);
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum FakeViewGatewayMode {
@@ -406,9 +442,12 @@ mod tests {
         let query = shared_view::view_query(request(None), 123).expect("query maps");
         let metrics = GatewayMetrics::for_tests();
 
+        let lanes =
+            crate::lanes::BackendLanes::new(&crate::config::AdmissionConfig::default(), &metrics);
         let result = view_result_from_client(
             &client,
             &metrics,
+            &lanes.view,
             &query,
             Instant::now() + Duration::from_millis(10),
         )
