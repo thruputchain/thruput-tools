@@ -320,7 +320,7 @@ pub(super) fn validate_method(method: &str) -> Result<(), BenchError> {
 mod tests {
     use serde_json::json;
     use thruput_json_rpc_types::base58::Base58;
-    use thruput_xdr::types::{Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash};
+    use thruput_xdr::types::{BlockHeight, Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash};
 
     use super::*;
 
@@ -423,6 +423,48 @@ mod tests {
         };
 
         assert!(matches!(err, BenchError::MissingAccounts));
+    }
+
+    #[test]
+    fn parallel_batch_keeps_index_order_accounts_nonces_and_expiry() {
+        // Enough transactions to span every signing thread with uneven chunks.
+        let accounts = transaction_inputs_for_method(
+            "sendTransaction",
+            Some(&manifest_with_accounts(3)),
+            3,
+            None,
+        )
+        .unwrap();
+        let network = manifest().network_hash.to_network_hash();
+        let count = std::thread::available_parallelism().map_or(1, |n| n.get()) * 7 + 5;
+        let (nonce_start, expiry) = (1_000_000, 123_456);
+        let batch = generate_tx_batch(count, &accounts, &network, nonce_start, expiry).unwrap();
+        assert_eq!(batch.len(), count);
+        for (i, prepared) in batch.iter().enumerate() {
+            let bytes = hex::decode(prepared.hex.trim_start_matches("0x")).unwrap();
+            let signed: thruput_xdr::transaction::SignedTransaction =
+                xdrs::txs::decode(&bytes).unwrap();
+            let account = &accounts[i % accounts.len()];
+            let native =
+                PubkeyAccount::from_public_key_bytes(account.signer.verifying_key_bytes(), 0);
+            assert_eq!(
+                signed.tx.invocation.invoked_address,
+                native.address(),
+                "account at {i}"
+            );
+            assert_eq!(
+                signed.tx.uniquifier.nonce,
+                nonce_start + i as u64,
+                "nonce at {i}"
+            );
+            assert_eq!(
+                signed.tx.uniquifier.block_expiry_height,
+                BlockHeight::from(expiry),
+                "expiry at {i}"
+            );
+            let hash = TxHash(Base58(transaction_hash(&signed.tx).unwrap()));
+            assert_eq!(hash, prepared.hash, "hash at {i}");
+        }
     }
 
     #[test]
