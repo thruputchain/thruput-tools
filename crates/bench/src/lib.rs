@@ -337,7 +337,15 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             .ok_or(BenchError::MissingRuntimeManifest)?
             .network_hash
             .to_network_hash();
-        generate_tx_batch(batch_size, &accounts, &network_hash, 0)?
+        // Start load nonces at the current time so a rerun never replays an earlier run.
+        let nonce_start = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| BenchError::Setup(error.to_string()))?
+                .as_nanos(),
+        )
+        .map_err(|_| BenchError::Setup("current time does not fit a load nonce".into()))?;
+        generate_tx_batch(batch_size, &accounts, &network_hash, nonce_start, cli.block_expiry_height)?
             .into_iter()
             .map(|tx| tx.hex)
             .collect()
