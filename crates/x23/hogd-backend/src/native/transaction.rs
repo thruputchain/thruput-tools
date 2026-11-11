@@ -14,6 +14,7 @@ use thruput_node_rpc::{
     SchedulerTransactionStatus as Status,
 };
 use thruput_xdr::{event::TxEventLog, exec_result::ExecResult, transaction::InvocationFrameOutput};
+use xdrs::XDRDiscriminant;
 
 use super::invalid;
 use crate::receipt::tx_hash_to_wire;
@@ -170,7 +171,11 @@ pub fn indexed_status(
                 cause: diagnostic::cause(recent_failure.cause)?,
             }))
         }
-        TxInfoResult::Default { outcome } if outcome == TxInfoOutcome::TxInfoNotFound.0 => Ok(None),
+        TxInfoResult::Default { outcome }
+            if outcome.discriminant() == TxInfoOutcome::TxInfoNotFound.0 =>
+        {
+            Ok(None)
+        }
         _ => Err(invalid(
             Reason::UnsupportedValue,
             "unsupported indexer transaction outcome",

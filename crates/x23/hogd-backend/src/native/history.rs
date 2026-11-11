@@ -13,6 +13,7 @@ use thruput_json_rpc_types::{
 };
 use thruput_xdr::event::{TxEmittedEvent, kMaxEventLength};
 use xdr_common::{BytesM, VecM};
+use xdrs::XDRDiscriminant;
 
 fn position(
     start: Option<&input::HistoryStart>,
@@ -179,7 +180,9 @@ fn event(value: TxEmittedEvent, tx_hash: TxHash) -> Result<out::EmittedEvent, Rp
 pub fn event_page(value: wire::EventPageResult) -> Result<out::EventPage, RpcServerError> {
     let page = match value {
         wire::EventPageResult::IndexerQueryOk { page } => page,
-        wire::EventPageResult::Default { outcome } => return Err(query_error(outcome)),
+        wire::EventPageResult::Default { outcome } => {
+            return Err(query_error(outcome.discriminant()));
+        }
         _ => {
             return Err(invalid(
                 Reason::UnsupportedValue,
@@ -223,7 +226,9 @@ pub fn transaction_page(
 ) -> Result<out::TransactionRefPage, RpcServerError> {
     let page = match value {
         wire::TransactionRefPageResult::IndexerQueryOk { page } => page,
-        wire::TransactionRefPageResult::Default { outcome } => return Err(query_error(outcome)),
+        wire::TransactionRefPageResult::Default { outcome } => {
+            return Err(query_error(outcome.discriminant()));
+        }
         _ => {
             return Err(invalid(
                 Reason::UnsupportedValue,

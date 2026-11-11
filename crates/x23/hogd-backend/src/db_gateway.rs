@@ -11,6 +11,7 @@ use thruput_json_rpc_types::error::native::BackendDataInvalidReason as DataReaso
 use thruput_node_rpc::RPCError;
 use thruput_xdr::storage_item::WireStorageItem;
 use thruput_xdr::types::{StorageKey, StorageKeyContractData};
+use xdrs::XDRDiscriminant;
 
 /// Project one snapshot-bound rules reading without supplying missing defaults.
 pub fn tip_reading(
@@ -95,7 +96,7 @@ pub fn payload(service: &str, result: DbGatewayResult) -> Result<DbGatewayPayloa
         DbGatewayResult::kRPCNone { payload } => Ok(payload),
         DbGatewayResult::Default { error } => Err(RpcServerError::BackendUnavailable(format!(
             "{service}: {}",
-            RPCError(error)
+            RPCError(error.discriminant())
         ))),
         unexpected => {
             tracing::warn!(
@@ -131,7 +132,7 @@ pub(crate) fn stored_item(
     match item {
         DbGatewayItemResult::kRPCNone { item } => Ok(Some(item)),
         DbGatewayItemResult::Default { error } => {
-            let error = RPCError(error);
+            let error = RPCError(error.discriminant());
             if error == RPCError::kRPCNotFound {
                 Ok(None)
             } else {
@@ -171,7 +172,13 @@ mod config_tests {
             999,
         ] {
             assert!(matches!(
-                tip_reading("test", DbGatewayConfigResult::Default { error }, None),
+                tip_reading(
+                    "test",
+                    DbGatewayConfigResult::Default {
+                        error: XDRDiscriminant::from_discriminant(error)
+                    },
+                    None
+                ),
                 Err(RpcServerError::BackendUnavailable(_))
             ));
         }

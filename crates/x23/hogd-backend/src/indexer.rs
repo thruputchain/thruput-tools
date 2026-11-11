@@ -10,6 +10,7 @@ use thruput_indexer::indexer::{TxInfo, TxInfoOutcome, TxInfoResult};
 use thruput_json_rpc_server::RpcServerError;
 use thruput_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use thruput_trace::TxFailureDiagnostic;
+use xdrs::XDRDiscriminant;
 
 /// What the indexer knows about one transaction.
 ///
@@ -45,10 +46,13 @@ pub fn tx_lookup(
         TxInfoResult::TxInfoRecentFailure { recent_failure } => {
             Ok(TxLookup::RecentFailure(recent_failure))
         }
-        TxInfoResult::Default { outcome } if outcome == TxInfoOutcome::TxInfoNotFound.0 => {
+        TxInfoResult::Default { outcome }
+            if outcome.discriminant() == TxInfoOutcome::TxInfoNotFound.0 =>
+        {
             Ok(TxLookup::NotFound)
         }
         TxInfoResult::Default { outcome } => {
+            let outcome = outcome.discriminant();
             tracing::warn!(?tx_hash, %outcome, %service, "unexpected TxInfoResult outcome");
             Err(RpcServerError::BackendUnavailable(format!(
                 "{service} returned unexpected outcome: {outcome}"
