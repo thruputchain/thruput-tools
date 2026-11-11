@@ -1607,6 +1607,7 @@ mod tests {
     struct HandlerGate {
         calls: Arc<AtomicUsize>,
         release: Arc<tokio::sync::Notify>,
+        fail: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl HandlerGate {
@@ -1687,6 +1688,9 @@ mod tests {
             if self.block_config {
                 self.gate.wait().await;
             }
+            if self.gate.fail.load(Ordering::SeqCst) {
+                return Err(ProgramError::msg("test driver error"));
+            }
             Ok(test_db_config())
         }
         async fn dbgateway_intro(
@@ -1733,6 +1737,7 @@ mod tests {
     struct SchedulerCallCounts {
         null: Arc<AtomicUsize>,
         tip: Arc<AtomicUsize>,
+        submit: HandlerGate,
     }
 
     #[derive(Clone, Copy)]
@@ -1915,7 +1920,11 @@ mod tests {
             &self,
             _batch: ParallelSignedTransactionBatch,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
-            panic!("health probe test should not submit")
+            self.calls.submit.wait().await;
+            if self.calls.submit.fail.load(Ordering::SeqCst) {
+                return Err(ProgramError::msg("test driver error"));
+            }
+            Ok(VecM(vec![]))
         }
 
         async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
@@ -3030,7 +3039,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn db_request_deadline_fails_closed_before_worker_cancellation() {
+    async fn db_request_timeout_preserves_pool_and_next_call_succeeds() {
         let (db_addr, _server, gate) = start_saturated_db_gateway(true).await;
         let client = connect_optional_db_gateway(
             X23MultiplexConnections::default(),
@@ -3042,6 +3051,7 @@ mod tests {
         .await
         .expect("DB connection should succeed")
         .expect("DB should be connected");
+        let generation = client.generation();
         let metrics = GatewayMetrics::for_tests();
         let db = Arc::new(RwLock::new(Some(client)));
         let sink = DbTipSink::new(db.clone(), metrics.clone(), Duration::from_secs(1), None);
@@ -3051,13 +3061,110 @@ mod tests {
                 .await,
             Err(RpcServerError::BackendTimeout)
         ));
-        assert!(db.read().await.is_none());
+        assert_eq!(db.read().await.as_ref().unwrap().generation(), generation);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+
+        let next = sink.get_tip(std::time::Instant::now() + Duration::from_secs(1));
+        let release = async {
+            while gate.calls.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+            gate.release.notify_waiters();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(next, release)
+        })
+        .await
+        .expect("DB retry should reach the backend and finish");
+        result.expect("next call on the same DB client should succeed");
+        assert_eq!(db.read().await.as_ref().unwrap().generation(), generation);
+
+        gate.fail.store(true, Ordering::SeqCst);
+        let next = sink.get_tip(std::time::Instant::now() + Duration::from_secs(1));
+        let release = async {
+            while gate.calls.load(Ordering::SeqCst) < 3 {
+                tokio::task::yield_now().await;
+            }
+            gate.release.notify_waiters();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(next, release)
+        })
+        .await
+        .expect("DB error call should reach the backend and finish");
+        assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
+        assert!(db.read().await.is_none());
 
         let snapshot = HealthSnapshot::for_test(HealthStatus::Error, None, &[]);
         let body = metrics.gather(&snapshot).expect("metrics should encode");
         assert!(body.contains(
             "groundhog_gateway_backend_requests_total{backend=\"db_gateway\",operation=\"dbgateway_get_config\",outcome=\"timeout\"} 1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn scheduler_request_timeout_preserves_pool_and_next_call_succeeds() {
+        use crate::submitter::{SchedulerSink, SubmitSink};
+
+        let (addr, _server, calls) =
+            start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
+        let client = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let generation = client.generation();
+        let scheduler = Arc::new(RwLock::new(Some(client)));
+        let metrics = GatewayMetrics::for_tests();
+        let sink = SchedulerSink::new(scheduler.clone(), metrics.clone(), Duration::from_secs(1));
+        let batch = || thruput_hogd_backend::submit::pack(Vec::<Vec<u8>>::new()).unwrap();
+        assert!(matches!(
+            sink.submit(
+                batch(),
+                std::time::Instant::now() + Duration::from_millis(25)
+            )
+            .await,
+            Err(RpcServerError::BackendTimeout)
+        ));
+        assert_eq!(calls.submit.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            scheduler.read().await.as_ref().unwrap().generation(),
+            generation
+        );
+
+        for fail in [false, true] {
+            calls.submit.fail.store(fail, Ordering::SeqCst);
+            let expected_calls = if fail { 3 } else { 2 };
+            let next = sink.submit(batch(), std::time::Instant::now() + Duration::from_secs(1));
+            let release = async {
+                while calls.submit.calls.load(Ordering::SeqCst) < expected_calls {
+                    tokio::task::yield_now().await;
+                }
+                calls.submit.release.notify_waiters();
+            };
+            let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+                tokio::join!(next, release)
+            })
+            .await
+            .expect("scheduler retry should reach the backend and finish");
+            if fail {
+                assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
+                assert!(scheduler.read().await.is_none());
+            } else {
+                result.expect("next call on the same scheduler client should succeed");
+                assert_eq!(
+                    scheduler.read().await.as_ref().unwrap().generation(),
+                    generation
+                );
+            }
+        }
+        let snapshot = HealthSnapshot::for_test(HealthStatus::Error, None, &[]);
+        assert!(metrics.gather(&snapshot).unwrap().contains(
+            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_submit_tx_batch\",outcome=\"timeout\"} 1"
         ));
     }
 
