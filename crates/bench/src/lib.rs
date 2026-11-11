@@ -557,6 +557,8 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
                 .account_seed
                 .as_ref()
                 .map(|seed| thruput_json_rpc_types::hex::sha256_prefixed_hex(seed.as_bytes())),
+            block_expiry_height: (needs_transactions || cli.seed_count.is_some())
+                .then_some(cli.block_expiry_height),
             transaction_batch_size,
             max_skew_seconds: cli.max_skew,
             request_timeout_ms: cli.request_timeout_ms,
