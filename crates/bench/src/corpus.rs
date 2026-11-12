@@ -216,6 +216,7 @@ async fn prepare_inner(
                 &network_hash,
                 first_nonce,
                 block_expiry_height,
+                crate::workload::TxWorkload::BALANCE,
             )
         })
         .await
