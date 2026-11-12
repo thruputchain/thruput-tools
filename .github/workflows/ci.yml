@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
     # No registry credentials: deny.toml admits crates.io only.
-    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+    uses: thruputchain/actions/.github/workflows/rust-dependency-policy.yml@af495ed44f45e032e437b2a8f6e6550a4b9390cc
     with:
       runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
@@ -36,7 +36,7 @@ jobs:
   workflow-lint:
     permissions:
       contents: read
-    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@3e0d08d054591a349331ab57fe72197d6ccc0cf3
+    uses: thruputchain/actions/.github/workflows/workflow-lint.yml@af495ed44f45e032e437b2a8f6e6550a4b9390cc
     with:
       runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
