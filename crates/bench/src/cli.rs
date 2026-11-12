@@ -116,9 +116,10 @@ pub(super) struct Cli {
     #[arg(long, value_enum, default_value = "balance")]
     pub(super) tx_kind: TxKind,
 
-    /// Native token transfer amount in raw units (must be >= 1).
+    /// Native token transfer amount in raw units (must be >= 1). Capped at
+    /// u64 so result JSON keeps it exact for comparisons.
     #[arg(long, default_value = "1")]
-    pub(super) transfer_amount_raw: u128,
+    pub(super) transfer_amount_raw: u64,
 
     /// Warmup seconds (results discarded).
     #[arg(long, default_value = "2")]

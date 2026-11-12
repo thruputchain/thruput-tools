@@ -364,7 +364,7 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             cli.block_expiry_height,
             workload::TxWorkload {
                 kind: cli.tx_kind,
-                amount_raw: cli.transfer_amount_raw,
+                amount_raw: u128::from(cli.transfer_amount_raw),
             },
         )?
         .into_iter()
