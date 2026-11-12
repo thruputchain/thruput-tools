@@ -5,6 +5,7 @@
 //! If the harness cannot sustain the target rate it fails rather than silently
 //! degrading to closed-loop. `--unthrottled` instead dispatches as fast as the
 //! configured worker and in-flight caps allow.
+//! Use `--tx-kind transfer` to write token balances and emit transfer events.
 //!
 //! Usage:
 //!   # Against a local JSON-RPC endpoint (smoke):
@@ -45,6 +46,10 @@ use workload::{
 
 #[derive(Debug, thiserror::Error)]
 enum BenchError {
+    #[error("--transfer-amount-raw must be >= 1")]
+    InvalidTransferAmount,
+    #[error("--tx-kind transfer requires at least 2 accounts to avoid self-transfer")]
+    TransferRequiresTwoAccounts,
     #[error("invalid benchmark configuration: {0}")]
     InvalidConfiguration(String),
     #[error("benchmark setup failed: {0}")]
@@ -162,6 +167,12 @@ pub async fn run_cli() {
 }
 
 fn validate_configuration(cli: &Cli) -> Result<(), BenchError> {
+    if cli.transfer_amount_raw == 0 {
+        return Err(BenchError::InvalidTransferAmount);
+    }
+    if cli.tx_kind == cli::TxKind::Transfer && cli.accounts < 2 {
+        return Err(BenchError::TransferRequiresTwoAccounts);
+    }
     let invalid = |message: &str| BenchError::InvalidConfiguration(message.into());
     if cli.workers == 0 || cli.workers > 1024 {
         return Err(invalid("--workers must be in 1..=1024"));
@@ -345,10 +356,20 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
                 .as_nanos(),
         )
         .map_err(|_| BenchError::Setup("current time does not fit a load nonce".into()))?;
-        generate_tx_batch(batch_size, &accounts, &network_hash, nonce_start, cli.block_expiry_height)?
-            .into_iter()
-            .map(|tx| tx.hex)
-            .collect()
+        generate_tx_batch(
+            batch_size,
+            &accounts,
+            &network_hash,
+            nonce_start,
+            cli.block_expiry_height,
+            workload::TxWorkload {
+                kind: cli.tx_kind,
+                amount_raw: cli.transfer_amount_raw,
+            },
+        )?
+        .into_iter()
+        .map(|tx| tx.hex)
+        .collect()
     } else {
         Vec::new()
     };
@@ -553,6 +574,13 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
                 .map(|seed| thruput_json_rpc_types::hex::sha256_prefixed_hex(seed.as_bytes())),
             block_expiry_height: (needs_transactions || cli.seed_count.is_some())
                 .then_some(cli.block_expiry_height),
+            tx_kind: if needs_transactions {
+                Some(cli.tx_kind)
+            } else {
+                cli.seed_count.map(|_| cli::TxKind::Balance)
+            },
+            transfer_amount_raw: (needs_transactions && cli.tx_kind == cli::TxKind::Transfer)
+                .then_some(cli.transfer_amount_raw),
             transaction_batch_size,
             max_skew_seconds: cli.max_skew,
             request_timeout_ms: cli.request_timeout_ms,

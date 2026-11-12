@@ -16,6 +16,7 @@ use thruput_xdr::types::{ContractAddress, NetworkHash};
 use tokio::io::AsyncReadExt;
 
 use crate::BenchError;
+use crate::cli::TxKind;
 use thruput_json_rpc_types::{base58::Base58, transaction::TxHash};
 
 const NATIVE_TOKEN_BALANCE_ENTRYPOINT: ContractEntrypointID =
@@ -44,6 +45,19 @@ pub(super) struct PreparedTransaction {
     pub(super) hash: TxHash,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct TxWorkload {
+    pub(super) kind: TxKind,
+    pub(super) amount_raw: u128,
+}
+
+impl TxWorkload {
+    pub(super) const BALANCE: Self = Self {
+        kind: TxKind::Balance,
+        amount_raw: 1,
+    };
+}
+
 /// Pre-generate a batch of signed transactions and their canonical hashes.
 pub(super) fn generate_tx_batch(
     count: usize,
@@ -51,7 +65,14 @@ pub(super) fn generate_tx_batch(
     network_hash: &NetworkHash,
     nonce_start: u64,
     block_expiry_height: i64,
+    workload: TxWorkload,
 ) -> Result<Vec<PreparedTransaction>, BenchError> {
+    if workload.amount_raw == 0 {
+        return Err(BenchError::InvalidTransferAmount);
+    }
+    if workload.kind == TxKind::Transfer && accounts.len() < 2 {
+        return Err(BenchError::TransferRequiresTwoAccounts);
+    }
     // Signing dominates setup for large batches; split the index range across
     // threads. Each index still maps to the same account and nonce.
     let threads = std::thread::available_parallelism()
@@ -65,7 +86,14 @@ pub(super) fn generate_tx_batch(
             .map(|start| {
                 let end = (start + chunk).min(count);
                 scope.spawn(move || {
-                    generate_tx_range(start..end, accounts, network_hash, nonce_start, block_expiry_height)
+                    generate_tx_range(
+                        start..end,
+                        accounts,
+                        network_hash,
+                        nonce_start,
+                        block_expiry_height,
+                        workload,
+                    )
                 })
             })
             .collect();
@@ -87,6 +115,7 @@ fn generate_tx_range(
     network_hash: &NetworkHash,
     nonce_start: u64,
     block_expiry_height: i64,
+    workload: TxWorkload,
 ) -> Result<Vec<PreparedTransaction>, BenchError> {
     range
         .map(|i| {
@@ -94,16 +123,29 @@ fn generate_tx_range(
             let account = &accounts[idx];
             let native =
                 PubkeyAccount::from_public_key_bytes(account.signer.verifying_key_bytes(), 0);
-            let calldata = xdrs::cxs::encode(&(account.wallet_address,)).map_err(|error| {
-                BenchError::WalletCalldata {
-                    source: thruput_signing::SigningError::XdrEncode(error.to_string()),
-                }
-            })?;
+            let (entrypoint, calldata) = match workload.kind {
+                TxKind::Balance => (
+                    NATIVE_TOKEN_BALANCE_ENTRYPOINT,
+                    xdrs::cxs::encode(&(account.wallet_address,)).map_err(|error| {
+                        BenchError::WalletCalldata {
+                            source: thruput_signing::SigningError::XdrEncode(error.to_string()),
+                        }
+                    })?,
+                ),
+                TxKind::Transfer => (
+                    thruput_signing::NATIVE_TOKEN_TRANSFER_ENTRYPOINT,
+                    thruput_signing::native_token_transfer_calldata(
+                        &accounts[(idx + 1) % accounts.len()].wallet_address,
+                        workload.amount_raw,
+                    )
+                    .map_err(|source| BenchError::WalletCalldata { source })?,
+                ),
+            };
             let tx = thruput_signing::default_wallet::build_default_wallet_call_transaction(
                 thruput_signing::default_wallet::BuildDefaultWalletCallTransaction {
                     account: &native,
                     target_address: thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN,
-                    target_entrypoint: NATIVE_TOKEN_BALANCE_ENTRYPOINT,
+                    target_entrypoint: entrypoint,
                     target_calldata: &calldata,
                     gas_limit: 20_000_000,
                     target_gas_limit: 10_000_000,
@@ -432,32 +474,76 @@ mod tests {
         let network = manifest().network_hash.to_network_hash();
         let count = std::thread::available_parallelism().map_or(1, |n| n.get()) * 7 + 5;
         let (nonce_start, expiry) = (1_000_000, 123_456);
-        let batch = generate_tx_batch(count, &accounts, &network, nonce_start, expiry).unwrap();
-        assert_eq!(batch.len(), count);
-        for (i, prepared) in batch.iter().enumerate() {
-            let bytes = hex::decode(prepared.hex.trim_start_matches("0x")).unwrap();
-            let signed: thruput_xdr::transaction::SignedTransaction =
-                xdrs::txs::decode(&bytes).unwrap();
-            let account = &accounts[i % accounts.len()];
-            let native =
-                PubkeyAccount::from_public_key_bytes(account.signer.verifying_key_bytes(), 0);
-            assert_eq!(
-                signed.tx.invocation.invoked_address,
-                native.address(),
-                "account at {i}"
-            );
-            assert_eq!(
-                signed.tx.uniquifier.nonce,
-                nonce_start + i as u64,
-                "nonce at {i}"
-            );
-            assert_eq!(
-                signed.tx.uniquifier.block_expiry_height,
-                BlockHeight::from(expiry),
-                "expiry at {i}"
-            );
-            let hash = TxHash(Base58(transaction_hash(&signed.tx).unwrap()));
-            assert_eq!(hash, prepared.hash, "hash at {i}");
+        for kind in [TxKind::Balance, TxKind::Transfer] {
+            let amount_raw = u128::MAX;
+            let batch = generate_tx_batch(
+                count,
+                &accounts,
+                &network,
+                nonce_start,
+                expiry,
+                TxWorkload { kind, amount_raw },
+            )
+            .unwrap();
+            assert_eq!(batch.len(), count);
+            for (i, prepared) in batch.iter().enumerate() {
+                let bytes = hex::decode(prepared.hex.trim_start_matches("0x")).unwrap();
+                let signed: thruput_xdr::transaction::SignedTransaction =
+                    xdrs::txs::decode(&bytes).unwrap();
+                let account = &accounts[i % accounts.len()];
+                let native =
+                    PubkeyAccount::from_public_key_bytes(account.signer.verifying_key_bytes(), 0);
+                assert_eq!(
+                    signed.tx.invocation.invoked_address,
+                    native.address(),
+                    "account at {i}"
+                );
+                assert_eq!(
+                    signed.tx.uniquifier.nonce,
+                    nonce_start + i as u64,
+                    "nonce at {i}"
+                );
+                assert_eq!(
+                    signed.tx.uniquifier.block_expiry_height,
+                    BlockHeight::from(expiry),
+                    "expiry at {i}"
+                );
+                let hash = TxHash(Base58(transaction_hash(&signed.tx).unwrap()));
+                assert_eq!(hash, prepared.hash, "hash at {i}");
+                assert_eq!(
+                    signed.tx.invocation.entrypoint,
+                    thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+                );
+                let calls: Vec<(ContractAddress, ContractEntrypointID, u64, Vec<u8>)> =
+                    xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
+                assert_eq!(calls.len(), 1);
+                let (target, entrypoint, gas, calldata) = &calls[0];
+                assert_eq!(
+                    *target,
+                    thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN
+                );
+                assert_eq!(*gas, 10_000_000);
+                match kind {
+                    TxKind::Balance => {
+                        assert_eq!(*entrypoint, NATIVE_TOKEN_BALANCE_ENTRYPOINT);
+                        let (owner,): (ContractAddress,) = xdrs::cxs::decode(calldata).unwrap();
+                        assert_eq!(owner, account.wallet_address);
+                    }
+                    TxKind::Transfer => {
+                        assert_eq!(
+                            *entrypoint,
+                            thruput_signing::NATIVE_TOKEN_TRANSFER_ENTRYPOINT
+                        );
+                        let (recipient, amount): (ContractAddress, u128) =
+                            xdrs::cxs::decode(calldata).unwrap();
+                        assert_eq!(
+                            recipient,
+                            accounts[(i % accounts.len() + 1) % accounts.len()].wallet_address
+                        );
+                        assert_eq!(amount, amount_raw);
+                    }
+                }
+            }
         }
     }
 
@@ -466,7 +552,8 @@ mod tests {
         let accounts =
             transaction_inputs_for_method("sendTransaction", Some(&manifest()), 1, None).unwrap();
         let network = manifest().network_hash.to_network_hash();
-        let transactions = generate_tx_batch(1, &accounts, &network, 42, 10_000_000).unwrap();
+        let transactions =
+            generate_tx_batch(1, &accounts, &network, 42, 10_000_000, TxWorkload::BALANCE).unwrap();
         let bytes = hex::decode(transactions[0].hex.trim_start_matches("0x")).unwrap();
         let signed: thruput_xdr::transaction::SignedTransaction =
             xdrs::txs::decode(&bytes).unwrap();

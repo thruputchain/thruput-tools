@@ -210,7 +210,14 @@ async fn prepare_inner(
         let block_expiry_height = cli.block_expiry_height;
         *progress = format!("generating {count} seed transactions");
         let batch = tokio::task::spawn_blocking(move || {
-            generate_tx_batch(count, &accounts, &network_hash, first_nonce, block_expiry_height)
+            generate_tx_batch(
+                count,
+                &accounts,
+                &network_hash,
+                first_nonce,
+                block_expiry_height,
+                crate::workload::TxWorkload::BALANCE,
+            )
         })
         .await
         .map_err(|source| BenchError::WorkerJoin { source })??;

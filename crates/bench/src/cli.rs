@@ -7,6 +7,13 @@ use clap::Parser;
 use crate::BenchError;
 use crate::results::BENCH_RESULT_SCHEMA_VERSION;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum TxKind {
+    Balance,
+    Transfer,
+}
+
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const SUBMIT_CONFIRMATION_ACTION: &str = "submit signed state-changing benchmark transactions";
@@ -104,6 +111,14 @@ pub(super) struct Cli {
     /// Method to benchmark.
     #[arg(long, default_value = "sendTransaction")]
     pub(super) method: String,
+
+    /// Use --tx-kind transfer to write token balances and emit transfer events.
+    #[arg(long, value_enum, default_value = "balance")]
+    pub(super) tx_kind: TxKind,
+
+    /// Native token transfer amount in raw units (must be >= 1).
+    #[arg(long, default_value = "1")]
+    pub(super) transfer_amount_raw: u128,
 
     /// Warmup seconds (results discarded).
     #[arg(long, default_value = "2")]
@@ -235,6 +250,28 @@ pub(super) fn confirmation_required_json() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transaction_options_validate_and_keep_balance_default() {
+        let defaults = Cli::parse_from(["thruput-bench"]);
+        assert_eq!(defaults.tx_kind, TxKind::Balance);
+        assert_eq!(defaults.transfer_amount_raw, 1);
+        for (args, amount_error) in [
+            (
+                vec!["thruput-bench", "--tx-kind", "transfer", "--accounts", "1"],
+                false,
+            ),
+            (vec!["thruput-bench", "--transfer-amount-raw", "0"], true),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let error = crate::validate_configuration(&cli).unwrap_err();
+            if amount_error {
+                assert!(matches!(error, BenchError::InvalidTransferAmount));
+            } else {
+                assert!(matches!(error, BenchError::TransferRequiresTwoAccounts));
+            }
+        }
+    }
 
     #[test]
     fn read_only_method_does_not_require_confirmation() {
