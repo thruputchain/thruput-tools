@@ -16,6 +16,9 @@ The header keeps its size and every other offset.
 - Artifacts built by this CLI need a runtime that admits the new header.
   Artifacts built by earlier CLIs are still readable (`contract spec` and
   similar), but are not what this CLI produces or verifies.
+- Protocol crates move to 0.66.1, the SDK to 0.61.1, and standard interfaces
+  to 0.1.75. Newly generated projects pin SDK 0.61.1, the first that records
+  the version.
 - The lowering metadata and `rv32-lower --json` report `syscall_api_version`.
   The artifact format fingerprint is now `0xddedc325bf5506be`.
 
