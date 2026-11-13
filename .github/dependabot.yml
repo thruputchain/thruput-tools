@@ -4,10 +4,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Keep in sync with /cooldown.toml and /.cargo/cooldown*.toml.
     cooldown:
       default-days: 8
       exclude:
-        - "thruput-*"
+        - "thruput-*" # first-party crates
     open-pull-requests-limit: 3
     groups:
       rust-dependencies:
@@ -18,10 +19,11 @@ updates:
       - /scripts/scaffold-app
     schedule:
       interval: weekly
+    # Keep in sync with /crates/faucet/web/pnpm-workspace.yaml.
     cooldown:
       default-days: 8
       exclude:
-        - "@thruputchain/*"
+        - "@thruputchain/*" # first-party packages
     open-pull-requests-limit: 3
     groups:
       javascript-dependencies:

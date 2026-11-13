@@ -46,6 +46,38 @@ The cooldown controls Dependabot's version selection. Security-update PRs can
 open immediately and still need the usual review and CI checks. See
 [GitHub's cooldown documentation](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown).
 
-For manual updates, follow the same waiting period. Record the reason for an
-urgent security-fix exception in the PR. Publication age for manual updates is
-checked during review; CI continues to run the existing dependency policy checks.
+For manual Rust updates, use
+[cargo-cooldown](https://crates.io/crates/cargo-cooldown) instead of
+`cargo update`. It takes the same arguments and only selects releases old
+enough for the policy:
+
+```sh
+cargo install cargo-cooldown --version 0.3.5 --locked
+cargo cooldown update
+```
+
+CI's `cooldown` job checks `Cargo.lock` against the policy with
+[cargo-cooldown-check](https://github.com/NomicFoundation/cargo-cooldown-check)
+before any job builds dependency code. To run the same check locally:
+
+```sh
+cargo install --locked --git https://github.com/NomicFoundation/cargo-cooldown-check \
+    --rev d519cf72eed8dde4301f83298ee08366cf3b1cea
+cargo metadata --locked >/dev/null # fail on stale lockfile
+cargo cooldown-check
+```
+
+The policy lives in [cooldown.toml](cooldown.toml) for `cargo cooldown`, and in
+[.cargo/cooldown.toml](.cargo/cooldown.toml) and
+[.cargo/cooldown-allowlist.toml](.cargo/cooldown-allowlist.toml) for
+`cargo cooldown-check`. Keep them and [.github/dependabot.yml](.github/dependabot.yml)
+in sync. For an urgent security fix, add the release as an `[[allow.exact]]`
+entry in both `cooldown.toml` and `.cargo/cooldown-allowlist.toml`, with the
+reason and a removal date, and give the reason in the PR.
+
+The faucet web app sets the same policy for pnpm in
+[crates/faucet/web/pnpm-workspace.yaml](crates/faucet/web/pnpm-workspace.yaml):
+`pnpm install` and `pnpm update` only select releases old enough, and CI's
+`pnpm install --frozen-lockfile` rejects a lockfile entry that is too new.
+Manual updates in [scripts/scaffold-app](scripts/scaffold-app), which uses
+npm, should follow the same waiting period; CI does not check them.
