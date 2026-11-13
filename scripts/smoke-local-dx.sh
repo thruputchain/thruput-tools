@@ -1293,7 +1293,7 @@ log "restored chain advanced counter value: $PERSISTED_VALUE_AFTER->$POST_RESTOR
 
 log "Checking isolated integration tests with a hosted global default"
 "$CLI" --json config new futurenet --network futurenet --global --use \
-    --rpc-url https://rpc.invalid --faucet-url https://faucet.invalid \
+    --rpc-url https://rpc.invalid \
     --default-key smoke-sender > "$WORK/futurenet-config.json"
 INTEGRATION_ARGS=(--json test --integration)
 if [[ -n "$HOGD_PROTOCOL" ]]; then

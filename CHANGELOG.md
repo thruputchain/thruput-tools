@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Profiles pin their network hash; the faucet descriptor is gone
+
+The CLI no longer requests `GET /v1/network` from a faucet host. Hosted
+profiles used to discover their signing identity from that descriptor, so
+`deploy`, `call`, `transfer`, and `airdrop` failed once
+`https://faucet.thruput.network` stopped serving it.
+
+- Every profile now needs a `network_hash`, unless it has a local runtime
+  manifest. The RPC endpoint is checked against the pin and is never the source
+  of the identity. `thruput init` adds the built-in Futurenet pin to an existing
+  `futurenet` or `devnet` profile that still uses the built-in RPC URL; run it
+  once after upgrading. Other hosted profiles need
+  `thruput config set network-hash <hash> --profile <name>`. Without a pin,
+  signing commands fail with `missing_network_hash`.
+- Hosted airdrops go only to the RPC gateway's `faucet_requestAirdrop`. The CLI
+  no longer shows the faucet's amount, cooldown, and quota before the request,
+  and no longer compares the amount sent with an advertised one.
+- `faucet_url` is deprecated and unused. Existing configs still load, and
+  `--faucet-url` and `config set faucet-url` are still accepted. Hosted
+  profiles no longer require it, and `thruput init` no longer writes it. A
+  profile with no `network` and no runtime manifest now sends `airdrop` to its
+  RPC endpoint instead of reporting that it is RPC-only.
+- `airdrop --json` is schema 7: remote reports drop `faucetUrl` and `policy`
+  and add `amountTokens`; the remote dry run no longer plans `GET /v1/network`.
+- The error codes `faucet_service_error`, `network_descriptor_invalid`, and
+  `network_descriptor_mismatch` are removed. An RPC endpoint that serves a
+  different network than the pin reports the existing network-mismatch error.
+- An airdrop attempt left in flight by an older CLI is not resumed: retained
+  attempts are now keyed by profile, recipient, and network hash.
+
 ## 0.45.0
 
 - Align protocol crates at 0.66.0, the SDK at 0.61.0, and standard interfaces

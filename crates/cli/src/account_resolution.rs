@@ -38,13 +38,11 @@ pub(crate) struct ResolvedLocalBootstrapAccount {
 #[derive(Debug)]
 pub(crate) struct ResolvedTransactionSender {
     pub(crate) native_account: Option<thruput_signing::PubkeyAccount>,
-    pub(crate) key_name: String,
     pub(crate) wallet_name: Option<String>,
     pub(crate) signer: SchemeSigner,
     pub(crate) wallet_address: thruput_xdr::types::ContractAddress,
-    /// Optional network pin, validated against hosted RPC before signing.
-    /// Hosted profiles may discover the identity from matching descriptor and RPC data.
-    pub(crate) network_hash: Option<thruput_xdr::types::NetworkHash>,
+    /// The profile's network pin; every signature is bound to it.
+    pub(crate) network_hash: thruput_xdr::types::NetworkHash,
 }
 
 impl ResolvedTransactionSender {
@@ -64,21 +62,13 @@ impl ResolvedTransactionSender {
         &self,
         profile: &ResolvedProfile,
         runtime: &tokio::runtime::Runtime,
-    ) -> Result<crate::network_descriptor::WalletSigningContext, CliError> {
-        if self.native_account.is_some() {
-            crate::network_descriptor::resolve_native_signing_context(
-                profile,
-                self.network_hash.as_ref(),
-                runtime,
-            )
-        } else {
-            crate::network_descriptor::resolve_wallet_signing_context(
-                profile,
-                &self.key_name,
-                self.network_hash.clone(),
-                runtime,
-            )
-        }
+    ) -> Result<crate::signing_context::WalletSigningContext, CliError> {
+        crate::signing_context::resolve_signing_context(
+            profile,
+            &self.network_hash,
+            self.native_account.is_some(),
+            runtime,
+        )
     }
 }
 
@@ -106,7 +96,6 @@ pub(crate) fn bind_sender_to_network(
     let network_hash = resolve_network_hash(profile, &sender.key_name)?;
     Ok(ResolvedTransactionSender {
         native_account: sender.native_account,
-        key_name: sender.key_name,
         wallet_name: sender.wallet_name,
         signer: sender.signer,
         wallet_address: sender.wallet_address,
@@ -160,24 +149,21 @@ pub(crate) fn resolve_sender_account(
 ///
 /// A runtime manifest is authoritative when configured, since it is written by
 /// the node that owns the chain. Otherwise the profile's own `network_hash` is
-/// the expected identity. Hosted profiles can omit this pin: signing discovers
-/// the identity from the network descriptor and checks it against the live RPC.
+/// the expected identity. Every other profile must pin it: the RPC endpoint is
+/// checked against the pin, never trusted to supply the identity.
 pub(crate) fn resolve_network_hash(
     profile: &ResolvedProfile,
     key_name: &str,
-) -> Result<Option<thruput_xdr::types::NetworkHash>, CliError> {
+) -> Result<thruput_xdr::types::NetworkHash, CliError> {
     if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
-        return Ok(Some(manifest.network_hash.to_network_hash()));
+        return Ok(manifest.network_hash.to_network_hash());
     }
-    let Some(configured) = profile.network_hash.as_deref() else {
-        return if profile.faucet_url.is_some() {
-            Ok(None)
-        } else {
-            Err(CliError::MissingNetworkHash)
-        };
-    };
+    let configured = profile
+        .network_hash
+        .as_deref()
+        .ok_or(CliError::MissingNetworkHash)?;
     NetworkHashText::try_from(configured)
-        .map(|hash| Some(hash.to_network_hash()))
+        .map(|hash| hash.to_network_hash())
         .map_err(|_| CliError::InvalidNetworkHash {
             value: configured.to_owned(),
         })
@@ -942,8 +928,15 @@ mod tests {
     }
 
     #[test]
-    fn rpc_only_signing_still_requires_a_network_hash() {
-        let profile = test_profile("alice", None, BTreeMap::new());
+    fn signing_requires_a_network_hash_pin() {
+        let mut profile = test_profile("alice", None, BTreeMap::new());
+        assert!(matches!(
+            resolve_network_hash(&profile, "alice"),
+            Err(CliError::MissingNetworkHash)
+        ));
+        // A hosted profile is no exception: nothing discovers the identity for it.
+        profile.network = Some(crate::config::Network::Futurenet);
+        profile.faucet_url = Some("http://127.0.0.1:2".into());
         assert!(matches!(
             resolve_network_hash(&profile, "alice"),
             Err(CliError::MissingNetworkHash)
@@ -951,9 +944,8 @@ mod tests {
     }
 
     #[test]
-    fn hosted_signing_does_not_ignore_an_invalid_network_pin() {
+    fn signing_rejects_an_invalid_network_pin() {
         let mut profile = test_profile("alice", None, BTreeMap::new());
-        profile.faucet_url = Some("http://127.0.0.1:2".into());
         profile.network_hash = Some("invalid".into());
         assert!(matches!(
             resolve_network_hash(&profile, "alice"),
@@ -970,7 +962,7 @@ mod tests {
 
         assert_eq!(
             resolved,
-            Some(NetworkHashText::from([0xab; 32]).to_network_hash())
+            NetworkHashText::from([0xab; 32]).to_network_hash()
         );
     }
 

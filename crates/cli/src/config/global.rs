@@ -12,7 +12,10 @@ use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
 const FUTURENET_RPC_URL: &str = "https://rpc.thruput.network";
-const FUTURENET_FAUCET_URL: &str = "https://faucet.thruput.network";
+/// Network hash `getNetworkInfo` reports at [`FUTURENET_RPC_URL`]. Signing is
+/// bound to this pin; a Futurenet reset that changes it needs a new release
+/// or `thruput config set network-hash`.
+const FUTURENET_NETWORK_HASH: &str = "DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT";
 const NATIVE_TOKEN_CONTRACT_ADDRESS: &str = "11111111111111111111111111111112";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -220,8 +223,17 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
             if hosted_config.is_none_or(|profile| profile.rpc_url.is_none()) {
                 insert_preserving_decor(hosted_table, "rpc_url", value(FUTURENET_RPC_URL));
             }
-            if hosted_config.is_none_or(|profile| profile.faucet_url.is_none()) {
-                insert_preserving_decor(hosted_table, "faucet_url", value(FUTURENET_FAUCET_URL));
+            // Pin the built-in network only while the profile still points at
+            // it; a profile repointed at another endpoint pins its own hash.
+            let built_in_rpc = hosted_config
+                .and_then(|profile| profile.rpc_url.as_deref())
+                .is_none_or(|url| url.trim_end_matches('/') == FUTURENET_RPC_URL);
+            if built_in_rpc && hosted_config.is_none_or(|profile| profile.network_hash.is_none()) {
+                insert_preserving_decor(
+                    hosted_table,
+                    "network_hash",
+                    value(FUTURENET_NETWORK_HASH),
+                );
             }
             if hosted_config.is_none_or(|profile| !profile.contracts.contains_key("NATIVE_TOKEN")) {
                 insert_preserving_decor(

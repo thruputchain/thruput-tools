@@ -541,11 +541,11 @@ transfers the faucet cannot cover, and a transfer projected to leave less than
 10 native tokens adds a warning to the normal live-operation confirmation.
 Successful requests report best-effort committed faucet and recipient balances.
 
-Futurenet requests go through the configured faucet HTTP service. The service
-chooses a fixed amount and enforces its advertised recipient cooldown,
-client/IP quota window, and pending-request limit; `--amount` is unsupported.
-The CLI displays this static policy before the request but never exposes the
-Futurenet faucet balance or live quota usage.
+Futurenet requests go to the profile's RPC gateway as `faucet_requestAirdrop`;
+the CLI makes no request to a separate faucet host. The faucet chooses a fixed
+amount and enforces its recipient cooldown, client/IP quota, and
+pending-request limit; `--amount` is unsupported. The CLI reports the amount the
+faucet sent and surfaces a limit only when the faucet refuses a request.
 
 ### `thruput transfer` and `thruput tx`
 
@@ -1077,13 +1077,21 @@ network commands report that no active profile is selected. Offline builds and t
 can use the scaffold's local overlay when no profile is selected. The
 name `default` has no special behavior.
 
-Futurenet uses `https://rpc.thruput.network` and
-`https://faucet.thruput.network`. The CLI validates the signing network identity
-against RPC and faucet metadata rather than pinning a hash that can change on
-reset. `config new futurenet --network futurenet --project` creates a project
-overlay from the supplied fields. Omitted endpoints inherit the same-named
-global profile. A global profile or a project profile without a matching global
-name needs explicit endpoints.
+Futurenet uses `https://rpc.thruput.network`, which serves both RPC and the
+hosted faucet. Every profile pins the `network_hash` its signatures are bound
+to (a local profile takes it from the runtime manifest instead). The CLI checks
+the RPC endpoint against that pin and never takes the identity from the
+endpoint. `thruput init` writes the built-in Futurenet pin; a profile for
+another network needs `--network-hash`, or `thruput config set network-hash`.
+If a Futurenet reset changes the hash, signing commands report the mismatch
+until the pin is updated. `config new futurenet --network futurenet --project`
+creates a project overlay from the supplied fields. Omitted fields inherit the
+same-named global profile. A global profile or a project profile without a
+matching global name needs an explicit endpoint and network hash.
+
+`faucet_url` is deprecated. Existing configs that set it still load, and
+`--faucet-url` and `config set faucet-url` are still accepted, but no command
+reads the value.
 
 `network = "devnet"` remains a compatibility alias for the hosted network.
 Existing Devnet profiles, selected defaults, endpoints, wallets, and aliases
@@ -1113,18 +1121,18 @@ Create a complete profile atomically, then update individual typed fields:
 thruput config new staging \
   --network futurenet \
   --rpc-url https://rpc.example \
-  --faucet-url https://faucet.example \
+  --network-hash <BASE58> \
   --default-key alice \
   --use
 
 thruput config set rpc-url https://rpc2.example \
   --profile staging --global
-thruput config unset faucet-url --profile staging --global
+thruput config unset default-key --profile staging --global
 thruput config use staging --global
 ```
 
-Editable fields are `network`, `rpc-url`, `network-hash`, `faucet-url`, and
-`default-key`.
+Editable fields are `network`, `rpc-url`, `network-hash`, `default-key`, and the
+deprecated `faucet-url`.
 `config new` creates a profile; `config set` updates a profile that already
 exists in the selected layer. `config unset` removes only the selected layer's
 field, so removing a project override may reveal an inherited global value.

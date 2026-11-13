@@ -21,8 +21,8 @@ use crate::{
     account_resolution::ResolvedTransactionSender,
     codec::{decode_abort, decode_return, parse_contract_address},
     native_rpc::{self, failure_observations},
-    network_descriptor::WalletSigningContext,
     result::{CommandError, CommandResult},
+    signing_context::WalletSigningContext,
 };
 
 const REQUIRED_METHODS: &[&str] = &[
@@ -37,17 +37,14 @@ const REQUIRED_METHODS: &[&str] = &[
 
 pub(super) fn prepare_context(
     sender: &ResolvedTransactionSender,
-    profile: &crate::config::ResolvedProfile,
     url: &str,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<(WalletSigningContext, i64), CliError> {
-    let context = match (&sender.native_account, &sender.network_hash) {
-        (Some(_), Some(network_hash)) => WalletSigningContext {
-            network_hash: network_hash.clone(),
-            entrypoints: crate::network_descriptor::native_entrypoints(),
-        },
-        _ => sender.signing_context(profile, runtime)?,
-    };
+    // `verify_endpoint` below checks the RPC against the pin.
+    let context = crate::signing_context::pinned_signing_context(
+        &sender.network_hash,
+        sender.native_account.is_some(),
+    );
     let expected = &context.network_hash;
     let client = NativeClient::new(crate::http_client::rpc_client(url)?);
     let expiry = runtime.block_on(async {

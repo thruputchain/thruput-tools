@@ -29,10 +29,6 @@ const HASH_32_BYTES_HINT: &str =
 const PAGE_LIMIT_HINT: &str =
     "pass a positive whole-number page size; the selected endpoint enforces its maximum";
 
-/// Next step when a hosted network's descriptor disagrees with the profile.
-const NETWORK_DESCRIPTOR_HINT: &str = "check that the selected profile's RPC and faucet URLs \
-                                       refer to the same hosted network, then retry";
-
 /// Next step for a toolchain bundle that could not be installed or fetched.
 const TOOLCHAIN_RETRY_HINT: &str =
     "check the artifact source and cache permissions, then retry `thruput toolchain install`";
@@ -435,36 +431,16 @@ pub enum CliError {
     #[hint("rerun from an interactive terminal, or pass `--yes` to proceed without a prompt")]
     #[details(expr = Some(json!({ "action": action, "requiredFlag": "--yes" })))]
     ConfirmationRequired { action: &'static str },
-    #[error(
-        "faucet service request `{url}` failed with HTTP {http_status}: {message} ({service_code}){}",
-        .retry_after_seconds.map_or_else(String::new, |seconds| format!("; retry after {seconds}s"))
-    )]
-    #[code("faucet_service_error")]
-    #[hint(expr = Some(faucet_service_hint(*retry_after_seconds)))]
-    #[details(
-        expr = Some(json!({
-            "url": url,
-            "httpStatus": http_status,
-            "code": service_code,
-            "retryAfterSeconds": retry_after_seconds.map(|value| value.to_string()),
-        }))
-    )]
-    FaucetService {
-        url: String,
-        http_status: u16,
-        service_code: String,
-        message: String,
-        retry_after_seconds: Option<u64>,
-    },
     #[error("no signing key configured")]
     #[hint("set `default_key` in project or global config, or run `thruput keys generate`")]
     MissingSigningKey,
     #[error("cannot determine the network hash for this profile")]
     #[hint(
-        "signing binds each transaction to a network: run `thruput config set \
-         network-hash <hash> --profile <name>`, or point the profile at a runtime \
-         manifest from `thruput node` via THRUPUT_RUNTIME_MANIFEST or \
-         profile.<name>.runtime_manifest"
+        "signing binds each transaction to a network, so every profile pins its \
+         hash: run `thruput init` to pin the built-in Futurenet profile, run \
+         `thruput config set network-hash <hash> --profile <name>` for another \
+         network, or point the profile at a runtime manifest from `thruput node` \
+         via THRUPUT_RUNTIME_MANIFEST or profile.<name>.runtime_manifest"
     )]
     MissingNetworkHash,
     #[error("profile network_hash {value:?} is not base58 encoding of exactly 32 bytes")]
@@ -639,47 +615,6 @@ pub enum CliError {
         key_name: String,
         /// Specific metadata lookup or validation failure.
         message: String,
-    },
-    #[error("hosted network descriptor field `{field}` is invalid: {message}")]
-    #[hint(text = NETWORK_DESCRIPTOR_HINT)]
-    #[details]
-    NetworkDescriptorInvalid {
-        /// Public descriptor field containing invalid data.
-        field: &'static str,
-        /// Specific validation failure.
-        message: String,
-    },
-    #[error(
-        "hosted network descriptor field `{field}` does not match the selected profile: expected `{expected}`, got `{actual}`"
-    )]
-    #[hint(text = NETWORK_DESCRIPTOR_HINT)]
-    #[details]
-    NetworkDescriptorMismatch {
-        /// Public descriptor field that did not match local expectations.
-        field: &'static str,
-        /// Value expected from the profile or runtime manifest.
-        expected: String,
-        /// Value advertised by the public descriptor.
-        actual: String,
-    },
-    // A schema mismatch means the CLI and the hosted faucet are on different
-    // releases, not that the profile points at the wrong network. It keeps the
-    // descriptor-mismatch code and details so `--json` consumers see no change.
-    #[error(
-        "hosted network descriptor schema `{actual}` does not match this CLI's schema `{expected}`"
-    )]
-    #[code("network_descriptor_mismatch")]
-    #[hint(
-        "this CLI and the network's faucet are on different releases; install the CLI release that matches the network, or retry after the network upgrades"
-    )]
-    #[details]
-    NetworkDescriptorSchemaMismatch {
-        /// Always `schemaVersion`.
-        field: &'static str,
-        /// Descriptor schema this CLI reads.
-        expected: String,
-        /// Descriptor schema the faucet served.
-        actual: String,
     },
     #[error(
         "multiple wallets are saved for key `{key_name}` in profile `{profile}`: {wallet_names:?}"
@@ -891,16 +826,6 @@ fn protocol_intro_hint(expected_protocol: Option<&str>) -> Cow<'static, str> {
              against a matching thruput-xdr",
         ),
     }
-}
-
-/// Hint for a faucet refusal, pointing at the advertised retry interval when
-/// the service published one.
-fn faucet_service_hint(retry_after_seconds: Option<u64>) -> Cow<'static, str> {
-    Cow::Borrowed(if retry_after_seconds.is_some() {
-        "wait for the advertised retry interval, then retry the same command"
-    } else {
-        "check the faucet response and selected profile, then retry"
-    })
 }
 
 /// Hint for a catalog lookup, separating an unsupported host runtime from a

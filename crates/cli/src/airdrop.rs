@@ -15,7 +15,7 @@ use thruput_xdr::types::NetworkHash;
 
 use crate::account_resolution::{
     LocalBootstrapRole, resolve_address_target, resolve_address_target_or_default_wallet,
-    resolve_local_bootstrap_account,
+    resolve_local_bootstrap_account, resolve_network_hash,
 };
 use crate::balance::{
     LocalFundingProjection, fetch_balance_blocking, insufficient_local_faucet_error,
@@ -24,7 +24,6 @@ use crate::balance::{
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::native_token;
-use crate::network_descriptor::{RemoteAirdropDescriptor, fetch_remote_airdrop_descriptor};
 use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
 use crate::remote_attempt::{
     attempt_path, lock_attempt, read_attempt, remove_attempt, write_attempt,
@@ -35,7 +34,7 @@ use crate::tx_utils::{ensure_tx_success, format_tx_hash};
 use crate::{CliError, Print};
 
 /// Schema version of the `airdrop --json` data payload.
-pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 6;
+pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 7;
 const DEFAULT_AIRDROP_TOKENS: &str = "10";
 
 #[derive(Debug)]
@@ -60,21 +59,18 @@ pub(crate) struct PreparedLocalAirdrop {
 
 #[derive(Debug)]
 pub(crate) struct PreparedRemoteAirdrop {
-    pub(crate) faucet_url: String,
     pub(crate) rpc_url: String,
     pub(crate) recipient_input: String,
     pub(crate) recipient_wallet: String,
     client_nonce: String,
-    network_hash: thruput_json_rpc_types::NetworkHash,
-    airdrop_policy: thruput_json_rpc_types::network_descriptor::AirdropDescriptor,
-    amount_tokens: String,
+    /// The profile's network pin; the gateway is checked against it before funding.
+    network_hash: NetworkHash,
     attempt_path: PathBuf,
     _attempt_lock: File,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PreparedRemoteAirdropDryRun {
-    faucet_url: String,
     rpc_url: String,
     recipient_input: String,
     recipient_wallet: String,
@@ -105,11 +101,10 @@ struct LocalAirdropPlan {
 struct RemoteAirdropPlan {
     profile: ResolvedProfile,
     profile_name: String,
-    faucet_url: String,
     rpc_url: String,
     recipient_input: String,
     recipient_wallet: String,
-    descriptor: RemoteAirdropDescriptor,
+    network_hash: NetworkHash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -117,8 +112,7 @@ struct RemoteAirdropPlan {
 struct RemoteAirdropAttempt {
     profile: String,
     recipient_wallet: String,
-    network_id: String,
-    genesis_hash: String,
+    network_hash: String,
     client_nonce: String,
 }
 
@@ -225,16 +219,9 @@ fn prepare_remote_airdrop_dry_run(
         ));
     }
     let rpc_url = profile.rpc_endpoint()?.to_owned();
-    let faucet_url = profile
-        .faucet_url
-        .as_deref()
-        .ok_or_else(|| CliError::Other("remote airdrop requires faucet_url".into()))?
-        .trim_end_matches('/')
-        .to_owned();
     let recipient_wallet = recipient.wallet.clone();
 
     Ok(Some(PreparedRemoteAirdropDryRun {
-        faucet_url,
         rpc_url,
         recipient_input: recipient.input.clone(),
         recipient_wallet,
@@ -624,16 +611,8 @@ fn print_airdrop_plan(plan: &AirdropPlan, print: &Print) {
         }
         AirdropPlan::Remote(plan) => {
             print.detail("recipient", &plan.recipient_wallet);
-            print.detail(
-                "amount",
-                format_args!("{} native tokens", plan.descriptor.amount_tokens),
-            );
+            print.detail("amount", "set by the faucet");
             print.detail("profile", &plan.profile_name);
-            print_remote_airdrop_policy(
-                &plan.descriptor.policy,
-                &plan.descriptor.amount_tokens,
-                print,
-            );
         }
     }
 }
@@ -787,17 +766,9 @@ fn run_remote_airdrop(
             "mode": "remote",
             "recipient": prepared.recipient_input,
             "recipientWallet": prepared.recipient_wallet,
-            "faucetUrl": prepared.faucet_url,
             "rpcUrl": prepared.rpc_url,
             "rawAmount": raw_amount.to_string(),
-            "policy": {
-                "rawAmount": prepared.airdrop_policy.raw_amount,
-                "amountTokens": prepared.amount_tokens,
-                "recipientCooldownSeconds": prepared.airdrop_policy.recipient_cooldown_seconds.to_string(),
-                "clientQuotaMax": prepared.airdrop_policy.client_quota_max,
-                "clientQuotaWindowSeconds": prepared.airdrop_policy.client_quota_window_seconds.to_string(),
-                "maxPendingPerRecipient": prepared.airdrop_policy.max_pending_per_recipient,
-            },
+            "amountTokens": native_token::format_amount(raw_amount),
             "txHash": tx_hash,
             "height": height.to_string(),
             "execution": execution,
@@ -819,11 +790,10 @@ async fn request_remote_airdrop(
 > {
     let mut cancelled = crate::native_rpc::install_interrupt_listener().await;
     let client = NativeClient::new(crate::http_client::rpc_client(&prepared.rpc_url)?);
-    let signing_network = NetworkHash::from(prepared.network_hash.0);
     tokio::select! {
         biased;
         () = &mut cancelled => return Err(funding_cancelled(&prepared.attempt_path, "notSent")),
-        result = funding_preflight(&client, &signing_network, "faucet_requestAirdrop") => result?,
+        result = funding_preflight(&client, &prepared.network_hash, "faucet_requestAirdrop") => result?,
     }
     let response = tokio::select! {
         biased;
@@ -856,14 +826,12 @@ async fn request_remote_airdrop(
         }
     };
     if *recipient != request.recipient {
-        return Err(response_error(CliError::NetworkDescriptorMismatch {
-            field: "airdrop.recipient",
-            expected: prepared.recipient_wallet.clone(),
-            actual: format_contract_address(&recipient.0),
-        }));
+        return Err(response_error(CliError::Other(format!(
+            "the faucet funded `{}`, not the requested recipient `{}`",
+            format_contract_address(&recipient.0),
+            prepared.recipient_wallet
+        ))));
     }
-    validate_remote_airdrop_amount(&prepared.airdrop_policy.raw_amount, &raw_amount.to_string())
-        .map_err(response_error)?;
     match response {
         AirdropAttempt::Pending {
             transaction_hash: Some(hash),
@@ -872,7 +840,7 @@ async fn request_remote_airdrop(
             // The funding call is never repeated; only read the supplied transaction.
             let receipt = poll_receipt(
                 &client,
-                prepared.network_hash,
+                prepared.network_hash.clone().into_inner().into(),
                 hash,
                 None,
                 ReceiptPollConfig::default(),
@@ -917,42 +885,6 @@ async fn request_remote_airdrop(
     }
 }
 
-fn validate_remote_airdrop_amount(expected: &str, actual: &str) -> Result<(), CliError> {
-    let expected_amount = expected.parse::<u128>();
-    let actual_amount = actual.parse::<u128>();
-    if matches!((expected_amount, actual_amount), (Ok(expected), Ok(actual)) if expected == actual)
-    {
-        return Ok(());
-    }
-    Err(CliError::NetworkDescriptorMismatch {
-        field: "airdrop.rawAmount",
-        expected: expected.to_owned(),
-        actual: actual.to_owned(),
-    })
-}
-
-fn print_remote_airdrop_policy(
-    policy: &thruput_json_rpc_types::network_descriptor::AirdropDescriptor,
-    amount_tokens: &str,
-    print: &Print,
-) {
-    print.status(format_args!(
-        "Fixed airdrop amount: {amount_tokens} native tokens"
-    ));
-    print.status(format_args!(
-        "Recipient cooldown: {} seconds",
-        policy.recipient_cooldown_seconds
-    ));
-    print.status(format_args!(
-        "Client/IP quota: {} per {} seconds",
-        policy.client_quota_max, policy.client_quota_window_seconds
-    ));
-    print.status(format_args!(
-        "Pending requests per recipient: {}",
-        policy.max_pending_per_recipient
-    ));
-}
-
 fn prepare_airdrop_plan(
     profile: ResolvedProfile,
     recipient: &AirdropRecipient,
@@ -978,21 +910,15 @@ fn prepare_remote_airdrop_plan(
     recipient: &AirdropRecipient,
 ) -> Result<AirdropPlan, CliError> {
     let rpc_url = profile.rpc_endpoint()?.to_owned();
-    let faucet_url = profile
-        .faucet_url
-        .as_deref()
-        .ok_or_else(|| CliError::Other("remote airdrop requires faucet_url".into()))?;
-    let faucet_url = faucet_url.trim_end_matches('/').to_owned();
     let recipient_wallet = recipient.wallet.clone();
-    let descriptor = fetch_remote_airdrop_descriptor(&profile)?;
+    let network_hash = resolve_network_hash(&profile, "faucet")?;
     Ok(AirdropPlan::Remote(Box::new(RemoteAirdropPlan {
         profile_name: profile.name.clone(),
         profile,
         recipient_input: recipient.input.clone(),
         recipient_wallet,
-        faucet_url,
         rpc_url,
-        descriptor,
+        network_hash,
     })))
 }
 
@@ -1010,36 +936,31 @@ fn finalize_airdrop_plan(plan: AirdropPlan) -> Result<PreparedAirdrop, CliError>
             funding_projection: plan.funding_projection,
             network_hash: plan.network_hash,
         })),
-        AirdropPlan::Remote(plan) => prepare_remote_airdrop_with_descriptor(
+        AirdropPlan::Remote(plan) => prepare_remote_airdrop(
             &plan.profile,
             &plan.recipient_input,
             plan.recipient_wallet,
-            plan.faucet_url,
             plan.rpc_url,
-            &plan.descriptor,
+            plan.network_hash,
         ),
     }
 }
 
-fn prepare_remote_airdrop_with_descriptor(
+fn prepare_remote_airdrop(
     profile: &ResolvedProfile,
     recipient: &str,
     recipient_wallet: String,
-    faucet_url: String,
     rpc_url: String,
-    descriptor: &RemoteAirdropDescriptor,
+    network_hash: NetworkHash,
 ) -> Result<PreparedAirdrop, CliError> {
     let (loaded_attempt, attempt_lock) =
-        load_or_create_remote_airdrop_attempt(profile, &recipient_wallet, descriptor)?;
+        load_or_create_remote_airdrop_attempt(profile, &recipient_wallet, &network_hash)?;
     Ok(PreparedAirdrop::Remote(PreparedRemoteAirdrop {
-        faucet_url,
         rpc_url,
         recipient_input: recipient.to_owned(),
         recipient_wallet,
         client_nonce: loaded_attempt.attempt.client_nonce,
-        network_hash: descriptor.network_hash,
-        airdrop_policy: descriptor.policy.clone(),
-        amount_tokens: descriptor.amount_tokens.clone(),
+        network_hash,
         attempt_path: loaded_attempt.path,
         _attempt_lock: attempt_lock,
     }))
@@ -1048,18 +969,15 @@ fn prepare_remote_airdrop_with_descriptor(
 fn load_or_create_remote_airdrop_attempt(
     profile: &ResolvedProfile,
     recipient_wallet: &str,
-    descriptor: &RemoteAirdropDescriptor,
+    network_hash: &NetworkHash,
 ) -> Result<(LoadedRemoteAirdropAttempt, File), CliError> {
-    let network_id = descriptor.network_id.clone();
-    let genesis_hash = descriptor.genesis_hash.clone();
-    let path =
-        remote_airdrop_attempt_path(&profile.name, recipient_wallet, &network_id, &genesis_hash)?;
+    let network_hash = thruput_encoding::encode(network_hash.as_ref());
+    let path = remote_airdrop_attempt_path(&profile.name, recipient_wallet, &network_hash)?;
     let attempt_lock = lock_remote_airdrop_attempt(&path)?;
     if let Some(attempt) = read_attempt::<RemoteAirdropAttempt>(&path)? {
         if attempt.profile != profile.name
             || attempt.recipient_wallet != recipient_wallet
-            || attempt.network_id != network_id
-            || attempt.genesis_hash != genesis_hash
+            || attempt.network_hash != network_hash
         {
             return Err(CliError::Other(
                 "saved airdrop attempt does not match the recipient and network".into(),
@@ -1073,8 +991,7 @@ fn load_or_create_remote_airdrop_attempt(
     let attempt = RemoteAirdropAttempt {
         profile: profile.name.clone(),
         recipient_wallet: recipient_wallet.to_owned(),
-        network_id,
-        genesis_hash,
+        network_hash,
         client_nonce: format!("0x{}", hex::encode(client_nonce)),
     };
     write_attempt(&path, &attempt)?;
@@ -1092,12 +1009,11 @@ fn remove_remote_airdrop_attempt(prepared: &PreparedRemoteAirdrop) -> Result<(),
 fn remote_airdrop_attempt_path(
     profile: &str,
     recipient_wallet: &str,
-    network_id: &str,
-    genesis_hash: &str,
+    network_hash: &str,
 ) -> Result<PathBuf, CliError> {
     attempt_path(
         "airdrop-attempts",
-        &[profile, recipient_wallet, network_id, genesis_hash],
+        &[profile, recipient_wallet, network_hash],
     )
 }
 
@@ -1164,7 +1080,7 @@ fn print_dry_run(
                     "Prepared dry-run remote airdrop to {}.",
                     prepared.recipient_wallet
                 ));
-                print.status(format_args!("  faucet: {}", prepared.faucet_url));
+                print.status(format_args!("  gateway: {}", prepared.rpc_url));
                 print.status("  submitted: no (--dry-run)");
             });
 
@@ -1177,7 +1093,6 @@ fn print_dry_run(
                     "mode": "remote",
                     "recipient": prepared.recipient_input,
                     "recipientWallet": prepared.recipient_wallet,
-                    "faucetUrl": prepared.faucet_url,
                     "rpcUrl": prepared.rpc_url,
                     "plannedRequests": [
                         "faucet_requestAirdrop"
@@ -1200,7 +1115,7 @@ fn print_remote_dry_run(
             "Prepared dry-run remote airdrop to {}.",
             prepared.recipient_wallet
         ));
-        print.status(format_args!("  faucet: {}", prepared.faucet_url));
+        print.status(format_args!("  gateway: {}", prepared.rpc_url));
         print.status("  submitted: no (--dry-run)");
     });
 
@@ -1213,13 +1128,11 @@ fn print_remote_dry_run(
             "mode": "remote",
             "recipient": prepared.recipient_input,
             "recipientWallet": prepared.recipient_wallet,
-            "faucetUrl": prepared.faucet_url,
             "rpcUrl": prepared.rpc_url,
             "plannedRequests": [
-                "GET /v1/network",
                 "faucet_requestAirdrop"
             ],
-            "idempotencyKey": "profile + recipient + networkId + genesisHash + clientNonce",
+            "idempotencyKey": "profile + recipient + networkHash + clientNonce",
         }),
     ))
 }
@@ -1238,9 +1151,8 @@ mod tests {
 
     use super::{
         PreparedAirdrop, PreparedLocalAirdrop, RemoteAirdropAttempt, ensure_local_airdrop_success,
-        lock_remote_airdrop_attempt, observe_post_airdrop_balance,
-        prepare_remote_airdrop_with_descriptor, remote_airdrop_attempt_path,
-        resolve_airdrop_recipient, validate_remote_airdrop_amount,
+        lock_remote_airdrop_attempt, observe_post_airdrop_balance, prepare_remote_airdrop,
+        remote_airdrop_attempt_path, resolve_airdrop_recipient,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::native_token;
@@ -1363,8 +1275,8 @@ mod tests {
 
         assert_eq!(lower, mixed);
         assert_eq!(
-            remote_airdrop_attempt_path(&profile.name, &lower, "devnet", "0xgenesis").unwrap(),
-            remote_airdrop_attempt_path(&profile.name, &mixed, "devnet", "0xgenesis").unwrap()
+            remote_airdrop_attempt_path(&profile.name, &lower, "pin").unwrap(),
+            remote_airdrop_attempt_path(&profile.name, &mixed, "pin").unwrap()
         );
     }
 
@@ -1374,15 +1286,14 @@ mod tests {
         let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
         let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
         let profile = test_profile(BTreeMap::new());
-        let descriptor = test_network_descriptor();
+        let network_hash = test_network_hash();
         let current_recipient = thruput_encoding::encode(&[0xab; 32]);
         let recipient_wallet = resolve_airdrop_recipient(&profile, &current_recipient)
             .expect("bug: base58 recipient should resolve");
         let path = remote_airdrop_attempt_path(
             &profile.name,
             &recipient_wallet,
-            &descriptor.network_id,
-            &descriptor.genesis_hash,
+            &thruput_encoding::encode(network_hash.as_ref()),
         )
         .unwrap();
         let client_nonce = format!("0x{}", "11".repeat(16));
@@ -1391,20 +1302,18 @@ mod tests {
             &RemoteAirdropAttempt {
                 profile: profile.name.clone(),
                 recipient_wallet: recipient_wallet.clone(),
-                network_id: descriptor.network_id.clone(),
-                genesis_hash: descriptor.genesis_hash.clone(),
+                network_hash: thruput_encoding::encode(network_hash.as_ref()),
                 client_nonce: client_nonce.clone(),
             },
         )
         .unwrap();
 
-        let prepared = prepare_remote_airdrop_with_descriptor(
+        let prepared = prepare_remote_airdrop(
             &profile,
             &current_recipient,
             recipient_wallet.clone(),
-            "http://127.0.0.1:8081".into(),
             "http://127.0.0.1:9545".into(),
-            &descriptor,
+            network_hash,
         )
         .expect("bug: pending attempt should be reused");
         let PreparedAirdrop::Remote(prepared) = prepared else {
@@ -1423,13 +1332,12 @@ mod tests {
         let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
         let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
         let profile = test_profile(BTreeMap::new());
-        let descriptor = test_network_descriptor();
+        let network_hash = test_network_hash();
         let recipient_wallet = thruput_encoding::encode(&[0xab; 32]);
         let path = remote_airdrop_attempt_path(
             &profile.name,
             &recipient_wallet,
-            &descriptor.network_id,
-            &descriptor.genesis_hash,
+            &thruput_encoding::encode(network_hash.as_ref()),
         )
         .unwrap();
         write_attempt(
@@ -1437,21 +1345,19 @@ mod tests {
             &RemoteAirdropAttempt {
                 profile: profile.name.clone(),
                 recipient_wallet: thruput_encoding::encode(&[0xcd; 32]),
-                network_id: descriptor.network_id.clone(),
-                genesis_hash: descriptor.genesis_hash.clone(),
+                network_hash: thruput_encoding::encode(network_hash.as_ref()),
                 client_nonce: format!("0x{}", "11".repeat(16)),
             },
         )
         .unwrap();
         let original = std::fs::read(&path).unwrap();
 
-        let error = prepare_remote_airdrop_with_descriptor(
+        let error = prepare_remote_airdrop(
             &profile,
             &recipient_wallet,
             recipient_wallet.clone(),
-            "http://127.0.0.1:8081".into(),
             "http://127.0.0.1:9545".into(),
-            &descriptor,
+            network_hash,
         )
         .unwrap_err();
         assert!(error.to_string().contains("does not match"));
@@ -1490,7 +1396,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn prepares_remote_airdrop_from_profile_faucet() {
+    fn prepares_remote_airdrop_for_the_pinned_network() {
         let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
         unsafe { env::set_var("XDG_CACHE_HOME", tmp.path()) };
         let mut wallets = BTreeMap::new();
@@ -1503,24 +1409,22 @@ mod tests {
                 owner_public_key: thruput_encoding::encode(&[0xef; 32]),
             },
         );
-        let mut profile = test_profile(wallets);
-        profile.faucet_url = Some("http://127.0.0.1:8081/".into());
+        let profile = test_profile(wallets);
         let recipient_wallet = resolve_airdrop_recipient(&profile, "alice").unwrap();
 
-        let prepared = prepare_remote_airdrop_with_descriptor(
+        let prepared = prepare_remote_airdrop(
             &profile,
             "alice",
             recipient_wallet,
-            "http://127.0.0.1:8081".into(),
             "http://127.0.0.1:9545".into(),
-            &test_network_descriptor(),
+            test_network_hash(),
         )
         .unwrap();
 
         let PreparedAirdrop::Remote(prepared) = prepared else {
             panic!("bug: expected remote airdrop");
         };
-        assert_eq!(prepared.faucet_url, "http://127.0.0.1:8081");
+        assert_eq!(prepared.network_hash, test_network_hash());
         assert_eq!(prepared.rpc_url, "http://127.0.0.1:9545");
         assert_eq!(prepared.recipient_input, "alice");
         assert_eq!(
@@ -1578,26 +1482,6 @@ mod tests {
 
     #[test]
     #[serial]
-    fn airdrop_hosted_missing_faucet_reports_network_error() {
-        let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
-        for network in [Network::Futurenet, Network::Devnet] {
-            let name = network.as_str();
-            let mut profile = test_profile(BTreeMap::new());
-            profile.name = name.into();
-            profile.network = Some(network);
-
-            let error = resolve_faucet_backend(&profile, "airdrop")
-                .expect_err("bug: missing hosted faucet should fail");
-
-            assert_eq!(
-                error.to_string(),
-                format!("profile `{name}` targets {name}, but airdrop requires `faucet_url`")
-            );
-        }
-    }
-
-    #[test]
-    #[serial]
     fn airdrop_hosted_missing_rpc_reports_network_error() {
         let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
         for network in [Network::Futurenet, Network::Devnet] {
@@ -1606,7 +1490,6 @@ mod tests {
             profile.name = name.into();
             profile.network = Some(network);
             profile.rpc_url = None;
-            profile.faucet_url = Some("http://127.0.0.1:8081".into());
 
             let error = resolve_faucet_backend(&profile, "airdrop")
                 .expect_err("bug: missing hosted rpc should fail");
@@ -1620,14 +1503,13 @@ mod tests {
 
     #[test]
     #[serial]
-    fn airdrop_hosted_with_urls_uses_remote_faucet() {
+    fn airdrop_hosted_uses_the_gateway_faucet_without_a_faucet_url() {
         let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
         for network in [Network::Futurenet, Network::Devnet] {
             let name = network.as_str();
             let mut profile = test_profile(BTreeMap::new());
             profile.name = name.into();
             profile.network = Some(network);
-            profile.faucet_url = Some("http://127.0.0.1:8081".into());
 
             let backend = resolve_faucet_backend(&profile, "airdrop")
                 .expect("bug: configured hosted profile should resolve");
@@ -1665,28 +1547,6 @@ mod tests {
             entrypoint.as_ref(),
             native_token::transfer_entrypoint().as_ref()
         );
-    }
-
-    #[test]
-    #[serial]
-    fn remote_airdrop_requires_additive_policy_at_airdrop_boundary() {
-        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
-        let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
-        let mut value = test_network_descriptor_value();
-        value.as_object_mut().unwrap().remove("airdrop");
-        let error = crate::network_descriptor::parse_remote_airdrop_descriptor(
-            "http://127.0.0.1:9545",
-            value,
-        )
-        .expect_err("bug: remote airdrop needs advertised policy");
-
-        assert!(matches!(
-            error,
-            crate::CliError::NetworkDescriptorInvalid {
-                field: "airdrop",
-                ..
-            }
-        ));
     }
 
     #[test]
@@ -1733,29 +1593,6 @@ mod tests {
                 .contains("insufficient actionable balance")
         );
         assert!(error.to_string().contains("fault"));
-    }
-
-    #[test]
-    fn remote_airdrop_rejects_amount_different_from_advertised_policy() {
-        let error = validate_remote_airdrop_amount("100000000", "200000000")
-            .expect_err("bug: mismatched service amount should fail");
-
-        assert_eq!(error.code(), "network_descriptor_mismatch");
-        assert!(error.to_string().contains("airdrop.rawAmount"));
-    }
-
-    #[test]
-    fn remote_airdrop_compares_raw_amounts_numerically() {
-        validate_remote_airdrop_amount("0100000000", "100000000")
-            .expect("bug: equivalent raw amounts should match");
-    }
-
-    #[test]
-    fn remote_airdrop_rejects_malformed_response_amount() {
-        let error = validate_remote_airdrop_amount("100000000", "invalid")
-            .expect_err("bug: malformed service amount should fail");
-
-        assert_eq!(error.code(), "network_descriptor_mismatch");
     }
 
     fn prepared_local_airdrop() -> PreparedLocalAirdrop {
@@ -1819,44 +1656,7 @@ mod tests {
         }
     }
 
-    fn test_network_descriptor() -> crate::network_descriptor::RemoteAirdropDescriptor {
-        crate::network_descriptor::parse_remote_airdrop_descriptor(
-            "http://127.0.0.1:9545",
-            test_network_descriptor_value(),
-        )
-        .expect("bug: test network descriptor should validate")
-    }
-
-    fn test_network_descriptor_value() -> serde_json::Value {
-        serde_json::json!({
-            "schemaVersion": thruput_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
-            "kind": "groundhog-network",
-            "networkId": "devnet-preview",
-            "networkHash": thruput_json_rpc_types::NetworkHashText::from([0x42; 32]),
-            "protocol": "x23",
-            "genesisHash": thruput_json_rpc_types::NetworkHashText::from([0x01; 32]),
-            "endpoints": { "rpcUrl": "http://127.0.0.1:9545" },
-            "nativeToken": {
-                "tokenAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x02; 32])),
-                "decimals": 7,
-                "transferEntrypoint": "0x63285b3523f9dc3f"
-            },
-            "faucet": { "walletAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x04; 32])) },
-            "airdrop": {
-                "rawAmount": "100000000",
-                "recipientCooldownSeconds": "43200",
-                "clientQuotaMax": 10,
-                "clientQuotaWindowSeconds": "3600",
-                "maxPendingPerRecipient": 1
-            },
-            "walletCreate": {
-                "prefundRawAmount": "100000000",
-                "walletContractHash": format!("0x{}", "03".repeat(32))
-            },
-            "devWallet": {
-                "deployEntrypoint": "0xf969542572bd6860",
-                "doActionEntrypoint": "0xa0fff94c64fbaf3c"
-            }
-        })
+    fn test_network_hash() -> thruput_xdr::types::NetworkHash {
+        thruput_xdr::types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from([0x42; 32]))
     }
 }

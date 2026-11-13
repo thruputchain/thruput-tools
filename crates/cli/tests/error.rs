@@ -84,20 +84,3 @@ fn generated_command_hints_quote_dynamic_arguments() {
         "pass `--hogd-protocol='hogp/test;echo bad'` to override, or rebuild thruput node against a matching thruput-xdr"
     );
 }
-
-#[test]
-fn faucet_service_error_preserves_machine_readable_response_fields() {
-    let error = CliError::FaucetService {
-        url: "https://faucet.example/v1/airdrop".into(),
-        http_status: 429,
-        service_code: "airdrop_recipient_cooldown".into(),
-        message: "recipient is cooling down".into(),
-        retry_after_seconds: Some(42),
-    };
-    let details = error.details_json().expect("bug: details should exist");
-
-    assert_eq!(error.code(), "faucet_service_error");
-    assert_eq!(details["httpStatus"], 429);
-    assert_eq!(details["code"], "airdrop_recipient_cooldown");
-    assert_eq!(details["retryAfterSeconds"], "42");
-}

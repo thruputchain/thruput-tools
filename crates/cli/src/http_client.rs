@@ -8,7 +8,6 @@ use std::ffi::OsString;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use http_body_util::BodyExt as _;
 use jsonrpsee::core::client::ClientT;
@@ -22,14 +21,6 @@ use crate::CliError;
 const HTTP_PROXY_NAMES: [&str; 2] = ["HTTP_PROXY", "http_proxy"];
 const HTTPS_PROXY_NAMES: [&str; 2] = ["HTTPS_PROXY", "https_proxy"];
 const ALL_PROXY_NAMES: [&str; 2] = ["ALL_PROXY", "all_proxy"];
-
-pub(crate) fn blocking_client(timeout: Duration) -> Result<reqwest::blocking::Client, CliError> {
-    validate_proxy_environment()?;
-    reqwest::blocking::Client::builder()
-        .timeout(timeout)
-        .build()
-        .map_err(|_| CliError::HttpClientInit)
-}
 
 pub(crate) fn build_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client, CliError> {
     // Keep reqwest's default TLS backend so the operating-system trust store remains authoritative.
@@ -253,7 +244,7 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc::{self, Receiver};
     use std::thread;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use jsonrpsee::core::client::ClientT as _;
     use jsonrpsee::rpc_params;
@@ -279,30 +270,6 @@ mod tests {
                 .recv_timeout(Duration::from_secs(2))
                 .unwrap()
                 .starts_with("POST http://")
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn lowercase_all_proxy_routes_blocking_http_client() {
-        let _env = ProxyEnvGuard::clear();
-        let (origin_url, origin_request) = spawn_json_rpc_origin();
-        let (proxy_url, proxy_request) = spawn_forwarding_proxy();
-        ProxyEnvGuard::set("all_proxy", &proxy_url);
-
-        let response = blocking_client(Duration::from_secs(2))
-            .unwrap()
-            .get(&origin_url)
-            .send()
-            .unwrap();
-
-        assert!(response.status().is_success());
-        assert!(origin_request.recv_timeout(Duration::from_secs(2)).unwrap());
-        assert!(
-            proxy_request
-                .recv_timeout(Duration::from_secs(2))
-                .unwrap()
-                .starts_with("GET http://")
         );
     }
 

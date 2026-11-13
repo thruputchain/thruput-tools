@@ -674,7 +674,6 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         thruput_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
     let sender = crate::account_resolution::ResolvedTransactionSender {
         native_account: Some(account.clone()),
-        key_name: key_name.into(),
         wallet_name: None,
         wallet_address: account.address(),
         signer: signer.into(),
