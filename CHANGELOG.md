@@ -1,9 +1,10 @@
 # Changelog
 
-## 0.45.0 (unreleased)
+## 0.45.0
 
 - Align protocol crates at 0.66.0, the SDK at 0.61.0, and standard interfaces
   at 0.1.74. Newly generated projects pin SDK 0.61.0.
+- Use managed hog-devnode 0.1.33, matching the new protocol identity.
 
 ### Breaking Rust API changes
 
