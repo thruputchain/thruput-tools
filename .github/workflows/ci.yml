@@ -32,6 +32,36 @@ jobs:
     with:
       runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
+  # Check every lockfile entry against the cooldown policy
+  # (.cargo/cooldown*.toml) before any job builds dependency code.
+  cooldown:
+    name: Dependency cooldown
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # This tool has no crates.io release, so pin the commit. Keep in sync
+      # with CONTRIBUTING.md.
+      - name: Install cargo-cooldown-check
+        run: |
+          cargo install --locked \
+            --git https://github.com/NomicFoundation/cargo-cooldown-check \
+            --rev d519cf72eed8dde4301f83298ee08366cf3b1cea
+          cargo cooldown-check --help >/dev/null
+
+      # cargo cooldown-check runs cargo metadata without --locked, which would
+      # re-resolve a stale lockfile before checking it.
+      - name: Check dependency cooldown
+        run: |
+          cargo metadata --locked >/dev/null
+          cargo cooldown-check
+
   # Lint our workflows
   workflow-lint:
     permissions:
@@ -41,7 +71,7 @@ jobs:
       runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
 
   clippy:
-    needs: dependency-policy # Check deps before building anything
+    needs: [dependency-policy, cooldown] # Check deps before building anything
     name: Clippy
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
@@ -66,7 +96,7 @@ jobs:
         run: cargo clippy --locked -p thruput-heap-profiling -p thruput-json-rpc-gateway -p thruput-faucet --all-targets --features thruput-heap-profiling/jemalloc,thruput-json-rpc-gateway/heap-profiling,thruput-faucet/heap-profiling -- -D warnings
 
   test:
-    needs: dependency-policy # Check deps before building anything
+    needs: [dependency-policy, cooldown] # Check deps before building anything
     name: Test
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
@@ -104,7 +134,7 @@ jobs:
         run: cargo test --workspace --locked
 
   heap-profiling:
-    needs: dependency-policy
+    needs: [dependency-policy, cooldown]
     name: Heap profiling
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
@@ -128,7 +158,7 @@ jobs:
           cargo test --locked -p thruput-heap-profiling --features jemalloc --release
 
   runtime-qualification:
-    needs: dependency-policy
+    needs: [dependency-policy, cooldown]
     name: Runtime qualification
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
@@ -206,7 +236,7 @@ jobs:
           cargo test --locked -p thruput --test native_rpc_qualification -- --ignored --test-threads=1
 
   managed-runtime:
-    needs: dependency-policy
+    needs: [dependency-policy, cooldown]
     name: Managed runtime (${{ matrix.target }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.github_runner || matrix.namespace_runner }}
     timeout-minutes: 20
@@ -245,7 +275,7 @@ jobs:
         run: scripts/smoke-managed-toolchain.sh
 
   cli-smoke:
-    needs: dependency-policy # Check deps before building anything
+    needs: [dependency-policy, cooldown] # Check deps before building anything
     name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + thruput test + thruput test --integration)
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
@@ -411,7 +441,7 @@ jobs:
           fi
 
   scaffold-app:
-    needs: dependency-policy
+    needs: [dependency-policy, cooldown]
     name: Counter app (generated project + real-node browser smoke)
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     timeout-minutes: 25
@@ -458,7 +488,7 @@ jobs:
   # Codegen tests assert on generated text. This job runs the real CLI over the
   # checked-in spec artifacts, then type-checks and runs what it generates.
   codegen-typecheck:
-    needs: dependency-policy # Check deps before building anything
+    needs: [dependency-policy, cooldown] # Check deps before building anything
     name: Codegen typecheck (spec artifact -> thruput codegen ts -> tsc)
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
     permissions:
