@@ -8,7 +8,8 @@ A v6 artifact header now carries the syscall API version the guest was built
 against, in place of the gas table version and gas schedule digest. A chain
 admits the artifact when it implements the same major version and at least that
 minor; gas prices are the chain's and are no longer stamped into the artifact.
-The header keeps its size and every other offset.
+The header shrinks from 128 to 120 bytes: the 8-byte digest is gone and every
+later field sits 8 bytes earlier.
 
 - `thruput build` and `rv32-lower` read the version from the guest ELF's
   `thruputsyscallapiv0` section, which `thruput-sdk` 0.61.1 and later emit.
@@ -20,7 +21,7 @@ The header keeps its size and every other offset.
   to 0.1.75. Newly generated projects pin SDK 0.61.1, the first that records
   the version.
 - The lowering metadata and `rv32-lower --json` report `syscall_api_version`.
-  The artifact format fingerprint is now `0xddedc325bf5506be`.
+  The artifact format fingerprint is now `0x1fa548ec574db1b4`.
 
 #### Breaking Rust API changes
 
@@ -29,8 +30,10 @@ The header keeps its size and every other offset.
   `build_artifact` stamps `SyscallApiVersion::BASELINE`. `GAS_TABLE_VERSION`,
   `GAS_SCHEDULE_DIGEST`, `GAS_VERSION_OFFSET`, `GAS_DIGEST_OFFSET`,
   `SYSCALL_ABI_VERSION` and `SYSCALL_ABI_OFFSET` are removed; see
-  `SYSCALL_API_MAJOR`, `SYSCALL_API_MAJOR_OFFSET`, `SYSCALL_API_MINOR_OFFSET`
-  and `RESERVED_OFFSET`. `declared_syscall_api` reads the version back.
+  `SYSCALL_API_MAJOR`, `SYSCALL_API_MAJOR_OFFSET` and
+  `SYSCALL_API_MINOR_OFFSET`. `HEADER_BYTES` is 120 and the offsets from
+  `MEMORY_BYTES_OFFSET` on are 8 lower; `LEGACY_HEADER_BYTES` is the 128-byte
+  header readers still open. `declared_syscall_api` reads the version back.
 - `thruput-rv32-lower`: `Lowered` gains `syscall_api`.
 
 ### Profiles pin their network hash; the faucet descriptor is gone

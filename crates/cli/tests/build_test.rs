@@ -897,7 +897,7 @@ fn build_rv32_project_sizes_guest_memory_from_package_metadata() {
     )
     .expect("bug: artifact should be written");
     assert_eq!(
-        u32::from_le_bytes(artifact[48..52].try_into().unwrap()),
+        u32::from_le_bytes(artifact[40..44].try_into().unwrap()),
         0x20000,
         "memory_bytes header field"
     );

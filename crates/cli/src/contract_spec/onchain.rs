@@ -218,10 +218,9 @@ mod tests {
 
     #[test]
     fn reads_v5_contracts_as_having_no_spec() {
-        let mut data = build_artifact(&[0; 4], &[], 0, 16).unwrap();
-        // A v5 body ends after initial memory, with no extension list.
-        data.truncate(data.len() - 4);
-        data[8..12].copy_from_slice(&5_u32.to_le_bytes());
+        let data = thruput_rv32_artifact::format::testing::as_v5(
+            &build_artifact(&[0; 4], &[], 0, 16).unwrap(),
+        );
         let (deployment, artifact) = response(data);
         assert_eq!(
             inspect_artifact(&deployment, &artifact).unwrap(),

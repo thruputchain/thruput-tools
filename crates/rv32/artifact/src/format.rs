@@ -31,34 +31,39 @@
 //! guest was built against ([`SyscallApiVersion`]). A chain admits the
 //! artifact when it implements the same major version and at least that
 //! minor; what a syscall costs is the chain's business and no longer part of
-//! the artifact. The header keeps its size and every other offset: the minor
-//! takes the old gas-table-version slot and the old digest slot is reserved,
-//! zero.
+//! the artifact. The minor takes the old gas-table-version slot and the
+//! 8-byte digest is gone, so a v6 header is 120 bytes and every later field
+//! sits 8 bytes earlier than in v5.
 //!
 //! Readers accept v5 too, since v5 contracts stay deployed after v6 ships: a
 //! v5 artifact reads as a v6 artifact with no extensions. Producers emit v6
 //! only.
 //!
-//! Header layout (little-endian, no padding, 128 bytes total):
+//! Header layout (little-endian, no padding, 120 bytes total):
 //!
 //! ```text
 //!   off  size  field
 //!     0     8  magic "GHRV32A1"
 //!     8     4  format_version          (6)
-//!    12     4  header_bytes            (128)
+//!    12     4  header_bytes            (120)
 //!    16     8  vm_profile_digest
 //!    24     4  flags                   (0)
 //!    28     4  entry_abi_version       (3)
 //!    32     4  syscall_api_major       (1)
-//!    36     4  syscall_api_minor       (v5: gas_table_version)
-//!    40     8  reserved, zero          (v5: gas_schedule_digest)
-//!    48     4  memory_bytes            (65536)
-//!    52     4  code_size
-//!    56     4  initial_memory_size
-//!    60     4  initial_memory_start
-//!    64    32  sha256(code)
-//!    96    32  sha256(initial_memory)
+//!    36     4  syscall_api_minor
+//!    40     4  memory_bytes            (65536)
+//!    44     4  code_size
+//!    48     4  initial_memory_size
+//!    52     4  initial_memory_start
+//!    56    32  sha256(code)
+//!    88    32  sha256(initial_memory)
 //! ```
+//!
+//! A v5 header is 128 bytes: `gas_table_version` at 36, an 8-byte
+//! `gas_schedule_digest` at 40, and the remaining fields 8 bytes later. So is
+//! a v6 header written before v6 declared a syscall API version; its
+//! `header_bytes` of 128 tells the two v6 layouts apart. Readers open all
+//! three.
 //!
 //! Body: `header || code || initial_memory || extensions`. Section positions
 //! are implicit: code starts at `header_bytes`, `initial_memory` directly
@@ -101,8 +106,15 @@ pub const FORMAT_VERSION: u32 = 6;
 pub const LEGACY_FORMAT_VERSION_V5: u32 = 5;
 /// Format versions readers accept.
 pub const READABLE_FORMAT_VERSIONS: [u32; 2] = [LEGACY_FORMAT_VERSION_V5, FORMAT_VERSION];
-/// Fixed header size in bytes (the same in v5 and v6).
-pub const HEADER_BYTES: usize = 128;
+/// Header size in bytes of the artifacts producers emit.
+pub const HEADER_BYTES: usize = 120;
+/// Header size in bytes of a header that declares a gas schedule: every v5
+/// artifact, and a v6 artifact written before v6 declared a syscall API
+/// version.
+pub const LEGACY_HEADER_BYTES: usize = HEADER_BYTES + LEGACY_GAS_DIGEST_BYTES;
+/// The gas-schedule digest a [`LEGACY_HEADER_BYTES`] header carries after its
+/// gas table version; every later field sits this much further on.
+const LEGACY_GAS_DIGEST_BYTES: usize = 8;
 /// VM-profile digest the runtime validates the artifact against.
 pub const VM_PROFILE_DIGEST: u64 = 0x55c5_3a68_5f0e_b33d;
 /// Entry ABI version (3 = enter at PC 0 with the method id seeded in a0/a1
@@ -148,7 +160,8 @@ impl std::fmt::Display for SyscallApiVersion {
 /// Digest size of each section hash stamped into the artifact header.
 pub const DIGEST_BYTES: usize = 32;
 
-/// Fixed v6 header offsets.
+/// Fixed v6 header offsets. In a [`LEGACY_HEADER_BYTES`] header the fields
+/// from `MEMORY_BYTES_OFFSET` on sit 8 bytes later.
 pub const FORMAT_VERSION_OFFSET: usize = 8;
 pub const HEADER_SIZE_OFFSET: usize = 12;
 pub const VM_PROFILE_OFFSET: usize = 16;
@@ -156,15 +169,11 @@ pub const FLAGS_OFFSET: usize = 24;
 pub const ENTRY_ABI_OFFSET: usize = 28;
 pub const SYSCALL_API_MAJOR_OFFSET: usize = 32;
 pub const SYSCALL_API_MINOR_OFFSET: usize = 36;
-/// Eight reserved bytes a v6 producer writes as zero. v5 kept its
-/// gas-schedule digest here.
-pub const RESERVED_OFFSET: usize = 40;
-pub const RESERVED_BYTES: usize = 8;
-pub const MEMORY_BYTES_OFFSET: usize = 48;
-pub const CODE_SIZE_OFFSET: usize = 52;
-pub const INITIAL_MEMORY_SIZE_OFFSET: usize = 56;
-pub const INITIAL_MEMORY_START_OFFSET: usize = 60;
-pub const CODE_DIGEST_OFFSET: usize = 64;
+pub const MEMORY_BYTES_OFFSET: usize = 40;
+pub const CODE_SIZE_OFFSET: usize = 44;
+pub const INITIAL_MEMORY_SIZE_OFFSET: usize = 48;
+pub const INITIAL_MEMORY_START_OFFSET: usize = 52;
+pub const CODE_DIGEST_OFFSET: usize = 56;
 pub const INITIAL_MEMORY_DIGEST_OFFSET: usize = CODE_DIGEST_OFFSET + DIGEST_BYTES;
 
 const _: () = assert!(INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES == HEADER_BYTES);
@@ -183,7 +192,7 @@ const FLAGS_REQUIRED_VALUE: u32 = 0;
 
 /// Pinned v6 artifact-format contract fingerprint. hogd pins the same value
 /// as `kArtifactFormatFingerprint` in `rv32/artifact.h`.
-pub const FORMAT_FINGERPRINT: u64 = 0xdded_c325_bf55_06be;
+pub const FORMAT_FINGERPRINT: u64 = 0x1fa5_48ec_574d_b1b4;
 const _: () = assert!(compute_format_fingerprint() == FORMAT_FINGERPRINT);
 
 const fn fnv_digest_byte(digest: u64, value: u8) -> u64 {
@@ -372,13 +381,6 @@ const fn compute_format_fingerprint_with_inputs(
     );
     digest = fold_layout_field(
         digest,
-        b"header.reserved.offset",
-        b"header.reserved.size",
-        RESERVED_OFFSET,
-        RESERVED_BYTES,
-    );
-    digest = fold_layout_field(
-        digest,
         b"header.memory_bytes.offset",
         b"header.memory_bytes.size",
         MEMORY_BYTES_OFFSET,
@@ -430,7 +432,6 @@ const fn compute_format_fingerprint_with_inputs(
     // The minor itself is not folded: it is the guest's, and a chain admits
     // any minor up to its own.
     digest = format_fingerprint_u64(digest, b"syscall_api_minor_le_host", 1);
-    digest = format_fingerprint_u64(digest, b"reserved_zero", 1);
     // The code and memory bounds are a chain's configuration, not part of the
     // format: the header fields are 32-bit either way, and what a chain admits
     // is checked where a contract is attached.
@@ -589,7 +590,6 @@ pub fn build_artifact_with_extensions(
     header.extend_from_slice(&ENTRY_ABI_VERSION.to_le_bytes());
     header.extend_from_slice(&syscall_api.major.to_le_bytes());
     header.extend_from_slice(&syscall_api.minor.to_le_bytes());
-    header.extend_from_slice(&[0; RESERVED_BYTES]);
     header.extend_from_slice(&to_u32(memory_bytes, "memory bytes")?.to_le_bytes());
     header.extend_from_slice(&code_size.to_le_bytes());
     header.extend_from_slice(&memory_size.to_le_bytes());
@@ -629,50 +629,84 @@ pub struct DeclaredSizes {
 /// header that disagrees with its body is reported as it is;
 /// [`verify_artifact`] checks the shape.
 pub fn declared_sizes(artifact: &[u8]) -> Option<DeclaredSizes> {
-    if artifact.len() < HEADER_BYTES || artifact[..MAGIC.len()] != MAGIC {
-        return None;
-    }
-    let read_u32 = |off: usize| -> Option<u32> {
-        artifact
-            .get(off..off + 4)?
-            .try_into()
-            .ok()
-            .map(u32::from_le_bytes)
-    };
-    if !READABLE_FORMAT_VERSIONS.contains(&read_u32(FORMAT_VERSION_OFFSET)?) {
-        return None;
-    }
+    let layout = HeaderLayout::read(artifact)?;
     Some(DeclaredSizes {
-        memory_bytes: read_u32(MEMORY_BYTES_OFFSET)?,
-        code_bytes: read_u32(CODE_SIZE_OFFSET)?,
+        memory_bytes: layout.u32_at(artifact, MEMORY_BYTES_OFFSET),
+        code_bytes: layout.u32_at(artifact, CODE_SIZE_OFFSET),
     })
+}
+
+/// Which of the readable header layouts an artifact has.
+#[derive(Debug, Clone, Copy)]
+struct HeaderLayout {
+    format_version: u32,
+    /// [`HEADER_BYTES`], or [`LEGACY_HEADER_BYTES`] for a header that declares
+    /// a gas schedule.
+    header_bytes: usize,
+}
+
+impl HeaderLayout {
+    /// `None` unless `artifact` starts with a whole header of a readable
+    /// format version and the size that version allows: 128 bytes for v5, and
+    /// for v6 either that or 120.
+    fn read(artifact: &[u8]) -> Option<Self> {
+        if artifact.len() < HEADER_BYTES || artifact[..MAGIC.len()] != MAGIC {
+            return None;
+        }
+        let read_u32 = |off: usize| -> u32 {
+            u32::from_le_bytes(
+                artifact[off..off + 4]
+                    .try_into()
+                    .expect("bug: 4-byte slice"),
+            )
+        };
+        let format_version = read_u32(FORMAT_VERSION_OFFSET);
+        let header_bytes = read_u32(HEADER_SIZE_OFFSET) as usize;
+        let readable = matches!(
+            (format_version, header_bytes),
+            (FORMAT_VERSION, HEADER_BYTES)
+                | (
+                    FORMAT_VERSION | LEGACY_FORMAT_VERSION_V5,
+                    LEGACY_HEADER_BYTES
+                )
+        );
+        (readable && artifact.len() >= header_bytes).then_some(Self {
+            format_version,
+            header_bytes,
+        })
+    }
+
+    /// Whether the header declares a syscall API version, as opposed to a gas
+    /// schedule.
+    fn declares_syscall_api(self) -> bool {
+        self.header_bytes == HEADER_BYTES
+    }
+
+    /// Where the field at v6 offset `off` sits in this header.
+    fn at(self, off: usize) -> usize {
+        if off >= MEMORY_BYTES_OFFSET {
+            off + (self.header_bytes - HEADER_BYTES)
+        } else {
+            off
+        }
+    }
+
+    fn u32_at(self, artifact: &[u8], off: usize) -> u32 {
+        let at = self.at(off);
+        u32::from_le_bytes(artifact[at..at + 4].try_into().expect("bug: 4-byte slice"))
+    }
 }
 
 /// The syscall API version a v6 artifact declares.
 ///
-/// `None` when `artifact` does not carry a readable v6 header, including a v5
-/// artifact, which declares a gas schedule in these bytes instead, and a v6
-/// header whose reserved bytes are not zero. The rest of the artifact is not
-/// verified.
+/// `None` when `artifact` does not carry a readable header that declares one:
+/// a v5 artifact, or a v6 artifact written before v6 did, declares a gas
+/// schedule instead. The rest of the artifact is not verified.
 pub fn declared_syscall_api(artifact: &[u8]) -> Option<SyscallApiVersion> {
-    if artifact.len() < HEADER_BYTES || artifact[..MAGIC.len()] != MAGIC {
-        return None;
-    }
-    let read_u32 = |off: usize| -> Option<u32> {
-        artifact
-            .get(off..off + 4)?
-            .try_into()
-            .ok()
-            .map(u32::from_le_bytes)
-    };
-    if read_u32(FORMAT_VERSION_OFFSET)? != FORMAT_VERSION
-        || artifact[RESERVED_OFFSET..RESERVED_OFFSET + RESERVED_BYTES] != [0; RESERVED_BYTES]
-    {
-        return None;
-    }
-    Some(SyscallApiVersion {
-        major: read_u32(SYSCALL_API_MAJOR_OFFSET)?,
-        minor: read_u32(SYSCALL_API_MINOR_OFFSET)?,
+    let layout = HeaderLayout::read(artifact)?;
+    layout.declares_syscall_api().then(|| SyscallApiVersion {
+        major: layout.u32_at(artifact, SYSCALL_API_MAJOR_OFFSET),
+        minor: layout.u32_at(artifact, SYSCALL_API_MINOR_OFFSET),
     })
 }
 
@@ -681,10 +715,10 @@ pub fn declared_syscall_api(artifact: &[u8]) -> Option<SyscallApiVersion> {
 /// extension list's framing. Cheap insurance against a writer regression
 /// slipping past until the C++ parser flags it.
 ///
-/// This is the producer check, so it accepts only [`FORMAT_VERSION`] with
-/// zero reserved bytes. Readers of deployed artifacts use
-/// [`artifact_extensions`] or [`artifact_spec`], which also accept v5 and do
-/// not read the bytes v5 kept its gas schedule in.
+/// This is the producer check, so it accepts only [`FORMAT_VERSION`] with a
+/// [`HEADER_BYTES`] header. Readers of deployed artifacts use
+/// [`artifact_extensions`] or [`artifact_spec`], which also accept the
+/// headers that declare a gas schedule.
 pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     let container = verify_container(artifact)?;
     if container.format_version != FORMAT_VERSION {
@@ -693,8 +727,10 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
             container.format_version
         )));
     }
-    if artifact[RESERVED_OFFSET..RESERVED_OFFSET + RESERVED_BYTES] != [0; RESERVED_BYTES] {
-        return Err(verify("reserved header bytes must be zero"));
+    if !container.layout.declares_syscall_api() {
+        return Err(verify(format!(
+            "header_bytes {LEGACY_HEADER_BYTES} (producers emit {HEADER_BYTES})"
+        )));
     }
     if artifact[MEMORY_BYTES_OFFSET..MEMORY_BYTES_OFFSET + 4] == [0; 4] {
         return Err(verify("memory_bytes out of range"));
@@ -705,6 +741,7 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
 /// What [`verify_container`] established about a structurally valid artifact.
 struct Container<'a> {
     format_version: u32,
+    layout: HeaderLayout,
     extensions: Vec<ArtifactExtension<'a>>,
 }
 
@@ -738,12 +775,15 @@ fn verify_container(artifact: &[u8]) -> Result<Container<'_>> {
     if !READABLE_FORMAT_VERSIONS.contains(&format_version) {
         return Err(verify(format!("format_version {format_version}")));
     }
-    if read_u32(HEADER_SIZE_OFFSET) as usize != HEADER_BYTES {
+    // v6 fixes the header at HEADER_BYTES; a header that declares a gas
+    // schedule, in v5 or an early v6, is LEGACY_HEADER_BYTES.
+    let Some(layout) = HeaderLayout::read(artifact) else {
         return Err(verify(format!(
             "header_bytes {}",
             read_u32(HEADER_SIZE_OFFSET)
         )));
-    }
+    };
+    let header_bytes = layout.header_bytes;
     if read_u64(VM_PROFILE_OFFSET) != VM_PROFILE_DIGEST {
         return Err(verify("vm_profile mismatch"));
     }
@@ -757,10 +797,10 @@ fn verify_container(artifact: &[u8]) -> Result<Container<'_>> {
         return Err(verify("flags must be zero"));
     }
 
-    let memory_bytes = read_u32(MEMORY_BYTES_OFFSET) as usize;
-    let code_size = read_u32(CODE_SIZE_OFFSET) as usize;
-    let init_mem_size = read_u32(INITIAL_MEMORY_SIZE_OFFSET) as usize;
-    let init_mem_start = read_u32(INITIAL_MEMORY_START_OFFSET) as usize;
+    let memory_bytes = layout.u32_at(artifact, MEMORY_BYTES_OFFSET) as usize;
+    let code_size = layout.u32_at(artifact, CODE_SIZE_OFFSET) as usize;
+    let init_mem_size = layout.u32_at(artifact, INITIAL_MEMORY_SIZE_OFFSET) as usize;
+    let init_mem_start = layout.u32_at(artifact, INITIAL_MEMORY_START_OFFSET) as usize;
 
     // Canonical layout: header || code || initial_memory || extensions (v6)
     // with no gaps or trailing bytes, and the stored memory prefix fits the
@@ -788,11 +828,11 @@ fn verify_container(artifact: &[u8]) -> Result<Container<'_>> {
             "initial_memory_start must be zero for an empty image",
         ));
     }
-    // Section positions are implicit: code at HEADER_BYTES, initial_memory
+    // Section positions are implicit: code after the header, initial_memory
     // directly after. A v5 file ends there; a v6 file's extension list runs
     // from there to the end. Checked math for the same 32-bit wrap reason as
     // above.
-    let sections_end = HEADER_BYTES
+    let sections_end = header_bytes
         .checked_add(code_size)
         .and_then(|len| len.checked_add(init_mem_size))
         .ok_or_else(|| verify("non-canonical section layout"))?;
@@ -808,12 +848,13 @@ fn verify_container(artifact: &[u8]) -> Result<Container<'_>> {
         decode_extensions(&artifact[sections_end..])?
     };
 
-    let code_dig = &artifact[CODE_DIGEST_OFFSET..CODE_DIGEST_OFFSET + DIGEST_BYTES];
-    let mem_dig =
-        &artifact[INITIAL_MEMORY_DIGEST_OFFSET..INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES];
+    let code_dig_at = layout.at(CODE_DIGEST_OFFSET);
+    let mem_dig_at = layout.at(INITIAL_MEMORY_DIGEST_OFFSET);
+    let code_dig = &artifact[code_dig_at..code_dig_at + DIGEST_BYTES];
+    let mem_dig = &artifact[mem_dig_at..mem_dig_at + DIGEST_BYTES];
 
-    let code = &artifact[HEADER_BYTES..HEADER_BYTES + code_size];
-    let memory = &artifact[HEADER_BYTES + code_size..sections_end];
+    let code = &artifact[header_bytes..header_bytes + code_size];
+    let memory = &artifact[header_bytes + code_size..sections_end];
 
     if sha256(code).as_slice() != code_dig {
         return Err(verify("code digest mismatch"));
@@ -823,7 +864,8 @@ fn verify_container(artifact: &[u8]) -> Result<Container<'_>> {
     }
 
     Ok(Container {
-        format_version,
+        format_version: layout.format_version,
+        layout,
         extensions,
     })
 }
@@ -844,4 +886,44 @@ pub fn artifact_spec(artifact: &[u8]) -> Result<Option<ArtifactSpec<'_>>> {
         .find(|extension| extension.kind == EXTENSION_KIND_CONTRACT_SPEC)
         .map(|extension| decode_spec_extension(extension.body))
         .transpose()
+}
+
+/// Rewrites of this crate's v6 output into the header layouts only readers
+/// handle, for tests: nothing produces them any more.
+#[doc(hidden)]
+pub mod testing {
+    use super::{
+        FORMAT_VERSION_OFFSET, HEADER_SIZE_OFFSET, LEGACY_FORMAT_VERSION_V5, LEGACY_HEADER_BYTES,
+        MEMORY_BYTES_OFFSET, SYSCALL_API_MINOR_OFFSET,
+    };
+
+    /// The gas table version and digest the last gas-stamping lowerer wrote.
+    pub const GAS_TABLE_VERSION: u32 = 3;
+    pub const GAS_SCHEDULE_DIGEST: u64 = 0x9183_17c2_1c46_bb60;
+
+    /// A v6 artifact as written before v6 declared a syscall API version:
+    /// the same body under a 128-byte header that declares a gas schedule.
+    #[must_use]
+    pub fn with_gas_schedule_header(artifact: &[u8]) -> Vec<u8> {
+        let mut out = artifact[..MEMORY_BYTES_OFFSET].to_vec();
+        out[SYSCALL_API_MINOR_OFFSET..].copy_from_slice(&GAS_TABLE_VERSION.to_le_bytes());
+        out.extend_from_slice(&GAS_SCHEDULE_DIGEST.to_le_bytes());
+        out.extend_from_slice(&artifact[MEMORY_BYTES_OFFSET..]);
+        let header_bytes = u32::try_from(LEGACY_HEADER_BYTES).expect("bug: fits in u32");
+        out[HEADER_SIZE_OFFSET..HEADER_SIZE_OFFSET + 4]
+            .copy_from_slice(&header_bytes.to_le_bytes());
+        out
+    }
+
+    /// The v5 artifact with the same image as a v6 artifact that has no
+    /// extensions: a gas-schedule header, and no extension list.
+    #[must_use]
+    pub fn as_v5(artifact: &[u8]) -> Vec<u8> {
+        let mut out = with_gas_schedule_header(artifact);
+        out[FORMAT_VERSION_OFFSET..FORMAT_VERSION_OFFSET + 4]
+            .copy_from_slice(&LEGACY_FORMAT_VERSION_V5.to_le_bytes());
+        // Drop the empty XDR extension list.
+        out.truncate(out.len() - 4);
+        out
+    }
 }

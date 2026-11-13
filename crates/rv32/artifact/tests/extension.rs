@@ -1,10 +1,11 @@
 //! v6 extension list: XDR framing, canonical order, the contract spec
 //! extension, and reading v5 artifacts as v6 with no extensions.
 
+use thruput_rv32_artifact::format::testing::{as_v5, with_gas_schedule_header};
 use thruput_rv32_artifact::{
     ArtifactExtension, ArtifactSpec, EXTENSION_KIND_CONTRACT_SPEC, HEADER_BYTES,
-    artifact_extensions, artifact_spec, build_artifact, build_artifact_with_extensions,
-    build_artifact_with_spec, sha256, verify_artifact,
+    LEGACY_HEADER_BYTES, artifact_extensions, artifact_spec, build_artifact,
+    build_artifact_with_extensions, build_artifact_with_spec, sha256, verify_artifact,
 };
 
 const SPEC: ArtifactSpec<'static> = ArtifactSpec {
@@ -192,9 +193,8 @@ fn every_truncation_is_rejected() {
 
 #[test]
 fn v5_reads_as_v6_without_extensions() {
-    let mut v5 = build_artifact(&[0; 4], &[7, 8], 14, 16).unwrap();
-    v5.truncate(SECTIONS_END);
-    v5[8..12].copy_from_slice(&5u32.to_le_bytes());
+    let v5 = as_v5(&build_artifact(&[0; 4], &[7, 8], 14, 16).unwrap());
+    assert_eq!(v5.len(), LEGACY_HEADER_BYTES + 4 + 2);
     assert_eq!(artifact_extensions(&v5).unwrap(), vec![]);
     assert_eq!(artifact_spec(&v5).unwrap(), None);
     // Producers emit v6 only.
@@ -211,18 +211,31 @@ fn v5_reads_as_v6_without_extensions() {
 }
 
 #[test]
-fn reader_ignores_the_bytes_v5_kept_a_gas_schedule_in() {
-    // Deployed artifacts written before v6 declared a syscall API version
-    // carry a gas table version and digest here. Readers still open them;
-    // the producer check does not accept them.
-    let mut artifact = with_spec(SPEC);
-    artifact[36..40].copy_from_slice(&4u32.to_le_bytes());
-    artifact[40..48].copy_from_slice(&0xa958_d226_df65_8598_u64.to_le_bytes());
+fn reader_opens_a_v6_artifact_that_declares_a_gas_schedule() {
+    // Deployed v6 artifacts written before v6 declared a syscall API version
+    // have a 128-byte header with a gas table version and digest. Readers
+    // still open them; the producer check does not accept them.
+    let current = with_spec(SPEC);
+    let mut artifact = with_gas_schedule_header(&current);
+    assert_eq!(artifact.len(), current.len() + 8);
     assert_eq!(artifact_spec(&artifact).unwrap(), Some(SPEC));
     assert!(verify_artifact(&artifact).is_err());
     assert_eq!(thruput_rv32_artifact::declared_syscall_api(&artifact), None);
-    artifact[HEADER_BYTES] ^= 1;
+    assert_eq!(
+        thruput_rv32_artifact::declared_sizes(&artifact),
+        thruput_rv32_artifact::declared_sizes(&current)
+    );
+    // The gas fields are not interpreted.
+    artifact[36..40].copy_from_slice(&4u32.to_le_bytes());
+    artifact[40..48].copy_from_slice(&0xa958_d226_df65_8598_u64.to_le_bytes());
+    assert_eq!(artifact_spec(&artifact).unwrap(), Some(SPEC));
+    artifact[LEGACY_HEADER_BYTES] ^= 1;
     assert!(artifact_spec(&artifact).is_err());
+
+    // A header size is tied to what it declares: v5 never has the short one.
+    let mut short_v5 = current;
+    short_v5[8..12].copy_from_slice(&5u32.to_le_bytes());
+    assert!(artifact_spec(&short_v5).is_err());
 }
 
 #[test]
@@ -236,10 +249,10 @@ fn reader_accepts_zero_memory_but_still_checks_initial_memory_span() {
         Some(SPEC),
     )
     .unwrap();
-    artifact[48..52].copy_from_slice(&0u32.to_le_bytes());
+    artifact[40..44].copy_from_slice(&0u32.to_le_bytes());
     assert_eq!(artifact_spec(&artifact).unwrap(), Some(SPEC));
     assert!(verify_artifact(&artifact).is_err());
-    artifact[60..64].copy_from_slice(&1u32.to_le_bytes());
+    artifact[52..56].copy_from_slice(&1u32.to_le_bytes());
     assert!(artifact_spec(&artifact).is_err());
 }
 

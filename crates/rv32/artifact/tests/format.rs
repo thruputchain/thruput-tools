@@ -19,37 +19,39 @@ fn v6_header_layout_and_field_values() {
 
     assert_eq!(&artifact[..8], b"GHRV32A1");
     assert_eq!(read_u32(&artifact, 8), 6, "format_version");
-    assert_eq!(read_u32(&artifact, 12), 128, "header_bytes");
-    assert_eq!(HEADER_BYTES, 128);
+    assert_eq!(read_u32(&artifact, 12), 120, "header_bytes");
+    assert_eq!(HEADER_BYTES, 120);
     assert_eq!(
         read_u32(&artifact, 28),
         3,
         "entry_abi_version (sp seeded 0)"
     );
-    assert_eq!(read_u32(&artifact, 48) as usize, DEFAULT_MEMORY_BYTES);
-    assert_eq!(read_u32(&artifact, 52), 8, "code_size");
-    assert_eq!(read_u32(&artifact, 56), 3, "initial_memory_size");
+    assert_eq!(read_u32(&artifact, 32), 1, "syscall_api_major");
+    assert_eq!(read_u32(&artifact, 36), 0, "syscall_api_minor (baseline)");
+    assert_eq!(read_u32(&artifact, 40) as usize, DEFAULT_MEMORY_BYTES);
+    assert_eq!(read_u32(&artifact, 44), 8, "code_size");
+    assert_eq!(read_u32(&artifact, 48), 3, "initial_memory_size");
     assert_eq!(
-        read_u32(&artifact, 60) as usize,
+        read_u32(&artifact, 52) as usize,
         start,
         "initial_memory_start"
     );
     // Section digests directly follow the scalar fields; section positions
     // are implicit (code at HEADER_BYTES, initial_memory right after code).
-    assert_eq!(&artifact[64..96], sha256(&code).as_slice(), "code digest");
+    assert_eq!(&artifact[56..88], sha256(&code).as_slice(), "code digest");
     assert_eq!(
-        &artifact[96..128],
+        &artifact[88..120],
         sha256(&memory).as_slice(),
         "initial_memory digest"
     );
-    assert_eq!(&artifact[128..136], &code, "code section placement");
+    assert_eq!(&artifact[120..128], &code, "code section placement");
     assert_eq!(
-        &artifact[136..139],
+        &artifact[128..131],
         &memory,
         "initial_memory section placement"
     );
-    assert_eq!(&artifact[139..], &[0; 4], "empty XDR extension list");
-    assert_eq!(artifact.len(), 128 + 8 + 3 + 4);
+    assert_eq!(&artifact[131..], &[0; 4], "empty XDR extension list");
+    assert_eq!(artifact.len(), 120 + 8 + 3 + 4);
 
     verify_artifact(&artifact).expect("self-verifies");
 }
@@ -112,9 +114,9 @@ fn verify_rejects_start_pushed_past_memory_end() {
     let code = [0u8; 4];
     let memory = vec![1u8; 16];
     let mut artifact = build_artifact(&code, &memory, 0x100, DEFAULT_MEMORY_BYTES).expect("builds");
-    // Tamper initial_memory_start (u32 @ 60) so start + size > memory_bytes.
+    // Tamper initial_memory_start (u32 @ 52) so start + size > memory_bytes.
     let bad = u32::try_from(DEFAULT_MEMORY_BYTES - 15).unwrap();
-    artifact[60..64].copy_from_slice(&bad.to_le_bytes());
+    artifact[52..56].copy_from_slice(&bad.to_le_bytes());
     let err = verify_artifact(&artifact).expect_err("should reject");
     assert!(
         err.to_string().contains("initial_memory_start"),
@@ -126,7 +128,7 @@ fn verify_rejects_start_pushed_past_memory_end() {
 fn verify_rejects_nonzero_start_for_empty_image() {
     let code = [0u8; 4];
     let mut artifact = build_artifact(&code, &[], 0, DEFAULT_MEMORY_BYTES).expect("builds");
-    artifact[60..64].copy_from_slice(&8u32.to_le_bytes());
+    artifact[52..56].copy_from_slice(&8u32.to_le_bytes());
     let err = verify_artifact(&artifact).expect_err("should reject");
     assert!(
         err.to_string().contains("initial_memory_start"),
@@ -144,7 +146,7 @@ fn build_stamps_the_requested_memory_bytes() {
     let memory = vec![1u8; 16];
     let larger = 2 * DEFAULT_MEMORY_BYTES;
     let artifact = build_artifact(&code, &memory, larger - 16, larger).expect("builds");
-    assert_eq!(read_u32(&artifact, 48) as usize, larger);
+    assert_eq!(read_u32(&artifact, 40) as usize, larger);
     verify_artifact(&artifact).expect("verifies");
     assert!(build_artifact(&code, &memory, larger - 15, larger).is_err());
     assert!(build_artifact(&code, &memory, 0, 0).is_err(), "zero memory");
@@ -176,8 +178,11 @@ fn declared_sizes_reads_the_header_and_nothing_else() {
         declared_sizes(&artifact)
     );
 
-    // v5 headers have the same layout and remain readable.
-    let mut v5 = artifact.clone();
+    // v5 headers, and v6 headers that declare a gas schedule, are 8 bytes
+    // longer and remain readable.
+    let legacy = thruput_rv32_artifact::format::testing::with_gas_schedule_header(&artifact);
+    assert_eq!(declared_sizes(&legacy), declared_sizes(&artifact));
+    let mut v5 = legacy;
     v5[8..12].copy_from_slice(&5u32.to_le_bytes());
     assert_eq!(declared_sizes(&v5), declared_sizes(&artifact));
 
@@ -214,7 +219,6 @@ fn declares_the_syscall_api_version_it_is_given() {
             .expect("builds");
     assert_eq!(declared_syscall_api(&artifact), Some(version));
     assert_eq!(artifact[36..40], 9u32.to_le_bytes());
-    assert_eq!(artifact[40..48], [0; 8]);
     verify_artifact(&artifact).expect("verifies");
 
     // Only the minor is the guest's to choose.
@@ -227,13 +231,12 @@ fn declares_the_syscall_api_version_it_is_given() {
             .is_err()
     );
 
-    // v5 kept a gas schedule in these bytes, so it declares no version.
-    let mut v5 = baseline;
-    v5[8..12].copy_from_slice(&5u32.to_le_bytes());
-    assert_eq!(declared_syscall_api(&v5), None);
-
-    let mut reserved = artifact;
-    reserved[47] = 1;
-    assert_eq!(declared_syscall_api(&reserved), None);
-    assert!(verify_artifact(&reserved).is_err());
+    // A header that declares a gas schedule declares no version.
+    let gas = thruput_rv32_artifact::format::testing::with_gas_schedule_header(&baseline);
+    assert_eq!(declared_syscall_api(&gas), None);
+    assert!(verify_artifact(&gas).is_err());
+    assert_eq!(
+        declared_syscall_api(&thruput_rv32_artifact::format::testing::as_v5(&baseline)),
+        None
+    );
 }
