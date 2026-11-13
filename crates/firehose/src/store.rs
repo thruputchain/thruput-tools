@@ -283,7 +283,9 @@ impl Store {
         match self.progress.clone() {
             Some(initialized) if parked => IndexerProgress::IndexerProgressCaughtUp { initialized },
             Some(initialized) => IndexerProgress::IndexerProgressInitialized { initialized },
-            None => IndexerProgress::Default { state: 0 },
+            None => IndexerProgress::Default {
+                state: thruput_indexer::IndexerProgressState(0),
+            },
         }
     }
 

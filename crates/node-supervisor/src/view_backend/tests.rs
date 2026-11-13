@@ -42,7 +42,9 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
         assert!(query.budget_millis > 0);
         if self.mode != FakeViewGatewayMode::Batch {
             tokio::time::sleep(Duration::from_millis(200)).await;
-            return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
+            return Ok(ViewGatewayBatchResult::Default {
+                outcome: thruput_view::ViewGatewayBatchOutcome(6),
+            });
         }
         assert!(query.budget_millis > 30_000);
         assert_eq!(query.max_response_bytes, 256);

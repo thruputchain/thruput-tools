@@ -19,7 +19,7 @@ impl RpcHandler for Reply {
             return Err(RpcError::SystemError);
         }
         Ok(xdrs::txs::encode(&EventIndexerPullResult::Default {
-            outcome: self.0,
+            outcome: thruput_indexer::EventIndexerPullOutcome(self.0),
             diagnostic: "test".try_into().unwrap(),
         })
         .unwrap())

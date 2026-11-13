@@ -1991,7 +1991,7 @@ mod tests {
             _tx_hash: TransactionHash,
         ) -> Result<TxInfoResult, ProgramError> {
             Ok(TxInfoResult::Default {
-                outcome: TxInfoOutcome::TxInfoNotFound.0,
+                outcome: TxInfoOutcome::TxInfoNotFound,
             })
         }
 
@@ -2062,7 +2062,7 @@ mod tests {
                             .0
                             .iter()
                             .map(|_| DbGatewayItemResult::Default {
-                                error: RPCError::kRPCNotFound.0,
+                                error: RPCError::kRPCNotFound,
                             })
                             .collect(),
                     ),

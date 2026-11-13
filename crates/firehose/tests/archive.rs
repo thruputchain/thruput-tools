@@ -40,7 +40,7 @@ fn every_pull_outcome_is_distinct() {
     ] {
         assert_eq!(
             outcome(&EventIndexerPullResult::Default {
-                outcome: code,
+                outcome: thruput_indexer::EventIndexerPullOutcome(code),
                 diagnostic: "test".try_into().unwrap()
             }),
             expected

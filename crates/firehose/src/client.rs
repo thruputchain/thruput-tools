@@ -167,7 +167,12 @@ pub async fn discover(endpoint: &str, protocol: ProtocolCommit) -> Result<bool, 
     let result = tokio::time::timeout(Duration::from_secs(3), async {
         Client::connect(endpoint)
             .await?
-            .pull(protocol, IndexerProgress::Default { state: 0 })
+            .pull(
+                protocol,
+                IndexerProgress::Default {
+                    state: thruput_indexer::IndexerProgressState(0),
+                },
+            )
             .await
     })
     .await
@@ -207,7 +212,7 @@ mod tests {
             let request: EventIndexerPullRequest = xdrs::txs::decode(data).unwrap();
             assert_eq!(request.progress.state().0, 0);
             Ok(xdrs::txs::encode(&EventIndexerPullResult::Default {
-                outcome: 2,
+                outcome: thruput_indexer::EventIndexerPullOutcome(2),
                 diagnostic: "not ready".try_into().unwrap(),
             })
             .unwrap())
@@ -246,7 +251,9 @@ mod tests {
         let result = client
             .pull(
                 thruput_xdr::PROTOCOL_VERSION,
-                IndexerProgress::Default { state: 0 },
+                IndexerProgress::Default {
+                    state: thruput_indexer::IndexerProgressState(0),
+                },
             )
             .await
             .unwrap();
@@ -348,7 +355,7 @@ mod tests {
             self.procedures.lock().unwrap().push(procedure);
             Ok(RpcResponse::from_payload(
                 xdrs::txs::encode(&EventIndexerPullResult::Default {
-                    outcome: 2,
+                    outcome: thruput_indexer::EventIndexerPullOutcome(2),
                     diagnostic: "not ready".try_into().unwrap(),
                 })
                 .unwrap(),
@@ -374,7 +381,9 @@ mod tests {
             last_consensus_hash: thruput_xdr::types::ConsensusValueHash::new([0; 32].into()),
         };
         for progress in [
-            IndexerProgress::Default { state: 0 },
+            IndexerProgress::Default {
+                state: thruput_indexer::IndexerProgressState(0),
+            },
             IndexerProgress::IndexerProgressInitialized {
                 initialized: initialized.clone(),
             },
