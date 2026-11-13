@@ -263,10 +263,14 @@ fn typed_outcomes_never_turn_into_empty_pages() {
         Outcome::IndexerQueryOk,
         Outcome::from(i32::MAX),
     ] {
-        let event = event_page(wire::EventPageResult::Default { outcome: outcome.0 }).unwrap_err();
-        let transaction =
-            transaction_page(wire::TransactionRefPageResult::Default { outcome: outcome.0 })
-                .unwrap_err();
+        let event = event_page(wire::EventPageResult::Default {
+            outcome: xdrs::XDRDiscriminant::from_discriminant(outcome.0),
+        })
+        .unwrap_err();
+        let transaction = transaction_page(wire::TransactionRefPageResult::Default {
+            outcome: xdrs::XDRDiscriminant::from_discriminant(outcome.0),
+        })
+        .unwrap_err();
         assert_eq!(event, transaction);
         if outcome == Outcome::IndexerQueryInvalidCursor {
             assert!(matches!(event, RpcServerError::InvalidCursor(_)));

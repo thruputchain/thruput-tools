@@ -3,6 +3,7 @@
 use super::{BackendDataInvalidReason, RpcServerError, invalid};
 use thruput_indexer::{BlockLookupOutcome, BlockLookupResult};
 use thruput_json_rpc_types::{BlockHeight, block, responses as out};
+use xdrs::XDRDiscriminant;
 
 /// Only an explicit authoritative indexer miss is absence. RPC/decoding failures
 /// must reach this function's caller as errors, never as a synthetic miss.
@@ -33,7 +34,7 @@ pub fn block_lookup(
             Ok(Some(block.into()))
         }
         BlockLookupResult::Default { outcome }
-            if outcome == BlockLookupOutcome::BlockNotFound.0 =>
+            if outcome.discriminant() == BlockLookupOutcome::BlockNotFound.0 =>
         {
             Ok(None)
         }

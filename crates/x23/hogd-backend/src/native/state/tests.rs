@@ -5,7 +5,7 @@ use xdr_common::VecM;
 
 fn absent() -> DbGatewayItemResult {
     DbGatewayItemResult::Default {
-        error: RPCError::kRPCNotFound.0,
+        error: xdrs::XDRDiscriminant::from_discriminant(RPCError::kRPCNotFound.0),
     }
 }
 fn item(item: WireStorageItem) -> DbGatewayItemResult {
@@ -45,7 +45,7 @@ fn single_read_requires_one_answer_and_nonnegative_height() {
         storage(
             7.into(),
             DbGatewayItemResult::Default {
-                error: RPCError::kRPCUnrecoverable.0
+                error: xdrs::XDRDiscriminant::from_discriminant(RPCError::kRPCUnrecoverable.0)
             }
         )
         .is_err()

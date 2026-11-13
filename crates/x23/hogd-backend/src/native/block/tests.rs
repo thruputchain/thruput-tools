@@ -68,7 +68,9 @@ fn only_authoritative_misses_are_null() {
             block_lookup(
                 &height.into(),
                 BlockLookupResult::Default {
-                    outcome: BlockLookupOutcome::BlockNotFound.0
+                    outcome: xdrs::XDRDiscriminant::from_discriminant(
+                        BlockLookupOutcome::BlockNotFound.0
+                    )
                 }
             )
             .unwrap()
@@ -76,7 +78,12 @@ fn only_authoritative_misses_are_null() {
         );
     }
     assert!(matches!(
-        block_lookup(&99.into(), BlockLookupResult::Default { outcome: 999 }),
+        block_lookup(
+            &99.into(),
+            BlockLookupResult::Default {
+                outcome: xdrs::XDRDiscriminant::from_discriminant(999)
+            }
+        ),
         Err(RpcServerError::BackendDataInvalid {
             reason: BackendDataInvalidReason::UnsupportedValue,
             ..

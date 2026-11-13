@@ -6,6 +6,7 @@ use thruput_json_rpc_types::block::{ChainTip, consensus_value_hash};
 use thruput_node_rpc::{
     DbTip, ExpectedDBTip, RPCError, SchedGatewaySubmitOutcome, consensus::ConsensusValue,
 };
+use xdrs::XDRDiscriminant;
 
 /// What the scheduler gateway answered when asked for the committed tip.
 #[derive(Debug)]
@@ -133,7 +134,9 @@ pub fn tip_reading(service: &str, db_tip: DbTip) -> Result<TipReading, RpcServer
 pub fn tip_answer(service: &str, result: ExpectedDBTip) -> Result<TipAnswer, RpcServerError> {
     match result {
         ExpectedDBTip::kRPCNone { db_tip } => Ok(TipAnswer::Tip(Box::new(db_tip))),
-        ExpectedDBTip::Default { error } if RPCError(error) == RPCError::kRPCNotFound => {
+        ExpectedDBTip::Default { error }
+            if RPCError(error.discriminant()) == RPCError::kRPCNotFound =>
+        {
             Ok(TipAnswer::NoCommittedBlock)
         }
         other => Err(RpcServerError::BackendUnavailable(format!(

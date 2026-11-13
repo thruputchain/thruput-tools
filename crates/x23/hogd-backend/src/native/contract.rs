@@ -7,6 +7,7 @@ use thruput_json_rpc_types::{
 };
 use thruput_node_rpc::RPCError;
 use thruput_xdr::{contract::Contract, storage_item::WireStorageItem};
+use xdrs::XDRDiscriminant;
 
 use super::{height, invalid};
 
@@ -47,13 +48,15 @@ pub fn contract_artifact(
 ) -> Result<out::ContractArtifactResult, RpcServerError> {
     let bytes = match result {
         DbGatewayContractResult::kRPCNone { contract_xdr } => contract_xdr.0,
-        DbGatewayContractResult::Default { error } if RPCError(error) == RPCError::kRPCNotFound => {
+        DbGatewayContractResult::Default { error }
+            if RPCError(error.discriminant()) == RPCError::kRPCNotFound =>
+        {
             return Err(RpcServerError::ContractArtifactUnavailable(hash));
         }
         DbGatewayContractResult::Default { error } => {
             return Err(RpcServerError::BackendUnavailable(format!(
                 "DbGateway: {}",
-                RPCError(error)
+                RPCError(error.discriminant())
             )));
         }
         _ => {
@@ -149,14 +152,14 @@ mod tests {
         let wanted = hash(b"missing");
         assert!(
             matches!(contract_artifact(wanted, DbGatewayContractResult::Default {
-            error: RPCError::kRPCNotFound.0,
+            error: xdrs::XDRDiscriminant::from_discriminant(RPCError::kRPCNotFound.0),
         }), Err(RpcServerError::ContractArtifactUnavailable(observed)) if observed == wanted)
         );
         assert!(matches!(
             contract_artifact(
                 wanted,
                 DbGatewayContractResult::Default {
-                    error: RPCError::kRPCUnrecoverable.0,
+                    error: xdrs::XDRDiscriminant::from_discriminant(RPCError::kRPCUnrecoverable.0),
                 }
             ),
             Err(RpcServerError::BackendUnavailable(_))
@@ -167,7 +170,7 @@ mod tests {
     fn deployment_absence_requires_an_authoritative_missing_row() {
         let address = Base58(thruput_xdr::types::ContractAddress::from([7; 32]));
         let missing = DbGatewayItemResult::Default {
-            error: RPCError::kRPCNotFound.0,
+            error: xdrs::XDRDiscriminant::from_discriminant(RPCError::kRPCNotFound.0),
         };
         let result = contract_deployment(address, 42.into(), missing).unwrap();
         assert_eq!(result.address, address);
@@ -190,7 +193,7 @@ mod tests {
                 address,
                 42.into(),
                 DbGatewayItemResult::Default {
-                    error: RPCError::kRPCUnrecoverable.0,
+                    error: xdrs::XDRDiscriminant::from_discriminant(RPCError::kRPCUnrecoverable.0),
                 }
             )
             .is_err()

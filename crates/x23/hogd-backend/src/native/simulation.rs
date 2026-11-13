@@ -6,6 +6,7 @@ use thruput_json_rpc_types::{
 use thruput_view::{ViewGatewayBatchQuery, ViewGatewayBatchResult, ViewGatewayResult};
 use thruput_xdr::{event::TxEmittedEvent, transaction::InvocationFrameOutput};
 use xdr_common::VecM;
+use xdrs::XDRDiscriminant;
 
 use super::{height, invalid};
 
@@ -239,13 +240,13 @@ pub fn simulations(
             ))
         }
         ViewGatewayBatchResult::Default { outcome }
-            if outcome == Outcome::ViewGatewayBatchDeadlineExceeded.0 =>
+            if outcome.discriminant() == Outcome::ViewGatewayBatchDeadlineExceeded.0 =>
         {
             Err(RpcServerError::BackendTimeout)
         }
         ViewGatewayBatchResult::Default { outcome }
-            if outcome == Outcome::ViewGatewayBatchInvalidRequest.0
-                || outcome == Outcome::ViewGatewayBatchResponseTooLarge.0 =>
+            if outcome.discriminant() == Outcome::ViewGatewayBatchInvalidRequest.0
+                || outcome.discriminant() == Outcome::ViewGatewayBatchResponseTooLarge.0 =>
         {
             Err(RpcServerError::InvalidParam(
                 "simulation batch exceeds backend limits".into(),
@@ -253,8 +254,8 @@ pub fn simulations(
         }
         // A backend can explicitly report an internal availability failure.
         ViewGatewayBatchResult::Default { outcome }
-            if outcome == Outcome::ViewGatewayBatchInternalError.0
-                || outcome == Outcome::ViewGatewayBatchAbandoned.0 =>
+            if outcome.discriminant() == Outcome::ViewGatewayBatchInternalError.0
+                || outcome.discriminant() == Outcome::ViewGatewayBatchAbandoned.0 =>
         {
             Err(RpcServerError::BackendUnavailable(
                 "simulation batch failed".into(),
