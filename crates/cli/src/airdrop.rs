@@ -1503,7 +1503,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn airdrop_hosted_uses_the_gateway_faucet_without_a_faucet_url() {
+    fn airdrop_hosted_uses_the_gateway_faucet() {
         let _manifest = EnvGuard::set_str("THRUPUT_RUNTIME_MANIFEST", "");
         for network in [Network::Futurenet, Network::Devnet] {
             let name = network.as_str();
@@ -1644,7 +1644,6 @@ mod tests {
             rpc_url: Some("http://127.0.0.1:9545".into()),
             network_hash: None,
             rpc_url_cli_override: false,
-            faucet_url: None,
             default_key: Some("dev-0".into()),
             default_wallet: None,
             runtime_manifest: None,

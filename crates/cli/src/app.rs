@@ -1371,9 +1371,6 @@ enum ConfigCommand {
         /// Network hash the RPC endpoint serves, as base58 encoding of exactly 32 bytes
         #[arg(long)]
         network_hash: Option<String>,
-        /// Deprecated and unused: the hosted faucet is reached through the RPC URL
-        #[arg(long)]
-        faucet_url: Option<String>,
         /// Profile-specific signing key
         #[arg(long)]
         default_key: Option<String>,
@@ -1408,13 +1405,13 @@ enum ConfigCommand {
     },
     /// Set one typed field in a profile layer
     #[command(
-        long_about = "Set network, rpc-url, network-hash, faucet-url, or default-key on an existing \
+        long_about = "Set network, rpc-url, network-hash, or default-key on an existing \
                       profile in one config layer. The profile must already exist in that layer. \
                       Inside a project, pass --global or --project; outside a project, omitted \
                       scope means global."
     )]
     Set {
-        /// Field to set: network, rpc-url, network-hash, faucet-url, or default-key
+        /// Field to set: network, rpc-url, network-hash, or default-key
         field: String,
         /// New field value
         value: String,
@@ -1430,12 +1427,12 @@ enum ConfigCommand {
     },
     /// Remove one typed field from a profile layer
     #[command(
-        long_about = "Remove network, rpc-url, network-hash, faucet-url, or default-key from one config \
+        long_about = "Remove network, rpc-url, network-hash, or default-key from one config \
                       layer. Missing fields and missing target-layer profiles are no-ops. Removing \
                       a project override may reveal the inherited global value."
     )]
     Unset {
-        /// Field to remove: network, rpc-url, network-hash, faucet-url, or default-key
+        /// Field to remove: network, rpc-url, network-hash, or default-key
         field: String,
         /// Profile to update
         #[arg(long)]
@@ -1492,7 +1489,6 @@ impl ConfigCommand {
                 network,
                 rpc_url,
                 network_hash,
-                faucet_url,
                 default_key,
                 select,
                 global,
@@ -1504,7 +1500,6 @@ impl ConfigCommand {
                     network,
                     rpc_url,
                     network_hash,
-                    faucet_url,
                     default_key,
                     select,
                 },
@@ -2351,8 +2346,8 @@ mod tests {
             "devnet",
             "--rpc-url",
             "https://rpc.example",
-            "--faucet-url",
-            "https://faucet.example",
+            "--network-hash",
+            "DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT",
             "--default-key",
             "alice",
             "--use",
@@ -2415,7 +2410,7 @@ mod tests {
             "thruput",
             "config",
             "unset",
-            "faucet-url",
+            "network-hash",
             "--profile",
             "devnet",
             "--global",

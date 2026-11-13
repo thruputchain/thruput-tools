@@ -19,11 +19,16 @@ profiles used to discover their signing identity from that descriptor, so
 - Hosted airdrops go only to the RPC gateway's `faucet_requestAirdrop`. The CLI
   no longer shows the faucet's amount, cooldown, and quota before the request,
   and no longer compares the amount sent with an advertised one.
-- `faucet_url` is deprecated and unused. Existing configs still load, and
-  `--faucet-url` and `config set faucet-url` are still accepted. Hosted
-  profiles no longer require it, and `thruput init` no longer writes it. A
-  profile with no `network` and no runtime manifest now sends `airdrop` to its
-  RPC endpoint instead of reporting that it is RPC-only.
+- The `faucet_url` profile field is removed. A config that still sets it
+  loads, and the key stays in the file untouched, but `config new --faucet-url`
+  and `config set`/`unset faucet-url` are rejected; delete a leftover key by
+  hand. Hosted profiles no longer require it, and `thruput init` no longer
+  writes it. A profile with no `network` and no runtime manifest now sends
+  `airdrop` to its RPC endpoint instead of reporting that it is RPC-only.
+- Reports no longer carry `faucetUrl`: `config get --json` is schema 3,
+  `build --json` is schema 4, and `test --json` is schema 9 (the `profile`
+  object in both loses the field). `config get` shows the network hash where
+  it showed the faucet URL.
 - `airdrop --json` is schema 7: remote reports drop `faucetUrl` and `policy`
   and add `amountTokens`; the remote dry run no longer plans `GET /v1/network`.
 - The error codes `faucet_service_error`, `network_descriptor_invalid`, and
