@@ -372,10 +372,6 @@ fn merged_field(
             profile.values.network_hash.clone()?,
             profile.sources.network_hash.as_ref()?,
         ),
-        ConfigField::FaucetUrl => (
-            profile.values.faucet_url.clone()?,
-            profile.sources.faucet_url.as_ref()?,
-        ),
         ConfigField::DefaultKey => (
             profile.values.default_key.clone()?,
             profile.sources.default_key.as_ref()?,
@@ -463,8 +459,8 @@ fn get_fields(report: &ConfigGetReport) -> Vec<(String, String)> {
             safe_option_label(report.rpc_url.as_deref()),
         ),
         (
-            "Faucet URL".into(),
-            safe_option_label(report.faucet_url.as_deref()),
+            "Network hash".into(),
+            safe_option_label(report.network_hash.as_deref()),
         ),
         (
             "Default key".into(),
@@ -534,9 +530,9 @@ fn source_rows(report: &ConfigGetReport) -> Vec<[String; 3]> {
             sources.and_then(|sources| sources.rpc_url.as_ref()),
         ),
         source_row(
-            "faucet_url",
-            safe_option_label(report.faucet_url.as_deref()),
-            sources.and_then(|sources| sources.faucet_url.as_ref()),
+            "network_hash",
+            safe_option_label(report.network_hash.as_deref()),
+            sources.and_then(|sources| sources.network_hash.as_ref()),
         ),
         source_row(
             "default_key",

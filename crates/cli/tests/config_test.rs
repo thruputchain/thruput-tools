@@ -238,10 +238,7 @@ greeter = "0xbeef"
         profile.rpc_url.as_deref(),
         Some("https://testnet.thruput.network")
     );
-    assert_eq!(
-        profile.faucet_url.as_deref(),
-        Some("https://faucet.testnet.thruput.network")
-    );
+    // A leftover `faucet_url` from an older config is ignored, not rejected.
     assert_eq!(profile.default_key.as_deref(), Some("bob"));
     assert_eq!(
         profile.contracts.get("greeter").map(String::as_str),
@@ -1469,10 +1466,6 @@ fn initialize_futurenet_preserves_existing_networks_and_user_defaults() {
         Some(thruput_cli::config::Network::Futurenet)
     );
     assert_eq!(future.rpc_url.as_deref(), Some("https://custom.example"));
-    assert_eq!(
-        future.faucet_url.as_deref(),
-        Some("https://custom-faucet.example")
-    );
     assert!(future.contracts.contains_key("counter"));
     assert!(future.network_hash.is_none());
 }
@@ -1498,10 +1491,11 @@ fn initialize_profiles_pins_an_existing_built_in_futurenet_profile() {
         profile.network_hash.as_deref(),
         Some("DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT")
     );
-    // The retired field is left as the user had it.
-    assert_eq!(
-        profile.faucet_url.as_deref(),
-        Some("https://faucet.thruput.network")
+    // The retired key is left in the file as the user had it.
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("faucet_url = 'https://faucet.thruput.network'")
     );
 }
 
@@ -1523,7 +1517,6 @@ fn initialize_profiles_preserves_non_hosted_use_of_hosted_profile_names() {
     for name in ["futurenet", "devnet"] {
         let profile = thruput_cli::config::resolve_profile(tmp.path(), Some(name)).unwrap();
         assert!(profile.rpc_url.is_none());
-        assert!(profile.faucet_url.is_none());
         assert!(profile.contracts.is_empty());
     }
 }
@@ -1553,7 +1546,6 @@ fn futurenet_project_overlay_inherits_global_endpoints_and_selection() {
         resolved.rpc_url.as_deref(),
         Some("https://rpc.thruput.network")
     );
-    assert!(resolved.faucet_url.is_none());
     assert_eq!(
         resolved.network_hash.as_deref(),
         Some("DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT")
@@ -1708,7 +1700,7 @@ NATIVE_TOKEN = "0x01"
     fs::write(
         project.join("thruput.toml"),
         r#"[profile.devnet]
-faucet_url = "https://faucet.example"
+network_hash = "DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT"
 runtime_manifest = "state/runtime.json"
 
 [profile.devnet.contracts]
@@ -1742,7 +1734,7 @@ counter = "0x02"
     assert_eq!(
         resolved
             .sources
-            .faucet_url
+            .network_hash
             .as_ref()
             .map(|source| source.kind),
         Some(thruput_cli::config::ConfigSourceKind::Project)
@@ -1834,7 +1826,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     let json = serde_json::to_string(&report).unwrap();
     let roundtrip: thruput_cli::config::ConfigGetReport = serde_json::from_str(&json).unwrap();
 
-    assert!(json.contains("\"schemaVersion\":2"));
+    assert!(json.contains("\"schemaVersion\":3"));
     assert!(json.contains("\"ownerPublicKey\""));
     assert!(!json.contains("owner_public_key"));
     assert_eq!(roundtrip, report);
@@ -1856,10 +1848,12 @@ fn config_field_validation_accepts_typed_values_and_rejects_invalid_values() {
             .is_ok()
     );
     assert!(
-        thruput_cli::config::ConfigField::FaucetUrl
+        thruput_cli::config::ConfigField::RpcUrl
             .parse_value("relative/path")
             .is_err()
     );
+    // The retired faucet URL is no longer an editable field.
+    assert!(thruput_cli::config::ConfigField::from_str("faucet-url").is_err());
     assert!(
         thruput_cli::config::ConfigField::DefaultKey
             .parse_value("  ")
@@ -1884,8 +1878,7 @@ fn config_new_creates_complete_project_profile_and_preserves_unrelated_content()
         &thruput_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("https://rpc.example".into()),
-            network_hash: None,
-            faucet_url: Some("https://faucet.example".into()),
+            network_hash: Some("DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT".into()),
             default_key: Some("alice".into()),
             select: true,
         },
@@ -1901,15 +1894,15 @@ fn config_new_creates_complete_project_profile_and_preserves_unrelated_content()
         report.created_fields,
         [
             thruput_cli::config::ConfigField::DefaultKey,
-            thruput_cli::config::ConfigField::FaucetUrl,
             thruput_cli::config::ConfigField::Network,
+            thruput_cli::config::ConfigField::NetworkHash,
             thruput_cli::config::ConfigField::RpcUrl,
         ]
     );
     assert!(report.selected);
     assert_eq!(
         fs::read_to_string(report.path).unwrap(),
-        "# retained\ndefault_profile = \"staging\"\nplugin = true\n\n[profile.staging]\nnetwork = \"devnet\"\nrpc_url = \"https://rpc.example\"\nfaucet_url = \"https://faucet.example\"\ndefault_key = \"alice\"\n"
+        "# retained\ndefault_profile = \"staging\"\nplugin = true\n\n[profile.staging]\nnetwork = \"devnet\"\nrpc_url = \"https://rpc.example\"\nnetwork_hash = \"DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT\"\ndefault_key = \"alice\"\n"
     );
 }
 
@@ -1928,7 +1921,6 @@ fn config_new_rejects_existing_target_layer_profile_without_changes() {
             network: "mainnet".into(),
             rpc_url: None,
             network_hash: None,
-            faucet_url: None,
             default_key: None,
             select: true,
         },
@@ -1957,7 +1949,6 @@ fn config_new_validates_all_values_before_waiting_for_lock() {
             network: "devnet".into(),
             rpc_url: Some("relative/path".into()),
             network_hash: None,
-            faucet_url: None,
             default_key: None,
             select: false,
         },
@@ -1978,7 +1969,6 @@ fn concurrent_config_new_allows_only_one_creator() {
         network: "devnet".into(),
         rpc_url: None,
         network_hash: None,
-        faucet_url: None,
         default_key: None,
         select: false,
     };
@@ -2024,7 +2014,6 @@ fn config_new_project_allows_overlay_for_global_profile() {
             network: "devnet".into(),
             rpc_url: Some("https://project.example".into()),
             network_hash: None,
-            faucet_url: None,
             default_key: None,
             select: false,
         },
@@ -2068,7 +2057,6 @@ fn config_new_project_use_rejects_invalid_global_layer_without_changes() {
             network: "devnet".into(),
             rpc_url: None,
             network_hash: None,
-            faucet_url: None,
             default_key: None,
             select: true,
         },
@@ -2420,7 +2408,7 @@ fn config_unset_missing_project_profile_is_noop_without_creating_table() {
     let report = thruput_cli::config::unset_profile_field(
         tmp.path(),
         "missing",
-        thruput_cli::config::ConfigField::FaucetUrl,
+        thruput_cli::config::ConfigField::NetworkHash,
         false,
         true,
     )

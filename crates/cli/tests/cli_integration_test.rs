@@ -1231,7 +1231,7 @@ NATIVE_TOKEN = "0x01"
 
 [profile.devnet]
 rpc_url = "https://project-rpc.example"
-faucet_url = "https://faucet.example"
+network_hash = "DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT"
 runtime_artifacts_dir = "artifacts"
 
 [profile.devnet.contracts]
@@ -1270,7 +1270,9 @@ counter = "0x02"
     let plain_stdout = String::from_utf8_lossy(&plain.stdout);
     assert!(plain_stdout.contains("Network           devnet"));
     assert!(plain_stdout.contains("https://project-rpc.example"));
-    assert!(plain_stdout.contains("https://faucet.example"));
+    assert!(
+        plain_stdout.contains("Network hash      DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT")
+    );
     assert!(!plain_stdout.contains("Selected by:"));
     assert!(!plain_stdout.contains("Scope:"));
     assert!(!plain_stdout.contains("Runtime manifest:"));
@@ -1336,7 +1338,7 @@ rpc_url = "https://rpc.example"
     let stdout = String::from_utf8(output.stdout).unwrap();
     let payload: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(payload["command"], "config.get");
-    assert_eq!(payload["data"]["schemaVersion"], 2);
+    assert_eq!(payload["data"]["schemaVersion"], 3);
     assert_eq!(payload["data"]["selectionSource"]["kind"], "explicit");
     assert_eq!(payload["data"]["scope"], "resolved");
     assert_eq!(
@@ -1628,7 +1630,7 @@ fn config_new_accepts_futurenet_without_pinning_overlay_endpoints() {
     let config_home = tmp.path().join("config-home");
     write_global_config(
         &config_home,
-        "[profile.futurenet]\nnetwork = 'futurenet'\nrpc_url = 'https://custom.example'\nfaucet_url = 'https://faucet.example'\n",
+        "[profile.futurenet]\nnetwork = 'futurenet'\nrpc_url = 'https://custom.example'\nnetwork_hash = 'DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT'\nfaucet_url = 'https://faucet.example'\n",
     );
     std::fs::write(tmp.path().join("thruput.toml"), "").unwrap();
     let output = thruput()
@@ -1666,7 +1668,12 @@ fn config_new_accepts_futurenet_without_pinning_overlay_endpoints() {
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["data"]["network"], "futurenet");
     assert_eq!(report["data"]["rpcUrl"], "https://custom.example");
-    assert_eq!(report["data"]["faucetUrl"], "https://faucet.example");
+    assert_eq!(
+        report["data"]["networkHash"],
+        "DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT"
+    );
+    // A leftover `faucet_url` still loads, but is no longer reported.
+    assert!(report["data"].get("faucetUrl").is_none());
 }
 
 #[test]
@@ -1688,8 +1695,8 @@ fn config_new_json_creates_complete_profile_then_set_reports_noop() {
             "devnet",
             "--rpc-url",
             "https://rpc.example",
-            "--faucet-url",
-            "https://faucet.example",
+            "--network-hash",
+            "DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT",
             "--default-key",
             "alice",
             "--use",
@@ -1711,7 +1718,7 @@ fn config_new_json_creates_complete_profile_then_set_reports_noop() {
             "scope": "global",
             "path": config_home.join("thruput/config.toml"),
             "changed": true,
-            "createdFields": ["default-key", "faucet-url", "network", "rpc-url"],
+            "createdFields": ["default-key", "network", "network-hash", "rpc-url"],
             "selected": true,
         })
     );
@@ -1750,7 +1757,7 @@ fn config_new_json_creates_complete_profile_then_set_reports_noop() {
     assert!(contents.starts_with("# retained\nunknown = true\n"));
     assert!(contents.contains("default_profile = \"ci\""));
     assert!(contents.contains(
-        "[profile.ci]\nnetwork = \"devnet\"\nrpc_url = \"https://rpc.example\"\nfaucet_url = \"https://faucet.example\"\ndefault_key = \"alice\""
+        "[profile.ci]\nnetwork = \"devnet\"\nrpc_url = \"https://rpc.example\"\nnetwork_hash = \"DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT\"\ndefault_key = \"alice\""
     ));
     assert!(contents.contains("password = \"private-password\""));
     assert!(contents.contains("node_id = \"private-node\""));
@@ -5198,7 +5205,7 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "test");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(stdout["data"]["schemaVersion"], 8);
+    assert_eq!(stdout["data"]["schemaVersion"], 9);
     assert_eq!(stdout["data"]["mode"], "rv32");
     assert_eq!(stdout["data"]["package"], "demo-contract");
     assert_rv32_test_artifact(&stdout["data"]);

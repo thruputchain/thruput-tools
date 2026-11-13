@@ -660,7 +660,6 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         rpc_url: Some(rpc_url.into()),
         network_hash: None,
         rpc_url_cli_override: false,
-        faucet_url: None,
         default_key: Some(key_name.into()),
         default_wallet: None,
         runtime_manifest,

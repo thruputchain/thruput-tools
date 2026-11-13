@@ -97,7 +97,6 @@ fn init_configures_profiles_and_succeeds() {
         futurenet.rpc_url.as_deref(),
         Some("https://rpc.thruput.network")
     );
-    assert!(futurenet.faucet_url.is_none());
     assert_eq!(
         futurenet.network_hash.as_deref(),
         Some("DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT")
@@ -173,10 +172,6 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     assert_eq!(
         devnet.rpc_url.as_deref(),
         Some("https://custom-rpc.devnet.example")
-    );
-    assert_eq!(
-        devnet.faucet_url.as_deref(),
-        Some("https://custom-faucet.devnet.example")
     );
     assert_eq!(
         devnet.contracts.get("NATIVE_TOKEN").map(String::as_str),

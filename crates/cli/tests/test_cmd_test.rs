@@ -581,7 +581,7 @@ fn test_workspace_json_reports_every_member() {
     let packages = data["packages"].as_array().unwrap();
     assert_eq!(packages.len(), 2);
     assert_eq!(packages[0]["package"], "alpha-contract");
-    assert_eq!(packages[0]["schemaVersion"], 8);
+    assert_eq!(packages[0]["schemaVersion"], 9);
     assert_eq!(packages[0]["success"], true);
     assert_eq!(packages[0]["artifact"]["kind"], "rv32");
     assert_eq!(packages[1]["package"], "beta-contract");

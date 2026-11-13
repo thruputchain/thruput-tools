@@ -1089,9 +1089,9 @@ creates a project overlay from the supplied fields. Omitted fields inherit the
 same-named global profile. A global profile or a project profile without a
 matching global name needs an explicit endpoint and network hash.
 
-`faucet_url` is deprecated. Existing configs that set it still load, and
-`--faucet-url` and `config set faucet-url` are still accepted, but no command
-reads the value.
+The `faucet_url` profile field is gone. A config that still sets it loads, and
+the key is left in the file untouched, but `--faucet-url` and
+`config set faucet-url` are rejected.
 
 `network = "devnet"` remains a compatibility alias for the hosted network.
 Existing Devnet profiles, selected defaults, endpoints, wallets, and aliases
@@ -1131,8 +1131,7 @@ thruput config unset default-key --profile staging --global
 thruput config use staging --global
 ```
 
-Editable fields are `network`, `rpc-url`, `network-hash`, `default-key`, and the
-deprecated `faucet-url`.
+Editable fields are `network`, `rpc-url`, `network-hash`, and `default-key`.
 `config new` creates a profile; `config set` updates a profile that already
 exists in the selected layer. `config unset` removes only the selected layer's
 field, so removing a project override may reveal an inherited global value.

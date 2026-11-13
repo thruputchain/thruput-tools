@@ -11,7 +11,7 @@ use thruput_contract_spec::ContractSpec;
 pub(crate) const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
 
 /// Schema version of the `build --json` data payload.
-pub const BUILD_JSON_SCHEMA_VERSION: u32 = 3;
+pub const BUILD_JSON_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

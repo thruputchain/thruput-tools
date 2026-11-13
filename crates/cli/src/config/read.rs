@@ -11,7 +11,7 @@ use super::global::{LocalRuntimeState, validate_local_runtime_state};
 use super::project::{Network, ProjectProfile};
 use crate::CliError;
 
-pub const CONFIG_GET_JSON_SCHEMA_VERSION: u32 = 2;
+pub const CONFIG_GET_JSON_SCHEMA_VERSION: u32 = 3;
 pub const CONFIG_PROFILES_JSON_SCHEMA_VERSION: u32 = 1;
 
 /// A scalar profile field managed by `thruput config`.
@@ -21,7 +21,6 @@ pub enum ConfigField {
     Network,
     RpcUrl,
     NetworkHash,
-    FaucetUrl,
     DefaultKey,
 }
 
@@ -32,15 +31,14 @@ impl ConfigField {
             Self::Network => Network::from_str(value.trim())
                 .map(ConfigFieldValue::Network)
                 .map_err(|message| invalid_field(self, message)),
-            Self::RpcUrl | Self::FaucetUrl => {
+            Self::RpcUrl => {
                 let value = value.trim();
                 validate_http_url(value).map_err(|message| invalid_field(self, message))?;
                 Ok(ConfigFieldValue::String(value.to_owned()))
             }
             Self::NetworkHash => {
-                // Accept the `0x` spelling `getNetworkInfo` and the
-                // faucet descriptor emit, and store the unprefixed form the
-                // runtime manifest uses. Reuse the wire type's validation so a
+                // Accept the `0x` spelling `getNetworkInfo` emits, and store
+                // the unprefixed form the runtime manifest uses. Reuse the wire type's validation so a
                 // profile cannot hold a hash the signing path would later
                 // reject.
                 parse_network_hash(value)
@@ -75,7 +73,6 @@ impl std::fmt::Display for ConfigField {
             Self::Network => "network",
             Self::RpcUrl => "rpc-url",
             Self::NetworkHash => "network-hash",
-            Self::FaucetUrl => "faucet-url",
             Self::DefaultKey => "default-key",
         })
     }
@@ -89,7 +86,6 @@ impl FromStr for ConfigField {
             "network" => Ok(Self::Network),
             "rpc-url" => Ok(Self::RpcUrl),
             "network-hash" => Ok(Self::NetworkHash),
-            "faucet-url" => Ok(Self::FaucetUrl),
             "default-key" => Ok(Self::DefaultKey),
             _ => Err(CliError::ConfigFieldUnsupported(value.trim().to_owned())),
         }
@@ -176,8 +172,6 @@ pub struct ProfileSources {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network_hash: Option<ConfigSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub faucet_url: Option<ConfigSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_key: Option<ConfigSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_wallet: Option<ConfigSource>,
@@ -224,7 +218,6 @@ pub struct ConfigGetReport {
     pub network: Option<Network>,
     pub rpc_url: Option<String>,
     pub network_hash: Option<String>,
-    pub faucet_url: Option<String>,
     pub default_key: Option<String>,
     pub default_wallet: Option<String>,
     pub runtime_manifest: Option<PathBuf>,
@@ -484,7 +477,6 @@ impl ConfigGetReport {
             network,
             rpc_url,
             network_hash,
-            faucet_url,
             default_key,
             default_wallet,
             runtime_manifest,
@@ -501,7 +493,6 @@ impl ConfigGetReport {
             network,
             rpc_url,
             network_hash,
-            faucet_url,
             default_key,
             default_wallet,
             runtime_manifest,
@@ -710,12 +701,6 @@ pub(super) fn validate_profile(
             detail,
         })?;
     }
-    if let Some(url) = profile.faucet_url.as_deref() {
-        validate_http_url(url).map_err(|detail| ProfileFieldError::Url {
-            field: "faucet_url",
-            detail,
-        })?;
-    }
     if profile
         .default_key
         .as_deref()
@@ -822,7 +807,6 @@ fn sources_for_profile(profile: &ProjectProfile, source: &ConfigSource) -> Profi
         network: profile.network.map(|_| source.clone()),
         rpc_url: profile.rpc_url.as_ref().map(|_| source.clone()),
         network_hash: profile.network_hash.as_ref().map(|_| source.clone()),
-        faucet_url: profile.faucet_url.as_ref().map(|_| source.clone()),
         default_key: profile.default_key.as_ref().map(|_| source.clone()),
         default_wallet: profile.default_wallet.as_ref().map(|_| source.clone()),
         runtime_manifest: profile.runtime_manifest.as_ref().map(|_| source.clone()),
@@ -860,7 +844,6 @@ fn merge_profiles(mut global: PersistedProfile, project: PersistedProfile) -> Pe
     replace_scalar!(network);
     replace_scalar!(rpc_url);
     replace_scalar!(network_hash);
-    replace_scalar!(faucet_url);
     replace_scalar!(default_key);
     replace_scalar!(default_wallet);
     replace_scalar!(runtime_manifest);
