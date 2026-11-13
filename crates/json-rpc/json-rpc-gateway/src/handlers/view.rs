@@ -47,8 +47,8 @@ async fn batch_result(
             ViewGatewayBatchResult::ViewGatewayBatchOk { .. }
             | ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable { .. } => true,
             ViewGatewayBatchResult::Default { outcome } => {
-                *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchInvalidRequest.0
-                    || *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchResponseTooLarge.0
+                *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchInvalidRequest
+                    || *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchResponseTooLarge
             }
             _ => false,
         },
@@ -183,11 +183,15 @@ mod tests {
                 ViewGatewayBatchPayload, ViewGatewayBatchResult, ViewGatewayHeightUnavailable,
             };
             if let FakeViewGatewayMode::BatchOutcome(outcome) = self.mode {
-                return Ok(ViewGatewayBatchResult::Default { outcome });
+                return Ok(ViewGatewayBatchResult::Default {
+                    outcome: thruput_view::ViewGatewayBatchOutcome(outcome),
+                });
             }
             if self.mode == FakeViewGatewayMode::Slow {
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
+                return Ok(ViewGatewayBatchResult::Default {
+                    outcome: thruput_view::ViewGatewayBatchOutcome(6),
+                });
             }
             assert!(query.budget_millis > 30_000);
             assert_eq!(query.max_response_bytes, 256);

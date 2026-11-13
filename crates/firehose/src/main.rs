@@ -611,8 +611,10 @@ mod tests {
                 2 => {
                     self.sampled.notify_one();
                     Ok(
-                        xdrs::txs::encode(&thruput_node_rpc::ExpectedDBTip::Default { error: 1 })
-                            .unwrap(),
+                        xdrs::txs::encode(&thruput_node_rpc::ExpectedDBTip::Default {
+                            error: thruput_node_rpc::RPCError(1),
+                        })
+                        .unwrap(),
                     )
                 }
                 _ => panic!("unexpected scheduler procedure {procedure}"),
@@ -701,9 +703,10 @@ mod tests {
             self.cursors.lock().unwrap().push(request.progress);
             let reply = self.replies.lock().unwrap().pop_front();
             match reply {
-                Some(EventIndexerPullResult::Default { outcome: -999, .. }) => {
-                    Err(RpcError::ConnectFailed)
-                }
+                Some(EventIndexerPullResult::Default {
+                    outcome: thruput_indexer::EventIndexerPullOutcome(-999),
+                    ..
+                }) => Err(RpcError::ConnectFailed),
                 Some(reply) => Ok(xdrs::txs::encode(&reply).unwrap()),
                 None => std::future::pending().await,
             }
@@ -712,7 +715,7 @@ mod tests {
 
     fn diagnostic(outcome: i32) -> EventIndexerPullResult {
         EventIndexerPullResult::Default {
-            outcome,
+            outcome: thruput_indexer::EventIndexerPullOutcome(outcome),
             diagnostic: "scripted outcome".try_into().unwrap(),
         }
     }
@@ -1003,7 +1006,9 @@ mod tests {
             }
             assert_eq!(
                 cursors.lock().unwrap()[2],
-                IndexerProgress::Default { state: 0 }
+                IndexerProgress::Default {
+                    state: thruput_indexer::IndexerProgressState(0)
+                }
             );
             assert_eq!(metrics.bootstrapping.get(), 0);
             assert!(!metrics.is_healthy());
@@ -1118,7 +1123,9 @@ mod tests {
         assert_eq!(*states.lock().unwrap(), [0, 1, 0, 1, 2]);
         assert_eq!(
             cursors.lock().unwrap()[2],
-            IndexerProgress::Default { state: 0 }
+            IndexerProgress::Default {
+                state: thruput_indexer::IndexerProgressState(0)
+            }
         );
         let recovered = Store::open(dir.path()).unwrap();
         assert_eq!(recovered.height(), 1);

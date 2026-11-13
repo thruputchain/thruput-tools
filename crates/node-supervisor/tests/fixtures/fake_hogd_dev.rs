@@ -1289,7 +1289,7 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
                 Ok(ExpectedDBTip::kRPCNone { db_tip })
             }
             None => Ok(ExpectedDBTip::Default {
-                error: RPCError::kRPCNotFound.0,
+                error: RPCError::kRPCNotFound,
             }),
         }
     }
@@ -1392,7 +1392,7 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
         _: thruput_xdr::types::SHA256Hash,
     ) -> Result<thruput_db_gateway::DbGatewayContractResult, rpc_driver::ProgramError> {
         Ok(thruput_db_gateway::DbGatewayContractResult::Default {
-            error: thruput_node_rpc::RPCError::kRPCNotFound.0,
+            error: thruput_node_rpc::RPCError::kRPCNotFound,
         })
     }
     async fn dbgateway_get_config(
@@ -1405,7 +1405,7 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
             .clone();
         let Some(tip) = tip else {
             return Ok(thruput_db_gateway::DbGatewayConfigResult::Default {
-                error: RPCError::kRPCNotFound.0,
+                error: RPCError::kRPCNotFound,
             });
         };
         Ok(thruput_db_gateway::DbGatewayConfigResult::kRPCNone {
@@ -1458,7 +1458,7 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
                     }
                 }
                 _ => DbGatewayItemResult::Default {
-                    error: RPCError::kRPCNotFound.0,
+                    error: RPCError::kRPCNotFound,
                 },
             })
             .collect();
@@ -1571,7 +1571,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         match self.committed.get(&key) {
             Some(info) => Ok(TxInfoResult::TxInfoFound { info: info.clone() }),
             None => Ok(TxInfoResult::Default {
-                outcome: thruput_indexer::TxInfoOutcome::TxInfoNotFound.0,
+                outcome: thruput_indexer::TxInfoOutcome::TxInfoNotFound,
             }),
         }
     }
@@ -1815,7 +1815,7 @@ mod tests {
             matches!(
                 result,
                 TxInfoResult::Default { outcome }
-                    if outcome == thruput_indexer::TxInfoOutcome::TxInfoNotFound.0
+                    if outcome == thruput_indexer::TxInfoOutcome::TxInfoNotFound
             ),
             "expected TxInfoNotFound for unknown hash, got {result:?}"
         );

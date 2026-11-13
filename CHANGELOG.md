@@ -1,6 +1,22 @@
 # Changelog
 
-## 0.44.0 — v6 contract artifacts (unreleased)
+## 0.45.0
+
+- Align protocol crates at 0.66.0, the SDK at 0.61.0, and standard interfaces
+  at 0.1.74. Newly generated projects pin SDK 0.61.0.
+- Use managed hog-devnode 0.1.33, matching the new protocol identity.
+
+### Breaking Rust API changes
+
+- Rust consumers that exchange protocol or SDK types with the client, testkit,
+  or backend crates must update those dependencies together. Types from the
+  previous versions are not interchangeable.
+- RPC union `Default` payloads now carry typed outcomes and errors. For example,
+  use `error: RPCError::kRPCNotFound` instead of its integer `.0` field when
+  constructing a result. The numeric codes keep their meaning and encoding.
+- These Rust dependency changes do not change the public JSON-RPC wire format.
+
+## 0.44.0 — v6 contract artifacts
 
 - Produce RV32 v6 artifacts with canonical onchain specs in an XDR extension
   list. Readers also accept v5 artifacts, which have no embedded spec.
@@ -8,7 +24,7 @@
   contracts remain executable; upgrade all validators before deploying v6.
 - Read deployed specs with `thruput inspect` and generate TypeScript bindings
   with `thruput codegen ts --address <address> --output bindings.ts`.
-- Use protocol crates 0.64.0, SDK 0.59.0, and interfaces 0.1.72.
+- Use protocol crates 0.65.0, SDK 0.60.1, and interfaces 0.1.73.
 - Release the dual-format runtime and matching executor/SDK first, then align
   tools pins and require normal green CI and publication checks. See
   [release instructions](docs/releases.md#gh-554-format-transition).

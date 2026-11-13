@@ -108,7 +108,7 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
 
     async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
         Ok(ExpectedDBTip::Default {
-            error: RPCError::kRPCNotFound.0,
+            error: RPCError::kRPCNotFound,
         })
     }
 
@@ -280,7 +280,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         match self.committed.get(&key) {
             Some(info) => Ok(TxInfoResult::TxInfoFound { info: info.clone() }),
             None => Ok(TxInfoResult::Default {
-                outcome: thruput_indexer::TxInfoOutcome::TxInfoNotFound.0,
+                outcome: thruput_indexer::TxInfoOutcome::TxInfoNotFound,
             }),
         }
     }
@@ -297,9 +297,9 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         }
         Ok(thruput_indexer::BlockLookupResult::Default {
             outcome: if *height == 0 {
-                thruput_indexer::BlockLookupOutcome::BlockNotFound.0
+                thruput_indexer::BlockLookupOutcome::BlockNotFound
             } else {
-                999
+                thruput_indexer::BlockLookupOutcome(999)
             },
         })
     }
@@ -309,7 +309,9 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         arg0: thruput_indexer::EventQuery,
     ) -> Result<EventPageResult, ProgramError> {
         if let FakeIndexerMode::HistoryOutcome(outcome) = self.mode {
-            return Ok(EventPageResult::Default { outcome });
+            return Ok(EventPageResult::Default {
+                outcome: thruput_indexer::IndexerQueryOutcome(outcome),
+            });
         }
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail"));
@@ -348,7 +350,9 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         _arg0: AddressTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
         if let FakeIndexerMode::HistoryOutcome(outcome) = self.mode {
-            return Ok(TransactionRefPageResult::Default { outcome });
+            return Ok(TransactionRefPageResult::Default {
+                outcome: thruput_indexer::IndexerQueryOutcome(outcome),
+            });
         }
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail"));
@@ -369,7 +373,9 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         _query: thruput_indexer::BlockTransactionQuery,
     ) -> Result<TransactionRefPageResult, ProgramError> {
         if let FakeIndexerMode::HistoryOutcome(outcome) = self.mode {
-            return Ok(TransactionRefPageResult::Default { outcome });
+            return Ok(TransactionRefPageResult::Default {
+                outcome: thruput_indexer::IndexerQueryOutcome(outcome),
+            });
         }
         Err(ProgramError::msg("not implemented in fake indexer"))
     }
@@ -432,14 +438,14 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
             });
         }
         Ok(thruput_db_gateway::DbGatewayContractResult::Default {
-            error: RPCError::kRPCNotFound.0,
+            error: RPCError::kRPCNotFound,
         })
     }
     async fn dbgateway_get_config(
         &self,
     ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
         Ok(thruput_db_gateway::DbGatewayConfigResult::Default {
-            error: thruput_node_rpc::RPCError::kRPCUnimplemented.0,
+            error: thruput_node_rpc::RPCError::kRPCUnimplemented,
         })
     }
     async fn dbgateway_intro(
@@ -468,7 +474,7 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
                         }
                     }
                     _ => DbGatewayItemResult::Default {
-                        error: RPCError::kRPCUnrecoverable.0,
+                        error: RPCError::kRPCUnrecoverable,
                     },
                 };
                 Ok(DbGatewayResult::kRPCNone {
@@ -492,13 +498,13 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
                 payload: DbGatewayPayload {
                     block_height: IdxBlockHeight::from(CANNED_STORAGE_HEIGHT),
                     items: VecM(vec![DbGatewayItemResult::Default {
-                        error: RPCError::kRPCNotFound.0,
+                        error: RPCError::kRPCNotFound,
                     }]),
                 },
             }),
             FakeDbGatewayMode::RpcFail => Err(ProgramError::msg("fake DbGateway rpc-fail")),
             FakeDbGatewayMode::OuterDefault => Ok(DbGatewayResult::Default {
-                error: RPCError::kRPCUnrecoverable.0,
+                error: RPCError::kRPCUnrecoverable,
             }),
             FakeDbGatewayMode::EmptyPayload => Ok(DbGatewayResult::kRPCNone {
                 payload: DbGatewayPayload {
@@ -510,7 +516,7 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
                 payload: DbGatewayPayload {
                     block_height: IdxBlockHeight::from(CANNED_STORAGE_HEIGHT),
                     items: VecM(vec![DbGatewayItemResult::Default {
-                        error: RPCError::kRPCUnrecoverable.0,
+                        error: RPCError::kRPCUnrecoverable,
                     }]),
                 },
             }),

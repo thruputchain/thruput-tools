@@ -513,12 +513,14 @@ mod tests {
 
     fn not_found_item() -> DbGatewayItemResult {
         DbGatewayItemResult::Default {
-            error: RPCError::kRPCNotFound.0,
+            error: RPCError::kRPCNotFound,
         }
     }
 
     fn other_error_item(code: i32) -> DbGatewayItemResult {
-        DbGatewayItemResult::Default { error: code }
+        DbGatewayItemResult::Default {
+            error: thruput_node_rpc::RPCError(code),
+        }
     }
 
     #[tokio::test]

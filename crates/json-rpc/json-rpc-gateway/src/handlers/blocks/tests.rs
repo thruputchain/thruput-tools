@@ -63,9 +63,11 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
                 })
             }
             3 => Ok(BlockLookupResult::Default {
-                outcome: BlockLookupOutcome::BlockNotFound.0,
+                outcome: BlockLookupOutcome::BlockNotFound,
             }),
-            4 => Ok(BlockLookupResult::Default { outcome: 999 }),
+            4 => Ok(BlockLookupResult::Default {
+                outcome: thruput_indexer::BlockLookupOutcome(999),
+            }),
             6 => std::future::pending().await,
             _ => Err(ProgramError::msg("indexer read failed")),
         }
@@ -104,10 +106,10 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
         }
         match query.limit {
             1 => Ok(EventPageResult::Default {
-                outcome: Outcome::IndexerQueryInvalidCursor.0,
+                outcome: Outcome::IndexerQueryInvalidCursor,
             }),
             2 => Ok(EventPageResult::Default {
-                outcome: Outcome::IndexerQueryHistoryUnavailable.0,
+                outcome: Outcome::IndexerQueryHistoryUnavailable,
             }),
             3 => std::future::pending().await,
             _ => Err(ProgramError::msg("history read failed")),
@@ -131,9 +133,9 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
         }
         Ok(TransactionRefPageResult::Default {
             outcome: if query.limit == 1 {
-                Outcome::IndexerQueryInvalidCursor.0
+                Outcome::IndexerQueryInvalidCursor
             } else {
-                Outcome::IndexerQueryHistoryUnavailable.0
+                Outcome::IndexerQueryHistoryUnavailable
             },
         })
     }
@@ -152,8 +154,8 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for Indexer {
         }
         Ok(TransactionRefPageResult::Default {
             outcome: match *query.height {
-                7 => Outcome::IndexerQueryInvalidCursor.0,
-                8 => Outcome::IndexerQueryHistoryUnavailable.0,
+                7 => Outcome::IndexerQueryInvalidCursor,
+                8 => Outcome::IndexerQueryHistoryUnavailable,
                 height => unreachable!("no test pages block {height}"),
             },
         })

@@ -482,7 +482,7 @@ mod tests {
 
         async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
             Ok(ExpectedDBTip::Default {
-                error: thruput_node_rpc::RPCError::kRPCNotFound.0,
+                error: thruput_node_rpc::RPCError::kRPCNotFound,
             })
         }
 
@@ -576,7 +576,7 @@ mod tests {
     ) {
         start_fake_indexer(
             TxInfoResult::Default {
-                outcome: TxInfoOutcome::TxInfoNotFound.0,
+                outcome: TxInfoOutcome::TxInfoNotFound,
             },
             Arc::new(AtomicUsize::new(0)),
         )
@@ -785,7 +785,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let (indexer_addr, indexer) = start_fake_indexer(
             TxInfoResult::Default {
-                outcome: TxInfoOutcome::TxInfoNotFound.0,
+                outcome: TxInfoOutcome::TxInfoNotFound,
             },
             calls.clone(),
         )
@@ -848,7 +848,7 @@ mod tests {
             let indexer_calls = Arc::new(AtomicUsize::new(0));
             let (indexer_addr, indexer) = start_fake_indexer(
                 TxInfoResult::Default {
-                    outcome: TxInfoOutcome::TxInfoNotFound.0,
+                    outcome: TxInfoOutcome::TxInfoNotFound,
                 },
                 indexer_calls.clone(),
             )
@@ -994,7 +994,7 @@ mod tests {
         let indexer_calls = Arc::new(AtomicUsize::new(0));
         let (indexer_addr, _indexer) = start_fake_indexer(
             TxInfoResult::Default {
-                outcome: TxInfoOutcome::TxInfoNotFound.0,
+                outcome: TxInfoOutcome::TxInfoNotFound,
             },
             indexer_calls.clone(),
         )
@@ -1103,7 +1103,7 @@ mod tests {
         assert!(matches!(
             watchdog(scheduler.schedgateway_get_tip()).await.unwrap(),
             ExpectedDBTip::Default { error }
-                if error == thruput_node_rpc::RPCError::kRPCNotFound.0
+                if error == thruput_node_rpc::RPCError::kRPCNotFound
         ));
 
         // The backend may finish the canceled call later; the replacement lane remains usable.
@@ -1236,7 +1236,7 @@ mod tests {
 
     fn indexer_miss() -> TxInfoResult {
         TxInfoResult::Default {
-            outcome: TxInfoOutcome::TxInfoNotFound.0,
+            outcome: TxInfoOutcome::TxInfoNotFound,
         }
     }
 

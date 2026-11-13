@@ -1043,7 +1043,7 @@ mod tests {
             &self,
         ) -> Result<thruput_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
             Ok(thruput_db_gateway::DbGatewayConfigResult::Default {
-                error: thruput_node_rpc::RPCError::kRPCUnimplemented.0,
+                error: thruput_node_rpc::RPCError::kRPCUnimplemented,
             })
         }
         async fn dbgateway_intro(
