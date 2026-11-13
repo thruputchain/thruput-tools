@@ -20,12 +20,20 @@
 //! shadow. v5 also bumps the entry ABI to 3: `sp` is seeded to 0 and the
 //! guest owns stack placement (v2 seeded `sp` to the top of data memory).
 //!
-//! v6 keeps the v5 header unchanged (apart from `format_version`) and appends
-//! an extension list after initial memory: data the runtime never loads into
-//! guest memory, such as the contract spec. Adding an extension kind does not
-//! change the format. See [`crate::extension`] for the XDR definition and
-//! the rules the chain enforces. The enclosing `SHA256(XDR(Contract))`
-//! identity covers the extensions along with the rest of the artifact.
+//! v6 appends an extension list after initial memory: data the runtime never
+//! loads into guest memory, such as the contract spec. Adding an extension
+//! kind does not change the format. See [`crate::extension`] for the XDR
+//! definition and the rules the chain enforces. The enclosing
+//! `SHA256(XDR(Contract))` identity covers the extensions along with the rest
+//! of the artifact.
+//!
+//! v6 also replaces v5's gas-schedule stamp with the syscall API version the
+//! guest was built against ([`SyscallApiVersion`]). A chain admits the
+//! artifact when it implements the same major version and at least that
+//! minor; what a syscall costs is the chain's business and no longer part of
+//! the artifact. The header keeps its size and every other offset: the minor
+//! takes the old gas-table-version slot and the old digest slot is reserved,
+//! zero.
 //!
 //! Readers accept v5 too, since v5 contracts stay deployed after v6 ships: a
 //! v5 artifact reads as a v6 artifact with no extensions. Producers emit v6
@@ -41,9 +49,9 @@
 //!    16     8  vm_profile_digest
 //!    24     4  flags                   (0)
 //!    28     4  entry_abi_version       (3)
-//!    32     4  syscall_abi_version     (1)
-//!    36     4  gas_table_version       (3)
-//!    40     8  gas_schedule_digest
+//!    32     4  syscall_api_major       (1)
+//!    36     4  syscall_api_minor       (v5: gas_table_version)
+//!    40     8  reserved, zero          (v5: gas_schedule_digest)
 //!    48     4  memory_bytes            (65536)
 //!    52     4  code_size
 //!    56     4  initial_memory_size
@@ -101,18 +109,42 @@ pub const VM_PROFILE_DIGEST: u64 = 0x55c5_3a68_5f0e_b33d;
 /// and `sp` seeded to 0 — the guest owns stack placement and must set `sp`
 /// before touching the stack; v2 seeded `sp` to the top of data memory).
 pub const ENTRY_ABI_VERSION: u32 = 3;
-/// Syscall ABI version (1 = register-native: args in a0..a7, no frame).
-pub const SYSCALL_ABI_VERSION: u32 = 1;
-/// Gas-schedule table version.
-/// v3: hogd admitted canonical UNIMP (0xc0001073) as a deterministic
-/// invalid-instruction trap.
-/// hogd meters v4 (`NNInt` storage access and the bytestring syscalls priced,
-/// the cold storage read charged on first touch), but every published runtime
-/// still accepts v3, so the lowerer stamps v3 until a runtime that prices v4
-/// ships; stamping v4 would tie this build to one hogd release's digest.
-pub const GAS_TABLE_VERSION: u32 = 3;
-/// Gas-schedule consensus digest (folds in instruction + host-syscall costs).
-pub const GAS_SCHEDULE_DIGEST: u64 = 0x9183_17c2_1c46_bb60;
+/// Major version of the syscall API (`syscall_api_version.major` in the
+/// protocol's `syscalls.yaml`): the calling convention (register-native,
+/// args in a0..a7, no frame) and every syscall's number and signature. This
+/// format describes artifacts for this major only. v5 calls the same field
+/// its syscall ABI version.
+pub const SYSCALL_API_MAJOR: u32 = 1;
+
+/// The syscall API version a guest was built against: what a v6 artifact
+/// declares so a chain can decide whether it implements everything the guest
+/// may call. The protocol's `syscalls.yaml` states the versioning rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SyscallApiVersion {
+    /// Changes when anything a guest can observe changes other than by adding
+    /// a syscall. Always [`SYSCALL_API_MAJOR`] in an artifact this crate
+    /// writes.
+    pub major: u32,
+    /// Rises by one whenever syscalls are added.
+    pub minor: u32,
+}
+
+impl SyscallApiVersion {
+    /// The syscalls every chain on [`SYSCALL_API_MAJOR`] offers. For an
+    /// artifact assembled without a guest to ask, such as a test fixture or
+    /// a size probe; an artifact for a real guest declares the version its
+    /// SDK was built against.
+    pub const BASELINE: Self = Self {
+        major: SYSCALL_API_MAJOR,
+        minor: 0,
+    };
+}
+
+impl std::fmt::Display for SyscallApiVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
 /// Digest size of each section hash stamped into the artifact header.
 pub const DIGEST_BYTES: usize = 32;
 
@@ -122,9 +154,12 @@ pub const HEADER_SIZE_OFFSET: usize = 12;
 pub const VM_PROFILE_OFFSET: usize = 16;
 pub const FLAGS_OFFSET: usize = 24;
 pub const ENTRY_ABI_OFFSET: usize = 28;
-pub const SYSCALL_ABI_OFFSET: usize = 32;
-pub const GAS_VERSION_OFFSET: usize = 36;
-pub const GAS_DIGEST_OFFSET: usize = 40;
+pub const SYSCALL_API_MAJOR_OFFSET: usize = 32;
+pub const SYSCALL_API_MINOR_OFFSET: usize = 36;
+/// Eight reserved bytes a v6 producer writes as zero. v5 kept its
+/// gas-schedule digest here.
+pub const RESERVED_OFFSET: usize = 40;
+pub const RESERVED_BYTES: usize = 8;
 pub const MEMORY_BYTES_OFFSET: usize = 48;
 pub const CODE_SIZE_OFFSET: usize = 52;
 pub const INITIAL_MEMORY_SIZE_OFFSET: usize = 56;
@@ -136,9 +171,7 @@ const _: () = assert!(INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES == HEADER_BYTE
 
 // Project-specific seeded FNV-1a fold. NOTE: FNV_OFFSET_BASIS is intentionally
 // NOT the canonical 64-bit FNV-1a basis (0xcbf29ce484222325); it is a fixed
-// project seed shared byte-for-byte with hogd's `kFnvOffsetBasis`. It also
-// seeds the consensus gas-schedule digest, so changing it would alter every
-// emitted artifact's gas digest — a format break, not a cleanup. The fold
+// project seed shared byte-for-byte with hogd's `kFnvOffsetBasis`. The fold
 // only needs a *consistent* seed across the two implementations, which the
 // cross-repo fingerprint check enforces. Do not "fix" to the canonical value.
 const FNV_OFFSET_BASIS: u64 = 1_469_598_103_934_665_603;
@@ -150,7 +183,7 @@ const FLAGS_REQUIRED_VALUE: u32 = 0;
 
 /// Pinned v6 artifact-format contract fingerprint. hogd pins the same value
 /// as `kArtifactFormatFingerprint` in `rv32/artifact.h`.
-pub const FORMAT_FINGERPRINT: u64 = 0x0e33_6ac8_e466_02e1;
+pub const FORMAT_FINGERPRINT: u64 = 0xdded_c325_bf55_06be;
 const _: () = assert!(compute_format_fingerprint() == FORMAT_FINGERPRINT);
 
 const fn fnv_digest_byte(digest: u64, value: u8) -> u64 {
@@ -279,9 +312,7 @@ const fn compute_format_fingerprint_with_inputs(
     digest = format_fingerprint_u64(digest, b"vm_profile_digest", VM_PROFILE_DIGEST);
     digest = format_fingerprint_u64(digest, b"flags_required_value", FLAGS_REQUIRED_VALUE as u64);
     digest = format_fingerprint_u64(digest, b"entry_abi_version", ENTRY_ABI_VERSION as u64);
-    digest = format_fingerprint_u64(digest, b"syscall_abi_version", SYSCALL_ABI_VERSION as u64);
-    digest = format_fingerprint_u64(digest, b"gas_table_version", GAS_TABLE_VERSION as u64);
-    digest = format_fingerprint_u64(digest, b"gas_schedule_digest", GAS_SCHEDULE_DIGEST);
+    digest = format_fingerprint_u64(digest, b"syscall_api_major", SYSCALL_API_MAJOR as u64);
 
     digest = fold_layout_field(
         digest,
@@ -327,24 +358,24 @@ const fn compute_format_fingerprint_with_inputs(
     );
     digest = fold_layout_field(
         digest,
-        b"header.syscall_abi.offset",
-        b"header.syscall_abi.size",
-        SYSCALL_ABI_OFFSET,
+        b"header.syscall_api_major.offset",
+        b"header.syscall_api_major.size",
+        SYSCALL_API_MAJOR_OFFSET,
         4,
     );
     digest = fold_layout_field(
         digest,
-        b"header.gas_version.offset",
-        b"header.gas_version.size",
-        GAS_VERSION_OFFSET,
+        b"header.syscall_api_minor.offset",
+        b"header.syscall_api_minor.size",
+        SYSCALL_API_MINOR_OFFSET,
         4,
     );
     digest = fold_layout_field(
         digest,
-        b"header.gas_digest.offset",
-        b"header.gas_digest.size",
-        GAS_DIGEST_OFFSET,
-        8,
+        b"header.reserved.offset",
+        b"header.reserved.size",
+        RESERVED_OFFSET,
+        RESERVED_BYTES,
     );
     digest = fold_layout_field(
         digest,
@@ -396,6 +427,10 @@ const fn compute_format_fingerprint_with_inputs(
     );
     digest = format_fingerprint_u64(digest, b"digest_bytes", DIGEST_BYTES as u64);
     digest = format_fingerprint_u64(digest, b"instruction_bytes", INSTRUCTION_BYTES as u64);
+    // The minor itself is not folded: it is the guest's, and a chain admits
+    // any minor up to its own.
+    digest = format_fingerprint_u64(digest, b"syscall_api_minor_le_host", 1);
+    digest = format_fingerprint_u64(digest, b"reserved_zero", 1);
     // The code and memory bounds are a chain's configuration, not part of the
     // format: the header fields are 32-bit either way, and what a chain admits
     // is checked where a contract is attached.
@@ -445,6 +480,10 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// artifact declares: the stored span must fit inside it, and an empty image
 /// must use base 0. How much code and memory a chain admits is its
 /// configuration, checked where the contract is attached rather than here.
+///
+/// The artifact declares [`SyscallApiVersion::BASELINE`]: this is for
+/// artifacts assembled without a guest, such as test fixtures and size
+/// probes. Lowering a real guest stamps the version its ELF records.
 pub fn build_artifact(
     code: &[u8],
     initial_memory: &[u8],
@@ -452,6 +491,7 @@ pub fn build_artifact(
     memory_bytes: usize,
 ) -> Result<Vec<u8>> {
     build_artifact_with_extensions(
+        SyscallApiVersion::BASELINE,
         code,
         initial_memory,
         initial_memory_start,
@@ -463,6 +503,7 @@ pub fn build_artifact(
 /// Assemble a v6 artifact with an optional contract spec, carried as a
 /// [`EXTENSION_KIND_CONTRACT_SPEC`] extension.
 pub fn build_artifact_with_spec(
+    syscall_api: SyscallApiVersion,
     code: &[u8],
     initial_memory: &[u8],
     initial_memory_start: usize,
@@ -479,6 +520,7 @@ pub fn build_artifact_with_spec(
         .into_iter()
         .collect();
     build_artifact_with_extensions(
+        syscall_api,
         code,
         initial_memory,
         initial_memory_start,
@@ -488,8 +530,9 @@ pub fn build_artifact_with_spec(
 }
 
 /// Assemble a v6 artifact carrying `extensions`, which must be in strictly
-/// ascending, nonzero `kind` order.
+/// ascending, nonzero `kind` order, for a guest built against `syscall_api`.
 pub fn build_artifact_with_extensions(
+    syscall_api: SyscallApiVersion,
     code: &[u8],
     initial_memory: &[u8],
     initial_memory_start: usize,
@@ -497,6 +540,15 @@ pub fn build_artifact_with_extensions(
     extensions: &[ArtifactExtension<'_>],
 ) -> Result<Vec<u8>> {
     let extensions = encode_extensions(extensions)?;
+    // This format describes one major. The minor is the guest's: a chain,
+    // not the producer, decides how recent a minor it admits.
+    if syscall_api.major != SYSCALL_API_MAJOR {
+        return Err(invalid(format!(
+            "syscall API major {} is not {SYSCALL_API_MAJOR}, the one this artifact format \
+             describes",
+            syscall_api.major
+        )));
+    }
     // The loader rejects code_size == 0; refuse to emit such an artifact even
     // when called directly (not via `lower`).
     if code.is_empty() {
@@ -535,9 +587,9 @@ pub fn build_artifact_with_extensions(
     header.extend_from_slice(&VM_PROFILE_DIGEST.to_le_bytes());
     header.extend_from_slice(&FLAGS_REQUIRED_VALUE.to_le_bytes());
     header.extend_from_slice(&ENTRY_ABI_VERSION.to_le_bytes());
-    header.extend_from_slice(&SYSCALL_ABI_VERSION.to_le_bytes());
-    header.extend_from_slice(&GAS_TABLE_VERSION.to_le_bytes());
-    header.extend_from_slice(&GAS_SCHEDULE_DIGEST.to_le_bytes());
+    header.extend_from_slice(&syscall_api.major.to_le_bytes());
+    header.extend_from_slice(&syscall_api.minor.to_le_bytes());
+    header.extend_from_slice(&[0; RESERVED_BYTES]);
     header.extend_from_slice(&to_u32(memory_bytes, "memory bytes")?.to_le_bytes());
     header.extend_from_slice(&code_size.to_le_bytes());
     header.extend_from_slice(&memory_size.to_le_bytes());
@@ -596,14 +648,43 @@ pub fn declared_sizes(artifact: &[u8]) -> Option<DeclaredSizes> {
     })
 }
 
-/// Re-parse a freshly-written artifact and confirm magic, the format/ABI/gas
+/// The syscall API version a v6 artifact declares.
+///
+/// `None` when `artifact` does not carry a readable v6 header, including a v5
+/// artifact, which declares a gas schedule in these bytes instead, and a v6
+/// header whose reserved bytes are not zero. The rest of the artifact is not
+/// verified.
+pub fn declared_syscall_api(artifact: &[u8]) -> Option<SyscallApiVersion> {
+    if artifact.len() < HEADER_BYTES || artifact[..MAGIC.len()] != MAGIC {
+        return None;
+    }
+    let read_u32 = |off: usize| -> Option<u32> {
+        artifact
+            .get(off..off + 4)?
+            .try_into()
+            .ok()
+            .map(u32::from_le_bytes)
+    };
+    if read_u32(FORMAT_VERSION_OFFSET)? != FORMAT_VERSION
+        || artifact[RESERVED_OFFSET..RESERVED_OFFSET + RESERVED_BYTES] != [0; RESERVED_BYTES]
+    {
+        return None;
+    }
+    Some(SyscallApiVersion {
+        major: read_u32(SYSCALL_API_MAJOR_OFFSET)?,
+        minor: read_u32(SYSCALL_API_MINOR_OFFSET)?,
+    })
+}
+
+/// Re-parse a freshly-written artifact and confirm magic, the format/ABI
 /// stamps, the canonical section layout, the two section digests, and the
 /// extension list's framing. Cheap insurance against a writer regression
 /// slipping past until the C++ parser flags it.
 ///
-/// This is the producer check, so it accepts only [`FORMAT_VERSION`] and this
-/// build's gas schedule. Readers of deployed artifacts use
-/// [`artifact_extensions`] or [`artifact_spec`], which also accept v5.
+/// This is the producer check, so it accepts only [`FORMAT_VERSION`] with
+/// zero reserved bytes. Readers of deployed artifacts use
+/// [`artifact_extensions`] or [`artifact_spec`], which also accept v5 and do
+/// not read the bytes v5 kept its gas schedule in.
 pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     let container = verify_container(artifact)?;
     if container.format_version != FORMAT_VERSION {
@@ -612,18 +693,8 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
             container.format_version
         )));
     }
-    let gas_version = u32::from_le_bytes(
-        artifact[GAS_VERSION_OFFSET..GAS_VERSION_OFFSET + 4]
-            .try_into()
-            .expect("bug: verified header"),
-    );
-    let gas_digest = u64::from_le_bytes(
-        artifact[GAS_DIGEST_OFFSET..GAS_DIGEST_OFFSET + 8]
-            .try_into()
-            .expect("bug: verified header"),
-    );
-    if gas_version != GAS_TABLE_VERSION || gas_digest != GAS_SCHEDULE_DIGEST {
-        return Err(verify("gas schedule mismatch"));
+    if artifact[RESERVED_OFFSET..RESERVED_OFFSET + RESERVED_BYTES] != [0; RESERVED_BYTES] {
+        return Err(verify("reserved header bytes must be zero"));
     }
     if artifact[MEMORY_BYTES_OFFSET..MEMORY_BYTES_OFFSET + 4] == [0; 4] {
         return Err(verify("memory_bytes out of range"));
@@ -679,8 +750,8 @@ fn verify_container(artifact: &[u8]) -> Result<Container<'_>> {
     if read_u32(ENTRY_ABI_OFFSET) != ENTRY_ABI_VERSION {
         return Err(verify("entry_abi mismatch"));
     }
-    if read_u32(SYSCALL_ABI_OFFSET) != SYSCALL_ABI_VERSION {
-        return Err(verify("syscall_abi mismatch"));
+    if read_u32(SYSCALL_API_MAJOR_OFFSET) != SYSCALL_API_MAJOR {
+        return Err(verify("syscall API major mismatch"));
     }
     if read_u32(FLAGS_OFFSET) != FLAGS_REQUIRED_VALUE {
         return Err(verify("flags must be zero"));

@@ -26,7 +26,9 @@ pub mod metadata;
 pub use error::{LowerError, Result};
 pub use lower::{
     ALLOC_ALLOWLIST, INTERFACE_ID_BYTES, INTERFACE_TABLE_ANCHOR_SECTION, INTERFACE_TABLE_SECTION,
-    LowerOptions, Lowered, lower, lower_with,
+    LowerOptions, Lowered, SYSCALL_API_RECORD_BYTES, SYSCALL_API_SECTION, lower, lower_with,
 };
 pub use metadata::{MetadataInput, render_metadata, summary_json};
-pub use thruput_rv32_artifact::{FORMAT_FINGERPRINT, compute_format_fingerprint};
+pub use thruput_rv32_artifact::{
+    FORMAT_FINGERPRINT, SyscallApiVersion, compute_format_fingerprint,
+};

@@ -12,7 +12,7 @@
 use thruput_rv32_artifact::{FORMAT_FINGERPRINT, verify_artifact};
 use thruput_rv32_lower::{
     ALLOC_ALLOWLIST, INTERFACE_ID_BYTES, INTERFACE_TABLE_ANCHOR_SECTION, INTERFACE_TABLE_SECTION,
-    MetadataInput, lower, render_metadata,
+    MetadataInput, SYSCALL_API_SECTION, SyscallApiVersion, lower, render_metadata,
 };
 
 // ---------------------------------------------------------------------------
@@ -124,8 +124,26 @@ fn push_shdr(
 
 /// Assemble a complete ELF file. Section table layout:
 /// `[0]=NULL, [1]=.text, [2..]=extras, then .symtab, .strtab, .shstrtab`.
+///
+/// Adds the syscall API version record every SDK-built guest carries, unless
+/// the spec supplies its own [`SYSCALL_API_SECTION`].
+fn assemble(mut spec: ElfSpec) -> Vec<u8> {
+    if !spec.extras.iter().any(|e| e.name == SYSCALL_API_SECTION) {
+        spec.extras.push(syscall_api_record(1, 1));
+    }
+    assemble_exactly(spec)
+}
+
+/// The non-alloc record section `thruput-sdk` emits: major then minor.
+fn syscall_api_record(major: u32, minor: u32) -> ExtraSection {
+    let mut bytes = major.to_le_bytes().to_vec();
+    bytes.extend_from_slice(&minor.to_le_bytes());
+    ExtraSection::progbits(SYSCALL_API_SECTION, 0, 0, bytes)
+}
+
+/// [`assemble`] without the implied syscall API version record.
 #[allow(clippy::too_many_lines)]
-fn assemble(spec: ElfSpec) -> Vec<u8> {
+fn assemble_exactly(spec: ElfSpec) -> Vec<u8> {
     let extra_count = spec.extras.len();
     let symtab_idx = as_u32(2 + extra_count);
     let strtab_idx = symtab_idx + 1;
@@ -1495,4 +1513,70 @@ fn cli_preserves_existing_artifact_when_metadata_cannot_be_opened() {
     std::fs::write(&out, b"previous artifact").unwrap();
     assert_cli_error(&run_cli(&elf, &out, Some(&metadata), true), true, "");
     assert_eq!(std::fs::read(&out).unwrap(), b"previous artifact");
+}
+
+// ---------------------------------------------------------------------------
+// Syscall API version record.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stamps_the_syscall_api_version_the_elf_records() {
+    use thruput_rv32_artifact::declared_syscall_api;
+
+    let mut spec = happy_spec();
+    spec.extras.push(syscall_api_record(1, 7));
+    let lowered = lower(&assemble(spec)).expect("lowers");
+    let version = SyscallApiVersion { major: 1, minor: 7 };
+    assert_eq!(lowered.syscall_api, version);
+    assert_eq!(declared_syscall_api(&lowered.artifact), Some(version));
+    // Major, minor, then the reserved bytes.
+    assert_eq!(lowered.artifact[32..36], 1u32.to_le_bytes());
+    assert_eq!(lowered.artifact[36..40], 7u32.to_le_bytes());
+    assert_eq!(lowered.artifact[40..48], [0; 8]);
+    verify_artifact(&lowered.artifact).expect("artifact self-verifies");
+}
+
+#[test]
+fn rejects_an_elf_without_a_syscall_api_record() {
+    let err = lower(&assemble_exactly(happy_spec())).expect_err("no record");
+    let message = err.to_string();
+    assert!(message.contains(SYSCALL_API_SECTION), "{message}");
+    assert!(message.contains("thruput-sdk 0.61.1"), "{message}");
+}
+
+#[test]
+fn rejects_a_malformed_syscall_api_record() {
+    // Two SDKs linked in: two records in one section.
+    let mut doubled = happy_spec();
+    let mut record = syscall_api_record(1, 1);
+    record
+        .file_bytes
+        .extend_from_slice(&[1, 0, 0, 0, 1, 0, 0, 0]);
+    doubled.extras.push(record);
+    let message = lower(&assemble(doubled))
+        .expect_err("two records")
+        .to_string();
+    assert!(message.contains("holds 16 bytes"), "{message}");
+
+    let mut empty = happy_spec();
+    let mut record = syscall_api_record(1, 1);
+    record.file_bytes.clear();
+    empty.extras.push(record);
+    assert!(lower(&assemble(empty)).is_err());
+
+    let mut twice = happy_spec();
+    twice.extras.push(syscall_api_record(1, 1));
+    twice.extras.push(syscall_api_record(1, 1));
+    let message = lower(&assemble(twice))
+        .expect_err("two sections")
+        .to_string();
+    assert!(message.contains("exactly one"), "{message}");
+}
+
+#[test]
+fn rejects_a_syscall_api_major_this_format_does_not_describe() {
+    let mut spec = happy_spec();
+    spec.extras.push(syscall_api_record(2, 0));
+    let message = lower(&assemble(spec)).expect_err("major 2").to_string();
+    assert!(message.contains("syscall API 2.0"), "{message}");
 }

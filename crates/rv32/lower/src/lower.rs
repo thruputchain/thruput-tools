@@ -11,7 +11,8 @@ use std::collections::HashSet;
 use crate::elf::{self, Section};
 use crate::error::{LowerError, Result, invalid};
 use thruput_rv32_artifact::{
-    DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, build_artifact, verify_artifact,
+    DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, SYSCALL_API_MAJOR, SyscallApiVersion,
+    build_artifact_with_extensions, verify_artifact,
 };
 
 /// Allocatable sections an rv32 contract image may contain. Anything else with
@@ -90,6 +91,15 @@ pub const LEGACY_FINAL_SPEC_SECTION_PREFIX: &str = "groundhogspecv";
 /// Name of the finalized contract-spec section this SDK generation writes.
 pub const FINAL_SPEC_SECTION: &str = "thruputspecv2";
 
+/// Section holding the syscall API version the guest was built against: one
+/// record of [`SYSCALL_API_RECORD_BYTES`] bytes, the major then the minor
+/// version as little-endian `u32`s. `thruput-sdk` emits it and its linker
+/// script keeps it out of guest memory. The name carries the record's layout
+/// version.
+pub const SYSCALL_API_SECTION: &str = "thruputsyscallapiv0";
+/// Size of the record in [`SYSCALL_API_SECTION`].
+pub const SYSCALL_API_RECORD_BYTES: usize = 8;
+
 /// The product of lowering: the serialized artifact plus the pieces that went
 /// into it (handy for metadata and tests).
 ///
@@ -112,6 +122,9 @@ pub struct Lowered {
     pub initial_memory_start: usize,
     /// Total guest data address space, in bytes.
     pub memory_bytes: usize,
+    /// The syscall API version the guest was built against, as its ELF
+    /// records it and the artifact declares it.
+    pub syscall_api: SyscallApiVersion,
     /// Non-fatal findings about the input, for the caller to surface. Today:
     /// duplicate ids in the interface table, and a code section past the
     /// protocol-default code limit.
@@ -162,6 +175,7 @@ pub fn lower_with(elf_bytes: &[u8], options: &LowerOptions) -> Result<Lowered> {
     let sections = elf::parse_elf(elf_bytes)?;
     let (code, initial_memory, initial_memory_start) =
         validate_sections(elf_bytes, &sections, *options)?;
+    let syscall_api = syscall_api_version(elf_bytes, &sections)?;
     let mut warnings = check_interface_table(elf_bytes, &sections)?;
     // Not a refusal: the lowerer does not know the target chain, and a chain
     // configured above the protocol default admits this code. The warning
@@ -176,11 +190,13 @@ pub fn lower_with(elf_bytes: &[u8], options: &LowerOptions) -> Result<Lowered> {
             code.len()
         ));
     }
-    let artifact = build_artifact(
+    let artifact = build_artifact_with_extensions(
+        syscall_api,
         &code,
         &initial_memory,
         initial_memory_start,
         options.memory_bytes,
+        &[],
     )?;
     verify_artifact(&artifact)?;
     Ok(Lowered {
@@ -189,8 +205,66 @@ pub fn lower_with(elf_bytes: &[u8], options: &LowerOptions) -> Result<Lowered> {
         initial_memory,
         initial_memory_start,
         memory_bytes: options.memory_bytes,
+        syscall_api,
         warnings,
     })
+}
+
+/// Read the syscall API version the guest was built against from
+/// [`SYSCALL_API_SECTION`].
+///
+/// The artifact has to declare it and only the guest's SDK knows it, so an
+/// ELF without the record cannot be lowered: there is no version to assume
+/// that a chain could rely on.
+fn syscall_api_version(data: &[u8], sections: &[Section]) -> Result<SyscallApiVersion> {
+    let mut records = sections.iter().filter(|s| s.name == SYSCALL_API_SECTION);
+    let section = match (records.next(), records.next()) {
+        (Some(section), None) => section,
+        (None, _) => {
+            return Err(invalid(format!(
+                "the ELF does not record the syscall API version it was built against (no \
+                 {SYSCALL_API_SECTION} section); build the contract with thruput-sdk 0.61.1 or \
+                 later"
+            )));
+        }
+        (Some(_), Some(_)) => {
+            return Err(invalid(format!(
+                "expected exactly one {SYSCALL_API_SECTION} section"
+            )));
+        }
+    };
+    if section.is_nobits() || section.size as usize != SYSCALL_API_RECORD_BYTES {
+        return Err(invalid(format!(
+            "section {SYSCALL_API_SECTION} holds {} bytes, expected one \
+             {SYSCALL_API_RECORD_BYTES}-byte record; the contract links more than one \
+             thruput-sdk, or none",
+            if section.is_nobits() { 0 } else { section.size }
+        )));
+    }
+    let off = section.offset as usize;
+    let record = off
+        .checked_add(SYSCALL_API_RECORD_BYTES)
+        .and_then(|end| data.get(off..end))
+        .ok_or_else(|| {
+            invalid(format!(
+                "section {SYSCALL_API_SECTION} extends past end of file"
+            ))
+        })?;
+    let word = |at: usize| {
+        u32::from_le_bytes([record[at], record[at + 1], record[at + 2], record[at + 3]])
+    };
+    let version = SyscallApiVersion {
+        major: word(0),
+        minor: word(4),
+    };
+    if version.major != SYSCALL_API_MAJOR {
+        return Err(invalid(format!(
+            "the contract was built against syscall API {version}, but this lowerer writes \
+             artifacts for major version {SYSCALL_API_MAJOR}; use a thruput CLI that matches \
+             the contract's thruput-sdk"
+        )));
+    }
+    Ok(version)
 }
 
 fn spans_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {

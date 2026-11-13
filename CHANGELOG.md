@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### RV32 artifacts declare a syscall API version instead of a gas schedule
+
+A v6 artifact header now carries the syscall API version the guest was built
+against, in place of the gas table version and gas schedule digest. A chain
+admits the artifact when it implements the same major version and at least that
+minor; gas prices are the chain's and are no longer stamped into the artifact.
+The header keeps its size and every other offset.
+
+- `thruput build` and `rv32-lower` read the version from the guest ELF's
+  `thruputsyscallapiv0` section, which `thruput-sdk` 0.61.1 and later emit.
+  An ELF without it is refused: rebuild the contract with SDK 0.61.1 or later.
+- Artifacts built by this CLI need a runtime that admits the new header.
+  Artifacts built by earlier CLIs are still readable (`contract spec` and
+  similar), but are not what this CLI produces or verifies.
+- The lowering metadata and `rv32-lower --json` report `syscall_api_version`.
+  The artifact format fingerprint is now `0xddedc325bf5506be`.
+
+#### Breaking Rust API changes
+
+- `thruput-rv32-artifact`: `build_artifact_with_spec` and
+  `build_artifact_with_extensions` take a leading `SyscallApiVersion`;
+  `build_artifact` stamps `SyscallApiVersion::BASELINE`. `GAS_TABLE_VERSION`,
+  `GAS_SCHEDULE_DIGEST`, `GAS_VERSION_OFFSET`, `GAS_DIGEST_OFFSET`,
+  `SYSCALL_ABI_VERSION` and `SYSCALL_ABI_OFFSET` are removed; see
+  `SYSCALL_API_MAJOR`, `SYSCALL_API_MAJOR_OFFSET`, `SYSCALL_API_MINOR_OFFSET`
+  and `RESERVED_OFFSET`. `declared_syscall_api` reads the version back.
+- `thruput-rv32-lower`: `Lowered` gains `syscall_api`.
+
 ### Profiles pin their network hash; the faucet descriptor is gone
 
 The CLI no longer requests `GET /v1/network` from a faucet host. Hosted

@@ -163,6 +163,7 @@ mod tests {
         };
         let bytes = xdrs::txs::encode(&spec).unwrap();
         let data = build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,
@@ -197,6 +198,7 @@ mod tests {
             ("absent", None)
         );
         let data = build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,
@@ -255,6 +257,7 @@ mod tests {
         bytes.extend(ContractTypeKind::U8.0.to_be_bytes());
         bytes.extend([0; 12]);
         let data = build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,

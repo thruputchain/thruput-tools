@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::Value;
-use thruput_rv32_artifact::{FORMAT_FINGERPRINT, sha256_hex};
+use thruput_rv32_artifact::{FORMAT_FINGERPRINT, declared_syscall_api, sha256_hex};
 
 use crate::lower::Lowered;
 
@@ -64,6 +64,11 @@ pub fn render_metadata(input: &MetadataInput) -> String {
         Value::from(input.initial_memory_start),
     );
     doc.insert("artifact_bytes", Value::from(input.artifact.len()));
+    // What the artifact declares, read back from its header.
+    doc.insert(
+        "syscall_api_version",
+        declared_syscall_api(input.artifact).map_or(Value::Null, |v| Value::String(v.to_string())),
+    );
     doc.insert("rustc_version", optional(input.rustc_version.as_ref()));
     doc.insert("target_triple", optional(input.target_triple.as_ref()));
     doc.insert("build_flags", optional(input.build_flags.as_ref()));
@@ -90,6 +95,7 @@ pub fn summary_json(out: &str, lowered: &Lowered) -> String {
         "memory_bytes": lowered.memory_bytes,
         "initial_memory_bytes": lowered.initial_memory.len(),
         "initial_memory_start": lowered.initial_memory_start,
+        "syscall_api_version": lowered.syscall_api.to_string(),
         "warnings": lowered.warnings,
     });
     doc.to_string()

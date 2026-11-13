@@ -191,3 +191,49 @@ fn declared_sizes_reads_the_header_and_nothing_else() {
     assert_eq!(declared_sizes(&other_version), None);
     assert_eq!(declared_sizes(&[]), None);
 }
+
+#[test]
+fn declares_the_syscall_api_version_it_is_given() {
+    use thruput_rv32_artifact::{
+        SYSCALL_API_MAJOR, SyscallApiVersion, build_artifact_with_extensions, declared_syscall_api,
+    };
+
+    let baseline = build_artifact(&[0u8; 8], &[], 0, DEFAULT_MEMORY_BYTES).expect("builds");
+    assert_eq!(
+        declared_syscall_api(&baseline),
+        Some(SyscallApiVersion::BASELINE)
+    );
+    assert_eq!(SyscallApiVersion::BASELINE.to_string(), "1.0");
+
+    let version = SyscallApiVersion {
+        major: SYSCALL_API_MAJOR,
+        minor: 9,
+    };
+    let artifact =
+        build_artifact_with_extensions(version, &[0u8; 8], &[], 0, DEFAULT_MEMORY_BYTES, &[])
+            .expect("builds");
+    assert_eq!(declared_syscall_api(&artifact), Some(version));
+    assert_eq!(artifact[36..40], 9u32.to_le_bytes());
+    assert_eq!(artifact[40..48], [0; 8]);
+    verify_artifact(&artifact).expect("verifies");
+
+    // Only the minor is the guest's to choose.
+    let other_major = SyscallApiVersion {
+        major: SYSCALL_API_MAJOR + 1,
+        minor: 0,
+    };
+    assert!(
+        build_artifact_with_extensions(other_major, &[0u8; 8], &[], 0, DEFAULT_MEMORY_BYTES, &[])
+            .is_err()
+    );
+
+    // v5 kept a gas schedule in these bytes, so it declares no version.
+    let mut v5 = baseline;
+    v5[8..12].copy_from_slice(&5u32.to_le_bytes());
+    assert_eq!(declared_syscall_api(&v5), None);
+
+    let mut reserved = artifact;
+    reserved[47] = 1;
+    assert_eq!(declared_syscall_api(&reserved), None);
+    assert!(verify_artifact(&reserved).is_err());
+}

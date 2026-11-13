@@ -16,11 +16,27 @@ const SPEC: ArtifactSpec<'static> = ArtifactSpec {
 const SECTIONS_END: usize = HEADER_BYTES + 4 + 2;
 
 fn with_spec(spec: ArtifactSpec<'_>) -> Vec<u8> {
-    build_artifact_with_spec(&[0; 4], &[7, 8], 14, 16, Some(spec)).unwrap()
+    build_artifact_with_spec(
+        thruput_rv32_artifact::SyscallApiVersion::BASELINE,
+        &[0; 4],
+        &[7, 8],
+        14,
+        16,
+        Some(spec),
+    )
+    .unwrap()
 }
 
 fn with_extensions(extensions: &[ArtifactExtension<'_>]) -> Vec<u8> {
-    build_artifact_with_extensions(&[0; 4], &[7, 8], 14, 16, extensions).unwrap()
+    build_artifact_with_extensions(
+        thruput_rv32_artifact::SyscallApiVersion::BASELINE,
+        &[0; 4],
+        &[7, 8],
+        14,
+        16,
+        extensions,
+    )
+    .unwrap()
 }
 
 /// Replace the extension list of a v6 artifact with raw bytes.
@@ -94,7 +110,15 @@ fn builder_refuses_non_canonical_order() {
     let ext = |kind| ArtifactExtension { kind, body: &[] };
     for extensions in [vec![ext(0)], vec![ext(2), ext(2)], vec![ext(3), ext(2)]] {
         assert!(
-            build_artifact_with_extensions(&[0; 4], &[], 0, 16, &extensions).is_err(),
+            build_artifact_with_extensions(
+                thruput_rv32_artifact::SyscallApiVersion::BASELINE,
+                &[0; 4],
+                &[],
+                0,
+                16,
+                &extensions
+            )
+            .is_err(),
             "{extensions:?}"
         );
     }
@@ -187,19 +211,31 @@ fn v5_reads_as_v6_without_extensions() {
 }
 
 #[test]
-fn reader_accepts_runtime_gas_schedule_without_relaxing_producer_checks() {
+fn reader_ignores_the_bytes_v5_kept_a_gas_schedule_in() {
+    // Deployed artifacts written before v6 declared a syscall API version
+    // carry a gas table version and digest here. Readers still open them;
+    // the producer check does not accept them.
     let mut artifact = with_spec(SPEC);
     artifact[36..40].copy_from_slice(&4u32.to_le_bytes());
     artifact[40..48].copy_from_slice(&0xa958_d226_df65_8598_u64.to_le_bytes());
     assert_eq!(artifact_spec(&artifact).unwrap(), Some(SPEC));
     assert!(verify_artifact(&artifact).is_err());
+    assert_eq!(thruput_rv32_artifact::declared_syscall_api(&artifact), None);
     artifact[HEADER_BYTES] ^= 1;
     assert!(artifact_spec(&artifact).is_err());
 }
 
 #[test]
 fn reader_accepts_zero_memory_but_still_checks_initial_memory_span() {
-    let mut artifact = build_artifact_with_spec(&[0; 4], &[], 0, 16, Some(SPEC)).unwrap();
+    let mut artifact = build_artifact_with_spec(
+        thruput_rv32_artifact::SyscallApiVersion::BASELINE,
+        &[0; 4],
+        &[],
+        0,
+        16,
+        Some(SPEC),
+    )
+    .unwrap();
     artifact[48..52].copy_from_slice(&0u32.to_le_bytes());
     assert_eq!(artifact_spec(&artifact).unwrap(), Some(SPEC));
     assert!(verify_artifact(&artifact).is_err());

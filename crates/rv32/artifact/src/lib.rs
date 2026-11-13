@@ -16,7 +16,8 @@ pub use extension::{
 pub use format::{
     DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, DeclaredSizes, FORMAT_FINGERPRINT,
     FORMAT_VERSION, HEADER_BYTES, INSTRUCTION_BYTES, LEGACY_FORMAT_VERSION_V5, MAGIC,
-    READABLE_FORMAT_VERSIONS, artifact_extensions, artifact_spec, build_artifact,
-    build_artifact_with_extensions, build_artifact_with_spec, compute_format_fingerprint,
-    declared_sizes, sha256, sha256_hex, verify_artifact,
+    READABLE_FORMAT_VERSIONS, SYSCALL_API_MAJOR, SyscallApiVersion, artifact_extensions,
+    artifact_spec, build_artifact, build_artifact_with_extensions, build_artifact_with_spec,
+    compute_format_fingerprint, declared_sizes, declared_syscall_api, sha256, sha256_hex,
+    verify_artifact,
 };
