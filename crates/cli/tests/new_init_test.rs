@@ -97,9 +97,10 @@ fn init_configures_profiles_and_succeeds() {
         futurenet.rpc_url.as_deref(),
         Some("https://rpc.thruput.network")
     );
+    assert!(futurenet.faucet_url.is_none());
     assert_eq!(
-        futurenet.faucet_url.as_deref(),
-        Some("https://faucet.thruput.network")
+        futurenet.network_hash.as_deref(),
+        Some("DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT")
     );
     assert_eq!(
         futurenet.contracts.get("NATIVE_TOKEN").map(String::as_str),

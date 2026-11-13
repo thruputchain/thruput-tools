@@ -4,31 +4,13 @@ use crate::{
     runtime_manifest::configured_runtime_manifest_path,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProfileBackend {
-    LocalManifest,
-    RemoteFaucet,
-    RpcOnly,
-}
-
-pub(crate) fn resolve_profile_backend(
-    profile: &ResolvedProfile,
-) -> Result<ProfileBackend, CliError> {
-    if configured_runtime_manifest_path(profile)?.is_some() {
-        return Ok(ProfileBackend::LocalManifest);
-    }
-    if profile.faucet_url.is_some() {
-        return Ok(ProfileBackend::RemoteFaucet);
-    }
-    Ok(ProfileBackend::RpcOnly)
-}
-
 /// Where a command that funds a wallet sends its request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FaucetBackend {
     /// The local dev wallet named by the profile's runtime manifest.
     LocalManifest,
-    /// The hosted faucet at the profile's `faucet_url`.
+    /// The hosted faucet behind the profile's RPC gateway, reached through
+    /// `faucet_requestAirdrop`.
     RemoteFaucet,
 }
 
@@ -71,24 +53,21 @@ pub(crate) fn resolve_faucet_backend(
                     "targets {network}, but {feature} requires `rpc_url`"
                 )));
             }
-            if profile.faucet_url.is_none() {
-                return Err(config_error(format!(
-                    "targets {network}, but {feature} requires `faucet_url`"
-                )));
-            }
             Ok(FaucetBackend::RemoteFaucet)
         }
         Some(Network::Mainnet) => Err(config_error(format!(
             "targets mainnet, but {feature} is not supported because mainnet does not exist yet"
         ))),
-        None => match resolve_profile_backend(profile)? {
-            ProfileBackend::LocalManifest => Ok(FaucetBackend::LocalManifest),
-            ProfileBackend::RemoteFaucet => Ok(FaucetBackend::RemoteFaucet),
-            ProfileBackend::RpcOnly => Err(CliError::Other(format!(
-                "profile `{}` is RPC-only; {feature} requires either `runtime_manifest` or `faucet_url`",
-                profile.name
-            ))),
-        },
+        // A profile with no declared network funds through its runtime
+        // manifest when it has one. Otherwise the gateway decides: the request
+        // fails cleanly when the endpoint does not serve a faucet.
+        None => {
+            if configured_runtime_manifest_path(profile)?.is_some() {
+                Ok(FaucetBackend::LocalManifest)
+            } else {
+                Ok(FaucetBackend::RemoteFaucet)
+            }
+        }
     }
 }
 
@@ -100,45 +79,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_prefers_explicit_runtime_manifest_over_faucet() {
+    fn undeclared_network_prefers_a_runtime_manifest() {
         let mut profile = test_profile();
-        profile.faucet_url = Some("https://faucet.example".into());
         profile.runtime_manifest = Some(PathBuf::from("runtime-manifest.json"));
 
-        let backend = resolve_profile_backend(&profile).expect("bug: backend should resolve");
+        let backend = resolve_faucet_backend(&profile, "airdrop").expect("bug: should resolve");
 
-        assert_eq!(backend, ProfileBackend::LocalManifest);
+        assert_eq!(backend, FaucetBackend::LocalManifest);
     }
 
     #[test]
-    fn backend_prefers_profile_runtime_manifest_over_faucet() {
-        let manifest_path = PathBuf::from("runtime-manifest.json");
-        let mut profile = test_profile();
-        profile.rpc_url = Some("http://127.0.0.1:9545".into());
-        profile.runtime_manifest = Some(manifest_path);
-        profile.faucet_url = Some("https://faucet.example".into());
-
-        let backend = resolve_profile_backend(&profile).expect("bug: backend should resolve");
-
-        assert_eq!(backend, ProfileBackend::LocalManifest);
-    }
-
-    #[test]
-    fn backend_uses_remote_faucet_without_runtime_manifest() {
-        let mut profile = test_profile();
-        profile.faucet_url = Some("https://faucet.example".into());
-
-        let backend = resolve_profile_backend(&profile).expect("bug: backend should resolve");
-
-        assert_eq!(backend, ProfileBackend::RemoteFaucet);
-    }
-
-    #[test]
-    fn backend_is_rpc_only_without_runtime_manifest_or_faucet() {
+    fn undeclared_network_without_a_manifest_asks_the_gateway() {
         let backend =
-            resolve_profile_backend(&test_profile()).expect("bug: backend should resolve");
+            resolve_faucet_backend(&test_profile(), "airdrop").expect("bug: should resolve");
 
-        assert_eq!(backend, ProfileBackend::RpcOnly);
+        assert_eq!(backend, FaucetBackend::RemoteFaucet);
+    }
+
+    #[test]
+    fn hosted_networks_need_no_faucet_url() {
+        for network in [Network::Futurenet, Network::Devnet] {
+            let mut profile = test_profile();
+            profile.network = Some(network);
+
+            let backend = resolve_faucet_backend(&profile, "airdrop").expect("bug: should resolve");
+
+            assert_eq!(backend, FaucetBackend::RemoteFaucet);
+        }
     }
 
     fn test_profile() -> ResolvedProfile {

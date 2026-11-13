@@ -1479,6 +1479,34 @@ fn initialize_futurenet_preserves_existing_networks_and_user_defaults() {
 
 #[test]
 #[serial]
+fn initialize_profiles_pins_an_existing_built_in_futurenet_profile() {
+    let tmp = TempDir::new().unwrap();
+    let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
+    let path = global_config_path(&tmp);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    // What an earlier CLI's `init` wrote: endpoints, no network hash.
+    fs::write(
+        &path,
+        "[profile.futurenet]\nnetwork = 'futurenet'\nrpc_url = 'https://rpc.thruput.network'\nfaucet_url = 'https://faucet.thruput.network'\n",
+    )
+    .unwrap();
+
+    thruput_cli::config::initialize_global_profiles().unwrap();
+
+    let profile = thruput_cli::config::resolve_profile(tmp.path(), Some("futurenet")).unwrap();
+    assert_eq!(
+        profile.network_hash.as_deref(),
+        Some("DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT")
+    );
+    // The retired field is left as the user had it.
+    assert_eq!(
+        profile.faucet_url.as_deref(),
+        Some("https://faucet.thruput.network")
+    );
+}
+
+#[test]
+#[serial]
 fn initialize_profiles_preserves_non_hosted_use_of_hosted_profile_names() {
     let tmp = TempDir::new().unwrap();
     let _config_home = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
@@ -1525,11 +1553,11 @@ fn futurenet_project_overlay_inherits_global_endpoints_and_selection() {
         resolved.rpc_url.as_deref(),
         Some("https://rpc.thruput.network")
     );
+    assert!(resolved.faucet_url.is_none());
     assert_eq!(
-        resolved.faucet_url.as_deref(),
-        Some("https://faucet.thruput.network")
+        resolved.network_hash.as_deref(),
+        Some("DFizVugYrvktaiKivvCx2P1ApArLuyYmH6vN3HN7FcNT")
     );
-    assert!(resolved.network_hash.is_none());
 
     thruput_cli::config::set_profile_field(
         tmp.path(),

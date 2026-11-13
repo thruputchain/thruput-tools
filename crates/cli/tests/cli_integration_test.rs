@@ -5938,16 +5938,15 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
 }
 
 #[test]
-fn deploy_dry_run_uses_hosted_descriptor_entrypoint() {
+fn deploy_dry_run_uses_legacy_entrypoint_on_a_hosted_profile() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    add_faucet_to_default_profile(&project, &faucet_url);
+    mark_default_profile_hosted(&project);
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = thruput()
@@ -5962,8 +5961,6 @@ fn deploy_dry_run_uses_hosted_descriptor_entrypoint() {
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
-
-    descriptor_server.join().unwrap();
     rpc_server.join().unwrap();
     assert!(
         output.status.success(),
@@ -6710,7 +6707,7 @@ fn empty_wallet_fixture() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
     let project = tmp.path().join("project");
     let config = tmp.path().join("config");
     std::fs::create_dir_all(&project).unwrap();
-    std::fs::write(project.join("thruput.toml"), "default_profile = 'default'\n[profile.default]\ndefault_key = 'owner'\nrpc_url = 'http://127.0.0.1:1'\nfaucet_url = 'http://127.0.0.1:1'\n").unwrap();
+    std::fs::write(project.join("thruput.toml"), "default_profile = 'default'\n[profile.default]\ndefault_key = 'owner'\nrpc_url = 'http://127.0.0.1:1'\n").unwrap();
     assert!(
         thruput()
             .args(["keys", "generate", "owner"])
@@ -7435,7 +7432,7 @@ fn airdrop_dry_run_json_uses_default_wallet_when_recipient_is_omitted() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "airdrop");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 6);
+    assert_eq!(stdout["data"]["schemaVersion"], 7);
     assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["recipient"], "alice");
@@ -7530,15 +7527,11 @@ fn airdrop_default_submits_without_recipient_signer() {
             } else {
                 spawn_local_airdrop_rpc(&faucet, &recipient)
             };
-            let (profile_fields, descriptor_server) = if hosted {
-                let (faucet_url, server) = spawn_network_descriptor(&rpc_url);
-                (format!("faucet_url = '{faucet_url}'\n"), Some(server))
+            let profile_fields = if hosted {
+                format!("network_hash = '{TEST_NETWORK_HASH}'\n")
             } else {
                 let manifest = write_runtime_manifest(&project, 0, &faucet, None);
-                (
-                    format!("runtime_manifest = '{}'\n", manifest.display()),
-                    None,
-                )
+                format!("runtime_manifest = '{}'\n", manifest.display())
             };
             // Hosted cases use the global default key selected during key generation.
             let default_key = if hosted {
@@ -7560,9 +7553,6 @@ fn airdrop_default_submits_without_recipient_signer() {
                 "hosted={hosted}, {selection}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            if let Some(server) = descriptor_server {
-                server.join().unwrap();
-            }
             rpc_server.join().unwrap();
             let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(report["data"]["recipientWallet"], recipient);
@@ -8016,7 +8006,7 @@ fn local_airdrop_json_warns_when_projected_faucet_balance_is_below_ten_tokens() 
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["warnings"][0]["level"], "warn");
     assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
-    assert_eq!(payload["data"]["schemaVersion"], 6);
+    assert_eq!(payload["data"]["schemaVersion"], 7);
 }
 
 #[test]
@@ -8028,9 +8018,8 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     std::fs::create_dir_all(&project).unwrap();
     let recipient = thruput_encoding::encode(&[0xaa; 32]);
     let (rpc_url, rpc_server) = spawn_airdrop_rpc(&recipient);
-    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    add_faucet_to_default_profile(&project, &faucet_url);
+    mark_default_profile_hosted(&project);
 
     let output = thruput()
         .args(["--json", "airdrop", "alice", "--force"])
@@ -8039,8 +8028,6 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
         .env("XDG_CACHE_HOME", &cache_home)
         .output()
         .unwrap();
-
-    descriptor_server.join().unwrap();
     rpc_server.join().unwrap();
     assert!(
         output.status.success(),
@@ -8049,9 +8036,14 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["mode"], "remote");
-    assert_eq!(stdout["data"]["schemaVersion"], 6);
+    assert_eq!(stdout["data"]["schemaVersion"], 7);
     assert_eq!(stdout["data"]["recipientWallet"], recipient);
     assert_eq!(stdout["data"]["rawAmount"], "25000000");
+    assert_eq!(stdout["data"]["amountTokens"], "2.5");
+    // The gateway is the only host involved, and nothing advertises a policy.
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
+    assert!(stdout["data"].get("faucetUrl").is_none());
+    assert!(stdout["data"].get("policy").is_none());
     assert_eq!(
         stdout["data"]["txHash"],
         thruput_encoding::encode(&[0x22; 32])
@@ -8068,9 +8060,8 @@ fn hosted_airdrop_pending_only_polls_when_a_hash_is_known() {
         std::fs::create_dir_all(&project).unwrap();
         let recipient = thruput_encoding::encode(&[0xaa; 32]);
         let (rpc_url, rpc_server) = spawn_airdrop_rpc_outcome(&recipient, Some(has_hash));
-        let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
         write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-        add_faucet_to_default_profile(&project, &faucet_url);
+        mark_default_profile_hosted(&project);
         let mut command = thruput();
         if json_output {
             command.arg("--json");
@@ -8082,7 +8073,6 @@ fn hosted_airdrop_pending_only_polls_when_a_hash_is_known() {
             .env("XDG_CACHE_HOME", &cache_home)
             .output()
             .unwrap();
-        descriptor_server.join().unwrap();
         rpc_server.join().unwrap();
         assert_eq!(
             output.status.success(),
@@ -8129,9 +8119,8 @@ fn hosted_airdrop_unknown_outcomes_retain_attempt_path_and_raw_response() {
         };
         let (rpc_url, server) =
             spawn_airdrop_rpc_response(&recipient, None, Some(response.clone()));
-        let (faucet_url, descriptor) = spawn_network_descriptor(&rpc_url);
         write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-        add_faucet_to_default_profile(&project, &faucet_url);
+        mark_default_profile_hosted(&project);
         let output = thruput()
             .args(["--json", "airdrop", "alice", "--force"])
             .current_dir(&project)
@@ -8139,7 +8128,6 @@ fn hosted_airdrop_unknown_outcomes_retain_attempt_path_and_raw_response() {
             .env("XDG_CACHE_HOME", &cache_home)
             .output()
             .unwrap();
-        descriptor.join().unwrap();
         server.join().unwrap();
         assert!(!output.status.success());
         let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
@@ -8158,11 +8146,13 @@ fn native_wallet_airdrop_uses_saved_default_on_hosted_faucet() {
     let created: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let recipient = created["data"]["wallet"].as_str().unwrap();
     let (rpc_url, rpc_server) = spawn_airdrop_rpc(recipient);
-    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     let path = project.join("thruput.toml");
     let mut doc: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     doc["profile"]["default"]["rpc_url"] = toml::Value::String(rpc_url);
-    doc["profile"]["default"]["faucet_url"] = toml::Value::String(faucet_url);
+    doc["profile"]["default"]
+        .as_table_mut()
+        .unwrap()
+        .insert("network_hash".into(), TEST_NETWORK_HASH.into());
     std::fs::write(&path, toml::to_string(&doc).unwrap()).unwrap();
     let output = thruput()
         .args(["--json", "airdrop", "--force"])
@@ -8176,7 +8166,6 @@ fn native_wallet_airdrop_uses_saved_default_on_hosted_faucet() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    descriptor_server.join().unwrap();
     rpc_server.join().unwrap();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["data"]["recipientWallet"], recipient);
@@ -8192,7 +8181,7 @@ fn transaction_commands_require_force_before_submission_or_attempt_state() {
     std::fs::create_dir_all(&project).unwrap();
     let rpc_url = "http://127.0.0.1:9";
     write_project_config_with_alice_wallet(&project, rpc_url, &config_home);
-    add_faucet_to_default_profile(&project, "http://127.0.0.1:8");
+    mark_default_profile_hosted(&project);
     let artifact = write_opaque_rv32_artifact(tmp.path());
     let contract = thruput_encoding::encode(&[0x11; 32]);
     let recipient = thruput_encoding::encode(&[0x22; 32]);
@@ -8320,7 +8309,7 @@ fn funding_commands_refuse_without_force_before_reading_the_profile() {
 }
 
 #[test]
-fn initialized_futurenet_profile_discovers_signing_identity_for_all_transaction_commands() {
+fn initialized_futurenet_profile_signs_all_transaction_commands_for_its_pin() {
     use std::fmt::Write as _;
 
     for command in ["transfer", "call", "deploy"] {
@@ -8360,11 +8349,16 @@ fn initialized_futurenet_profile_discovers_signing_identity_for_all_transaction_
             .unwrap()
             .parse::<toml_edit::DocumentMut>()
             .unwrap();
-        assert!(config["profile"]["futurenet"].get("network_hash").is_none());
+        // `init` pins the built-in network; this test stands in its own.
+        assert!(
+            config["profile"]["futurenet"]["network_hash"]
+                .as_str()
+                .is_some()
+        );
+        assert!(config["profile"]["futurenet"].get("faucet_url").is_none());
         let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-        let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
         config["profile"]["futurenet"]["rpc_url"] = toml_edit::value(&rpc_url);
-        config["profile"]["futurenet"]["faucet_url"] = toml_edit::value(&faucet_url);
+        config["profile"]["futurenet"]["network_hash"] = toml_edit::value(TEST_NETWORK_HASH);
         std::fs::write(&path, config.to_string()).unwrap();
         let project_path = project.join("thruput.toml");
         let mut project_config = std::fs::read_to_string(&project_path).unwrap();
@@ -8395,7 +8389,6 @@ fn initialized_futurenet_profile_discovers_signing_identity_for_all_transaction_
             _ => unreachable!(),
         }
         let output = invocation.output().unwrap();
-        descriptor_server.join().unwrap();
         rpc_server.join().unwrap();
         assert!(
             output.status.success(),
@@ -8418,22 +8411,21 @@ fn initialized_futurenet_profile_discovers_signing_identity_for_all_transaction_
 }
 
 #[test]
-fn hosted_signing_without_a_pin_rejects_disagreeing_descriptor_and_rpc() {
+fn hosted_signing_without_a_pin_is_rejected_before_any_request() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
-    let (rpc_url, rpc_server) = spawn_network_info_rpc(&thruput_encoding::encode(&[0x42; 32]));
-    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
-    write_project_config_with_alice_wallet(tmp.path(), &rpc_url, &config_home);
-    add_faucet_to_default_profile(tmp.path(), &faucet_url);
+    // Nothing listens here: the missing pin must fail before the RPC is asked.
+    write_project_config_with_alice_wallet(tmp.path(), "http://127.0.0.1:9", &config_home);
+    mark_default_profile_hosted(tmp.path());
     let path = tmp.path().join("thruput.toml");
     let mut config = std::fs::read_to_string(&path)
         .unwrap()
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
-    config["profile"]["default"]
-        .as_table_mut()
-        .unwrap()
-        .remove("network_hash");
+    let profile = config["profile"]["default"].as_table_mut().unwrap();
+    profile.remove("network_hash");
+    // The retired faucet URL does not stand in for a pin.
+    profile["faucet_url"] = toml_edit::value("http://127.0.0.1:8");
     std::fs::write(&path, config.to_string()).unwrap();
     let output = thruput()
         .args([
@@ -8447,12 +8439,9 @@ fn hosted_signing_without_a_pin_rejects_disagreeing_descriptor_and_rpc() {
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
-    descriptor_server.join().unwrap();
-    rpc_server.join().unwrap();
     assert!(!output.status.success() && output.stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(error["error"]["code"], "network_descriptor_mismatch");
-    assert_eq!(error["error"]["details"]["field"], "networkHash");
+    assert_eq!(error["error"]["code"], "missing_network_hash");
 }
 
 #[test]
@@ -8463,10 +8452,8 @@ fn hosted_signing_rejects_profile_network_hash_mismatch() {
     std::fs::create_dir_all(&project).unwrap();
     let live_network_hash = thruput_encoding::encode(&[0x42; 32]);
     let (rpc_url, rpc_server) = spawn_network_info_rpc(&live_network_hash);
-    let (faucet_url, descriptor_server) =
-        spawn_network_descriptor_with_hash(&rpc_url, &live_network_hash);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    add_faucet_to_default_profile(&project, &faucet_url);
+    mark_default_profile_hosted(&project);
     let recipient = thruput_encoding::encode(&[0xbc; 32]);
 
     let output = thruput()
@@ -8475,14 +8462,14 @@ fn hosted_signing_rejects_profile_network_hash_mismatch() {
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
-
-    descriptor_server.join().unwrap();
     rpc_server.join().unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "network_descriptor_mismatch");
-    assert_eq!(stderr["error"]["details"]["field"], "networkHash");
+    let details = &stderr["error"]["details"];
+    assert_eq!(details["preflightReason"], "networkMismatch", "{stderr}");
+    assert_eq!(details["expectedNetworkHash"], TEST_NETWORK_HASH);
+    assert_eq!(details["actualNetworkHash"], live_network_hash);
 }
 
 #[test]
@@ -8724,15 +8711,14 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
 }
 
 #[test]
-fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_native_token_constants() {
+fn transfer_dry_run_on_a_hosted_profile_uses_protocol_native_token_constants() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     let config_home = tmp.path().join("config-home");
     std::fs::create_dir_all(&project).unwrap();
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    add_faucet_to_default_profile(&project, &faucet_url);
+    mark_default_profile_hosted(&project);
     let recipient = thruput_encoding::encode(&[0xbc; 32]);
 
     let output = thruput()
@@ -8741,7 +8727,6 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_native_token_constants()
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
-    descriptor_server.join().unwrap();
     rpc_server.join().unwrap();
 
     assert!(
@@ -8764,16 +8749,15 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_native_token_constants()
 }
 
 #[test]
-fn native_wallet_transfer_discovers_unconfigured_hosted_network_identity() {
+fn native_wallet_transfer_signs_for_the_pinned_hosted_network() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config");
     let owner = generate_key_public_key(&config_home, "alice");
     let owner = thruput_signing::strkey::parse_public_key(&owner).unwrap();
     let account = thruput_signing::PubkeyAccount::from_public_key_bytes(owner, 0);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     std::fs::write(tmp.path().join("thruput.toml"), format!(
-        "default_profile = 'devnet'\n[profile.devnet]\nnetwork = 'devnet'\nrpc_url = '{rpc_url}'\nfaucet_url = '{faucet_url}'\n"
+        "default_profile = 'devnet'\n[profile.devnet]\nnetwork = 'devnet'\nrpc_url = '{rpc_url}'\nnetwork_hash = '{TEST_NETWORK_HASH}'\n"
     )).unwrap();
     let output = thruput()
         .args([
@@ -8788,7 +8772,6 @@ fn native_wallet_transfer_discovers_unconfigured_hosted_network_identity() {
         .output()
         .unwrap();
     rpc_server.join().unwrap();
-    descriptor_server.join().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -10668,16 +10651,15 @@ fn call_dry_run_json_outputs_prepared_transaction() {
 }
 
 #[test]
-fn call_dry_run_uses_hosted_descriptor_entrypoint() {
+fn call_dry_run_uses_legacy_entrypoint_on_a_hosted_profile() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    add_faucet_to_default_profile(&project, &faucet_url);
+    mark_default_profile_hosted(&project);
     let contract = thruput_encoding::encode(&[0x11; 32]);
 
     let output = thruput()
@@ -10693,8 +10675,6 @@ fn call_dry_run_uses_hosted_descriptor_entrypoint() {
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
-
-    descriptor_server.join().unwrap();
     rpc_server.join().unwrap();
     assert!(
         output.status.success(),
@@ -15009,42 +14989,6 @@ fn read_jsonrpc_request(
     (stream, request)
 }
 
-fn spawn_network_descriptor(rpc_url: &str) -> (String, MockServer) {
-    spawn_network_descriptor_with_hash(rpc_url, TEST_NETWORK_HASH)
-}
-
-fn spawn_network_descriptor_with_hash(rpc_url: &str, network_hash: &str) -> (String, MockServer) {
-    let descriptor = serde_json::json!({
-        "schemaVersion": thruput_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
-        "kind": "groundhog-network",
-        "networkId": "devnet",
-        "networkHash": network_hash,
-        "protocol": "hogp/test00000000000",
-        "genesisHash": thruput_json_rpc_types::NetworkHashText::from([0x42; 32]),
-        "endpoints": { "rpcUrl": rpc_url },
-        "nativeToken": {
-            "tokenAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x61; 32])),
-            "decimals": 7,
-            "transferEntrypoint": "0x63285b3523f9dc3f"
-        },
-        "faucet": { "walletAddress": thruput_json_rpc_types::ContractAddress::from(thruput_xdr::types::ContractAddress::from([0x71; 32])) },
-        "airdrop": {
-            "rawAmount": "25000000",
-            "recipientCooldownSeconds": "60",
-            "clientQuotaWindowSeconds": "3600",
-            "clientQuotaMax": 5,
-            "maxPendingPerRecipient": 1
-        },
-    });
-    let server = RecordingServer::builder()
-        .method("networkDescriptor", move |_| Ok(descriptor.clone()))
-        .get_route("/v1/network", "networkDescriptor")
-        .start();
-    recorded_mock(server, |script| {
-        script.expect("networkDescriptor");
-    })
-}
-
 fn spawn_network_info_rpc(network_hash: &str) -> (String, MockServer) {
     let network_hash = network_hash.to_owned();
     let server = rpc_mock()
@@ -15125,7 +15069,7 @@ fn spawn_airdrop_rpc_response(
         .method("getTransactionReceipt", move |_| Ok(receipt.clone()))
         .start();
     recorded_mock(server, move |script| {
-        script.expect("getNetworkInfo");
+        // One preflight check of the gateway against the pin, then the request.
         script.expect("getNetworkInfo");
         let params = script.expect("faucet_requestAirdrop");
         let mut fields = params
@@ -16372,14 +16316,16 @@ fn write_project_config_with_alice_wallet(
     owner_public_key
 }
 
-fn add_faucet_to_default_profile(project: &std::path::Path, faucet_url: &str) {
+/// Declare the default profile a hosted network, so funding goes to the
+/// gateway's faucet rather than a local runtime manifest.
+fn mark_default_profile_hosted(project: &std::path::Path) {
     let path = project.join("thruput.toml");
     let config = std::fs::read_to_string(&path).unwrap();
     std::fs::write(
         path,
         config.replacen(
             "default_profile = \"default\"\n\n[profile.default]\n",
-            &format!("default_profile = \"default\"\n\n[profile.default]\nfaucet_url = \"{faucet_url}\"\n"),
+            "default_profile = \"default\"\n\n[profile.default]\nnetwork = \"futurenet\"\n",
             1,
         ),
     )

@@ -1371,7 +1371,7 @@ enum ConfigCommand {
         /// Network hash the RPC endpoint serves, as base58 encoding of exactly 32 bytes
         #[arg(long)]
         network_hash: Option<String>,
-        /// Absolute HTTP(S) faucet URL
+        /// Deprecated and unused: the hosted faucet is reached through the RPC URL
         #[arg(long)]
         faucet_url: Option<String>,
         /// Profile-specific signing key

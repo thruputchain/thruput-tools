@@ -26,10 +26,6 @@ const SHARED_CODES: &[(&str, &str)] = &[
     ("invalid_event_limit", "InvalidTokenTransferLimit"),
     ("invalid_event_cursor", "InvalidTokenTransferCursor"),
     ("invalid_event_options", "InvalidTokenTransferOptions"),
-    (
-        "network_descriptor_mismatch",
-        "NetworkDescriptorSchemaMismatch",
-    ),
 ];
 
 #[test]
@@ -159,22 +155,6 @@ fn computed_details_payloads_carry_their_keys() {
             action: "remove key `alice`",
         }),
         json!({ "action": "remove key `alice`", "requiredFlag": "--yes" }),
-    );
-    assert_eq!(
-        details_of(&CliError::FaucetService {
-            url: "https://faucet.example/airdrop".to_owned(),
-            http_status: 429,
-            service_code: "rate_limited".to_owned(),
-            message: "slow down".to_owned(),
-            retry_after_seconds: Some(30),
-        }),
-        json!({
-            "url": "https://faucet.example/airdrop",
-            "httpStatus": 429,
-            "code": "rate_limited",
-            "retryAfterSeconds": "30",
-        }),
-        "the faucet payload renames service_code and omits the message the display carries"
     );
 }
 

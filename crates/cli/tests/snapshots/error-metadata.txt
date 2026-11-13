@@ -291,18 +291,13 @@ ConfirmationRequired
   hint text: rerun from an interactive terminal, or pass `--yes` to proceed without a prompt
   details: computed
 
-FaucetService
-  code: faucet_service_error
-  hint: computed
-  details: computed
-
 MissingSigningKey
   code: missing_signing_key
   hint text: set `default_key` in project or global config, or run `thruput keys generate`
 
 MissingNetworkHash
   code: missing_network_hash
-  hint text: signing binds each transaction to a network: run `thruput config set network-hash <hash> --profile <name>`, or point the profile at a runtime manifest from `thruput node` via THRUPUT_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
+  hint text: signing binds each transaction to a network, so every profile pins its hash: run `thruput init` to pin the built-in Futurenet profile, run `thruput config set network-hash <hash> --profile <name>` for another network, or point the profile at a runtime manifest from `thruput node` via THRUPUT_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
 
 InvalidNetworkHash
   code: invalid_network_hash
@@ -412,21 +407,6 @@ LocalFundingUnresolved
 LocalRuntimeUnavailable
   code: local_runtime_unavailable
   hint text: use a current local runtime manifest; start a fresh node if local state uses an unsupported schema
-
-NetworkDescriptorInvalid
-  code: network_descriptor_invalid
-  hint text: check that the selected profile's RPC and faucet URLs refer to the same hosted network, then retry
-  details: field, message
-
-NetworkDescriptorMismatch
-  code: network_descriptor_mismatch
-  hint text: check that the selected profile's RPC and faucet URLs refer to the same hosted network, then retry
-  details: field, expected, actual
-
-NetworkDescriptorSchemaMismatch
-  code: network_descriptor_mismatch
-  hint text: this CLI and the network's faucet are on different releases; install the CLI release that matches the network, or retry after the network upgrades
-  details: field, expected, actual
 
 SavedWalletAmbiguous
   code: saved_wallet_ambiguous

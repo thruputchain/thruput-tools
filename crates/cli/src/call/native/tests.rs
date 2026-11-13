@@ -27,9 +27,8 @@ fn sender() -> ResolvedTransactionSender {
         wallet_address: account.address(),
         native_account: Some(account),
         signer: signer.into(),
-        key_name: "fixture".into(),
         wallet_name: None,
-        network_hash: Some(network()),
+        network_hash: network(),
     }
 }
 fn prepared() -> PreparedCall {
@@ -117,11 +116,6 @@ async fn endpoint(
     )
 }
 
-fn profile(url: &str) -> crate::config::ResolvedProfile {
-    serde_json::from_value(json!({"name":"fixture", "rpc_url":url, "contracts":{}, "wallets":{}}))
-        .unwrap()
-}
-
 #[test]
 #[serial_test::serial]
 fn preparation_checks_native_discovery_identity_and_expiry() {
@@ -136,7 +130,7 @@ fn preparation_checks_native_discovery_identity_and_expiry() {
             Ok(json!({"blockHeight":"42","blockHash":NetworkHash::from(SHA256Hash::from([7;32]))})),
         ),
     ]));
-    let (context, expiry) = prepare_context(&sender(), &profile(&url), &url, &rt).unwrap();
+    let (context, expiry) = prepare_context(&sender(), &url, &rt).unwrap();
     assert_eq!(context.network_hash, network());
     assert_eq!(expiry, 1042);
     assert_eq!(
@@ -662,7 +656,7 @@ fn native_rpc_accepts_contract_wallets_without_reinterpreting_their_address() {
     let mut sender = sender();
     sender.native_account = None;
     sender.wallet_address = XdrAddress::from([0x37; 32]);
-    let (context, expiry) = prepare_context(&sender, &profile(&url), &url, &rt).unwrap();
+    let (context, expiry) = prepare_context(&sender, &url, &rt).unwrap();
     assert_eq!(context.entrypoints.source, "legacy_default");
     assert_eq!(expiry, 1042);
     assert!(
