@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn preserves_identity_for_unknown_formats_but_rejects_bad_magic() {
         let mut data = build_artifact(&[0; 4], &[], 0, 16).unwrap();
-        data[8..12].copy_from_slice(&7_u32.to_le_bytes());
+        data[8..12].copy_from_slice(&8_u32.to_le_bytes());
         let (deployment, artifact) = response(data.clone());
         assert_eq!(
             inspect_artifact(&deployment, &artifact).unwrap(),

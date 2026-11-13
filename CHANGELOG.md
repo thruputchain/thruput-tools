@@ -2,38 +2,41 @@
 
 ## Unreleased
 
-### RV32 artifacts declare a syscall API version instead of a gas schedule
+### RV32 artifact format v7 declares a syscall API version instead of a gas schedule
 
-A v6 artifact header now carries the syscall API version the guest was built
-against, in place of the gas table version and gas schedule digest. A chain
-admits the artifact when it implements the same major version and at least that
-minor; gas prices are the chain's and are no longer stamped into the artifact.
-The header shrinks from 128 to 120 bytes: the 8-byte digest is gone and every
-later field sits 8 bytes earlier.
+The CLI now writes RV32 artifact format v7. A v7 header carries the syscall API
+version the guest was built against, in place of the gas table version and gas
+schedule digest of v5 and v6. A chain admits the artifact when it implements the
+same major version and at least that minor; gas prices are the chain's and are
+no longer stamped into the artifact. The v7 header is 120 bytes: the 8-byte
+digest is gone and every later field sits 8 bytes earlier than in v5 and v6.
 
 - `thruput build` and `rv32-lower` read the version from the guest ELF's
   `thruputsyscallapiv0` section, which `thruput-sdk` 0.61.1 and later emit.
   An ELF without it is refused: rebuild the contract with SDK 0.61.1 or later.
-- Artifacts built by this CLI need a runtime that admits the new header.
-  Artifacts built by earlier CLIs are still readable (`contract spec` and
-  similar), but are not what this CLI produces or verifies.
+- A v7 artifact needs a runtime that reads v7 and a chain whose configuration
+  admits it (`max_rv32_artifact_version` of at least 7).
+- v5 and v6 artifacts are still readable (`contract spec` and similar), but
+  are not what this CLI produces or verifies.
 - Protocol crates move to 0.66.1, the SDK to 0.61.1, and standard interfaces
   to 0.1.75. Newly generated projects pin SDK 0.61.1, the first that records
   the version.
 - The lowering metadata and `rv32-lower --json` report `syscall_api_version`.
-  The artifact format fingerprint is now `0x1fa548ec574db1b4`.
+  The artifact format fingerprint is now `0x95cbfa8b3b2f37da`.
 
 #### Breaking Rust API changes
 
-- `thruput-rv32-artifact`: `build_artifact_with_spec` and
+- `thruput-rv32-artifact`: `FORMAT_VERSION` is 7 and `READABLE_FORMAT_VERSIONS`
+  is 5 through 7. `build_artifact_with_spec` and
   `build_artifact_with_extensions` take a leading `SyscallApiVersion`;
-  `build_artifact` stamps `SyscallApiVersion::BASELINE`. `GAS_TABLE_VERSION`,
+  `build_artifact` stamps `SyscallApiVersion::BASELINE`. `HEADER_BYTES` is 120
+  and the offsets from `MEMORY_BYTES_OFFSET` on are 8 lower; `V5_V6_HEADER_BYTES`
+  is the 128-byte header of v5 and v6. `LEGACY_FORMAT_VERSION_V5` is renamed
+  `FORMAT_VERSION_V5`, with `FORMAT_VERSION_V6` beside it. `GAS_TABLE_VERSION`,
   `GAS_SCHEDULE_DIGEST`, `GAS_VERSION_OFFSET`, `GAS_DIGEST_OFFSET`,
   `SYSCALL_ABI_VERSION` and `SYSCALL_ABI_OFFSET` are removed; see
   `SYSCALL_API_MAJOR`, `SYSCALL_API_MAJOR_OFFSET` and
-  `SYSCALL_API_MINOR_OFFSET`. `HEADER_BYTES` is 120 and the offsets from
-  `MEMORY_BYTES_OFFSET` on are 8 lower; `LEGACY_HEADER_BYTES` is the 128-byte
-  header readers still open. `declared_syscall_api` reads the version back.
+  `SYSCALL_API_MINOR_OFFSET`. `declared_syscall_api` reads the version back.
 - `thruput-rv32-lower`: `Lowered` gains `syscall_api`.
 
 ### Profiles pin their network hash; the faucet descriptor is gone

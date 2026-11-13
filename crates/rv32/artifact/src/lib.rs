@@ -1,4 +1,4 @@
-//! `thruput-rv32-artifact` — the Thruput v6 RV32 artifact format.
+//! `thruput-rv32-artifact` — the Thruput v7 RV32 artifact format.
 //!
 //! This crate is the single Rust source of truth for the on-disk `.rv32a`
 //! format the hogd runtime parses: constants, field offsets, the format
@@ -15,9 +15,9 @@ pub use extension::{
 };
 pub use format::{
     DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, DeclaredSizes, FORMAT_FINGERPRINT,
-    FORMAT_VERSION, HEADER_BYTES, INSTRUCTION_BYTES, LEGACY_FORMAT_VERSION_V5, LEGACY_HEADER_BYTES,
-    MAGIC, READABLE_FORMAT_VERSIONS, SYSCALL_API_MAJOR, SyscallApiVersion, artifact_extensions,
-    artifact_spec, build_artifact, build_artifact_with_extensions, build_artifact_with_spec,
-    compute_format_fingerprint, declared_sizes, declared_syscall_api, sha256, sha256_hex,
-    verify_artifact,
+    FORMAT_VERSION, FORMAT_VERSION_V5, FORMAT_VERSION_V6, HEADER_BYTES, INSTRUCTION_BYTES, MAGIC,
+    READABLE_FORMAT_VERSIONS, SYSCALL_API_MAJOR, SyscallApiVersion, V5_V6_HEADER_BYTES,
+    artifact_extensions, artifact_spec, build_artifact, build_artifact_with_extensions,
+    build_artifact_with_spec, compute_format_fingerprint, declared_sizes, declared_syscall_api,
+    sha256, sha256_hex, verify_artifact,
 };

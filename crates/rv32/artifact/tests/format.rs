@@ -1,4 +1,4 @@
-//! v6 format writer/verifier contract tests: header field placement, the
+//! v7 format writer/verifier contract tests: header field placement, the
 //! `initial_memory_start` load-base semantics, and the canonicality rules the
 //! verifier enforces on it.
 
@@ -11,14 +11,14 @@ fn read_u32(bytes: &[u8], off: usize) -> u32 {
 }
 
 #[test]
-fn v6_header_layout_and_field_values() {
+fn v7_header_layout_and_field_values() {
     let code = [0u8; 8];
     let memory = [0xAAu8, 0xBB, 0xCC];
     let start = 0x1008;
     let artifact = build_artifact(&code, &memory, start, DEFAULT_MEMORY_BYTES).expect("builds");
 
     assert_eq!(&artifact[..8], b"GHRV32A1");
-    assert_eq!(read_u32(&artifact, 8), 6, "format_version");
+    assert_eq!(read_u32(&artifact, 8), 7, "format_version");
     assert_eq!(read_u32(&artifact, 12), 120, "header_bytes");
     assert_eq!(HEADER_BYTES, 120);
     assert_eq!(
@@ -178,11 +178,10 @@ fn declared_sizes_reads_the_header_and_nothing_else() {
         declared_sizes(&artifact)
     );
 
-    // v5 headers, and v6 headers that declare a gas schedule, are 8 bytes
-    // longer and remain readable.
-    let legacy = thruput_rv32_artifact::format::testing::with_gas_schedule_header(&artifact);
-    assert_eq!(declared_sizes(&legacy), declared_sizes(&artifact));
-    let mut v5 = legacy;
+    // v5 and v6 headers are 8 bytes longer and remain readable.
+    let v6 = thruput_rv32_artifact::format::testing::as_v6(&artifact);
+    assert_eq!(declared_sizes(&v6), declared_sizes(&artifact));
+    let mut v5 = v6;
     v5[8..12].copy_from_slice(&5u32.to_le_bytes());
     assert_eq!(declared_sizes(&v5), declared_sizes(&artifact));
 
@@ -192,7 +191,7 @@ fn declared_sizes_reads_the_header_and_nothing_else() {
     bad_magic[0] ^= 0xff;
     assert_eq!(declared_sizes(&bad_magic), None);
     let mut other_version = artifact.clone();
-    other_version[8..12].copy_from_slice(&7u32.to_le_bytes());
+    other_version[8..12].copy_from_slice(&8u32.to_le_bytes());
     assert_eq!(declared_sizes(&other_version), None);
     assert_eq!(declared_sizes(&[]), None);
 }
@@ -231,10 +230,10 @@ fn declares_the_syscall_api_version_it_is_given() {
             .is_err()
     );
 
-    // A header that declares a gas schedule declares no version.
-    let gas = thruput_rv32_artifact::format::testing::with_gas_schedule_header(&baseline);
-    assert_eq!(declared_syscall_api(&gas), None);
-    assert!(verify_artifact(&gas).is_err());
+    // v5 and v6 declare a gas schedule, and so no version.
+    let v6 = thruput_rv32_artifact::format::testing::as_v6(&baseline);
+    assert_eq!(declared_syscall_api(&v6), None);
+    assert!(verify_artifact(&v6).is_err());
     assert_eq!(
         declared_syscall_api(&thruput_rv32_artifact::format::testing::as_v5(&baseline)),
         None

@@ -108,7 +108,7 @@ pub const SYSCALL_API_RECORD_BYTES: usize = 8;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Lowered {
-    /// The complete v6 artifact bytes (`.rv32a`), with no extensions. The SDK
+    /// The complete v7 artifact bytes (`.rv32a`), with no extensions. The SDK
     /// build pipeline adds its canonical spec as an extension, outside the
     /// guest memory image.
     pub artifact: Vec<u8>,
@@ -155,7 +155,7 @@ impl Default for LowerOptions {
     }
 }
 
-/// Parse, validate, and lower an rv32im contract ELF into a v5 artifact with
+/// Parse, validate, and lower an rv32im contract ELF into a v7 artifact with
 /// the protocol-default data address space.
 pub fn lower(elf_bytes: &[u8]) -> Result<Lowered> {
     lower_with(elf_bytes, &LowerOptions::default())

@@ -1,10 +1,10 @@
-//! v6 extension list: XDR framing, canonical order, the contract spec
-//! extension, and reading v5 artifacts as v6 with no extensions.
+//! The extension list: XDR framing, canonical order, the contract spec
+//! extension, and reading v5 and v6 artifacts.
 
-use thruput_rv32_artifact::format::testing::{as_v5, with_gas_schedule_header};
+use thruput_rv32_artifact::format::testing::{as_v5, as_v6};
 use thruput_rv32_artifact::{
     ArtifactExtension, ArtifactSpec, EXTENSION_KIND_CONTRACT_SPEC, HEADER_BYTES,
-    LEGACY_HEADER_BYTES, artifact_extensions, artifact_spec, build_artifact,
+    V5_V6_HEADER_BYTES, artifact_extensions, artifact_spec, build_artifact,
     build_artifact_with_extensions, build_artifact_with_spec, sha256, verify_artifact,
 };
 
@@ -40,7 +40,7 @@ fn with_extensions(extensions: &[ArtifactExtension<'_>]) -> Vec<u8> {
     .unwrap()
 }
 
-/// Replace the extension list of a v6 artifact with raw bytes.
+/// Replace the extension list of a v7 artifact with raw bytes.
 fn with_raw_extensions(raw: &[u8]) -> Vec<u8> {
     let mut artifact = build_artifact(&[0; 4], &[7, 8], 14, 16).unwrap();
     artifact.truncate(SECTIONS_END);
@@ -69,7 +69,7 @@ fn absent_extensions_have_one_encoding() {
     assert_eq!(&artifact[SECTIONS_END..], &[0; 4]);
     assert_eq!(artifact_extensions(&artifact).unwrap(), vec![]);
     assert_eq!(artifact_spec(&artifact).unwrap(), None);
-    // A v6 artifact must carry the list, even when it is empty.
+    // A v7 artifact must carry the list, even when it is empty.
     assert!(artifact_extensions(&artifact[..SECTIONS_END]).is_err());
 }
 
@@ -194,10 +194,10 @@ fn every_truncation_is_rejected() {
 #[test]
 fn v5_reads_as_v6_without_extensions() {
     let v5 = as_v5(&build_artifact(&[0; 4], &[7, 8], 14, 16).unwrap());
-    assert_eq!(v5.len(), LEGACY_HEADER_BYTES + 4 + 2);
+    assert_eq!(v5.len(), V5_V6_HEADER_BYTES + 4 + 2);
     assert_eq!(artifact_extensions(&v5).unwrap(), vec![]);
     assert_eq!(artifact_spec(&v5).unwrap(), None);
-    // Producers emit v6 only.
+    // Producers emit v7 only.
     assert!(verify_artifact(&v5).is_err());
 
     // v5 has no extension list: anything after initial memory is trailing.
@@ -211,12 +211,12 @@ fn v5_reads_as_v6_without_extensions() {
 }
 
 #[test]
-fn reader_opens_a_v6_artifact_that_declares_a_gas_schedule() {
-    // Deployed v6 artifacts written before v6 declared a syscall API version
-    // have a 128-byte header with a gas table version and digest. Readers
-    // still open them; the producer check does not accept them.
+fn reader_opens_v6_artifacts() {
+    // Deployed v6 artifacts have a 128-byte header with a gas table version
+    // and digest. Readers still open them; the producer check does not accept
+    // them.
     let current = with_spec(SPEC);
-    let mut artifact = with_gas_schedule_header(&current);
+    let mut artifact = as_v6(&current);
     assert_eq!(artifact.len(), current.len() + 8);
     assert_eq!(artifact_spec(&artifact).unwrap(), Some(SPEC));
     assert!(verify_artifact(&artifact).is_err());
@@ -229,13 +229,19 @@ fn reader_opens_a_v6_artifact_that_declares_a_gas_schedule() {
     artifact[36..40].copy_from_slice(&4u32.to_le_bytes());
     artifact[40..48].copy_from_slice(&0xa958_d226_df65_8598_u64.to_le_bytes());
     assert_eq!(artifact_spec(&artifact).unwrap(), Some(SPEC));
-    artifact[LEGACY_HEADER_BYTES] ^= 1;
+    artifact[V5_V6_HEADER_BYTES] ^= 1;
     assert!(artifact_spec(&artifact).is_err());
 
-    // A header size is tied to what it declares: v5 never has the short one.
-    let mut short_v5 = current;
-    short_v5[8..12].copy_from_slice(&5u32.to_le_bytes());
-    assert!(artifact_spec(&short_v5).is_err());
+    // A header size belongs to its version: v5 and v6 never have the v7 one,
+    // and v7 never has theirs.
+    for version in [5u32, 6] {
+        let mut short = current.clone();
+        short[8..12].copy_from_slice(&version.to_le_bytes());
+        assert!(artifact_spec(&short).is_err(), "v{version}");
+    }
+    let mut long_v7 = as_v6(&current);
+    long_v7[8..12].copy_from_slice(&7u32.to_le_bytes());
+    assert!(artifact_spec(&long_v7).is_err());
 }
 
 #[test]
