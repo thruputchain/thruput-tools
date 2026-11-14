@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.45.1
 
 ### Profiles pin their network hash; the faucet descriptor is gone
 
