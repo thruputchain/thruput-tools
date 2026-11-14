@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.45.2
+
+### Protocol 5176319
+
+Tools move to protocol crates 0.66.2 and SDK 0.61.2, which carry protocol
+`5176319`, the commit hogd v0.1.34 builds against. The gateway, firehose,
+and local runtime handshakes compare protocol tokens with hogd, so tools
+must build against the same protocol commit. The protocol changes since
+`dc6f9ee` touch only `syscalls.yaml`; no XDR type changed.
+
+- New projects pin SDK 0.61.2. Artifacts stay RV32 format v6.
+
 ## 0.45.1
 
 ### Profiles pin their network hash; the faucet descriptor is gone
