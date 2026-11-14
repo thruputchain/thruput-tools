@@ -12,7 +12,7 @@
 //!      the minimal nonzero initial-memory span and its load base. Dispatch
 //!      lives in the guest (since v4), so no symbol scanning is needed and
 //!      stripped builds are valid.
-//!   3. `thruput-rv32-artifact` — pack the v6 header + sections, then
+//!   3. `thruput-rv32-artifact` — pack the v7 header + sections, then
 //!      self-verify.
 //!
 //! See `docs/architecture.md` ("From contract source to invocation") for the
@@ -26,7 +26,9 @@ pub mod metadata;
 pub use error::{LowerError, Result};
 pub use lower::{
     ALLOC_ALLOWLIST, INTERFACE_ID_BYTES, INTERFACE_TABLE_ANCHOR_SECTION, INTERFACE_TABLE_SECTION,
-    LowerOptions, Lowered, lower, lower_with,
+    LowerOptions, Lowered, SYSCALL_API_RECORD_BYTES, SYSCALL_API_SECTION, lower, lower_with,
 };
 pub use metadata::{MetadataInput, render_metadata, summary_json};
-pub use thruput_rv32_artifact::{FORMAT_FINGERPRINT, compute_format_fingerprint};
+pub use thruput_rv32_artifact::{
+    FORMAT_FINGERPRINT, SyscallApiVersion, compute_format_fingerprint,
+};
