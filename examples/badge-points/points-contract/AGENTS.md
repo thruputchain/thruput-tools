@@ -1,0 +1,29 @@
+# points-contract agent guide
+
+Scaffolded with Thruput 0.45.1, template `counter`.
+Start with [README.md](README.md), the manifests, and nearby tests. Use the
+project's resolved SDK and toolchain; change pins only when the task requires it.
+
+## Where to work
+
+- `src/implementation.rs`: contract state, methods, errors, and declared events.
+- `src/lib.rs` and `src/main.rs`: crate setup and the RV32 entrypoint wrapper.
+- `tests/common/mod.rs`: behavior checks shared by native and RV32 tests.
+- `tests/test.rs`: native executor setup.
+- `tests/test_rv32.rs`: compiled guest setup.
+- `tests/integration.rs`: RPC tests against a node.
+
+## Validate
+
+Run `cargo test` and `thruput test` for contract changes. The latter builds and
+executes the guest artifact, by default
+`target/thruput/points_contract.rv32a`; use the reported path if configured
+elsewhere. Follow README for setup and other checks. Report native tests, guest
+builds, and guest execution separately.
+
+Check the existing manifest and tests before changing features, entrypoints,
+or build configuration. Use resolved SDK source for API and storage semantics.
+
+If local source and tests do not answer a question, additional guidance is
+optional: start with `thruput skill --help` or `thruput docs --help`. Install
+or load only what the task needs. Check the command's `--help` when uncertain.

@@ -1,0 +1,63 @@
+[package]
+name = "points-contract"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["rlib"]
+doctest = false
+test = false
+
+# RV32 ELF bin wrapper. The name must stay the snake-case package name:
+# `thruput build` looks for the ELF at `release/<snake_name>`.
+# `required-features` keeps host `cargo build` / `cargo test` from building
+# this no_std binary.
+[[bin]]
+name = "points_contract"
+path = "src/main.rs"
+required-features = ["entrypoints"]
+test = false
+bench = false
+
+# Per-contract settings `thruput build` reads; uncomment to override a default.
+# [package.metadata.thruput]
+# Guest data memory to declare (default 64K); the target chain's
+# `max_rv32_memory_bytes` must allow it.
+# initial_memory_bytes = "128K"
+
+# Three of these feature names are contracts with the toolchain — do not
+# rename them:
+# - `entrypoints`: the #[contract] macro keys guest entrypoint codegen on
+#   this exact name, and `thruput build` compiles the rv32 bin with it.
+# - `dev`: `thruput test` runs host tests with `--features dev`.
+# - `thruput-integration-test`: `thruput test --integration` enables it.
+[features]
+entrypoints = []
+dev = ["thruput-sdk/dev"]
+thruput-integration-test = ["dep:thruput-json-rpc-client", "dep:tokio", "dep:serde_json"]
+
+# `thruput-sdk` is declared per target because it needs `std` on the host and forbids
+# it on the guest. Cargo resolves features per platform, so host `cargo build`
+# / `cargo check` (and rust-analyzer) see a buildable crate without `dev`
+# being a default feature, and the rv32 build stays `no_std`.
+[target.'cfg(target_arch = "riscv32")'.dependencies]
+thruput-sdk = { version = "=0.61.0" }
+
+[target.'cfg(not(target_arch = "riscv32"))'.dependencies]
+thruput-sdk = { version = "=0.61.0", features = ["std"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[target.'cfg(not(target_arch = "riscv32"))'.dependencies.thruput-json-rpc-client]
+version = "0.45.1"
+optional = true
+
+# The self-dependency is deliberate: it turns the `dev` feature (and so
+# `thruput-sdk/dev`, the native mock executor) on for `cargo test` builds only,
+# keeping the library itself no_std for guest builds.
+[dev-dependencies]
+points-contract = { path = ".", features = ["dev"] }
+
+# This example lives inside the thruput-tools checkout but is not a member of
+# its workspace.
+[workspace]

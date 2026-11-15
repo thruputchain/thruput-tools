@@ -1,0 +1,12 @@
+{
+  "id": "thruput-points",
+  "name": "Thruput Points",
+  "version": "0.1.0",
+  "author": "@you",
+  "summary": "Award points to the badges around you, recorded on the Thruput testnet. Unsigned: demo only.",
+  "icon": "star",
+  "accent": "FFB000",
+  "category": "social",
+  "permissions": ["mesh", "http"],
+  "hosts": ["rpc.thruput.network"]
+}

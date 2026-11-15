@@ -1,0 +1,38 @@
+# Project-local Thruput config.
+#
+# User-level defaults live in ~/.config/thruput/config.toml.
+# Profiles here merge with global profiles of the same name, and project
+# aliases override global aliases.
+
+# Follow the global default selected with `thruput config use <NAME> --global`.
+# To select a network only for this project, use `thruput config use <NAME> --project`.
+
+[profile.local]
+network = "local"
+# Set with `thruput wallet use <NAME> --profile local`.
+# default_wallet = "alice"
+
+[profile.local.contracts]
+# points-contract = "11111111111111111111111111111111"
+
+# [profile.local.wallets.alice]
+# address = "11111111111111111111111111111111"
+# owner_public_key = "11111111111111111111111111111111"
+
+# Genesis parameter overrides read when the local profile is selected.
+# Use `THRUPUT_PROFILE=local thruput node` or `thruput test --integration --profile local`.
+# A `--network-config` flag replaces a value here.
+# [profile.local.network_config]
+# max_rv32_code_bytes = "256K"
+
+[profile.futurenet]
+network = "futurenet"
+# Set with `thruput wallet use <NAME> --profile futurenet`.
+# default_wallet = "alice"
+
+[profile.futurenet.contracts]
+# points-contract = "11111111111111111111111111111111"
+
+# [profile.futurenet.wallets.alice]
+# address = "11111111111111111111111111111111"
+# owner_public_key = "11111111111111111111111111111111"
