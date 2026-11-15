@@ -11,6 +11,9 @@ must build against the same protocol commit. The protocol changes since
 `dc6f9ee` touch only `syscalls.yaml`; no XDR type changed.
 
 - New projects pin SDK 0.61.2. Artifacts stay RV32 format v6.
+- Use managed hog-devnode 0.1.34, matching the new protocol identity. Its
+  macOS bundle is not Developer ID signed or notarized; installs through
+  `thruput` are not quarantined, so `thruput node` is unaffected.
 
 ## 0.45.1
 
