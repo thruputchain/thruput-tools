@@ -90,18 +90,26 @@ pub(crate) async fn timed_backend_call<T: Send + 'static, E: std::fmt::Display +
     tokio::spawn(async move {
         let task = task;
         let started_at = Instant::now();
-        let result = tokio::time::timeout_at(deadline.into(), call)
-            .instrument(span)
-            .await;
+        // The task may first run after the deadline under executor load, and
+        // timeout_at polls its future once before reporting expiry. Check
+        // here so an expired call never reaches the backend.
+        let result = if started_at >= deadline {
+            None
+        } else {
+            tokio::time::timeout_at(deadline.into(), call)
+                .instrument(span)
+                .await
+                .ok()
+        };
         let outcome = match &result {
-            Err(_) => BackendRequestOutcome::Timeout,
-            Ok(Ok(value)) if is_ok(value) => BackendRequestOutcome::Ok,
-            Ok(Ok(_) | Err(_)) => BackendRequestOutcome::Error,
+            None => BackendRequestOutcome::Timeout,
+            Some(Ok(value)) if is_ok(value) => BackendRequestOutcome::Ok,
+            Some(Ok(_) | Err(_)) => BackendRequestOutcome::Error,
         };
         metrics.observe_backend_request(backend, op, outcome, started_at.elapsed());
         let result = match result {
-            Err(_) => Err(RpcServerError::BackendTimeout),
-            Ok(result) => result
+            None => Err(RpcServerError::BackendTimeout),
+            Some(result) => result
                 .map_err(|error| RpcServerError::BackendUnavailable(format!("{service}: {error}"))),
         };
         drop(task);
