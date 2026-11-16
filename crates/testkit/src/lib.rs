@@ -85,6 +85,38 @@
 //!   evidence is kept inspectable in [`TestkitError::InvalidFundingEvidence`]
 //!   or [`TestkitError::InvalidFundingResponse`]; it does not prove admission.
 //!
+//! # Block production and block time
+//!
+//! On a local node, in every [`BlockDriverMode`], [`Network`] can produce
+//! blocks and move block time forward, so a test can cover days of chain time
+//! in seconds. Contracts read the block timepoint in Unix nanoseconds.
+//!
+//! - [`Network::produce_block`] produces one block now, which can be empty.
+//! - [`Network::produce_block_at`] produces one at an exact timepoint.
+//! - [`Network::produce_blocks`] produces several, optionally an interval apart.
+//! - [`Network::set_next_block_timepoint`] pins the next block's timepoint.
+//! - [`Network::increase_time`] moves the clock forward without a block.
+//! - [`Network::set_block_driver`] switches between instant, interval and
+//!   manual block production.
+//!
+//! After a time jump, later blocks continue from the new time. Blocks never
+//! move backward: a timepoint earlier than the chain tip's is refused. These
+//! controls call the node's `dev_` JSON-RPC methods, so they work the same on
+//! a harness-owned node and on an attached `thruput node`. Hosted networks do
+//! not offer them.
+//!
+//! ```rust,no_run
+//! # async fn example(ctx: thruput_testkit::AgentContext) -> thruput_testkit::Result<()> {
+//! use std::time::Duration;
+//!
+//! // Thirty days pass; an empty block makes the new time visible to views.
+//! ctx.network().increase_time(Duration::from_hours(30 * 24)).await?;
+//! let block = ctx.network().produce_block().await?;
+//! println!("block {} at {}", block.height, *block.timepoint);
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Typed calls
 //!
 //! With `thruput-sdk`'s `remote` feature (typically on a dev-dependency),
@@ -159,12 +191,12 @@ pub use contract::{
 pub use error::{AgentFailure, AgentFailures, Result, TestkitError};
 pub use logging::init_tracing;
 pub use mailbox::{Envelope, Mailbox, Message};
-pub use network::{LocalNetworkConfig, Network, NetworkConfig, SubmittedTransaction};
+pub use network::{
+    LocalNetworkConfig, Network, NetworkConfig, ProducedBlock, SubmittedTransaction,
+};
 pub use rng::AgentRng;
 pub use scenario::{AgentOutcome, Scenario, ScenarioBuilder, ScenarioReport};
-pub use thruput_node_supervisor::{
-    BlockDriverConfig, BlockDriverMode, BlockProductionError, LogLevel, ProducedBlock,
-};
+pub use thruput_node_supervisor::{BlockDriverConfig, BlockDriverMode, LogLevel};
 pub use thruput_signing::default_wallet::WalletInitCall;
 
 // Re-exports so agent code can name RPC/XDR types and encode calldata without
