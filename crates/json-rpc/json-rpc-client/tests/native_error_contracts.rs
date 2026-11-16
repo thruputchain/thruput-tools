@@ -147,7 +147,7 @@ fn all_kinds_codes_and_declared_methods_have_consistent_schemas() {
     assert_eq!(err::ERROR_INFOS.len(), 12);
     let unique: std::collections::BTreeSet<_> = err::ERROR_INFOS.iter().map(|v| v.code).collect();
     assert_eq!(unique.len(), 12);
-    assert_eq!(err::METHODS.len(), 24);
+    assert_eq!(err::METHODS.len(), 29);
     for method in err::METHODS {
         let codes = err::method_error_codes(method).unwrap();
         assert_eq!(

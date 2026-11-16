@@ -5,6 +5,7 @@
 //! the JSON-RPC facade that serves the same public API as the gateway.
 
 mod airdrop;
+mod block_control;
 mod block_driver;
 pub mod config;
 pub mod error;

@@ -127,6 +127,12 @@ fn request(name: &str) -> Value {
         "dev_fundAccount" => {
             json!({"recipient": ADDRESS, "rawAmount": "1", "clientNonce": "0x01", "faucet": ADDRESS})
         }
+        "dev_produceBlock" | "dev_setNextBlockTimepoint" => {
+            json!({"blockTimepoint": "1700000000000000000"})
+        }
+        "dev_produceBlocks" => json!({"count": 3, "intervalNanoseconds": "12000000000"}),
+        "dev_increaseTime" => json!({"nanoseconds": "259200000000000"}),
+        "dev_setBlockDriver" => json!({"mode": "manual"}),
         _ => panic!("missing request fixture: {name}"),
     }
 }
@@ -180,6 +186,16 @@ fn result(name: &str) -> Value {
             json!({"recipient": ADDRESS, "rawAmount": "1", "transactionHash": ADDRESS, "signedTransaction": "0x01"})
         }
         "dev_getPendingTransactionCount" => json!({"count": "9007199254740993"}),
+        "dev_produceBlock" => {
+            json!({"blockHeight": "812", "blockTimepoint": "1700000000000000000"})
+        }
+        "dev_produceBlocks" => {
+            json!({"blocks": [{"blockHeight": "812", "blockTimepoint": "1700000000000000000"}]})
+        }
+        "dev_setNextBlockTimepoint" | "dev_increaseTime" => {
+            json!({"nextBlockTimepoint": "1700000000000000000"})
+        }
+        "dev_setBlockDriver" => json!({"mode": "manual", "intervalMilliseconds": "500"}),
         "getContractDeployment" => {
             json!({"address": ADDRESS, "stateBlockHeight": "42", "deployment": null})
         }
@@ -211,7 +227,7 @@ fn complete_method_map_has_strict_named_params_required_first_and_error_parity()
         .iter()
         .map(|m| m["name"].as_str().unwrap())
         .collect();
-    assert_eq!(methods.len(), 24);
+    assert_eq!(methods.len(), 29);
     assert_eq!(names, METHOD_NAMES.iter().copied().collect());
     assert_eq!(names, errors::METHODS.iter().copied().collect());
     for method in methods {

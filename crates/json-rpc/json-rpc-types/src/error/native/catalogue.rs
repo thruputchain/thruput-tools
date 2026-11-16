@@ -108,8 +108,9 @@ pub fn error_info_by_code(code: i32) -> Option<&'static RpcErrorInfo> {
     ERROR_INFOS.iter().find(|info| info.code == code)
 }
 
-/// Core methods plus the three selected optional methods. This does not
-/// register or advertise any method on a running server.
+/// Core methods plus the optional faucet, local funding and local block
+/// control methods. This does not register or advertise any method on a
+/// running server.
 pub const METHODS: &[&str] = &[
     "getVersionInfo",
     "getNetworkInfo",
@@ -135,6 +136,11 @@ pub const METHODS: &[&str] = &[
     "faucet_requestAirdrop",
     "dev_fundAccount",
     "dev_getPendingTransactionCount",
+    "dev_produceBlock",
+    "dev_produceBlocks",
+    "dev_setNextBlockTimepoint",
+    "dev_increaseTime",
+    "dev_setBlockDriver",
 ];
 
 /// Declared application codes. Standard dispatcher/transport errors may occur
@@ -210,13 +216,18 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
         | "getRegisteredAuth"
         | "getContractDeployment"
         | "getEffectiveContract"
-        | "dev_getPendingTransactionCount" => &[
+        | "dev_getPendingTransactionCount"
+        | "dev_produceBlock"
+        | "dev_produceBlocks"
+        | "dev_setNextBlockTimepoint"
+        | "dev_increaseTime" => &[
             INVALID_PARAMS,
             BACKEND_UNAVAILABLE,
             BACKEND_TIMEOUT,
             OVERLOADED,
             BACKEND_DATA_INVALID,
         ],
+        "dev_setBlockDriver" => &[INVALID_PARAMS, BACKEND_UNAVAILABLE],
         _ => return None,
     })
 }

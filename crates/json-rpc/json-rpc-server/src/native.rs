@@ -130,3 +130,6 @@ pub mod service;
 
 /// Optional faucet and local funding semantics.
 pub mod funding;
+
+/// Optional local block production and block time control.
+pub mod block_control;

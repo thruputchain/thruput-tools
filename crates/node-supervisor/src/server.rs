@@ -28,6 +28,7 @@ use thruput_xdr::PROTOCOL_VERSION;
 use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
     airdrop::{LocalAirdropContext, LocalAirdropRpc},
+    block_control::LocalBlockControl,
     block_driver::{BlockDriverTask, BlockProducer},
     hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_runtime_identity},
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
@@ -638,7 +639,8 @@ where
             matches!(backend_planes.view, PlaneStatus::ViewGateway),
         ),
     )
-    .with_local_pending_count();
+    .with_local_pending_count()
+    .with_block_control(LocalBlockControl::new(block_driver.producer()));
     let core_rpc = match bundle_identity.as_ref() {
         Some(identity) => core_rpc.with_bundle_identity(identity),
         None => core_rpc,

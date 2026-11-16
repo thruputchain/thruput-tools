@@ -220,6 +220,11 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
     assert_eq!(version.wire_format, "14.5.0");
     let expected = [
         "dev_getPendingTransactionCount",
+        "dev_increaseTime",
+        "dev_produceBlock",
+        "dev_produceBlocks",
+        "dev_setBlockDriver",
+        "dev_setNextBlockTimepoint",
         "getBalance",
         "getChainConfig",
         "getChainTip",
@@ -986,6 +991,98 @@ async fn switching_to_instant_mode_mines_later_submits() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn block_control_rpc_methods_drive_the_local_block_clock() {
+    let (handle, client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let target = wall_clock_nanos() + nanos(3 * DAY);
+    let call = |method: &'static str, params: serde_json::Value| {
+        let client = &client;
+        async move {
+            client
+                .request::<serde_json::Value, _>(method, NamedParams(params))
+                .await
+        }
+    };
+
+    let block = call(
+        "dev_produceBlock",
+        serde_json::json!({"blockTimepoint": target.to_string()}),
+    )
+    .await
+    .expect("bug: a pinned block should commit");
+    assert_eq!(
+        block,
+        serde_json::json!({"blockHeight": "1", "blockTimepoint": target.to_string()})
+    );
+
+    let empty = call("dev_produceBlock", serde_json::json!({}))
+        .await
+        .expect("bug: an empty block should commit");
+    assert_eq!(empty["blockHeight"], "2");
+
+    let clock = call(
+        "dev_increaseTime",
+        serde_json::json!({"nanoseconds": nanos(DAY).to_string()}),
+    )
+    .await
+    .expect("bug: increasing time should succeed");
+    let next: u64 = clock["nextBlockTimepoint"]
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .expect("bug: the clock reports a decimal timepoint");
+    assert!(next >= target + nanos(DAY));
+
+    let clock = call(
+        "dev_setNextBlockTimepoint",
+        serde_json::json!({"blockTimepoint": (target + nanos(10 * DAY)).to_string()}),
+    )
+    .await
+    .expect("bug: a future timepoint should be accepted");
+    assert_eq!(
+        clock,
+        serde_json::json!({"nextBlockTimepoint": (target + nanos(10 * DAY)).to_string()})
+    );
+
+    let blocks = call(
+        "dev_produceBlocks",
+        serde_json::json!({"count": 2, "intervalNanoseconds": "1000"}),
+    )
+    .await
+    .expect("bug: two blocks should commit");
+    assert_eq!(
+        blocks,
+        serde_json::json!({"blocks": [
+            {"blockHeight": "3", "blockTimepoint": (target + nanos(10 * DAY)).to_string()},
+            {"blockHeight": "4", "blockTimepoint": (target + nanos(10 * DAY) + 1000).to_string()},
+        ]})
+    );
+
+    let error = call(
+        "dev_produceBlock",
+        serde_json::json!({"blockTimepoint": target.to_string()}),
+    )
+    .await
+    .expect_err("bug: a timepoint before the tip is rejected");
+    assert!(
+        matches!(error, ClientError::Call(ref error) if error.code() == codes::INVALID_PARAMS),
+        "{error}"
+    );
+
+    let status = call(
+        "dev_setBlockDriver",
+        serde_json::json!({"mode": "interval", "intervalMilliseconds": "250"}),
+    )
+    .await
+    .expect("bug: switching mode should succeed");
+    assert_eq!(
+        status,
+        serde_json::json!({"mode": "interval", "intervalMilliseconds": "250"})
+    );
 
     handle.stop().await.expect("bug: clean shutdown");
 }

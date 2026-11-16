@@ -40,8 +40,8 @@ use crate::config::{BlockDriverConfig, BlockDriverMode};
 const BLOCK_REQUEST_CAPACITY: usize = 1;
 
 /// Maximum number of blocks that one [`BlockProducer::produce_blocks`] call
-/// can produce.
-pub const MAX_BLOCKS_PER_REQUEST: u32 = 1_000;
+/// can produce. The `dev_produceBlocks` RPC method shares this limit.
+pub const MAX_BLOCKS_PER_REQUEST: u32 = thruput_json_rpc_types::requests::MAX_PRODUCE_BLOCKS;
 
 /// Metadata returned after the scheduler commits a requested block.
 #[derive(Debug, Clone, PartialEq, Eq)]
