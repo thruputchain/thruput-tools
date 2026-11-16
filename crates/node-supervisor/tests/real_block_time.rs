@@ -177,7 +177,8 @@ async fn transaction_waits_for_a_requested_block(node: &NodeSupervisorHandle, cl
                 faucet,
                 // A new account needs enough to hold its own balance.
                 raw_amount: 123_456_789,
-                client_nonce: ClientNonce::new(vec![0x31]).unwrap(),
+                // Any value unique to this request works; the start time is.
+                client_nonce: ClientNonce::new(wall_clock_nanos().to_be_bytes().to_vec()).unwrap(),
             }),
         )
         .await
