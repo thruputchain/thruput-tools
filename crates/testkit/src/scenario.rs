@@ -371,8 +371,8 @@ async fn acquire_network(
                 .runtime_manifest
                 .clone()
                 .ok_or(TestkitError::MissingRuntimeManifest)?;
-            let manual_block_producer = handle.manual_block_producer();
-            let network = Network::connect(&rpc_url, &manifest, manual_block_producer).await?;
+            let block_producer = Some(handle.block_producer());
+            let network = Network::connect(&rpc_url, &manifest, block_producer).await?;
             Ok((
                 network,
                 account_source(manifest, seed, use_bootstrap_accounts, accounts)?,

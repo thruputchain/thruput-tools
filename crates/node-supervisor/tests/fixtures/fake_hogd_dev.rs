@@ -1048,10 +1048,6 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         if self.mode == FakeSchedulerMode::AutomineNominateError {
             return Err(ProgramError::msg("fake proposal RPC failure"));
         }
-        if self.pending_submits.load(Ordering::SeqCst) == 0 {
-            return Ok(SchedulerProposalResult::SchedulerProposalError);
-        }
-
         let tip = self
             .tip
             .lock()
@@ -1060,7 +1056,11 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
             .expect("bug: automine should only run after genesis load");
         let next_height = *tip.value.proposal_header.block_height + 1;
         let block_id = tip.id + 1;
-        if onto != tip.id {
+        // Like hogd: an empty mempool still proposes an (empty) block, and a
+        // block may not be older than its parent.
+        if onto != tip.id
+            || proposal_context.block_timepoint < tip.value.proposal_header.block_timepoint
+        {
             return Ok(SchedulerProposalResult::SchedulerProposalError);
         }
         let mut transactions = fake_proposal_txs();
@@ -1151,14 +1151,14 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
                 return Err(ProgramError::msg("overlapping fake scheduler commit"));
             }
             tokio::time::sleep(Duration::from_millis(75)).await;
-            let pending = self.pending_submits.fetch_sub(1, Ordering::SeqCst);
+            let _ =
+                self.pending_submits
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |pending| {
+                        Some(pending.saturating_sub(1))
+                    });
             self.commit_in_progress.store(false, Ordering::SeqCst);
-            if pending == 0 {
-                self.pending_submits.store(0, Ordering::SeqCst);
-                return Ok(SchedulerCommitOutcome::SchedulerCommitBlockNotFound);
-            }
-        } else if self.pending_submits.swap(0, Ordering::SeqCst) == 0 {
-            return Ok(SchedulerCommitOutcome::SchedulerCommitBlockNotFound);
+        } else {
+            self.pending_submits.store(0, Ordering::SeqCst);
         }
 
         let mut guard = self.tip.lock().expect("bug: fake tip mutex poisoned");

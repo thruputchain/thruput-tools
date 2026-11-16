@@ -254,7 +254,8 @@ pub struct BlockDriverConfig {
     pub mode: BlockDriverMode,
     /// Timer interval for [`BlockDriverMode::Interval`].
     pub interval: Duration,
-    /// Execution deadline once a request reaches the manual driver.
+    /// Execution deadline for each requested block, once the request reaches
+    /// the driver.
     ///
     /// Time spent waiting behind an earlier request is not included.
     pub manual_request_timeout: Duration,
@@ -305,7 +306,7 @@ impl BlockDriverConfig {
         self
     }
 
-    /// Return a copy with a different manual request deadline.
+    /// Return a copy with a different requested-block deadline.
     #[must_use]
     pub const fn with_manual_request_timeout(mut self, timeout: Duration) -> Self {
         self.manual_request_timeout = timeout;
@@ -344,7 +345,8 @@ pub enum BlockDriverMode {
     Instant,
     /// A fixed timer drives nomination/commit attempts.
     Interval,
-    /// Blocks are produced only through the supervisor's in-process control handle.
+    /// Blocks are produced only on request, through
+    /// [`crate::BlockProducer`] or the `dev_produceBlock` RPC method.
     Manual,
 }
 

@@ -356,10 +356,7 @@ async fn commit_transaction(
         admitted.transaction_hash == expected_hash,
         "admission hash mismatch",
     )?;
-    node.manual_block_producer()
-        .ok_or_else(|| std::io::Error::other("manual block producer missing"))?
-        .produce_block()
-        .await?;
+    node.block_producer().produce_block().await?;
     wait_for_receipt(native, signing_network, expected_hash).await
 }
 
@@ -420,9 +417,7 @@ async fn check_unfunded_deployment_conflict(
         admitted.transaction_hash == expected_hash,
         "admission hash mismatch",
     )?;
-    let producer = node
-        .manual_block_producer()
-        .ok_or_else(|| std::io::Error::other("manual block producer missing"))?;
+    let producer = node.block_producer();
     let mut last_status = None;
     for _ in 0..20 {
         producer.produce_block().await?;
@@ -548,10 +543,7 @@ async fn send_transfer(
     nonce: u64,
 ) -> TestResult<output::TransactionReceipt> {
     let hash = submit_transfer(native, sender, recipient, signing_network.clone(), nonce).await?;
-    node.manual_block_producer()
-        .ok_or_else(|| std::io::Error::other("manual block producer missing"))?
-        .produce_block()
-        .await?;
+    node.block_producer().produce_block().await?;
     wait_for_receipt(native, signing_network, hash).await
 }
 
@@ -1043,11 +1035,7 @@ async fn check_block_continuations(
             submit_transfer(native, sender, recipient, signing_network.clone(), nonce).await?,
         );
     }
-    let block = node
-        .manual_block_producer()
-        .ok_or_else(|| std::io::Error::other("manual block producer missing"))?
-        .produce_block()
-        .await?;
+    let block = node.block_producer().produce_block().await?;
     for hash in &hashes {
         let receipt = wait_for_receipt(native, signing_network.clone(), *hash).await?;
         require(

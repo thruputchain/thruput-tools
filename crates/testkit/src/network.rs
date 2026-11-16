@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use thruput_node_supervisor::{BlockDriverConfig, LogLevel, ManualBlockProducer, ProducedBlock};
+use thruput_node_supervisor::{BlockDriverConfig, BlockProducer, LogLevel, ProducedBlock};
 
 use thruput_json_rpc_client::native::{
     NativeClient, NativeClientError,
@@ -182,7 +182,7 @@ struct NetworkInner {
     local_faucet: Option<ContractAddress>,
     local_funding:
         tokio::sync::Mutex<std::collections::HashMap<ContractAddress, LocalFundingAttempt>>,
-    manual_block_producer: Option<ManualBlockProducer>,
+    block_producer: Option<BlockProducer>,
 }
 
 impl fmt::Debug for Network {
@@ -190,10 +190,7 @@ impl fmt::Debug for Network {
         f.debug_struct("Network")
             .field("rpc_url", &self.inner.rpc_url)
             .field("online", &self.inner.client.is_some())
-            .field(
-                "manual_block_production",
-                &self.inner.manual_block_producer.is_some(),
-            )
+            .field("block_production", &self.inner.block_producer.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -204,7 +201,7 @@ impl Network {
     pub(crate) async fn connect(
         rpc_url: &str,
         manifest: &RuntimeManifest,
-        manual_block_producer: Option<ManualBlockProducer>,
+        block_producer: Option<BlockProducer>,
     ) -> Result<Self> {
         let transport = HttpClientBuilder::default()
             .build(rpc_url)
@@ -238,7 +235,7 @@ impl Network {
                 faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?),
                 local_faucet: local_faucet(manifest)?,
                 local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-                manual_block_producer,
+                block_producer,
             }),
         })
     }
@@ -253,7 +250,7 @@ impl Network {
                 faucet: tokio::sync::Mutex::new(None),
                 local_faucet: None,
                 local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-                manual_block_producer: None,
+                block_producer: None,
             }),
         }
     }
@@ -410,10 +407,10 @@ impl Network {
         })
     }
 
-    /// Produce one block through a harness-owned local node in manual mode.
+    /// Produce one block, which can be empty, through a harness-owned local node.
     pub async fn produce_block(&self) -> Result<ProducedBlock> {
         self.inner
-            .manual_block_producer
+            .block_producer
             .as_ref()
             .ok_or(TestkitError::ManualBlockProductionUnavailable)?
             .produce_block()

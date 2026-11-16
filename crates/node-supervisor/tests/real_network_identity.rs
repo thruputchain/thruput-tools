@@ -126,11 +126,7 @@ async fn fund(node: &NodeSupervisorHandle, recipient: ContractAddress) {
         )
         .await
         .unwrap();
-    node.manual_block_producer()
-        .unwrap()
-        .produce_block()
-        .await
-        .unwrap();
+    node.block_producer().produce_block().await.unwrap();
     receipt(&client, response.transaction_hash).await;
     assert_eq!(balance(&client, recipient).await, before + 10_000_000);
 }
@@ -216,11 +212,7 @@ async fn distinct_domains_and_persistent_identity() {
             .transaction_hash,
         hash
     );
-    a.manual_block_producer()
-        .unwrap()
-        .produce_block()
-        .await
-        .unwrap();
+    a.block_producer().produce_block().await.unwrap();
     receipt(&a_client, hash).await;
     let sender_before = balance(&b_client, sender_address).await;
     let recipient_before = balance(&b_client, recipient_address).await;
@@ -235,11 +227,7 @@ async fn distinct_domains_and_persistent_identity() {
         if error.message().contains("authentication")),
         "{wrong_domain:?}"
     );
-    b.manual_block_producer()
-        .unwrap()
-        .produce_block()
-        .await
-        .unwrap();
+    b.block_producer().produce_block().await.unwrap();
     assert!(
         b_client
             .request::<output::ReceiptResult, _>(
@@ -269,11 +257,7 @@ async fn distinct_domains_and_persistent_identity() {
             .transaction_hash,
         hash
     );
-    b.manual_block_producer()
-        .unwrap()
-        .produce_block()
-        .await
-        .unwrap();
+    b.block_producer().produce_block().await.unwrap();
     receipt(&b_client, hash).await;
     let sender_after = balance(&b_client, sender_address).await;
     let recipient_after = balance(&b_client, recipient_address).await;

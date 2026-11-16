@@ -92,8 +92,7 @@ async fn produce(fixture: &Fixture) -> Result<BlockHeight> {
         .node
         .as_ref()
         .unwrap()
-        .manual_block_producer()
-        .unwrap()
+        .block_producer()
         .produce_block()
         .await?
         .height

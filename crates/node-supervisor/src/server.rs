@@ -28,7 +28,7 @@ use thruput_xdr::PROTOCOL_VERSION;
 use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
     airdrop::{LocalAirdropContext, LocalAirdropRpc},
-    block_driver::{BlockDriverTask, ManualBlockProducer},
+    block_driver::{BlockDriverTask, BlockProducer},
     hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_runtime_identity},
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
@@ -146,7 +146,7 @@ pub struct NodeSupervisorHandle {
     rpc_handle: ServerHandle,
     rpc_addr: SocketAddr,
     backend_planes: BackendPlanes,
-    manual_block_producer: Option<ManualBlockProducer>,
+    block_producer: BlockProducer,
     block_driver: Option<BlockDriverTask>,
 }
 
@@ -232,7 +232,7 @@ impl NodeSupervisorHandle {
                     rpc_handle: started.handle,
                     rpc_addr: started.addr,
                     backend_planes: started.backend_planes,
-                    manual_block_producer: started.block_driver.manual_producer(),
+                    block_producer: started.block_driver.producer(),
                     block_driver: Some(started.block_driver),
                 })
             }
@@ -271,9 +271,9 @@ impl NodeSupervisorHandle {
         self.hogd.child_id()
     }
 
-    /// In-process block production control when the supervisor runs in manual mode.
-    pub fn manual_block_producer(&self) -> Option<ManualBlockProducer> {
-        self.manual_block_producer.clone()
+    /// In-process block production and block clock control, in every mode.
+    pub fn block_producer(&self) -> BlockProducer {
+        self.block_producer.clone()
     }
 
     /// Wait until either hogd-dev exits or the JSON-RPC server stops, then
