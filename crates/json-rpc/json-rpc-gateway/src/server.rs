@@ -62,6 +62,11 @@ pub(crate) fn start(
                     }
                 },
             };
+            // jsonrpsee's own accept loop disables Nagle; this one must too, or
+            // small WebSocket responses stall behind delayed ACKs.
+            if let Err(error) = socket.set_nodelay(true) {
+                tracing::warn!(%error, "gateway TCP_NODELAY failed");
+            }
             // Build once per socket, never once per HTTP request: the builder
             // assigns ConnectionId here, shared by HTTP/2 streams and WS calls.
             let service = builder.clone().build(rpc.clone(), stop.clone());
