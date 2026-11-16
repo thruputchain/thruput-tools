@@ -21,12 +21,26 @@ fn node_client(node: &NodeSupervisorHandle) -> HttpClient {
         .unwrap()
 }
 
+/// Write a gateway config beside `log` whose client admission budget these
+/// tests cannot reach. They qualify read correctness as one fast client, so the
+/// public per-client rate limit must not be what they measure.
+fn unthrottled_gateway_config(log: &Path) -> std::io::Result<std::path::PathBuf> {
+    let config = log.with_extension("toml");
+    std::fs::write(
+        &config,
+        "[client_admission]\nclient_rate_per_sec = 1000000\nclient_burst = 10000000\n",
+    )?;
+    Ok(config)
+}
+
 async fn gateway(node: &NodeSupervisorHandle, log: &Path) -> (tokio::process::Child, HttpClient) {
     let binary = std::env::var_os("THRUPUT_GATEWAY_BINARY").expect("gateway binary is required");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
     let child = tokio::process::Command::new(binary)
+        .arg("--config")
+        .arg(unthrottled_gateway_config(log).unwrap())
         .arg("--runtime-manifest")
         .arg(node.hogd_readiness().manifest_path.as_ref().unwrap())
         .arg("--listen")

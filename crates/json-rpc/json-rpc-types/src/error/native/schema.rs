@@ -98,3 +98,37 @@ fn refine(variant: &mut Value, method: Option<&str>) {
             .extend(conditions);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limit_catalogue_and_typed_retry_delay_are_distinct_from_backend_data_errors() {
+        assert_eq!(super::super::codes::BACKEND_DATA_INVALID, -32054);
+        assert_eq!(super::super::codes::RATE_LIMITED, -32055);
+        let mut codes = std::collections::HashSet::new();
+        for info in super::super::ERROR_INFOS {
+            assert!(
+                codes.insert(info.code),
+                "duplicate native error code {}",
+                info.code
+            );
+        }
+        let schema = method_data_schema("getChainTip", -32055).unwrap();
+        let variants = schema["oneOf"].as_array().unwrap();
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0]["properties"]["kind"]["const"], "rateLimited");
+        assert_eq!(variants[0]["required"], json!(["kind"]));
+        assert_eq!(
+            variants[0]["properties"]["retryAfterMs"]["$ref"],
+            "#/definitions/DecimalU64"
+        );
+        assert!(method_data_schema("getVersionInfo", -32055).is_none());
+        assert_eq!(super::super::outcome_for_code(-32055), "rate_limited");
+        let info = super::super::error_info_by_code(-32055).unwrap();
+        assert_eq!(info.message, "Rate limited");
+        assert!(info.description.contains("data.retryAfterMs"));
+        assert!(info.description.contains("never reached a backend"));
+    }
+}

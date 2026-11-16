@@ -1,3 +1,4 @@
+pub(crate) mod admission;
 mod lookup;
 pub(crate) use lookup::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
@@ -125,6 +126,7 @@ pub struct GatewayMetrics {
 
 struct MetricsInner {
     lookup: lookup::LookupMetrics,
+    admission: admission::AdmissionMetrics,
     registry: Registry,
     gather_lock: Mutex<()>,
     health_status: GaugeVec,
@@ -152,6 +154,10 @@ struct MetricsInner {
 }
 
 impl GatewayMetrics {
+    pub(crate) fn admission(&self) -> &admission::AdmissionMetrics {
+        &self.inner.admission
+    }
+
     pub(crate) fn scheduler_lookup(&self) -> &lookup::LookupMetrics {
         &self.inner.lookup
     }
@@ -167,6 +173,7 @@ impl GatewayMetrics {
     ) -> prometheus::Result<Self> {
         let registry = Registry::new();
         let lookup = lookup::LookupMetrics::new(&registry)?;
+        let admission = admission::AdmissionMetrics::new(&registry)?;
         let health_status = GaugeVec::new(
             Opts::new(
                 "groundhog_gateway_health_status",
@@ -364,6 +371,7 @@ impl GatewayMetrics {
         Ok(Self {
             inner: Arc::new(MetricsInner {
                 lookup,
+                admission,
                 registry,
                 gather_lock: Mutex::new(()),
                 health_status,
