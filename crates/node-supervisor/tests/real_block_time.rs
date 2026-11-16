@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use jsonrpsee::core::client::{ClientT, Error as ClientError};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use thruput_json_rpc_api::params::NamedParams;
 use thruput_json_rpc_types::{
     BlockHeight, airdrop::ClientNonce, base58::Base58, error::native::codes, requests as input,
@@ -162,9 +163,12 @@ async fn block_time_controls_drive_a_real_runtime() {
 async fn transaction_waits_for_a_requested_block(node: &NodeSupervisorHandle, client: &HttpClient) {
     let manifest = node.hogd_readiness().runtime_manifest.as_ref().unwrap();
     let faucet = manifest.bootstrap_accounts[0].wallet_address;
+    // A fresh recipient and nonce for each run; the test only needs them to
+    // be unique, not secret.
+    let run: [u8; 32] = Sha256::digest(wall_clock_nanos().to_be_bytes()).into();
     let recipient = Base58(
         PubkeyAccount::from_public_key_bytes(
-            LocalSigner::from_secret_key([0x31; 32]).verifying_key_bytes(),
+            LocalSigner::from_secret_key(run).verifying_key_bytes(),
             0,
         )
         .address(),
@@ -177,8 +181,7 @@ async fn transaction_waits_for_a_requested_block(node: &NodeSupervisorHandle, cl
                 faucet,
                 // A new account needs enough to hold its own balance.
                 raw_amount: 123_456_789,
-                // Any value unique to this request works; the start time is.
-                client_nonce: ClientNonce::new(wall_clock_nanos().to_be_bytes().to_vec()).unwrap(),
+                client_nonce: ClientNonce::new(run.to_vec()).unwrap(),
             }),
         )
         .await
