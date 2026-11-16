@@ -1058,6 +1058,48 @@ async fn a_failed_time_increase_leaves_the_clock_unchanged() {
 }
 
 #[tokio::test]
+async fn a_request_that_times_out_during_its_tip_read_leaves_the_clock_unchanged() {
+    // Each runtime tip read and commit takes 400 ms, and each request may wait
+    // one 500 ms timeout in the queue plus one for its tip read: 1000 ms.
+    let (handle, client) = start_fake_with_block_driver(
+        "automine-slow-coordinator",
+        BlockDriverConfig::instant().with_manual_request_timeout(Duration::from_millis(500)),
+    )
+    .await;
+    let producer = handle.block_producer();
+    let before = wall_clock_nanos();
+    client
+        .request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({
+                "signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")
+            })),
+        )
+        .await
+        .expect("bug: submit reaches fake scheduler");
+
+    // Automatic production (tip read + commit) holds the driver for about
+    // 800 ms. The request leaves the queue then, before its 1000 ms deadline,
+    // and its own 400 ms tip read outlasts that deadline.
+    let error = producer
+        .increase_time(3 * DAY)
+        .await
+        .expect_err("bug: the deadline passes during the tip read");
+    assert!(matches!(error, BlockProductionError::TimedOut { .. }));
+
+    let preview = producer
+        .increase_time(Duration::ZERO)
+        .await
+        .expect("bug: an idle driver answers");
+    assert!(
+        *preview < before + nanos(DAY),
+        "a request whose caller stopped waiting must not move the clock"
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
 async fn a_request_waiting_behind_hung_automatic_production_times_out() {
     let (handle, client) = start_fake_with_block_driver(
         "automine-hanging-commit",

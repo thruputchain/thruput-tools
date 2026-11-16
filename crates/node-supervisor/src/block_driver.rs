@@ -68,8 +68,8 @@ pub enum BlockProductionError {
     /// Shutdown interrupted a request after scheduler work may have begun.
     #[error("block production was interrupted; scheduler outcome may be unknown")]
     OutcomeUnknown,
-    /// The scheduler did not complete a request before its deadline.
-    #[error("block production did not complete within {timeout:?}; outcome may be unknown")]
+    /// A request did not complete before its deadline.
+    #[error("block driver request did not complete within {timeout:?}; outcome may be unknown")]
     TimedOut {
         /// Configured request deadline.
         timeout: Duration,
@@ -628,14 +628,14 @@ impl Driver {
                 reply,
             } => {
                 let (result, step) = self
-                    .produce_requested(count, first, interval, shutdown)
+                    .produce_requested(count, first, interval, &reply, shutdown)
                     .await;
                 let _ = reply.send(result);
                 step
             }
             Command::SetNextTimepoint { timepoint, reply } => {
                 let (result, step) = self
-                    .with_tip(shutdown, |clock, tip| {
+                    .with_tip(shutdown, &reply, |clock, tip| {
                         if timepoint < tip {
                             return Err(BlockProductionError::TimepointBeforeTip {
                                 requested: timepoint,
@@ -653,7 +653,7 @@ impl Driver {
                 // Change the clock only after the tip read succeeds, so a
                 // failed request leaves time unchanged and is safe to retry.
                 let (result, step) = self
-                    .with_tip(shutdown, |clock, tip| {
+                    .with_tip(shutdown, &reply, |clock, tip| {
                         clock.advance(nanos);
                         Ok(TimePoint::new(
                             clock.timepoint_after(tip, SystemTime::now()),
@@ -668,6 +668,9 @@ impl Driver {
                 interval,
                 reply,
             } => {
+                // Nothing awaits between the abandoned-request check in
+                // `handle` and this change, so a caller that has gone never
+                // has its mode applied.
                 let entering_instant = mode == BlockDriverMode::Instant
                     && self.config.mode != BlockDriverMode::Instant;
                 self.config.mode = mode;
@@ -705,9 +708,14 @@ impl Driver {
     }
 
     /// Read the tip's timepoint, then apply `update` to the clock.
-    async fn with_tip<T>(
+    ///
+    /// When the caller stops waiting during the tip read, its deadline has
+    /// passed and it was told the outcome is unknown. The clock is then left
+    /// unchanged, so a retry cannot apply the change twice.
+    async fn with_tip<T, R>(
         &mut self,
         shutdown: &mut oneshot::Receiver<()>,
+        reply: &Reply<R>,
         update: impl FnOnce(&mut BlockClock, u64) -> Result<T, BlockProductionError>,
     ) -> (Result<T, BlockProductionError>, Step) {
         let timeout = self.config.effective_manual_request_timeout();
@@ -716,6 +724,12 @@ impl Driver {
             _ = &mut *shutdown => return (Err(BlockProductionError::DriverStopped), Step::Stop),
             tip = tokio::time::timeout(timeout, tip_timepoint(&self.scheduler)) => tip,
         };
+        if reply.is_closed() {
+            return (
+                Err(BlockProductionError::TimedOut { timeout }),
+                Step::Continue,
+            );
+        }
         let result = match tip {
             Ok(Ok(tip)) => update(&mut self.clock, tip),
             Ok(Err(error)) => Err(error),
@@ -729,12 +743,21 @@ impl Driver {
         count: u32,
         first: Option<u64>,
         interval: Option<u64>,
+        reply: &Reply<Vec<ProducedBlock>>,
         shutdown: &mut oneshot::Receiver<()>,
     ) -> (Result<Vec<ProducedBlock>, BlockProductionError>, Step) {
         let timeout = self.config.effective_manual_request_timeout();
         let mut blocks = Vec::new();
         let mut requested = first;
         for index in 0..count {
+            // A caller that stopped waiting was told the outcome is unknown;
+            // start no further blocks for it.
+            if index > 0 && reply.is_closed() {
+                return (
+                    Err(BlockProductionError::TimedOut { timeout }),
+                    Step::Continue,
+                );
+            }
             let result = tokio::select! {
                 biased;
                 _ = &mut *shutdown => {

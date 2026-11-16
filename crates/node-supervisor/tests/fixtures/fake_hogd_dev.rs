@@ -151,6 +151,9 @@ fn main() {
             run_ready_with_scheduler(FakeSchedulerMode::SubmitBatchProbe);
         }
         Ok("automine") => run_ready_with_scheduler(FakeSchedulerMode::Automine),
+        Ok("automine-slow-coordinator") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineSlowCoordinator);
+        }
         Ok("automine-slow-commit") => {
             run_ready_with_scheduler(FakeSchedulerMode::AutomineSlowCommit);
         }
@@ -790,6 +793,10 @@ enum FakeSchedulerMode {
     SubmitBatchProbe,
     Automine,
     AutomineSlowCommit,
+    /// Runtime coordinator tip reads and commits each take
+    /// [`SLOW_COORDINATOR_DELAY`], so tests can time a request's deadline
+    /// against a busy driver.
+    AutomineSlowCoordinator,
     AutomineSerializeProbe,
     AutomineHangingCommit,
     AutomineCommitResponseLost,
@@ -813,6 +820,7 @@ impl FakeSchedulerMode {
             self,
             Self::Automine
                 | Self::AutomineSlowCommit
+                | Self::AutomineSlowCoordinator
                 | Self::AutomineSerializeProbe
                 | Self::AutomineHangingCommit
                 | Self::AutomineCommitResponseLost
@@ -824,6 +832,9 @@ impl FakeSchedulerMode {
         )
     }
 }
+
+/// Delay of each slow call in [`FakeSchedulerMode::AutomineSlowCoordinator`].
+const SLOW_COORDINATOR_DELAY: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone)]
 struct FakeScheduler {
@@ -1119,6 +1130,9 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         if !self.mode.supports_block_driver() {
             return Err(ProgramError::msg("not implemented in fake hogd-dev"));
         }
+        if self.mode == FakeSchedulerMode::AutomineSlowCoordinator {
+            tokio::time::sleep(SLOW_COORDINATOR_DELAY).await;
+        }
         if self.mode == FakeSchedulerMode::AutomineSlowCommit {
             tokio::time::sleep(Duration::from_millis(75)).await;
         }
@@ -1184,6 +1198,9 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         // succeed, so tests can observe recovery.
         if self.mode == FakeSchedulerMode::AutomineRuntimeGetTipError && call == 1 {
             return Err(ProgramError::msg("fake runtime get_tip failure"));
+        }
+        if self.mode == FakeSchedulerMode::AutomineSlowCoordinator && call >= 1 {
+            tokio::time::sleep(SLOW_COORDINATOR_DELAY).await;
         }
 
         match self
