@@ -952,18 +952,34 @@ async fn produce_blocks_spaces_blocks_by_the_requested_interval() {
 }
 
 #[tokio::test]
-async fn switching_to_instant_mode_mines_later_submits() {
+async fn an_interval_overflows_only_when_another_block_follows() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+    producer
+        .produce_block_at(TimePoint::new(u64::MAX - 5))
+        .await
+        .expect("bug: a far-future timepoint should be accepted");
+
+    let last = producer
+        .produce_blocks(1, Some(Duration::from_secs(10)))
+        .await
+        .expect("bug: a single block needs no next timepoint");
+    assert_eq!(last.len(), 1);
+    let error = producer
+        .produce_blocks(2, Some(Duration::from_secs(10)))
+        .await
+        .expect_err("bug: the second block's timepoint overflows");
+    assert!(matches!(error, BlockProductionError::TimepointOverflow));
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn switching_to_instant_mode_mines_pending_transactions() {
     let (handle, client) =
         start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
     let producer = handle.block_producer();
-    let submit = || {
-        client.request::<out::SendTransactionResult, _>(
-            "sendTransaction",
-            NamedParams(serde_json::json!({
-                "signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")
-            })),
-        )
-    };
     let tip = || async {
         *client
             .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
@@ -972,27 +988,105 @@ async fn switching_to_instant_mode_mines_later_submits() {
             .block_height
     };
 
-    submit().await.expect("bug: submit reaches fake scheduler");
+    // Nothing pending: switching modes produces no block.
+    producer
+        .set_block_driver(BlockDriverMode::Instant, None)
+        .await
+        .expect("bug: switching mode should succeed");
+    producer
+        .set_block_driver(BlockDriverMode::Manual, None)
+        .await
+        .expect("bug: switching mode should succeed");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(tip().await, 0, "an empty pool must not produce a block");
+
+    client
+        .request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({
+                "signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")
+            })),
+        )
+        .await
+        .expect("bug: submit reaches fake scheduler");
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(tip().await, 0, "manual mode must not automine");
 
+    // Like Anvil re-enabling automine, the pending transaction is mined
+    // without another submit.
     let config = producer
         .set_block_driver(BlockDriverMode::Instant, None)
         .await
         .expect("bug: switching mode should succeed");
     assert_eq!(config.mode, BlockDriverMode::Instant);
-    submit().await.expect("bug: submit reaches fake scheduler");
-
     let deadline = Instant::now() + Duration::from_secs(2);
     while tip().await < 1 {
         assert!(
             Instant::now() < deadline,
-            "instant mode did not mine a submit"
+            "instant mode did not mine the pending transaction"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
     handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_failed_time_increase_leaves_the_clock_unchanged() {
+    let (handle, _client) = start_fake_with_block_driver(
+        "automine-runtime-get-tip-error",
+        BlockDriverConfig::manual(),
+    )
+    .await;
+    let producer = handle.block_producer();
+    let before = wall_clock_nanos();
+
+    producer
+        .increase_time(3 * DAY)
+        .await
+        .expect_err("bug: the fake fails the first runtime tip read");
+    let preview = producer
+        .increase_time(Duration::ZERO)
+        .await
+        .expect("bug: later tip reads succeed");
+    assert!(
+        *preview < before + nanos(DAY),
+        "a failed request must not move the clock, so a retry moves it once"
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_request_waiting_behind_hung_automatic_production_times_out() {
+    let (handle, client) = start_fake_with_block_driver(
+        "automine-hanging-commit",
+        BlockDriverConfig::instant().with_manual_request_timeout(Duration::from_millis(100)),
+    )
+    .await;
+    let producer = handle.block_producer();
+    client
+        .request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({
+                "signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")
+            })),
+        )
+        .await
+        .expect("bug: submit reaches fake scheduler");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The submit wake starts automatic production, which hangs in commit.
+    let error = tokio::time::timeout(Duration::from_secs(2), producer.increase_time(DAY))
+        .await
+        .expect("bug: the request deadline must include its wait in the queue")
+        .expect_err("bug: the driver is busy with the hung commit");
+    assert!(matches!(error, BlockProductionError::TimedOut { .. }));
+
+    tokio::time::timeout(Duration::from_secs(2), handle.stop())
+        .await
+        .expect("bug: shutdown should not wait for the hung commit")
+        .expect("bug: clean shutdown");
 }
 
 #[tokio::test]

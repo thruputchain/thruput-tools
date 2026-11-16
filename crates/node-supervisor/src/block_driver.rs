@@ -23,6 +23,7 @@ use thruput_node_rpc::{
     BlockID, ConsensusValue, ProposalTxsHash, SchedulerCommitOutcome, SchedulerGetTipResult,
     SchedulerProposalResult, SchedulerProposedBlock,
     sched_coord::SchedulerCoord_SchedulerCoord1_Client,
+    sched_gateway::SchedGateway_SchedGateway1_Client,
 };
 use thruput_xdr::{
     header::{ProposalContext, ProposalHeader},
@@ -194,17 +195,26 @@ impl BlockProductionError {
 /// the driver starts the request cancels it. Once scheduler work begins,
 /// dropping the future does not cancel it.
 ///
+/// Each request has one deadline that includes the time it waits behind
+/// automatic production or an earlier request: the configured request timeout
+/// for the wait, plus the timeout for each block or tip read it runs. When it
+/// expires, the request returns [`BlockProductionError::TimedOut`]. Work the
+/// driver already started still completes.
+///
 /// [`BlockProductionError::TimedOut`], [`BlockProductionError::OutcomeUnknown`],
 /// [`BlockProductionError::ProposalOutcomeUnknown`], and
 /// [`BlockProductionError::CommitOutcomeUnknown`] mean callers must inspect
 /// chain state before deciding whether to request another block. Malformed
 /// proposal, commit rejection, and consensus-hash errors are also terminal
-/// because the scheduler may have retained the proposed candidate. The driver
-/// stops after an indeterminate result, so later requests return
-/// [`BlockProductionError::DriverStopped`].
+/// because the scheduler may have retained the proposed candidate. After such
+/// a result for a requested block, the driver stops, so later requests return
+/// [`BlockProductionError::DriverStopped`]. Automatic production in instant
+/// and interval mode logs such a result and continues: it never cancels
+/// scheduler work, and hogd refuses a new proposal while one is pending.
 #[derive(Debug, Clone)]
 pub struct BlockProducer {
     commands: mpsc::Sender<Command>,
+    timeout: Duration,
 }
 
 impl BlockProducer {
@@ -248,7 +258,7 @@ impl BlockProducer {
         &self,
         timepoint: TimePoint,
     ) -> Result<TimePoint, BlockProductionError> {
-        self.request(|reply| Command::SetNextTimepoint {
+        self.request(1, |reply| Command::SetNextTimepoint {
             timepoint: *timepoint,
             reply,
         })
@@ -262,7 +272,7 @@ impl BlockProducer {
         duration: Duration,
     ) -> Result<TimePoint, BlockProductionError> {
         let nanos = duration_nanos(duration)?;
-        self.request(|reply| Command::IncreaseTime { nanos, reply })
+        self.request(1, |reply| Command::IncreaseTime { nanos, reply })
             .await
     }
 
@@ -273,7 +283,7 @@ impl BlockProducer {
         mode: BlockDriverMode,
         interval: Option<Duration>,
     ) -> Result<BlockDriverConfig, BlockProductionError> {
-        self.request(|reply| Command::SetMode {
+        self.request(1, |reply| Command::SetMode {
             mode,
             interval,
             reply,
@@ -293,7 +303,7 @@ impl BlockProducer {
                 max: MAX_BLOCKS_PER_REQUEST,
             });
         }
-        self.request(|reply| Command::Produce {
+        self.request(count, |reply| Command::Produce {
             count,
             first,
             interval,
@@ -302,18 +312,27 @@ impl BlockProducer {
         .await
     }
 
+    /// Send one command and await its reply within one timeout for the wait
+    /// in the queue plus one for each of the `steps` it runs.
     async fn request<T>(
         &self,
+        steps: u32,
         command: impl FnOnce(Reply<T>) -> Command,
     ) -> Result<T, BlockProductionError> {
-        let (reply, response) = oneshot::channel();
-        self.commands
-            .send(command(reply))
+        let deadline = self.timeout.saturating_mul(steps.saturating_add(1));
+        let exchange = async {
+            let (reply, response) = oneshot::channel();
+            self.commands
+                .send(command(reply))
+                .await
+                .map_err(|_| BlockProductionError::DriverStopped)?;
+            response
+                .await
+                .unwrap_or(Err(BlockProductionError::DriverStopped))
+        };
+        tokio::time::timeout(deadline, exchange)
             .await
-            .map_err(|_| BlockProductionError::DriverStopped)?;
-        response
-            .await
-            .unwrap_or(Err(BlockProductionError::DriverStopped))
+            .unwrap_or(Err(BlockProductionError::TimedOut { timeout: deadline }))
     }
 }
 
@@ -462,6 +481,7 @@ impl BlockDriverTask {
     /// Start the block driver for the supplied scheduler client.
     pub(crate) fn start(
         scheduler: SchedulerCoord_SchedulerCoord1_Client,
+        gateway: SchedGateway_SchedGateway1_Client,
         config: BlockDriverConfig,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -473,6 +493,7 @@ impl BlockDriverTask {
         };
         let mut driver = Driver {
             scheduler,
+            gateway,
             config,
             clock: BlockClock::default(),
             notify,
@@ -483,7 +504,10 @@ impl BlockDriverTask {
         let join = tokio::spawn(driver.run(receiver, shutdown_rx));
         Self {
             trigger,
-            producer: BlockProducer { commands },
+            producer: BlockProducer {
+                commands,
+                timeout: config.effective_manual_request_timeout(),
+            },
             shutdown: Some(shutdown_tx),
             join,
         }
@@ -523,6 +547,7 @@ enum Wake {
 
 struct Driver {
     scheduler: SchedulerCoord_SchedulerCoord1_Client,
+    gateway: SchedGateway_SchedGateway1_Client,
     config: BlockDriverConfig,
     clock: BlockClock,
     notify: Arc<Notify>,
@@ -625,9 +650,11 @@ impl Driver {
                 step
             }
             Command::IncreaseTime { nanos, reply } => {
-                self.clock.advance(nanos);
+                // Change the clock only after the tip read succeeds, so a
+                // failed request leaves time unchanged and is safe to retry.
                 let (result, step) = self
                     .with_tip(shutdown, |clock, tip| {
+                        clock.advance(nanos);
                         Ok(TimePoint::new(
                             clock.timepoint_after(tip, SystemTime::now()),
                         ))
@@ -641,14 +668,38 @@ impl Driver {
                 interval,
                 reply,
             } => {
+                let entering_instant = mode == BlockDriverMode::Instant
+                    && self.config.mode != BlockDriverMode::Instant;
                 self.config.mode = mode;
                 if let Some(interval) = interval {
                     self.config.interval = interval;
                 }
                 self.apply_mode();
                 tracing::info!(?mode, interval = ?self.config.effective_interval(), "hogd-dev block driver mode changed");
+                if entering_instant {
+                    self.mine_pending_on_entering_instant().await;
+                }
                 let _ = reply.send(Ok(self.config));
                 Step::Continue
+            }
+        }
+    }
+
+    /// Like Anvil re-enabling automine: transactions already pending get a
+    /// block at once instead of waiting for the next submit. No pending
+    /// transactions means no block.
+    async fn mine_pending_on_entering_instant(&self) {
+        let timeout = self.config.effective_manual_request_timeout();
+        match tokio::time::timeout(timeout, self.gateway.schedgateway_pending_tx_count()).await {
+            Ok(Ok(count)) if count > 0 => self.notify.notify_one(),
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "pending count failed; pending transactions wait for the next submit");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "pending count timed out; pending transactions wait for the next submit"
+                );
             }
         }
     }
@@ -683,7 +734,7 @@ impl Driver {
         let timeout = self.config.effective_manual_request_timeout();
         let mut blocks = Vec::new();
         let mut requested = first;
-        for _ in 0..count {
+        for index in 0..count {
             let result = tokio::select! {
                 biased;
                 _ = &mut *shutdown => {
@@ -714,12 +765,17 @@ impl Driver {
                 self.clock.pin(*block.timepoint, SystemTime::now());
             }
             self.clock.committed(*block.timepoint, SystemTime::now());
+            let another_follows = index + 1 < count;
             requested = match interval {
-                Some(interval) => match (*block.timepoint).checked_add(interval) {
-                    Some(next) => Some(next),
-                    None => return (Err(BlockProductionError::TimepointOverflow), Step::Continue),
-                },
-                None => None,
+                Some(interval) if another_follows => {
+                    match (*block.timepoint).checked_add(interval) {
+                        Some(next) => Some(next),
+                        None => {
+                            return (Err(BlockProductionError::TimepointOverflow), Step::Continue);
+                        }
+                    }
+                }
+                _ => None,
             };
             blocks.push(block);
         }

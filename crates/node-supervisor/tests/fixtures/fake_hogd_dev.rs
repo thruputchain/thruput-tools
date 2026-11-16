@@ -1180,8 +1180,9 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         let call = self.get_tip_calls.fetch_add(1, Ordering::SeqCst);
         // Startup genesis validation is the first coordinator tip call. Public
         // chainTip uses SchedGateway, so the next coordinator call belongs to
-        // the block driver and is the intended runtime failure.
-        if self.mode == FakeSchedulerMode::AutomineRuntimeGetTipError && call >= 1 {
+        // the block driver and is the intended runtime failure. Later calls
+        // succeed, so tests can observe recovery.
+        if self.mode == FakeSchedulerMode::AutomineRuntimeGetTipError && call == 1 {
             return Err(ProgramError::msg("fake runtime get_tip failure"));
         }
 

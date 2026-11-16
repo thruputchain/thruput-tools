@@ -609,6 +609,7 @@ where
 
     let block_driver = BlockDriverTask::start(
         scheduler_backend.scheduler_client().clone(),
+        scheduler_backend.scheduler_gateway_client().clone(),
         block_driver_config,
     );
     let block_driver_trigger = block_driver.trigger();
