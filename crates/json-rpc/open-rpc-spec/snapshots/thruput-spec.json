@@ -97174,6 +97174,9 @@
         },
         {
           "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
         }
       ],
       "name": "dev_setBlockDriver",
@@ -97207,6 +97210,668 @@
       },
       "summary": "Change how the local node produces blocks while it runs.",
       "x-data-schema": {
+        "BackendTimeout": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "definitions": {
+            "AttemptAdmission": {
+              "description": "Evidence for this submission attempt, never proof about an earlier attempt.",
+              "enum": [
+                "notAttempted",
+                "rejected",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "BackendDataInvalidReason": {
+              "description": "Evidence-backed refinements; omission conveys no finer classification.",
+              "enum": [
+                "invalidEncoding",
+                "invalidCardinality",
+                "unsupportedValue",
+                "inconsistentResult"
+              ],
+              "type": "string"
+            },
+            "Base58_ContractAddress": {
+              "description": "Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 bytes. Encoded length and alphabet alone do not validate decoded length.",
+              "maxLength": 45,
+              "minLength": 32,
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+              "type": "string"
+            },
+            "Base58_SHA256Hash": {
+              "description": "Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 bytes. Encoded length and alphabet alone do not validate decoded length.",
+              "maxLength": 45,
+              "minLength": 32,
+              "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+              "type": "string"
+            },
+            "DecimalU64": {
+              "description": "Canonical decimal integer in the inclusive range 0 to 18446744073709551615.",
+              "maxLength": 20,
+              "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+              "type": "string",
+              "x-integer-maximum": "18446744073709551615",
+              "x-integer-minimum": "0"
+            },
+            "EmittedEvent": {
+              "description": "Parsed event with a typed emitter address and raw topic/data bytes.",
+              "properties": {
+                "address": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/Base58_ContractAddress"
+                },
+                "data": {
+                  "pattern": "^0x(?:[0-9a-f]{2})*(?![\\s\\S])",
+                  "type": "string"
+                },
+                "topics": {
+                  "items": {
+                    "maxLength": 66,
+                    "minLength": 66,
+                    "pattern": "^0x(?:[0-9a-f]{2})*(?![\\s\\S])",
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "address",
+                "topics",
+                "data"
+              ],
+              "type": "object"
+            },
+            "ExecutorBoundDetail": {
+              "description": "Existing executor-bound diagnostic fields, with native numeric constraints.",
+              "oneOf": [
+                {
+                  "properties": {
+                    "attached": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "max": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "reason": {
+                      "const": "tooManyContracts",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "attached",
+                    "max"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "index": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxBytes": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "reason": {
+                      "const": "contractTooLarge",
+                      "type": "string"
+                    },
+                    "sizeBytes": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "index",
+                    "sizeBytes",
+                    "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "firstIndex": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "index": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "reason": {
+                      "const": "duplicateContract",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "index",
+                    "firstIndex"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "index": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxBytes": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "memoryBytes": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "reason": {
+                      "const": "rv32MemoryTooLarge",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "index",
+                    "memoryBytes",
+                    "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "codeBytes": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "index": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxBytes": {
+                      "format": "uint32",
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "reason": {
+                      "const": "rv32CodeTooLarge",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "index",
+                    "codeBytes",
+                    "maxBytes"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "gasLimit": {
+                      "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "maxGas": {
+                      "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    },
+                    "reason": {
+                      "const": "gasLimitTooHigh",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "gasLimit",
+                    "maxGas"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "FundingAttemptStoppedData": {
+              "description": "Retained funding evidence. A stop does not establish nonexecution.",
+              "properties": {
+                "receipt": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/TransactionReceipt"
+                },
+                "serviceCode": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/ServiceCode"
+                },
+                "signedTransaction": {
+                  "pattern": "^0x(?:[0-9a-f]{2})*(?![\\s\\S])",
+                  "type": "string"
+                },
+                "transactionHash": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/TxHash"
+                }
+              },
+              "type": "object"
+            },
+            "FundingCause": {
+              "description": "Recognized stop retained inside unresolved local funding evidence.",
+              "oneOf": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/FundingAttemptStoppedData"
+                    },
+                    {
+                      "not": {
+                        "required": [
+                          "admission"
+                        ]
+                      }
+                    },
+                    {
+                      "not": {
+                        "required": [
+                          "observation"
+                        ]
+                      }
+                    },
+                    {
+                      "not": {
+                        "required": [
+                          "cause"
+                        ]
+                      }
+                    },
+                    {
+                      "not": {
+                        "required": [
+                          "serviceCode"
+                        ]
+                      }
+                    },
+                    {
+                      "not": {
+                        "required": [
+                          "error"
+                        ]
+                      }
+                    },
+                    {
+                      "dependencies": {
+                        "receipt": [
+                          "transactionHash"
+                        ],
+                        "signedTransaction": [
+                          "transactionHash"
+                        ]
+                      }
+                    }
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "fundingAttemptStopped",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "HistoryUnavailableReason": {
+              "description": "Evidence-backed refinements; omission conveys no finer classification.",
+              "enum": [
+                "outsideRetention"
+              ],
+              "type": "string"
+            },
+            "InvalidCursorReason": {
+              "description": "Evidence-backed refinements; omission conveys no finer classification.",
+              "enum": [
+                "malformed",
+                "unsupportedVersion",
+                "queryMismatch"
+              ],
+              "type": "string"
+            },
+            "InvalidParamsReason": {
+              "description": "Evidence-backed refinements; omission conveys no finer classification.",
+              "enum": [
+                "missingField",
+                "unknownField",
+                "invalidType",
+                "invalidFormat",
+                "outOfRange",
+                "conflictingFields",
+                "invalidValue"
+              ],
+              "type": "string"
+            },
+            "ReceiptExecution": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "result": {
+                      "const": "return",
+                      "type": "string"
+                    },
+                    "returnData": {
+                      "pattern": "^0x(?:[0-9a-f]{2})*(?![\\s\\S])",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "result",
+                    "returnData"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "abortData": {
+                      "pattern": "^0x(?:[0-9a-f]{2})*(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "result": {
+                      "const": "abort",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "result",
+                    "abortData"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "result": {
+                      "const": "fault",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "result"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "result": {
+                      "const": "nonDeterministicError",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "result"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "result": {
+                      "const": "failedGasSponsorship",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "result"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "result": {
+                      "const": "other",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "Committed execution outcome. Return and abort bytes are required, even empty."
+            },
+            "ReceiptObservation": {
+              "description": "Independently validated commitment identity; no partial receipt payload.",
+              "properties": {
+                "blockHeight": {
+                  "description": "Canonical decimal block height in the inclusive range 0 to 9223372036854775807.",
+                  "maxLength": 19,
+                  "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+                  "type": "string",
+                  "x-integer-maximum": "9223372036854775807",
+                  "x-integer-minimum": "0"
+                },
+                "transactionHash": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/TxHash"
+                }
+              },
+              "required": [
+                "transactionHash",
+                "blockHeight"
+              ],
+              "type": "object"
+            },
+            "SchedulerError": {
+              "description": "Scheduler subsystem and its unmodified numeric diagnostic.",
+              "properties": {
+                "code": {
+                  "maximum": 2147483647,
+                  "minimum": -2147483648,
+                  "type": "integer"
+                },
+                "source": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/SchedulerErrorSource"
+                }
+              },
+              "required": [
+                "source",
+                "code"
+              ],
+              "type": "object"
+            },
+            "SchedulerErrorSource": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "auth",
+                    "scheduler",
+                    "executor",
+                    "other"
+                  ],
+                  "type": "string"
+                }
+              ],
+              "description": "Source of a scheduler diagnostic; unfamiliar names remain unsupported."
+            },
+            "ServiceCode": {
+              "description": "Bounded service diagnostic, not a message or a recovery decision.\nThe native contract limits producer codes to 128 Unicode scalar values.",
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "TransactionInvalidReason": {
+              "description": "Evidence-backed refinements; omission conveys no finer classification.",
+              "enum": [
+                "invalidEncoding",
+                "malformedTransaction",
+                "invalidAuthEnvelope",
+                "transactionTooLarge",
+                "executorBoundViolation"
+              ],
+              "type": "string"
+            },
+            "TransactionReceipt": {
+              "description": "A committed receipt. Existence does not imply successful execution.",
+              "properties": {
+                "blockHeight": {
+                  "description": "Canonical decimal block height in the inclusive range 0 to 9223372036854775807.",
+                  "maxLength": 19,
+                  "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+                  "type": "string",
+                  "x-integer-maximum": "9223372036854775807",
+                  "x-integer-minimum": "0"
+                },
+                "events": {
+                  "items": {
+                    "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/EmittedEvent"
+                  },
+                  "type": "array"
+                },
+                "execution": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/ReceiptExecution"
+                },
+                "gasUsed": {
+                  "allOf": [
+                    {
+                      "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                    }
+                  ],
+                  "description": "Metered work, not a fee or token burn."
+                },
+                "transactionHash": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/TxHash"
+                }
+              },
+              "required": [
+                "transactionHash",
+                "blockHeight",
+                "execution",
+                "events",
+                "gasUsed"
+              ],
+              "type": "object"
+            },
+            "TransactionRejectedReason": {
+              "description": "Evidence-backed refinements; omission conveys no finer classification.",
+              "enum": [
+                "expired",
+                "authenticationRejected"
+              ],
+              "type": "string"
+            },
+            "TxHash": {
+              "allOf": [
+                {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/Base58_SHA256Hash"
+                }
+              ],
+              "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as an unprefixed, case-sensitive base58 string encoding 32 bytes."
+            }
+          },
+          "description": "The selected application-data union. Use `DecodedError` for method/code and\nevidence validation. Deserializing this union alone does not establish those\nrelationships. Additional fields are retained in the reader's raw error.",
+          "oneOf": [
+            {
+              "allOf": [
+                {
+                  "not": {
+                    "required": [
+                      "admission"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "transactionHash"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "signedTransaction"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "observation"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "receipt"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "cause"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "serviceCode"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "error"
+                    ]
+                  }
+                }
+              ],
+              "properties": {
+                "admission": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/AttemptAdmission"
+                },
+                "kind": {
+                  "const": "backendTimeout",
+                  "type": "string"
+                },
+                "retryAfterMs": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/DecimalU64"
+                },
+                "transactionHash": {
+                  "$ref": "#/methods/28/x-data-schema/BackendTimeout/definitions/TxHash"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ],
+          "title": "ErrorData"
+        },
         "BackendUnavailable": {
           "$schema": "http://json-schema.org/draft-07/schema#",
           "definitions": {

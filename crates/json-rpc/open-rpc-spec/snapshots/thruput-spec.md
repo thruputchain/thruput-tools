@@ -570,6 +570,7 @@ Change how the local node produces blocks while it runs.
 | --- | --- | --- |
 | -32602 | `InvalidParams` | `"invalidParams"` |
 | -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
 
 ## Errors
 

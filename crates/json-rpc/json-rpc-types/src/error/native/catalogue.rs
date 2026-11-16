@@ -227,7 +227,7 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
             OVERLOADED,
             BACKEND_DATA_INVALID,
         ],
-        "dev_setBlockDriver" => &[INVALID_PARAMS, BACKEND_UNAVAILABLE],
+        "dev_setBlockDriver" => &[INVALID_PARAMS, BACKEND_UNAVAILABLE, BACKEND_TIMEOUT],
         _ => return None,
     })
 }

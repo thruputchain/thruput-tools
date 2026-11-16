@@ -897,6 +897,35 @@ async fn the_next_block_timepoint_applies_to_the_next_block_only() {
 }
 
 #[tokio::test]
+async fn an_increase_after_setting_the_next_timepoint_moves_the_blocks_after_it() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+    let target = wall_clock_nanos() + nanos(DAY);
+
+    producer
+        .set_next_block_timepoint(TimePoint::new(target))
+        .await
+        .expect("bug: a future timepoint should be accepted");
+    let preview = producer
+        .increase_time(2 * DAY)
+        .await
+        .expect("bug: increasing time should succeed");
+    assert_eq!(*preview, target, "the pinned next block keeps its time");
+
+    let pinned = producer.produce_block().await.expect("bug: block commits");
+    assert_eq!(*pinned.timepoint, target);
+    let after = producer.produce_block().await.expect("bug: block commits");
+    assert!(
+        *after.timepoint >= target + nanos(2 * DAY),
+        "the increase must reach the blocks after the pinned one"
+    );
+    assert!(*after.timepoint < target + nanos(3 * DAY));
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
 async fn increasing_time_moves_every_later_block_forward() {
     let (handle, _client) =
         start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;

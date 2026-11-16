@@ -390,10 +390,14 @@ impl Command {
 /// refuses a block older than its committed tip. Pinning a timepoint also
 /// moves the offset, so later blocks continue from the pinned time instead of
 /// falling back to the wall clock.
+///
+/// Time increased while a next timepoint is pinned leaves that block at its
+/// exact timepoint, as Anvil does, and moves every block after it.
 #[derive(Debug, Default)]
 struct BlockClock {
     offset_nanos: i128,
     next: Option<u64>,
+    increase_after_next: i128,
 }
 
 impl BlockClock {
@@ -408,16 +412,24 @@ impl BlockClock {
     fn pin(&mut self, timepoint: u64, now: SystemTime) {
         self.next = Some(timepoint);
         self.offset_nanos = i128::from(timepoint) - unix_nanos(now);
+        self.increase_after_next = 0;
     }
 
     fn advance(&mut self, nanos: u64) {
-        self.offset_nanos = self.offset_nanos.saturating_add(i128::from(nanos));
+        let nanos = i128::from(nanos);
+        if self.next.is_some() {
+            self.increase_after_next = self.increase_after_next.saturating_add(nanos);
+        } else {
+            self.offset_nanos = self.offset_nanos.saturating_add(nanos);
+        }
     }
 
     fn committed(&mut self, timepoint: u64, now: SystemTime) {
         if self.next.is_some() {
+            let increase = self.increase_after_next;
             self.pin(timepoint, now);
             self.next = None;
+            self.offset_nanos = self.offset_nanos.saturating_add(increase);
         }
     }
 }
@@ -679,11 +691,13 @@ impl Driver {
                 }
                 self.apply_mode();
                 tracing::info!(?mode, interval = ?self.config.effective_interval(), "hogd-dev block driver mode changed");
-                if entering_instant {
-                    self.mine_pending_on_entering_instant().await;
-                }
+                let step = if entering_instant {
+                    self.mine_pending_on_entering_instant(shutdown).await
+                } else {
+                    Step::Continue
+                };
                 let _ = reply.send(Ok(self.config));
-                Step::Continue
+                step
             }
         }
     }
@@ -691,9 +705,16 @@ impl Driver {
     /// Like Anvil re-enabling automine: transactions already pending get a
     /// block at once instead of waiting for the next submit. No pending
     /// transactions means no block.
-    async fn mine_pending_on_entering_instant(&self) {
+    /// The mode is already applied, so shutdown during the pending count
+    /// stops the driver at once.
+    async fn mine_pending_on_entering_instant(&self, shutdown: &mut oneshot::Receiver<()>) -> Step {
         let timeout = self.config.effective_manual_request_timeout();
-        match tokio::time::timeout(timeout, self.gateway.schedgateway_pending_tx_count()).await {
+        let count = tokio::select! {
+            biased;
+            _ = &mut *shutdown => return Step::Stop,
+            count = tokio::time::timeout(timeout, self.gateway.schedgateway_pending_tx_count()) => count,
+        };
+        match count {
             Ok(Ok(count)) if count > 0 => self.notify.notify_one(),
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {
@@ -705,6 +726,7 @@ impl Driver {
                 );
             }
         }
+        Step::Continue
     }
 
     /// Read the tip's timepoint, then apply `update` to the clock.
@@ -1231,6 +1253,24 @@ mod clock_tests {
         clock.advance(DAY);
 
         assert_eq!(clock.timepoint_after(0, at(NOW)), NOW + DAY);
+    }
+
+    #[test]
+    fn an_increase_after_a_pin_moves_the_blocks_after_the_pinned_one() {
+        let mut clock = BlockClock::default();
+        clock.pin(NOW + DAY, at(NOW));
+        clock.advance(2 * DAY);
+
+        let pinned = clock.timepoint_after(0, at(NOW + 5));
+        assert_eq!(pinned, NOW + DAY);
+        clock.committed(pinned, at(NOW + 5));
+
+        // The block after it is the pinned time plus the increase plus the
+        // wall-clock time since the commit.
+        assert_eq!(
+            clock.timepoint_after(pinned, at(NOW + 12)),
+            NOW + 3 * DAY + 7
+        );
     }
 
     #[test]

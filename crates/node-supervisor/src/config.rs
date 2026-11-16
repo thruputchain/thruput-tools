@@ -254,10 +254,13 @@ pub struct BlockDriverConfig {
     pub mode: BlockDriverMode,
     /// Timer interval for [`BlockDriverMode::Interval`].
     pub interval: Duration,
-    /// Execution deadline for each requested block, once the request reaches
-    /// the driver.
+    /// Deadline unit for block driver requests.
     ///
-    /// Time spent waiting behind an earlier request is not included.
+    /// Each requested block and each tip read must finish within it once the
+    /// driver starts it. Each request as a whole, including its wait behind
+    /// automatic production or an earlier request, must finish within it
+    /// times one more than its block count (one block for time and mode
+    /// requests). A request that misses its deadline returns `TimedOut`.
     pub manual_request_timeout: Duration,
 }
 
