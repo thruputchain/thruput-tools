@@ -26,13 +26,21 @@ depend on time, such as vesting, expiry, auctions, and interest.
   be empty. After a time change, later blocks continue from the new time.
   The hosted gateway does not serve them. The wire format is 14.6.0.
 - `thruput node --block-driver manual` produces blocks only on request.
+  Switching to instant mode mines transactions that are already pending, as
+  Anvil does when automine is turned back on.
+- Interval mode produces a block on every tick, empty or not; hog-devnode
+  always accepted empty blocks. In instant mode, a submit that arrives while
+  a block is being produced can add one more block, which can be empty. Tests
+  that check exact heights should use manual mode.
 - The Rust testkit `Network` adds `produce_block_at`, `produce_blocks`,
   `set_next_block_timepoint`, `increase_time`, and `set_block_driver`. All
   block controls now call these methods, so they also work on an attached
   `thruput node`. `ProducedBlock` is now a testkit type with `height` and
   `timepoint`. `BlockProductionError`, `ManualBlockProductionUnavailable`, and
   `TestkitError::BlockProduction` are removed; node errors arrive as RPC
-  errors.
+  errors. Arguments the harness refuses before calling the node, such as a
+  block driver interval that is not whole milliseconds, return the new
+  `TestkitError::InvalidArgument`.
 - `thruput-node-supervisor` renames `ManualBlockProducer` to `BlockProducer`
   and `manual_block_producer()` to `block_producer()`, which works in every
   mode.

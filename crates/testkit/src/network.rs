@@ -481,16 +481,9 @@ impl Network {
             BlockDriverMode::Instant => requests::BlockDriverMode::Instant,
             BlockDriverMode::Interval => requests::BlockDriverMode::Interval,
             BlockDriverMode::Manual => requests::BlockDriverMode::Manual,
-            _ => return Err(TestkitError::rpc(METHOD, "unsupported block driver mode")),
+            _ => return Err(invalid_argument(METHOD, "unsupported block driver mode")),
         };
-        let interval_milliseconds = interval
-            .map(|interval| {
-                u64::try_from(interval.as_millis())
-                    .ok()
-                    .filter(|millis| *millis > 0)
-                    .ok_or_else(|| TestkitError::rpc(METHOD, "interval must be at least 1 ms"))
-            })
-            .transpose()?;
+        let interval_milliseconds = interval.map(whole_millis).transpose()?;
         known(
             self.require_client(METHOD)?
                 .set_block_driver(requests::SetBlockDriverRequest {
@@ -716,7 +709,30 @@ impl From<thruput_json_rpc_types::responses::ProducedBlock> for ProducedBlock {
 
 fn nanos(method: &'static str, duration: Duration) -> Result<u64> {
     u64::try_from(duration.as_nanos())
-        .map_err(|_| TestkitError::rpc(method, "duration does not fit u64 nanoseconds"))
+        .map_err(|_| invalid_argument(method, "duration does not fit u64 nanoseconds"))
+}
+
+/// The node takes the driver interval in whole milliseconds. Refuse a
+/// fraction rather than round it silently.
+fn whole_millis(interval: Duration) -> Result<u64> {
+    const METHOD: &str = "dev_setBlockDriver";
+    if !interval.subsec_nanos().is_multiple_of(1_000_000) {
+        return Err(invalid_argument(
+            METHOD,
+            "interval must be a whole number of milliseconds",
+        ));
+    }
+    u64::try_from(interval.as_millis())
+        .ok()
+        .filter(|millis| *millis > 0)
+        .ok_or_else(|| invalid_argument(METHOD, "interval must be at least 1 ms"))
+}
+
+fn invalid_argument(operation: &'static str, detail: &str) -> TestkitError {
+    TestkitError::InvalidArgument {
+        operation,
+        detail: detail.to_owned(),
+    }
 }
 
 fn known<T>(
@@ -862,6 +878,27 @@ mod tests {
                 classify_pending_status(&status),
                 PendingStatusClassification::Terminal
             );
+        }
+    }
+
+    #[test]
+    fn block_driver_intervals_must_be_whole_milliseconds() {
+        assert_eq!(
+            super::whole_millis(std::time::Duration::from_millis(250)).unwrap(),
+            250
+        );
+        for invalid in [
+            std::time::Duration::from_micros(1_900),
+            std::time::Duration::ZERO,
+            std::time::Duration::from_nanos(1),
+        ] {
+            assert!(matches!(
+                super::whole_millis(invalid),
+                Err(TestkitError::InvalidArgument {
+                    operation: "dev_setBlockDriver",
+                    ..
+                })
+            ));
         }
     }
 

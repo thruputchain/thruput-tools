@@ -15,4 +15,5 @@ testkit relates to the other test tools.
 
 The live tests in `tests/contract_smoke.rs` cover atomic initialization,
 registration and hash-only deployment, calls, manual blocks, and recovery
-across scenario runs. Run them with `scripts/smoke-testkit-local.sh`.
+across scenario runs. `tests/block_time_live.rs` covers block production and
+block time. Run them with `scripts/smoke-testkit-local.sh`.

@@ -1007,7 +1007,7 @@ strings; contracts read the same value with `get_block_timepoint()`.
 | `dev_produceBlocks` | `anvil_mine` | Produce `count` blocks (1 to 1000), optionally `intervalNanoseconds` apart. |
 | `dev_setNextBlockTimepoint` | `evm_setNextBlockTimestamp` | Set the time of the next block. |
 | `dev_increaseTime` | `evm_increaseTime` | Move the clock forward by `nanoseconds` for every later block. |
-| `dev_setBlockDriver` | `evm_setAutomine` | Change the block driver mode while the node runs. |
+| `dev_setBlockDriver` | `evm_setAutomine` | Change the block driver mode while the node runs. Switching to `instant` mines pending transactions. |
 
 After a time change, later blocks continue from the new time; they do not fall
 back to the wall clock. Blocks never move backward: a timepoint earlier than

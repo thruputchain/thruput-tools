@@ -74,4 +74,7 @@ run_test contract_smoke multiple_runs_are_possible
 log "running testkit two-agent live smoke"
 run_test trivial_scenario local_two_agents_live_smoke
 
+log "running testkit block time smoke"
+run_test block_time_live block_time_controls_on_a_real_node
+
 log "testkit live contract smoke passed"

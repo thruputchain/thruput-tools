@@ -145,6 +145,16 @@ pub enum TestkitError {
         detail: String,
     },
 
+    /// A caller-supplied argument is outside what an operation accepts. The
+    /// harness rejects it before contacting the target.
+    #[error("invalid argument for `{operation}`: {detail}")]
+    InvalidArgument {
+        /// The operation that refused the argument.
+        operation: &'static str,
+        /// Why the argument is invalid.
+        detail: String,
+    },
+
     /// A chain operation was attempted against an offline target.
     #[error("operation `{operation}` requires a live target, but this scenario is offline")]
     Offline {
