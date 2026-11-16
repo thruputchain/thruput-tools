@@ -230,7 +230,7 @@ jobs:
           export THRUPUT_DEVNODE_BINARY
           THRUPUT_DEVNODE_BINARY=$(python3 -c 'import json; print(json.load(open("/tmp/history-toolchain.json"))["data"]["path"])')
           export THRUPUT_GATEWAY_BINARY="$PWD/target/debug/hog-gateway"
-          for test in real_block_queries real_local_state real_native_qualification real_network_identity; do
+          for test in real_block_queries real_block_time real_local_state real_native_qualification real_network_identity; do
             cargo test --locked -p thruput-node-supervisor --test "$test" -- --ignored --test-threads=1
           done
           cargo test --locked -p thruput --test native_rpc_qualification -- --ignored --test-threads=1
