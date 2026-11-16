@@ -25,6 +25,8 @@ depend on time, such as vesting, expiry, auctions, and interest.
   `dev_setBlockDriver`. They work in every block driver mode, and a block can
   be empty. After a time change, later blocks continue from the new time.
   The hosted gateway does not serve them. The wire format is 14.6.0.
+- A contract view sees a time change once a block exists at the new time. This
+  needs a hog-devnode newer than 0.1.34; 0.1.34 runs views at the wall clock.
 - `thruput node --block-driver manual` produces blocks only on request.
   Switching to instant mode mines transactions that are already pending, as
   Anvil does when automine is turned back on.

@@ -16,4 +16,7 @@ testkit relates to the other test tools.
 The live tests in `tests/contract_smoke.rs` cover atomic initialization,
 registration and hash-only deployment, calls, manual blocks, and recovery
 across scenario runs. `tests/block_time_live.rs` covers block production and
-block time. Run them with `scripts/smoke-testkit-local.sh`.
+block time, and `tests/contract_block_time.rs` checks that a contract view reads
+the moved time. Run them with `scripts/smoke-testkit-local.sh`; the contract
+view check needs `THRUPUT_SMOKE_VIEW_TIME=1` and a runtime newer than
+hog-devnode 0.1.34.
