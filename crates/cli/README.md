@@ -883,6 +883,7 @@ thruput node --hog-devnode-binary /path/to/hog-devnode
 thruput node --hog-devnode-binary /path/to/hog-devnode --contract-artifacts-dir /path/to/built_contracts
 thruput node --hog-devnode-binary /path/to/hog-devnode --hogd-protocol hogp/<hash>
 thruput node --rpc-max-connections 2000
+thruput node --block-driver manual
 thruput node -v
 RUST_LOG=thruput_node_supervisor=debug,hogd_dev=debug thruput node
 ```
@@ -986,6 +987,44 @@ then retry the original recipient and amount. The existing airdrop remains fixed
 at 10 native tokens. Funding storage is bounded to 1024 retained attempts per
 chain and never evicts them; a full journal rejects new requests while
 reconciling old ones.
+
+#### Block production and block time
+
+`--block-driver` selects how the node produces blocks:
+
+- `instant` (default): one block for each accepted transaction submission.
+- `interval`: one block every `--block-interval-ms` milliseconds.
+- `manual`: blocks only on request.
+
+In every mode, these local-only JSON-RPC methods control blocks and block time,
+so a test can cover days of chain time in seconds. They follow Anvil's mining
+and time methods. Timepoints and durations are Unix nanoseconds, as decimal
+strings; contracts read the same value with `get_block_timepoint()`.
+
+| Method | Anvil | Effect |
+| --- | --- | --- |
+| `dev_produceBlock` | `evm_mine` | Produce one block now. It can be empty. An optional `blockTimepoint` sets its time. |
+| `dev_produceBlocks` | `anvil_mine` | Produce `count` blocks (1 to 1000), optionally `intervalNanoseconds` apart. |
+| `dev_setNextBlockTimepoint` | `evm_setNextBlockTimestamp` | Set the time of the next block. |
+| `dev_increaseTime` | `evm_increaseTime` | Move the clock forward by `nanoseconds` for every later block. |
+| `dev_setBlockDriver` | `evm_setAutomine` | Change the block driver mode while the node runs. |
+
+After a time change, later blocks continue from the new time; they do not fall
+back to the wall clock. Blocks never move backward: a timepoint earlier than
+the chain tip's returns `-32602`. A contract view runs at the later of the wall
+clock and the tip's time, so produce a block to make a new time visible to
+views. For example, move 30 days ahead with an empty block:
+
+```bash
+curl -s http://127.0.0.1:9545 -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"dev_increaseTime","params":{"nanoseconds":"2592000000000000"}}'
+curl -s http://127.0.0.1:9545 -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"dev_produceBlock","params":{}}'
+```
+
+The [OpenRPC reference](../json-rpc/open-rpc-spec/snapshots/thruput-spec.md)
+lists the exact parameters and results. The Rust testkit wraps these methods
+on `Network`.
 
 Persistent state and `chain dump` include the private faucet credential and the
 funding journal. Archives use private permissions; keep them with their matching

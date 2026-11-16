@@ -15,6 +15,28 @@ chain admits, which no RPC method reported before.
 - The retired SHA-256 buffer byte limit stays unreported: nodes no longer
   enforce it.
 
+### Control block production and block time on a local node
+
+`thruput node` can now cover days of chain time in seconds, for contracts that
+depend on time, such as vesting, expiry, auctions, and interest.
+
+- New local-only JSON-RPC methods, modeled on Anvil: `dev_produceBlock`,
+  `dev_produceBlocks`, `dev_setNextBlockTimepoint`, `dev_increaseTime`, and
+  `dev_setBlockDriver`. They work in every block driver mode, and a block can
+  be empty. After a time change, later blocks continue from the new time.
+  The hosted gateway does not serve them. The wire format is 14.6.0.
+- `thruput node --block-driver manual` produces blocks only on request.
+- The Rust testkit `Network` adds `produce_block_at`, `produce_blocks`,
+  `set_next_block_timepoint`, `increase_time`, and `set_block_driver`. All
+  block controls now call these methods, so they also work on an attached
+  `thruput node`. `ProducedBlock` is now a testkit type with `height` and
+  `timepoint`. `BlockProductionError`, `ManualBlockProductionUnavailable`, and
+  `TestkitError::BlockProduction` are removed; node errors arrive as RPC
+  errors.
+- `thruput-node-supervisor` renames `ManualBlockProducer` to `BlockProducer`
+  and `manual_block_producer()` to `block_producer()`, which works in every
+  mode.
+
 ## 0.45.2
 
 ### Protocol 5176319
