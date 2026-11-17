@@ -18,7 +18,7 @@ use thruput_json_rpc_types::{
 use thruput_node_supervisor::{
     BlockDriverConfig, HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle,
 };
-use thruput_signing::{LocalSigner, PubkeyAccount};
+use thruput_xdr::types::ContractAddress;
 
 const DAY: u64 = 24 * 60 * 60 * 1_000_000_000;
 
@@ -163,16 +163,10 @@ async fn block_time_controls_drive_a_real_runtime() {
 async fn transaction_waits_for_a_requested_block(node: &NodeSupervisorHandle, client: &HttpClient) {
     let manifest = node.hogd_readiness().runtime_manifest.as_ref().unwrap();
     let faucet = manifest.bootstrap_accounts[0].wallet_address;
-    // A fresh recipient and nonce for each run; the test only needs them to
-    // be unique, not secret.
+    // A fresh recipient address and request nonce for each run; the test only
+    // needs them to be unique, not secret or tied to a key.
     let run: [u8; 32] = Sha256::digest(wall_clock_nanos().to_be_bytes()).into();
-    let recipient = Base58(
-        PubkeyAccount::from_public_key_bytes(
-            LocalSigner::from_secret_key(run).verifying_key_bytes(),
-            0,
-        )
-        .address(),
-    );
+    let recipient = Base58(ContractAddress::from(run));
     let funded = client
         .request::<output::FundingSubmission, _>(
             "dev_fundAccount",
