@@ -271,11 +271,8 @@ impl NetworkConfigParams {
                 } => {
                     resolved.max_rv32_artifact_version = Some(*max_rv32_artifact_version);
                 }
-                // `kConfigParamMaxSHA256BufferBytes` is retired and no longer
-                // enforced, so it is not reported. Every other parameter this
-                // build's protocol names is read above; otherwise the
-                // catch-all exists only because the enum is
-                // `#[non_exhaustive]`, and a new parameter needs an arm here.
+                // `kConfigParamMaxSHA256BufferBytes` is retired; otherwise the
+                // catch-all exists only because the enum is `#[non_exhaustive]`.
                 _ => {}
             }
         }
