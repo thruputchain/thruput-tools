@@ -25,8 +25,12 @@ use thruput_json_rpc_types::protocol_token::protocol_text;
 use thruput_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
 use thruput_xdr::PROTOCOL_VERSION;
 
+use http::HeaderValue;
+use tower_http::cors::{self, AllowOrigin, CorsLayer};
+
 use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
+    RpcCors,
     airdrop::{LocalAirdropContext, LocalAirdropRpc},
     block_control::LocalBlockControl,
     block_driver::{BlockDriverTask, BlockProducer},
@@ -34,6 +38,7 @@ use crate::{
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
     stub_backend::StubBackend,
+    validate_cors_origin,
     view_backend::HogdDevViewBackend,
 };
 
@@ -185,6 +190,8 @@ impl NodeSupervisorHandle {
             .local_airdrop
             .validate()
             .map_err(|reason| NodeSupervisorError::InvalidLocalAirdropConfig { reason })?;
+        // Check origins before starting hog-devnode, so a typo fails fast.
+        cors_layer(&config.rpc_cors)?;
         let mut hogd =
             HogdDevProcess::start_with_inherited_file(&config.hogd_dev, inherited_file).await?;
 
@@ -523,6 +530,7 @@ fn rpc_server_options(
         rpc_max_connections: config.rpc_max_connections,
         rpc_batch_concurrency: config.rpc_batch_concurrency,
         bundle_identity: config.bundle_identity.clone(),
+        rpc_cors: config.rpc_cors.clone(),
     }
 }
 
@@ -551,6 +559,52 @@ struct RpcServerOptions {
     rpc_max_connections: u32,
     rpc_batch_concurrency: thruput_json_rpc_server::batch::RpcBatchConcurrency,
     bundle_identity: Option<BundleIdentity>,
+    rpc_cors: RpcCors,
+}
+
+/// The CORS layer for the public listener, or `None` when CORS is disabled.
+///
+/// Allowed requests may use any method and header; only the origin varies.
+fn cors_layer(cors: &RpcCors) -> Result<Option<CorsLayer>, NodeSupervisorError> {
+    let origins = match cors {
+        RpcCors::Disabled => return Ok(None),
+        RpcCors::AllowAny => AllowOrigin::any(),
+        RpcCors::Origins(origins) => {
+            let origins = origins
+                .iter()
+                .map(|origin| {
+                    validate_cors_origin(origin)
+                        .and_then(|()| HeaderValue::from_str(origin).map_err(|e| e.to_string()))
+                        .map_err(|reason| NodeSupervisorError::InvalidRpcCorsOrigin { reason })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            AllowOrigin::list(origins)
+        }
+    };
+    Ok(Some(
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods(cors::Any)
+            .allow_headers(cors::Any),
+    ))
+}
+
+/// The bound listener address. Warns when any web page can call a listener
+/// that other hosts can reach.
+fn listener_addr<H, R>(
+    server: &Server<H, R>,
+    cors: &RpcCors,
+) -> Result<SocketAddr, NodeSupervisorError> {
+    let rpc_addr = server
+        .local_addr()
+        .map_err(|source| NodeSupervisorError::RpcLocalAddr { source })?;
+    if *cors == RpcCors::AllowAny && !rpc_addr.ip().is_loopback() {
+        tracing::warn!(
+            %rpc_addr,
+            "JSON-RPC listens beyond loopback and allows browser requests from any origin; any web page can call this node, including its funding and dev_ methods. Use --allow-origin or --no-cors to limit it"
+        );
+    }
+    Ok(rpc_addr)
 }
 
 async fn start_rpc_server_with_read<R, V>(
@@ -580,6 +634,7 @@ where
         rpc_max_connections,
         rpc_batch_concurrency,
         bundle_identity,
+        rpc_cors,
     } = options;
     ensure_rpc_nofile_limit(rpc_max_connections)?;
     let max_response_body_size = jsonrpsee::core::TEN_MB_SIZE_BYTES;
@@ -594,8 +649,10 @@ where
         jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(move |inner| {
             ConcurrentBatchService::new(inner, max_response_body_size, rpc_batch_concurrency)
         });
+    let http_middleware = tower::ServiceBuilder::new().option_layer(cors_layer(&rpc_cors)?);
     let server = Server::builder()
         .set_config(server_config)
+        .set_http_middleware(http_middleware)
         .set_rpc_middleware(rpc_middleware)
         .build(listen_address)
         .await
@@ -603,9 +660,7 @@ where
             address: listen_address.to_string(),
             source,
         })?;
-    let rpc_addr = server
-        .local_addr()
-        .map_err(|source| NodeSupervisorError::RpcLocalAddr { source })?;
+    let rpc_addr = listener_addr(&server, &rpc_cors)?;
 
     let block_driver = BlockDriverTask::start(
         scheduler_backend.scheduler_client().clone(),

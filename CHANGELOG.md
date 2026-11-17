@@ -41,6 +41,18 @@ digest is gone and every later field sits 8 bytes earlier than in v5 and v6.
   `SYSCALL_API_MINOR_OFFSET`. `declared_syscall_api` reads the version back.
 - `thruput-rv32-lower`: `Lowered` gains `syscall_api`.
 
+### Browser apps can call a local node
+
+`thruput node` now answers CORS preflight requests and allows every origin by
+default, like Anvil and the hosted gateway. A browser app uses the same RPC URL
+pattern locally and on Futurenet, without a development proxy.
+
+- `--allow-origin ORIGIN` (repeatable) allows only the listed origins; `--no-cors`
+  sends no CORS headers.
+- The node logs a warning when its listener binds beyond loopback and allows
+  every origin, because any web page can then call it.
+- `thruput-node-supervisor` adds `NodeSupervisorConfig::rpc_cors` (`RpcCors`).
+
 ### `getChainConfig` reports every enforced config parameter
 
 `stated` and `execution.effectiveLimits` now carry every parameter a node

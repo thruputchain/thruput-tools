@@ -230,6 +230,8 @@ pub struct LocalNodeOptions {
     pub block_interval: Option<Duration>,
     /// Override the public JSON-RPC simultaneous connection cap.
     pub rpc_max_connections: Option<u32>,
+    /// Override browser (CORS) access to the public JSON-RPC listener.
+    pub rpc_cors: Option<thruput_node_supervisor::RpcCors>,
     /// Override active plus buffered entries per JSON-RPC array (1..=1024).
     pub rpc_batch_concurrency: Option<thruput_node_supervisor::RpcBatchConcurrency>,
     /// Override the RAM database capacity in bytes hog-devnode reserves at startup.
@@ -1237,6 +1239,10 @@ fn local_node_config(
         Some(concurrency) => config.with_rpc_batch_concurrency(concurrency),
         None => config,
     };
+    let config = match options.rpc_cors {
+        Some(cors) => config.with_rpc_cors(cors),
+        None => config,
+    };
     let config = match (options.block_driver, options.block_interval) {
         (None, None) => config,
         (mode, interval) => {
@@ -1582,6 +1588,7 @@ mod tests {
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
             rpc_max_connections: Some(512),
+            rpc_cors: Some(thruput_node_supervisor::RpcCors::Disabled),
             rpc_batch_concurrency: Some(17.try_into().unwrap()),
             ramdb_bytes: Some(2_147_483_648),
             network_config_overrides: vec![(ConfigParamName::MaxRv32MemoryBytes, 16_777_216)],
@@ -1591,6 +1598,7 @@ mod tests {
         .expect("bug: local node config should build");
 
         assert_eq!(config.rpc_listen_address, "127.0.0.1:0");
+        assert_eq!(config.rpc_cors, thruput_node_supervisor::RpcCors::Disabled);
         assert_eq!(config.hogd_dev.init_network_hash, Some([0xab; 32].into()));
         assert_eq!(config.hogd_dev.binary_path, Some(binary));
         assert_eq!(

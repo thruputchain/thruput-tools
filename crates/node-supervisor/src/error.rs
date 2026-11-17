@@ -60,6 +60,12 @@ pub enum NodeSupervisorError {
         /// Human-readable validation failure.
         reason: &'static str,
     },
+    /// A configured CORS origin is not a browser origin.
+    #[error("invalid JSON-RPC CORS origin: {reason}")]
+    InvalidRpcCorsOrigin {
+        /// Why the origin is invalid.
+        reason: String,
+    },
     /// The configured protocol override is not the wire width of a token.
     #[error("invalid protocol override: {source}")]
     InvalidProtocolOverride {

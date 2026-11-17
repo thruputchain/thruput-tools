@@ -883,6 +883,7 @@ thruput node --hog-devnode-binary /path/to/hog-devnode
 thruput node --hog-devnode-binary /path/to/hog-devnode --contract-artifacts-dir /path/to/built_contracts
 thruput node --hog-devnode-binary /path/to/hog-devnode --hogd-protocol hogp/<hash>
 thruput node --rpc-max-connections 2000
+thruput node --allow-origin http://127.0.0.1:5173
 thruput node --block-driver manual
 thruput node -v
 RUST_LOG=thruput_node_supervisor=debug,hogd_dev=debug thruput node
@@ -910,6 +911,15 @@ hog-devnode's internal x23 services remain on loopback.
 Binding to `0.0.0.0` or another non-loopback address exposes an unauthenticated
 development RPC endpoint. Only do this on a trusted network or behind an
 appropriate container, VM, or host firewall.
+
+Browser apps can call the node directly, as they call a hosted gateway: the
+listener answers CORS preflight requests and allows every origin, method, and
+header by default, like Anvil. Any web page you open can then call the node,
+including its funding and `dev_` methods. `--allow-origin ORIGIN` (repeatable)
+allows only the listed origins, such as `http://127.0.0.1:5173`; `*` allows
+any. `--no-cors` sends no CORS headers, so browsers block cross-origin calls.
+When the listener binds beyond loopback and allows every origin, the node logs
+a warning.
 
 The supervisor owns a random private faucet with 1,000,000 native tokens. Its
 key stays with the chain directory. The selected stored key receives 100 native

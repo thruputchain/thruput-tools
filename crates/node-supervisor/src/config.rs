@@ -132,6 +132,44 @@ pub struct NodeSupervisorConfig {
     pub local_airdrop: LocalAirdropConfig,
     /// Validated release identity supplied by the binary embedding the supervisor.
     pub bundle_identity: Option<BundleIdentity>,
+    /// Browser (CORS) access to the public JSON-RPC listener.
+    pub rpc_cors: RpcCors,
+}
+
+/// Browser (CORS) access to the public JSON-RPC listener.
+///
+/// The default allows every origin, method and header, as Anvil does, so a
+/// browser app can call a local node the same way it calls a hosted
+/// gateway. Any web page the developer opens can then call the node,
+/// including its funding and `dev_` methods.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RpcCors {
+    /// Allow every origin.
+    #[default]
+    AllowAny,
+    /// Allow only these origins, such as `http://127.0.0.1:5173`.
+    Origins(Vec<String>),
+    /// Send no CORS headers, so browsers block cross-origin calls.
+    Disabled,
+}
+
+/// Check that `origin` is a browser origin: `http` or `https`, a host, an
+/// optional port, and nothing else.
+pub fn validate_cors_origin(origin: &str) -> Result<(), String> {
+    let uri: http::Uri = origin
+        .parse()
+        .map_err(|error| format!("`{origin}` is not a valid origin: {error}"))?;
+    let scheme_ok = matches!(uri.scheme_str(), Some("http" | "https"));
+    // `http::Uri` reports the path of `http://host` as `/`; the text must
+    // not end in one, so only the implicit root path passes.
+    let bare = uri.path() == "/" && uri.query().is_none();
+    if !scheme_ok || uri.authority().is_none() || !bare || origin.ends_with('/') {
+        return Err(format!(
+            "`{origin}` is not a valid origin; use scheme://host[:port], such as http://127.0.0.1:5173"
+        ));
+    }
+    Ok(())
 }
 
 impl Default for NodeSupervisorConfig {
@@ -148,6 +186,7 @@ impl Default for NodeSupervisorConfig {
             block_driver: BlockDriverConfig::default(),
             local_airdrop: LocalAirdropConfig::default(),
             bundle_identity: None,
+            rpc_cors: RpcCors::default(),
         }
     }
 }
@@ -235,6 +274,13 @@ impl NodeSupervisorConfig {
     #[must_use]
     pub const fn with_local_airdrop(mut self, local_airdrop: LocalAirdropConfig) -> Self {
         self.local_airdrop = local_airdrop;
+        self
+    }
+
+    /// Return a copy with different browser (CORS) access to the JSON-RPC listener.
+    #[must_use]
+    pub fn with_rpc_cors(mut self, rpc_cors: RpcCors) -> Self {
+        self.rpc_cors = rpc_cors;
         self
     }
 

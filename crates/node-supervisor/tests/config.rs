@@ -106,3 +106,36 @@ fn hogd_dev_config_lowers_to_public_allocations() {
         100 * 10_000_000
     );
 }
+
+#[test]
+fn cors_origins_are_scheme_host_and_optional_port() {
+    use thruput_node_supervisor::validate_cors_origin;
+
+    for valid in [
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "https://app.example",
+    ] {
+        assert!(validate_cors_origin(valid).is_ok(), "{valid}");
+    }
+    for invalid in [
+        "127.0.0.1:5173",
+        "localhost",
+        "ftp://example.com",
+        "http://127.0.0.1:5173/",
+        "http://127.0.0.1:5173/app",
+        "http://example.com?x=1",
+        "*",
+        "",
+    ] {
+        assert!(validate_cors_origin(invalid).is_err(), "{invalid}");
+    }
+}
+
+#[test]
+fn rpc_cors_allows_any_origin_by_default() {
+    assert_eq!(
+        thruput_node_supervisor::NodeSupervisorConfig::default().rpc_cors,
+        thruput_node_supervisor::RpcCors::AllowAny
+    );
+}

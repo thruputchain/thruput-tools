@@ -36,6 +36,9 @@ getrandom = { workspace = true }
 zeroize = { workspace = true }
 hex = { workspace = true }
 jsonrpsee = { workspace = true }
+http = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
 libc = { workspace = true }
 nix = { workspace = true }
 rpc_driver = { workspace = true }
@@ -50,6 +53,7 @@ xdr-common = { workspace = true }
 xdrs = { workspace = true }
 
 [dev-dependencies]
+reqwest = { workspace = true }
 tracing-subscriber = { workspace = true }
 thruput-json-rpc-client = { workspace = true }
 thruput-trace = { workspace = true }
