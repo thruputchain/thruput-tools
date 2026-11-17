@@ -2,7 +2,7 @@
 
 <!-- Generated from thruput-spec.json by tests/spec_snapshot.rs. Do not edit. -->
 
-Wire format `14.4.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
+Wire format `14.5.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
 
 This file lists all native methods. A server serves only the methods that its backends support; `getVersionInfo` lists them. For exact schemas, see [thruput-spec.json](thruput-spec.json).
 
@@ -664,15 +664,20 @@ Explicit configuration values. Omission means unavailable or unspecified.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `maxAuthTokenDepth` | integer (uint32) | no |  |
+| `maxAuthTokens` | integer (uint32) | no |  |
 | `maxBytestringLen` | integer (uint32) | no |  |
+| `maxCalldataLen` | integer (uint32) | no |  |
 | `maxContractSizeBytes` | integer (uint32) | no |  |
 | `maxCrossInvokeDepth` | integer (uint32) | no |  |
 | `maxNewContractsPerTx` | integer (uint32) | no |  |
+| `maxReturnBufferLen` | integer (uint32) | no |  |
+| `maxRv32ArtifactVersion` | integer (uint32) | no |  |
 | `maxRv32CodeBytes` | integer (uint32) | no |  |
 | `maxRv32MemoryBytes` | integer (uint32) | no |  |
 | `maxSavepointDepth` | integer (uint32) | no |  |
 | `maxSha256Buffers` | integer (uint32) | no |  |
 | `maxTxGas` | [`DecimalU64`](#decimalu64) | no |  |
+| `minRv32ArtifactVersion` | integer (uint32) | no |  |
 
 ### `ConflictCode`
 

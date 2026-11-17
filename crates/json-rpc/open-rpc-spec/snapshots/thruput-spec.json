@@ -505,7 +505,19 @@
             "minimum": 0,
             "type": "integer"
           },
+          "maxAuthTokens": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
           "maxBytestringLen": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxCalldataLen": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 0,
@@ -524,6 +536,18 @@
             "type": "integer"
           },
           "maxNewContractsPerTx": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxReturnBufferLen": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxRv32ArtifactVersion": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 0,
@@ -555,6 +579,12 @@
           },
           "maxTxGas": {
             "$ref": "#/components/schemas/DecimalU64"
+          },
+          "minRv32ArtifactVersion": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "type": "object"
@@ -2173,7 +2203,7 @@
   },
   "info": {
     "title": "Thruput JSON-RPC",
-    "version": "14.4.0"
+    "version": "14.5.0"
   },
   "methods": [
     {

@@ -64,6 +64,29 @@ fn retired_sha256_buffer_bytes_is_dropped_when_a_chain_still_states_it() {
 }
 
 #[test]
+fn rv32_artifact_version_range_is_read_from_its_arms() {
+    let config = network_config(vec![
+        ConfigParam::kConfigParamMinRv32ArtifactVersion {
+            min_rv32_artifact_version: 5,
+        },
+        ConfigParam::kConfigParamMaxRv32ArtifactVersion {
+            max_rv32_artifact_version: 7,
+        },
+    ]);
+
+    let params = NetworkConfigParams::from_network_config(&config).unwrap();
+
+    let encoded = serde_json::to_value(params).expect("bug: params serialize");
+    assert_eq!(
+        encoded,
+        json!({ "minRv32ArtifactVersion": 5, "maxRv32ArtifactVersion": 7 })
+    );
+    let decoded: NetworkConfigParams =
+        serde_json::from_value(encoded).expect("bug: params deserialize");
+    assert_eq!(decoded, params);
+}
+
+#[test]
 fn max_tx_gas_is_read_from_its_arm_and_spelled_as_a_decimal_string() {
     let config = network_config(vec![ConfigParam::kConfigParamMaxTxGas {
         max_tx_gas: 5_000_000_000,
