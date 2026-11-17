@@ -35,10 +35,10 @@ use crate::{
     block_control::LocalBlockControl,
     block_driver::{BlockDriverTask, BlockProducer},
     hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_runtime_identity},
+    normalize_cors_origin,
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
     stub_backend::StubBackend,
-    validate_cors_origin,
     view_backend::HogdDevViewBackend,
 };
 
@@ -573,8 +573,12 @@ fn cors_layer(cors: &RpcCors) -> Result<Option<CorsLayer>, NodeSupervisorError> 
             let origins = origins
                 .iter()
                 .map(|origin| {
-                    validate_cors_origin(origin)
-                        .and_then(|()| HeaderValue::from_str(origin).map_err(|e| e.to_string()))
+                    // Browsers send origins normalized, and CORS compares
+                    // them exactly.
+                    normalize_cors_origin(origin)
+                        .and_then(|origin| {
+                            HeaderValue::from_str(&origin).map_err(|e| e.to_string())
+                        })
                         .map_err(|reason| NodeSupervisorError::InvalidRpcCorsOrigin { reason })
                 })
                 .collect::<Result<Vec<_>, _>>()?;

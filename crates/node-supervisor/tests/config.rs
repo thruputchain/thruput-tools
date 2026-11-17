@@ -139,3 +139,24 @@ fn rpc_cors_allows_any_origin_by_default() {
         thruput_node_supervisor::RpcCors::AllowAny
     );
 }
+
+#[test]
+fn cors_origins_are_spelled_the_way_browsers_send_them() {
+    use thruput_node_supervisor::normalize_cors_origin;
+
+    for (configured, browser) in [
+        ("http://localhost:80", "http://localhost"),
+        ("https://app.example:443", "https://app.example"),
+        ("HTTP://LocalHost:5173", "http://localhost:5173"),
+        ("http://127.0.0.1:5173", "http://127.0.0.1:5173"),
+        ("https://app.example:80", "https://app.example:80"),
+        ("http://[::1]:5173", "http://[::1]:5173"),
+    ] {
+        assert_eq!(
+            normalize_cors_origin(configured).as_deref(),
+            Ok(browser),
+            "{configured}"
+        );
+    }
+    assert!(normalize_cors_origin("http://user@localhost:5173").is_err());
+}

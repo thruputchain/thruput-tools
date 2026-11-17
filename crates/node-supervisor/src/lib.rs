@@ -46,7 +46,7 @@ pub use block_driver::{
 };
 pub use config::{
     BlockDriverConfig, BlockDriverMode, HogdDevConfig, LocalAirdropConfig, LogLevel,
-    NodeSupervisorConfig, RpcCors, validate_cors_origin,
+    NodeSupervisorConfig, RpcCors, normalize_cors_origin, validate_cors_origin,
 };
 pub use error::NodeSupervisorError;
 pub use hogd_dev::{

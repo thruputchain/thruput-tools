@@ -468,6 +468,26 @@ async fn only_listed_origins_can_call_the_node() {
 }
 
 #[tokio::test]
+async fn a_listed_origin_matches_however_it_was_spelled() {
+    // Browsers send `http://127.0.0.1`: lowercase, without the default port.
+    let config = supervisor_config(fake_hogd("ready"))
+        .with_rpc_cors(RpcCors::Origins(vec!["HTTP://127.0.0.1:80".to_owned()]));
+    let (handle, _client) = start_fake_supervisor(config).await;
+
+    let browser_origin = "http://127.0.0.1";
+    assert_eq!(
+        allowed_origin(&preflight(&handle, browser_origin).await),
+        Some(browser_origin)
+    );
+    assert_eq!(
+        allowed_origin(&browser_call(&handle, browser_origin).await),
+        Some(browser_origin)
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
 async fn disabled_cors_sends_no_cors_headers() {
     let config = supervisor_config(fake_hogd("ready")).with_rpc_cors(RpcCors::Disabled);
     let (handle, _client) = start_fake_supervisor(config).await;

@@ -157,19 +157,44 @@ pub enum RpcCors {
 /// Check that `origin` is a browser origin: `http` or `https`, a host, an
 /// optional port, and nothing else.
 pub fn validate_cors_origin(origin: &str) -> Result<(), String> {
+    normalize_cors_origin(origin).map(drop)
+}
+
+/// Spell `origin` the way a browser sends it in an `Origin` header: a
+/// lowercase scheme and host, and no port when it is the scheme's default.
+/// CORS compares origins exactly, so `http://LOCALHOST:80` must become
+/// `http://localhost` to match.
+pub fn normalize_cors_origin(origin: &str) -> Result<String, String> {
+    let invalid = || {
+        format!(
+            "`{origin}` is not a valid origin; use scheme://host[:port], such as http://127.0.0.1:5173"
+        )
+    };
     let uri: http::Uri = origin
         .parse()
         .map_err(|error| format!("`{origin}` is not a valid origin: {error}"))?;
-    let scheme_ok = matches!(uri.scheme_str(), Some("http" | "https"));
+    let scheme = uri
+        .scheme_str()
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(invalid)?;
+    let default_port = match scheme.as_str() {
+        "http" => 80,
+        "https" => 443,
+        _ => return Err(invalid()),
+    };
+    let authority = uri.authority().ok_or_else(invalid)?;
     // `http::Uri` reports the path of `http://host` as `/`; the text must
-    // not end in one, so only the implicit root path passes.
-    let bare = uri.path() == "/" && uri.query().is_none();
-    if !scheme_ok || uri.authority().is_none() || !bare || origin.ends_with('/') {
-        return Err(format!(
-            "`{origin}` is not a valid origin; use scheme://host[:port], such as http://127.0.0.1:5173"
-        ));
+    // not end in one, so only the implicit root path passes. Browsers never
+    // send user information in an origin.
+    let bare = uri.path() == "/" && uri.query().is_none() && !origin.ends_with('/');
+    if !bare || authority.as_str().contains('@') {
+        return Err(invalid());
     }
-    Ok(())
+    let host = authority.host().to_ascii_lowercase();
+    Ok(match authority.port_u16() {
+        Some(port) if port != default_port => format!("{scheme}://{host}:{port}"),
+        _ => format!("{scheme}://{host}"),
+    })
 }
 
 impl Default for NodeSupervisorConfig {
