@@ -192,6 +192,9 @@ ConfigLimits {
     max_savepoint_depth: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     #[schemars(schema_with = "u32_schema")]
+    max_sha256_buffer_bytes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    #[schemars(schema_with = "u32_schema")]
     max_auth_token_depth: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     #[schemars(schema_with = "u32_schema")]
@@ -199,6 +202,15 @@ ConfigLimits {
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     #[schemars(schema_with = "u32_schema")]
     max_rv32_memory_bytes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    #[schemars(schema_with = "u32_schema")]
+    max_auth_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    #[schemars(schema_with = "u32_schema")]
+    max_calldata_len: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    #[schemars(schema_with = "u32_schema")]
+    max_return_buffer_len: Option<u32>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -207,6 +219,12 @@ ConfigLimits {
     )]
     #[schemars(with = "crate::decimal::Decimal<u64>")]
     max_tx_gas: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    #[schemars(schema_with = "u32_schema")]
+    min_rv32_artifact_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    #[schemars(schema_with = "u32_schema")]
+    max_rv32_artifact_version: Option<u32>,
 }
 }
 

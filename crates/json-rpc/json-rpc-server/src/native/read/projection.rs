@@ -31,10 +31,16 @@ fn limits(value: legacy::NetworkConfigParams) -> out::ConfigLimits {
         max_bytestring_len,
         max_contract_size_bytes,
         max_savepoint_depth,
+        max_sha256_buffer_bytes,
         max_auth_token_depth,
         max_rv32_code_bytes,
         max_rv32_memory_bytes,
+        max_auth_tokens,
+        max_calldata_len,
+        max_return_buffer_len,
         max_tx_gas,
+        min_rv32_artifact_version,
+        max_rv32_artifact_version,
     } = value;
     out::ConfigLimits {
         max_sha256_buffers,
@@ -43,10 +49,16 @@ fn limits(value: legacy::NetworkConfigParams) -> out::ConfigLimits {
         max_bytestring_len,
         max_contract_size_bytes,
         max_savepoint_depth,
+        max_sha256_buffer_bytes,
         max_auth_token_depth,
         max_rv32_code_bytes,
         max_rv32_memory_bytes,
+        max_auth_tokens,
+        max_calldata_len,
+        max_return_buffer_len,
         max_tx_gas,
+        min_rv32_artifact_version,
+        max_rv32_artifact_version,
     }
 }
 
@@ -149,5 +161,51 @@ mod tests {
         let mut execution = execution();
         execution.observed_tip.height = 8.into();
         assert!(config(reading().with_execution(execution)).is_err());
+    }
+    #[test]
+    fn limits_carry_every_stated_parameter() {
+        let stated = legacy::NetworkConfigParams {
+            max_sha256_buffers: Some(1),
+            max_cross_invoke_depth: Some(2),
+            max_new_contracts_per_tx: Some(3),
+            max_bytestring_len: Some(4),
+            max_contract_size_bytes: Some(5),
+            max_savepoint_depth: Some(6),
+            max_sha256_buffer_bytes: Some(7),
+            max_auth_token_depth: Some(8),
+            max_rv32_code_bytes: Some(9),
+            max_rv32_memory_bytes: Some(10),
+            max_auth_tokens: Some(11),
+            max_calldata_len: Some(12),
+            max_return_buffer_len: Some(13),
+            max_tx_gas: Some(14),
+            min_rv32_artifact_version: Some(15),
+            max_rv32_artifact_version: Some(16),
+        };
+        assert_eq!(
+            serde_json::to_value(limits(stated)).unwrap(),
+            serde_json::json!({
+                "maxSha256Buffers": 1,
+                "maxCrossInvokeDepth": 2,
+                "maxNewContractsPerTx": 3,
+                "maxBytestringLen": 4,
+                "maxContractSizeBytes": 5,
+                "maxSavepointDepth": 6,
+                "maxSha256BufferBytes": 7,
+                "maxAuthTokenDepth": 8,
+                "maxRv32CodeBytes": 9,
+                "maxRv32MemoryBytes": 10,
+                "maxAuthTokens": 11,
+                "maxCalldataLen": 12,
+                "maxReturnBufferLen": 13,
+                "maxTxGas": "14",
+                "minRv32ArtifactVersion": 15,
+                "maxRv32ArtifactVersion": 16,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(limits(legacy::NetworkConfigParams::default())).unwrap(),
+            serde_json::json!({})
+        );
     }
 }

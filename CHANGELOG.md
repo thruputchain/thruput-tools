@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### `getChainConfig` reports every config parameter
+
+`stated` and `execution.effectiveLimits` now carry all sixteen parameters the
+protocol names. Six were read from the chain and then dropped:
+`maxSha256BufferBytes`, `maxAuthTokens`, `maxCalldataLen`,
+`maxReturnBufferLen`, `minRv32ArtifactVersion`, and `maxRv32ArtifactVersion`.
+The last two are the RV32 artifact format range a chain admits, which no RPC
+method reported before.
+
+- The fields are optional and omitted when a chain does not state them, like
+  the existing ones. Wire format is 14.5.0.
+- `maxSha256BufferBytes` is no longer enforced by nodes. It is reported
+  because a chain that states it commits to it in `configHash`.
+
 ## 0.45.2
 
 ### Protocol 5176319
