@@ -217,9 +217,17 @@ mod tests {
         operation::get_secret_value::GetSecretValueOutput,
         primitives::Blob,
     };
-    use aws_smithy_http_client::test_util::capture_request;
+    use aws_smithy_runtime_api::client::{
+        http::{
+            HttpClient, HttpConnector, HttpConnectorFuture, HttpConnectorSettings,
+            SharedHttpConnector,
+        },
+        orchestrator::{HttpRequest, HttpResponse},
+        runtime_components::RuntimeComponents,
+    };
     use aws_smithy_types::body::SdkBody;
     use serial_test::serial;
+    use std::sync::{Arc, Mutex};
 
     use super::{
         DefaultFaucetSecretKeyLoader, FaucetSecretKeyLoader, FaucetSecretKeySource,
@@ -227,6 +235,60 @@ mod tests {
     };
 
     const TEST_KEY_VARIABLE: &str = "THRUPUT_FAUCET_TEST_SECRET_KEY";
+
+    /// An HTTP client that answers one request with a canned response and
+    /// keeps the request for the test to inspect.
+    #[derive(Debug, Clone)]
+    struct CapturingClient {
+        response: Arc<Mutex<Option<HttpResponse>>>,
+        request: Arc<Mutex<Option<HttpRequest>>>,
+    }
+
+    impl CapturingClient {
+        fn new(response: http::Response<SdkBody>) -> Self {
+            let response = response
+                .try_into()
+                .expect("bug: fake response should convert");
+            Self {
+                response: Arc::new(Mutex::new(Some(response))),
+                request: Arc::new(Mutex::new(None)),
+            }
+        }
+
+        fn expect_request(&self) -> HttpRequest {
+            self.request
+                .lock()
+                .expect("bug: request lock should not be poisoned")
+                .take()
+                .expect("bug: a request should have been sent")
+        }
+    }
+
+    impl HttpConnector for CapturingClient {
+        fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
+            *self
+                .request
+                .lock()
+                .expect("bug: request lock should not be poisoned") = Some(request);
+            let response = self
+                .response
+                .lock()
+                .expect("bug: response lock should not be poisoned")
+                .take()
+                .expect("bug: only one request should be sent");
+            HttpConnectorFuture::ready(Ok(response))
+        }
+    }
+
+    impl HttpClient for CapturingClient {
+        fn http_connector(
+            &self,
+            _: &HttpConnectorSettings,
+            _: &RuntimeComponents,
+        ) -> SharedHttpConnector {
+            SharedHttpConnector::new(self.clone())
+        }
+    }
 
     #[tokio::test]
     #[serial]
@@ -339,18 +401,18 @@ mod tests {
                 r#"{"VersionId":"version-1","SecretString":"abab"}"#,
             ))
             .expect("bug: fake response should build");
-        let (http_client, captured_request) = capture_request(Some(response));
+        let http_client = CapturingClient::new(response);
         let config = aws_sdk_secretsmanager::Config::builder()
             .behavior_version_latest()
             .credentials_provider(Credentials::for_tests())
             .region(Region::new("us-west-2"))
-            .http_client(http_client)
+            .http_client(http_client.clone())
             .build();
         let client = Client::from_conf(config);
 
         let _ = request_aws_secret(&client, "thruput/devnet/faucet", "version-1").await;
 
-        let request = captured_request.expect_request();
+        let request = http_client.expect_request();
         let body = std::str::from_utf8(
             request
                 .body()
