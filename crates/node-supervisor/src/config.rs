@@ -138,19 +138,21 @@ pub struct NodeSupervisorConfig {
 
 /// Browser (CORS) access to the public JSON-RPC listener.
 ///
-/// The default allows every origin, method and header, as Anvil does, so a
-/// browser app can call a local node the same way it calls a hosted
-/// gateway. Any web page the developer opens can then call the node,
-/// including its funding and `dev_` methods.
+/// The default sends no CORS headers, so embedders such as test harnesses
+/// do not expose their node to web pages. `thruput node` opts in to
+/// [`RpcCors::AllowAny`], as Anvil does, so a browser app can call a local
+/// node the same way it calls a hosted gateway.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RpcCors {
-    /// Allow every origin.
-    #[default]
+    /// Allow every origin, method and header. Any web page the developer
+    /// opens can then call the node, including its funding and `dev_`
+    /// methods.
     AllowAny,
     /// Allow only these origins, such as `http://127.0.0.1:5173`.
     Origins(Vec<String>),
     /// Send no CORS headers, so browsers block cross-origin calls.
+    #[default]
     Disabled,
 }
 

@@ -919,7 +919,7 @@ including its funding and `dev_` methods. `--allow-origin ORIGIN` (repeatable)
 allows only the listed origins, such as `http://127.0.0.1:5173`; `*` allows
 any. `--no-cors` sends no CORS headers, so browsers block cross-origin calls.
 When the listener binds beyond loopback and allows every origin, the node logs
-a warning.
+a warning. Nodes that `thruput test --integration` starts send no CORS headers.
 
 The supervisor owns a random private faucet with 1,000,000 native tokens. Its
 key stays with the chain directory. The selected stored key receives 100 native

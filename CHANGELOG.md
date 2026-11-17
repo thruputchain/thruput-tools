@@ -51,7 +51,10 @@ pattern locally and on Futurenet, without a development proxy.
   sends no CORS headers.
 - The node logs a warning when its listener binds beyond loopback and allows
   every origin, because any web page can then call it.
+- Only `thruput node` allows browser access. Nodes that `thruput test
+  --integration` and the Rust testkit start send no CORS headers.
 - `thruput-node-supervisor` adds `NodeSupervisorConfig::rpc_cors` (`RpcCors`).
+  It defaults to `RpcCors::Disabled`, so embedders opt in to browser access.
 
 ### `getChainConfig` reports every enforced config parameter
 

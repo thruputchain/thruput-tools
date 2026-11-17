@@ -133,10 +133,10 @@ fn cors_origins_are_scheme_host_and_optional_port() {
 }
 
 #[test]
-fn rpc_cors_allows_any_origin_by_default() {
+fn rpc_cors_sends_no_cors_headers_by_default() {
     assert_eq!(
         thruput_node_supervisor::NodeSupervisorConfig::default().rpc_cors,
-        thruput_node_supervisor::RpcCors::AllowAny
+        thruput_node_supervisor::RpcCors::Disabled
     );
 }
 

@@ -127,14 +127,16 @@ fn parse_allow_origin(value: &str) -> Result<String, String> {
 
 /// CORS for `thruput node`, as Anvil sets it: any origin unless origins are
 /// listed, and none with `--no-cors`. `*` among the origins allows any.
-fn rpc_cors(no_cors: bool, origins: Vec<String>) -> Option<thruput_node_supervisor::RpcCors> {
+/// Other local nodes, such as integration test nodes, keep the supervisor's
+/// default of no CORS headers.
+fn rpc_cors(no_cors: bool, origins: Vec<String>) -> thruput_node_supervisor::RpcCors {
     use thruput_node_supervisor::RpcCors;
     if no_cors {
-        Some(RpcCors::Disabled)
+        RpcCors::Disabled
     } else if origins.is_empty() || origins.iter().any(|origin| origin == "*") {
-        None
+        RpcCors::AllowAny
     } else {
-        Some(RpcCors::Origins(origins))
+        RpcCors::Origins(origins)
     }
 }
 
@@ -2686,8 +2688,12 @@ mod tests {
             }
         };
 
-        assert_eq!(parse(&[]).unwrap(), None, "default: any origin");
-        assert_eq!(parse(&["--allow-origin", "*"]).unwrap(), None);
+        assert_eq!(
+            parse(&[]).unwrap(),
+            RpcCors::AllowAny,
+            "default: any origin"
+        );
+        assert_eq!(parse(&["--allow-origin", "*"]).unwrap(), RpcCors::AllowAny);
         assert_eq!(
             parse(&[
                 "--allow-origin",
@@ -2696,12 +2702,12 @@ mod tests {
                 "https://app.example",
             ])
             .unwrap(),
-            Some(RpcCors::Origins(vec![
+            RpcCors::Origins(vec![
                 "http://127.0.0.1:5173".into(),
                 "https://app.example".into()
-            ]))
+            ])
         );
-        assert_eq!(parse(&["--no-cors"]).unwrap(), Some(RpcCors::Disabled));
+        assert_eq!(parse(&["--no-cors"]).unwrap(), RpcCors::Disabled);
         assert!(parse(&["--allow-origin", "127.0.0.1:5173"]).is_err());
         assert!(parse(&["--no-cors", "--allow-origin", "http://localhost:3000"]).is_err());
     }

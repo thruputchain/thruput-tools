@@ -427,8 +427,9 @@ fn allowed_origin(response: &reqwest::Response) -> Option<&str> {
 }
 
 #[tokio::test]
-async fn browsers_can_call_the_node_from_any_origin_by_default() {
-    let (handle, _client) = start_fake_supervisor(supervisor_config(fake_hogd("ready"))).await;
+async fn allowing_any_origin_lets_browsers_call_the_node() {
+    let config = supervisor_config(fake_hogd("ready")).with_rpc_cors(RpcCors::AllowAny);
+    let (handle, _client) = start_fake_supervisor(config).await;
 
     let response = preflight(&handle, BROWSER_ORIGIN).await;
     assert!(response.status().is_success(), "{}", response.status());
@@ -488,9 +489,9 @@ async fn a_listed_origin_matches_however_it_was_spelled() {
 }
 
 #[tokio::test]
-async fn disabled_cors_sends_no_cors_headers() {
-    let config = supervisor_config(fake_hogd("ready")).with_rpc_cors(RpcCors::Disabled);
-    let (handle, _client) = start_fake_supervisor(config).await;
+async fn the_default_sends_no_cors_headers() {
+    // Embedders such as test harnesses must opt in to browser access.
+    let (handle, _client) = start_fake_supervisor(supervisor_config(fake_hogd("ready"))).await;
 
     assert_eq!(
         allowed_origin(&preflight(&handle, BROWSER_ORIGIN).await),
