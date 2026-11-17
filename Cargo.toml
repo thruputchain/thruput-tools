@@ -98,14 +98,14 @@ thruput-trace = { version = "=0.66.2" }
 # --- sdk-rs (crates.io) ---
 # The SDK crates release as one version line, and the standard interfaces as
 # another. Keep each exact and move it as a family.
-thruput-spec-tool = { version = "=0.61.2" }
-thruput-contract-util = { version = "=0.61.2" }
-thruput-domain-separator = { version = "=0.61.2" }
-thruput-contract-spec = { version = "=0.61.2" }
-thruput-u256 = { version = "=0.61.2" }
+thruput-spec-tool = { version = "=0.61.3" }
+thruput-contract-util = { version = "=0.61.3" }
+thruput-domain-separator = { version = "=0.61.3" }
+thruput-contract-spec = { version = "=0.61.3" }
+thruput-u256 = { version = "=0.61.3" }
 thruput-erc20-if = { version = "=0.1.76" }
 thruput-erc20-permit-if = { version = "=0.1.76" }
-thruput-sdk = { version = "=0.61.2" }
+thruput-sdk = { version = "=0.61.3" }
 
 # --- xdrs (crates.io, published as thruput-*) ---
 # The XDR codec is the exception: caret, so an xdrs patch release reaches this

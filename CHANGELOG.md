@@ -17,6 +17,10 @@ digest is gone and every later field sits 8 bytes earlier than in v5 and v6.
 - A v7 artifact needs a runtime that reads v7 (hogd 0.1.34 and later, so
   hog-devnode 0.1.34) and a chain whose configuration
   admits it (`max_rv32_artifact_version` of at least 7).
+- The SDK moves to 0.61.3, and newly generated projects pin it. Its native
+  test executor (hogd test FFI 0.44.2) is the first that accepts v7, so
+  `thruput test` in a project on an older SDK fails with a contract
+  verification error: move the project to SDK 0.61.3.
 - v5 and v6 artifacts are still readable (`contract spec` and similar), but
   are not what this CLI produces or verifies.
 - The lowering metadata and `rv32-lower --json` report `syscall_api_version`.
@@ -36,6 +40,7 @@ digest is gone and every later field sits 8 bytes earlier than in v5 and v6.
   `SYSCALL_API_MAJOR`, `SYSCALL_API_MAJOR_OFFSET` and
   `SYSCALL_API_MINOR_OFFSET`. `declared_syscall_api` reads the version back.
 - `thruput-rv32-lower`: `Lowered` gains `syscall_api`.
+
 ### `getChainConfig` reports every enforced config parameter
 
 `stated` and `execution.effectiveLimits` now carry every parameter a node
