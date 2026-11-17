@@ -31,6 +31,7 @@ impl Fixture {
     fn write_spec(&self, spec: &thruput_contract_spec::ContractSpec) {
         let bytes = xdrs::txs::encode(spec).unwrap();
         let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,

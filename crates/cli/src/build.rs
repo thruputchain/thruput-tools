@@ -535,6 +535,7 @@ pub fn build_rv32_project(
     print.phase("Finalizing contract spec...");
     let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?;
     lowered.artifact = thruput_rv32_artifact::build_artifact_with_spec(
+        lowered.syscall_api,
         &lowered.code,
         &lowered.initial_memory,
         lowered.initial_memory_start,

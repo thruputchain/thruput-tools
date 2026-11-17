@@ -106,6 +106,7 @@ fn spec_artifact_fixture() -> Vec<u8> {
 fn artifact_with_spec(spec: &thruput_contract_spec::ContractSpec) -> Vec<u8> {
     let bytes = xdrs::txs::encode(spec).unwrap();
     thruput_rv32_artifact::build_artifact_with_spec(
+        thruput_rv32_artifact::SyscallApiVersion::BASELINE,
         &[0; 4],
         &[],
         0,
@@ -4723,6 +4724,7 @@ fn codegen_onchain_failures_preserve_existing_output() {
     );
     let (unknown_deployment, unknown_artifact) = codegen_artifact_response(
         thruput_rv32_artifact::build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,

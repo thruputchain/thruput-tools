@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### RV32 artifact format v7 declares a syscall API version instead of a gas schedule
+
+The CLI now writes RV32 artifact format v7. A v7 header carries the syscall API
+version the guest was built against, in place of the gas table version and gas
+schedule digest of v5 and v6. A chain admits the artifact when it implements the
+same major version and at least that minor; gas prices are the chain's and are
+no longer stamped into the artifact. The v7 header is 120 bytes: the 8-byte
+digest is gone and every later field sits 8 bytes earlier than in v5 and v6.
+
+- `thruput build` and `rv32-lower` read the version from the guest ELF's
+  `thruputsyscallapiv0` section, which `thruput-sdk` 0.61.1 and later emit.
+  An ELF without it is refused: rebuild the contract with SDK 0.61.1 or later.
+- A v7 artifact needs a runtime that reads v7 (hogd 0.1.34 and later, so
+  hog-devnode 0.1.34) and a chain whose configuration
+  admits it (`max_rv32_artifact_version` of at least 7).
+- The SDK moves to 0.61.3, and newly generated projects pin it. Its native
+  test executor (hogd test FFI 0.44.2) is the first that accepts v7, so
+  `thruput test` in a project on an older SDK fails with a contract
+  verification error: move the project to SDK 0.61.3.
+- v5 and v6 artifacts are still readable (`contract spec` and similar), but
+  are not what this CLI produces or verifies.
+- The lowering metadata and `rv32-lower --json` report `syscall_api_version`.
+  The artifact format fingerprint is now `0x95cbfa8b3b2f37da`.
+
+#### Breaking Rust API changes
+
+- `thruput-rv32-artifact`: `FORMAT_VERSION` is 7 and `READABLE_FORMAT_VERSIONS`
+  is 5 through 7. `build_artifact_with_spec` and
+  `build_artifact_with_extensions` take a leading `SyscallApiVersion`;
+  `build_artifact` stamps `SyscallApiVersion::BASELINE`. `HEADER_BYTES` is 120
+  and the offsets from `MEMORY_BYTES_OFFSET` on are 8 lower; `V5_V6_HEADER_BYTES`
+  is the 128-byte header of v5 and v6. `LEGACY_FORMAT_VERSION_V5` is renamed
+  `FORMAT_VERSION_V5`, with `FORMAT_VERSION_V6` beside it. `GAS_TABLE_VERSION`,
+  `GAS_SCHEDULE_DIGEST`, `GAS_VERSION_OFFSET`, `GAS_DIGEST_OFFSET`,
+  `SYSCALL_ABI_VERSION` and `SYSCALL_ABI_OFFSET` are removed; see
+  `SYSCALL_API_MAJOR`, `SYSCALL_API_MAJOR_OFFSET` and
+  `SYSCALL_API_MINOR_OFFSET`. `declared_syscall_api` reads the version back.
+- `thruput-rv32-lower`: `Lowered` gains `syscall_api`.
+
 ### `getChainConfig` reports every enforced config parameter
 
 `stated` and `execution.effectiveLimits` now carry every parameter a node

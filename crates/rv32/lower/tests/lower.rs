@@ -12,7 +12,7 @@
 use thruput_rv32_artifact::{FORMAT_FINGERPRINT, verify_artifact};
 use thruput_rv32_lower::{
     ALLOC_ALLOWLIST, INTERFACE_ID_BYTES, INTERFACE_TABLE_ANCHOR_SECTION, INTERFACE_TABLE_SECTION,
-    MetadataInput, lower, render_metadata,
+    MetadataInput, SYSCALL_API_SECTION, SyscallApiVersion, lower, render_metadata,
 };
 
 // ---------------------------------------------------------------------------
@@ -124,8 +124,26 @@ fn push_shdr(
 
 /// Assemble a complete ELF file. Section table layout:
 /// `[0]=NULL, [1]=.text, [2..]=extras, then .symtab, .strtab, .shstrtab`.
+///
+/// Adds the syscall API version record every SDK-built guest carries, unless
+/// the spec supplies its own [`SYSCALL_API_SECTION`].
+fn assemble(mut spec: ElfSpec) -> Vec<u8> {
+    if !spec.extras.iter().any(|e| e.name == SYSCALL_API_SECTION) {
+        spec.extras.push(syscall_api_record(1, 1));
+    }
+    assemble_exactly(spec)
+}
+
+/// The non-alloc record section `thruput-sdk` emits: major then minor.
+fn syscall_api_record(major: u32, minor: u32) -> ExtraSection {
+    let mut bytes = major.to_le_bytes().to_vec();
+    bytes.extend_from_slice(&minor.to_le_bytes());
+    ExtraSection::progbits(SYSCALL_API_SECTION, 0, 0, bytes)
+}
+
+/// [`assemble`] without the implied syscall API version record.
 #[allow(clippy::too_many_lines)]
-fn assemble(spec: ElfSpec) -> Vec<u8> {
+fn assemble_exactly(spec: ElfSpec) -> Vec<u8> {
     let extra_count = spec.extras.len();
     let symtab_idx = as_u32(2 + extra_count);
     let strtab_idx = symtab_idx + 1;
@@ -357,8 +375,8 @@ fn lowers_a_minimal_contract() {
     // No data sections, so the stored initial-memory span is empty.
     assert_eq!(lowered.initial_memory.len(), 0);
     assert_eq!(lowered.initial_memory_start, 0);
-    // header (128) + code (32) + empty initial memory + empty extension list (4).
-    assert_eq!(lowered.artifact.len(), 128 + 32 + 4);
+    // header (120) + code (32) + empty initial memory + empty extension list (4).
+    assert_eq!(lowered.artifact.len(), 120 + 32 + 4);
     assert_eq!(&lowered.artifact[..8], b"GHRV32A1");
     verify_artifact(&lowered.artifact).expect("artifact self-verifies");
 }
@@ -390,7 +408,7 @@ fn copies_data_sections_into_the_memory_image() {
     assert_eq!(lowered.initial_memory_start, 0x100);
     assert_eq!(lowered.initial_memory, [0xDE, 0xAD, 0xBE, 0xEF]);
     // header + code + the 4-byte span + empty extension list: no leading-zero shadow.
-    assert_eq!(lowered.artifact.len(), 128 + 32 + 4 + 4);
+    assert_eq!(lowered.artifact.len(), 120 + 32 + 4 + 4);
 }
 
 #[test]
@@ -741,7 +759,7 @@ fn stack_first_layout_stores_no_leading_zero_shadow() {
     let lowered = lower(&assemble(spec)).expect("lowers with stack-first layout");
     assert_eq!(lowered.initial_memory_start, 0x1008);
     assert_eq!(lowered.initial_memory, [0x11, 0x22, 0x33, 0x44]);
-    assert_eq!(lowered.artifact.len(), 128 + 32 + 4 + 4);
+    assert_eq!(lowered.artifact.len(), 120 + 32 + 4 + 4);
 }
 
 #[test]
@@ -816,7 +834,7 @@ fn code_over_the_protocol_default_lowers_with_a_warning() {
     let lowered = lower(&assemble(spec)).expect("over-default .text lowers");
     assert_eq!(lowered.code.len(), 262_148);
     assert_eq!(
-        u32::from_le_bytes(lowered.artifact[52..56].try_into().unwrap()),
+        u32::from_le_bytes(lowered.artifact[44..48].try_into().unwrap()),
         262_148,
         "code_size header field"
     );
@@ -1032,9 +1050,9 @@ fn build_artifact_accepts_span_up_to_memory_bytes() {
 fn verify_artifact_rejects_code_size_disagreeing_with_the_body() {
     let lowered = lower(&assemble(happy_spec())).expect("lowers");
     let mut bytes = lowered.artifact.clone();
-    // Overwrite code_size (u32 @ 52) with a value the body does not carry. No
+    // Overwrite code_size (u32 @ 44) with a value the body does not carry. No
     // fixed cap applies any more; the layout check is what refuses it.
-    bytes[52..56].copy_from_slice(&0x0002_0000u32.to_le_bytes());
+    bytes[44..48].copy_from_slice(&0x0002_0000u32.to_le_bytes());
     let err = verify_artifact(&bytes).expect_err("should reject");
     assert!(err.to_string().contains("non-canonical"), "got: {err}");
 }
@@ -1053,7 +1071,7 @@ fn lower_with_stamps_the_requested_memory() {
     let lowered = lower_with(&elf, &raised).expect("lowers under a raised memory size");
     assert_eq!(lowered.memory_bytes, 2 * DEFAULT_MEMORY_BYTES);
     assert_eq!(
-        u32::from_le_bytes(lowered.artifact[48..52].try_into().unwrap()) as usize,
+        u32::from_le_bytes(lowered.artifact[40..44].try_into().unwrap()) as usize,
         2 * DEFAULT_MEMORY_BYTES
     );
     assert_eq!(lowered.code, default.code);
@@ -1234,7 +1252,7 @@ fn a_high_data_section_stages_only_its_own_span() {
     .expect("lowers with a high data section");
     assert_eq!(lowered.initial_memory, [7, 0, 9]);
     assert_eq!(lowered.initial_memory_start, addr as usize + 1);
-    assert_eq!(lowered.artifact.len(), 128 + 32 + 3 + 4);
+    assert_eq!(lowered.artifact.len(), 120 + 32 + 3 + 4);
     verify_artifact(&lowered.artifact).expect("artifact self-verifies");
 }
 
@@ -1495,4 +1513,70 @@ fn cli_preserves_existing_artifact_when_metadata_cannot_be_opened() {
     std::fs::write(&out, b"previous artifact").unwrap();
     assert_cli_error(&run_cli(&elf, &out, Some(&metadata), true), true, "");
     assert_eq!(std::fs::read(&out).unwrap(), b"previous artifact");
+}
+
+// ---------------------------------------------------------------------------
+// Syscall API version record.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stamps_the_syscall_api_version_the_elf_records() {
+    use thruput_rv32_artifact::declared_syscall_api;
+
+    let mut spec = happy_spec();
+    spec.extras.push(syscall_api_record(1, 7));
+    let lowered = lower(&assemble(spec)).expect("lowers");
+    let version = SyscallApiVersion { major: 1, minor: 7 };
+    assert_eq!(lowered.syscall_api, version);
+    assert_eq!(declared_syscall_api(&lowered.artifact), Some(version));
+    // Major then minor, directly before memory_bytes.
+    assert_eq!(lowered.artifact[12..16], 120u32.to_le_bytes());
+    assert_eq!(lowered.artifact[32..36], 1u32.to_le_bytes());
+    assert_eq!(lowered.artifact[36..40], 7u32.to_le_bytes());
+    verify_artifact(&lowered.artifact).expect("artifact self-verifies");
+}
+
+#[test]
+fn rejects_an_elf_without_a_syscall_api_record() {
+    let err = lower(&assemble_exactly(happy_spec())).expect_err("no record");
+    let message = err.to_string();
+    assert!(message.contains(SYSCALL_API_SECTION), "{message}");
+    assert!(message.contains("thruput-sdk 0.61.1"), "{message}");
+}
+
+#[test]
+fn rejects_a_malformed_syscall_api_record() {
+    // Two SDKs linked in: two records in one section.
+    let mut doubled = happy_spec();
+    let mut record = syscall_api_record(1, 1);
+    record
+        .file_bytes
+        .extend_from_slice(&[1, 0, 0, 0, 1, 0, 0, 0]);
+    doubled.extras.push(record);
+    let message = lower(&assemble(doubled))
+        .expect_err("two records")
+        .to_string();
+    assert!(message.contains("holds 16 bytes"), "{message}");
+
+    let mut empty = happy_spec();
+    let mut record = syscall_api_record(1, 1);
+    record.file_bytes.clear();
+    empty.extras.push(record);
+    assert!(lower(&assemble(empty)).is_err());
+
+    let mut twice = happy_spec();
+    twice.extras.push(syscall_api_record(1, 1));
+    twice.extras.push(syscall_api_record(1, 1));
+    let message = lower(&assemble(twice))
+        .expect_err("two sections")
+        .to_string();
+    assert!(message.contains("exactly one"), "{message}");
+}
+
+#[test]
+fn rejects_a_syscall_api_major_this_format_does_not_describe() {
+    let mut spec = happy_spec();
+    spec.extras.push(syscall_api_record(2, 0));
+    let message = lower(&assemble(spec)).expect_err("major 2").to_string();
+    assert!(message.contains("syscall API 2.0"), "{message}");
 }

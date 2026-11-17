@@ -141,9 +141,25 @@ fn minimal_rv32_elf_with_optional_section(extra: Option<(&str, &[u8])>) -> Vec<u
 
     let text = [0x13, 0x00, 0x00, 0x00]; // nop
 
+    // (name, flags, contents) of each section after `.text`. The SDK emits the
+    // raw spec fragment as a `static`, which lands in an ALLOC section; mark
+    // the fixture ALLOC so the lowering step in the build path exercises the
+    // spec-metadata skip rather than the non-alloc fast path. Every SDK-built
+    // guest also records the syscall API version it was built against (here
+    // 1.1), in a section its linker script keeps out of guest memory.
+    let syscall_api: [u8; 8] = [1, 0, 0, 0, 1, 0, 0, 0];
+    let mut sections: Vec<(&str, u32, &[u8])> = Vec::new();
+    if let Some((name, data)) = extra {
+        sections.push((name, SHF_ALLOC, data));
+    }
+    sections.push((thruput_rv32_lower::SYSCALL_API_SECTION, 0, &syscall_api));
+
     let mut shstr = vec![0u8];
     let text_name = add_name(&mut shstr, ".text");
-    let extra_name = extra.map(|(name, _)| add_name(&mut shstr, name));
+    let section_names: Vec<u32> = sections
+        .iter()
+        .map(|(name, _, _)| add_name(&mut shstr, name))
+        .collect();
     let symtab_name = add_name(&mut shstr, ".symtab");
     let strtab_name = add_name(&mut shstr, ".strtab");
     let shstrtab_name = add_name(&mut shstr, ".shstrtab");
@@ -165,11 +181,14 @@ fn minimal_rv32_elf_with_optional_section(extra: Option<(&str, &[u8])>) -> Vec<u
     let mut file = vec![0u8; 52];
     let text_off = as_u32(file.len());
     file.extend_from_slice(&text);
-    let extra_off = extra.map(|(_, data)| {
-        let offset = as_u32(file.len());
-        file.extend_from_slice(data);
-        offset
-    });
+    let section_offsets: Vec<u32> = sections
+        .iter()
+        .map(|(_, _, data)| {
+            let offset = as_u32(file.len());
+            file.extend_from_slice(data);
+            offset
+        })
+        .collect();
     let strtab_off = as_u32(file.len());
     file.extend_from_slice(&strtab);
     let symtab_off = as_u32(file.len());
@@ -193,25 +212,23 @@ fn minimal_rv32_elf_with_optional_section(extra: Option<(&str, &[u8])>) -> Vec<u
         0,
         0,
     );
-    if let Some(name) = extra_name {
-        let (_, data) = extra.expect("bug: extra name implies extra data");
-        // The SDK emits the raw spec fragment as a `static`, which lands in an
-        // ALLOC section. Mark the fixture ALLOC so the lowering step in the
-        // build path exercises the spec-metadata skip rather than the
-        // non-alloc fast path.
+    for ((_, flags, data), (&name, &offset)) in sections
+        .iter()
+        .zip(section_names.iter().zip(&section_offsets))
+    {
         push_shdr(
             &mut file,
             name,
             SHT_PROGBITS,
-            SHF_ALLOC,
+            *flags,
             0,
-            extra_off.expect("bug: extra data has an offset"),
+            offset,
             as_u32(data.len()),
             0,
             0,
         );
     }
-    let symtab_index: u32 = if extra.is_some() { 3 } else { 2 };
+    let symtab_index = 2 + as_u32(sections.len());
     let strtab_index = symtab_index + 1;
     let shstrtab_index = strtab_index + 1;
     push_shdr(

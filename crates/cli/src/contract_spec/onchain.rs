@@ -163,6 +163,7 @@ mod tests {
         };
         let bytes = xdrs::txs::encode(&spec).unwrap();
         let data = build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,
@@ -197,6 +198,7 @@ mod tests {
             ("absent", None)
         );
         let data = build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,
@@ -216,10 +218,9 @@ mod tests {
 
     #[test]
     fn reads_v5_contracts_as_having_no_spec() {
-        let mut data = build_artifact(&[0; 4], &[], 0, 16).unwrap();
-        // A v5 body ends after initial memory, with no extension list.
-        data.truncate(data.len() - 4);
-        data[8..12].copy_from_slice(&5_u32.to_le_bytes());
+        let data = thruput_rv32_artifact::format::testing::as_v5(
+            &build_artifact(&[0; 4], &[], 0, 16).unwrap(),
+        );
         let (deployment, artifact) = response(data);
         assert_eq!(
             inspect_artifact(&deployment, &artifact).unwrap(),
@@ -230,7 +231,7 @@ mod tests {
     #[test]
     fn preserves_identity_for_unknown_formats_but_rejects_bad_magic() {
         let mut data = build_artifact(&[0; 4], &[], 0, 16).unwrap();
-        data[8..12].copy_from_slice(&7_u32.to_le_bytes());
+        data[8..12].copy_from_slice(&8_u32.to_le_bytes());
         let (deployment, artifact) = response(data.clone());
         assert_eq!(
             inspect_artifact(&deployment, &artifact).unwrap(),
@@ -255,6 +256,7 @@ mod tests {
         bytes.extend(ContractTypeKind::U8.0.to_be_bytes());
         bytes.extend([0; 12]);
         let data = build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,

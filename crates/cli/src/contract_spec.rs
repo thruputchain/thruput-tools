@@ -370,6 +370,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("demo.rv32a");
         let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,
@@ -416,6 +417,7 @@ mod tests {
         let rv32 = output_dir.join("demo_contract.rv32a");
         let bytes = xdrs::txs::encode(&rv32_spec).unwrap();
         let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+            thruput_rv32_artifact::SyscallApiVersion::BASELINE,
             &[0; 4],
             &[],
             0,
@@ -662,6 +664,7 @@ mod tests {
             }
             bytes.extend([0; 16]); // Void return leaf, no effect/typedefs/events.
             let artifact = thruput_rv32_artifact::build_artifact_with_spec(
+                thruput_rv32_artifact::SyscallApiVersion::BASELINE,
                 &[0; 4],
                 &[],
                 0,
