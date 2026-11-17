@@ -212,7 +212,7 @@ pub enum CliError {
     #[hint("use a non-empty profile name without control characters")]
     ProfileNameInvalid(&'static str),
     #[error("unsupported config field `{0}`")]
-    #[hint("supported fields: network, rpc-url, network-hash, faucet-url, default-key")]
+    #[hint("supported fields: network, rpc-url, network-hash, default-key")]
     ConfigFieldUnsupported(String),
     #[error("invalid value for config field `{field}`: {message}")]
     #[hint(

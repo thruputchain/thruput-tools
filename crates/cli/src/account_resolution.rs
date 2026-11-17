@@ -936,7 +936,6 @@ mod tests {
         ));
         // A hosted profile is no exception: nothing discovers the identity for it.
         profile.network = Some(crate::config::Network::Futurenet);
-        profile.faucet_url = Some("http://127.0.0.1:2".into());
         assert!(matches!(
             resolve_network_hash(&profile, "alice"),
             Err(CliError::MissingNetworkHash)
@@ -1023,7 +1022,6 @@ mod tests {
             rpc_url: Some("http://127.0.0.1:1".into()),
             network_hash: None,
             rpc_url_cli_override: false,
-            faucet_url: None,
             default_key: Some(key_name.into()),
             default_wallet: None,
             runtime_manifest,
@@ -1156,7 +1154,6 @@ mod tests {
             rpc_url: None,
             network_hash: None,
             rpc_url_cli_override: false,
-            faucet_url: None,
             default_key: Some("dev-0".into()),
             default_wallet: None,
             runtime_manifest: manifest_path,

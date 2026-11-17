@@ -313,7 +313,11 @@ fn live_call_and_deploy_results_cover_success_and_execution_failure() {
 #[test]
 fn remote_funding_dry_runs_are_explicit_and_do_not_contact_services() {
     let temp = TempDir::new().unwrap();
-    std::fs::write(temp.path().join("thruput.toml"), "default_profile = \"devnet\"\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:9\"\nfaucet_url = \"http://127.0.0.1:9\"\n").unwrap();
+    std::fs::write(
+        temp.path().join("thruput.toml"),
+        "default_profile = \"devnet\"\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:9\"\n",
+    )
+    .unwrap();
     let args = [
         "airdrop",
         &thruput_encoding::encode(&[0x11; 32]),
@@ -427,7 +431,11 @@ fn native_wallet_creation_reports_offline_save_and_dry_run() {
     for dry_run in [false, true] {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config");
-        std::fs::write(temp.path().join("thruput.toml"), "default_profile = \"default\"\n[profile.default]\nrpc_url = \"http://127.0.0.1:9\"\nfaucet_url = \"http://127.0.0.1:9\"\n").unwrap();
+        std::fs::write(
+            temp.path().join("thruput.toml"),
+            "default_profile = \"default\"\n[profile.default]\nrpc_url = \"http://127.0.0.1:9\"\n",
+        )
+        .unwrap();
         generate_key_public_key(&config, "owner");
         let mut command = thruput();
         command

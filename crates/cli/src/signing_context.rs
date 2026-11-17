@@ -78,8 +78,6 @@ fn native_entrypoints() -> WalletEntrypoints {
     }
 }
 
-// Saved legacy wallet bindings use the canonical deployed-wallet ABI independently
-// of the native bootstrap account metadata.
 fn legacy_entrypoints() -> WalletEntrypoints {
     WalletEntrypoints {
         deploy: ContractEntrypointID::from(WALLET_DEPLOY_ENTRYPOINT),

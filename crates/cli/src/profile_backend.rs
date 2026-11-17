@@ -58,9 +58,7 @@ pub(crate) fn resolve_faucet_backend(
         Some(Network::Mainnet) => Err(config_error(format!(
             "targets mainnet, but {feature} is not supported because mainnet does not exist yet"
         ))),
-        // A profile with no declared network funds through its runtime
-        // manifest when it has one. Otherwise the gateway decides: the request
-        // fails cleanly when the endpoint does not serve a faucet.
+        // No declared network: use the runtime manifest if present, else the gateway.
         None => {
             if configured_runtime_manifest_path(profile)?.is_some() {
                 Ok(FaucetBackend::LocalManifest)
@@ -97,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn hosted_networks_need_no_faucet_url() {
+    fn hosted_networks_use_the_gateway_faucet() {
         for network in [Network::Futurenet, Network::Devnet] {
             let mut profile = test_profile();
             profile.network = Some(network);
@@ -114,7 +112,6 @@ mod tests {
             network: None,
             rpc_url: Some("https://rpc.example".into()),
             network_hash: None,
-            faucet_url: None,
             rpc_url_cli_override: false,
             default_key: None,
             default_wallet: None,

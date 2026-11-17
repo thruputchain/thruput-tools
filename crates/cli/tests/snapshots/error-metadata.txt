@@ -127,7 +127,7 @@ ProfileNameInvalid
 
 ConfigFieldUnsupported
   code: config_field_unsupported
-  hint text: supported fields: network, rpc-url, network-hash, faucet-url, default-key
+  hint text: supported fields: network, rpc-url, network-hash, default-key
 
 ConfigValueInvalid
   code: config_value_invalid

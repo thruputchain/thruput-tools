@@ -10,7 +10,7 @@ use crate::config::ResolvedProfile;
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
-pub const TEST_JSON_SCHEMA_VERSION: u32 = 8;
+pub const TEST_JSON_SCHEMA_VERSION: u32 = 9;
 
 /// Schema version for the `thruput test --workspace --json` payload.
 ///

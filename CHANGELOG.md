@@ -14,13 +14,11 @@ digest is gone and every later field sits 8 bytes earlier than in v5 and v6.
 - `thruput build` and `rv32-lower` read the version from the guest ELF's
   `thruputsyscallapiv0` section, which `thruput-sdk` 0.61.1 and later emit.
   An ELF without it is refused: rebuild the contract with SDK 0.61.1 or later.
-- A v7 artifact needs a runtime that reads v7 and a chain whose configuration
+- A v7 artifact needs a runtime that reads v7 (hogd 0.1.34 and later, so
+  hog-devnode 0.1.34) and a chain whose configuration
   admits it (`max_rv32_artifact_version` of at least 7).
 - v5 and v6 artifacts are still readable (`contract spec` and similar), but
   are not what this CLI produces or verifies.
-- Protocol crates move to 0.66.1, the SDK to 0.61.1, and standard interfaces
-  to 0.1.75. Newly generated projects pin SDK 0.61.1, the first that records
-  the version.
 - The lowering metadata and `rv32-lower --json` report `syscall_api_version`.
   The artifact format fingerprint is now `0x95cbfa8b3b2f37da`.
 
@@ -39,6 +37,23 @@ digest is gone and every later field sits 8 bytes earlier than in v5 and v6.
   `SYSCALL_API_MINOR_OFFSET`. `declared_syscall_api` reads the version back.
 - `thruput-rv32-lower`: `Lowered` gains `syscall_api`.
 
+## 0.45.2
+
+### Protocol 5176319
+
+Tools move to protocol crates 0.66.2 and SDK 0.61.2, which carry protocol
+`5176319`, the commit hogd v0.1.34 builds against. The gateway, firehose,
+and local runtime handshakes compare protocol tokens with hogd, so tools
+must build against the same protocol commit. The protocol changes since
+`dc6f9ee` touch only `syscalls.yaml`; no XDR type changed.
+
+- New projects pin SDK 0.61.2. Artifacts stay RV32 format v6.
+- Use managed hog-devnode 0.1.34, matching the new protocol identity. Its
+  macOS bundle is not Developer ID signed or notarized; installs through
+  `thruput` are not quarantined, so `thruput node` is unaffected.
+
+## 0.45.1
+
 ### Profiles pin their network hash; the faucet descriptor is gone
 
 The CLI no longer requests `GET /v1/network` from a faucet host. Hosted
@@ -56,11 +71,16 @@ profiles used to discover their signing identity from that descriptor, so
 - Hosted airdrops go only to the RPC gateway's `faucet_requestAirdrop`. The CLI
   no longer shows the faucet's amount, cooldown, and quota before the request,
   and no longer compares the amount sent with an advertised one.
-- `faucet_url` is deprecated and unused. Existing configs still load, and
-  `--faucet-url` and `config set faucet-url` are still accepted. Hosted
-  profiles no longer require it, and `thruput init` no longer writes it. A
-  profile with no `network` and no runtime manifest now sends `airdrop` to its
-  RPC endpoint instead of reporting that it is RPC-only.
+- The `faucet_url` profile field is removed. A config that still sets it
+  loads, and the key stays in the file untouched, but `config new --faucet-url`
+  and `config set`/`unset faucet-url` are rejected; delete a leftover key by
+  hand. Hosted profiles no longer require it, and `thruput init` no longer
+  writes it. A profile with no `network` and no runtime manifest now sends
+  `airdrop` to its RPC endpoint instead of reporting that it is RPC-only.
+- Reports no longer carry `faucetUrl`: `config get --json` is schema 3,
+  `build --json` is schema 4, and `test --json` is schema 9 (the `profile`
+  object in both loses the field). `config get` shows the network hash where
+  it showed the faucet URL.
 - `airdrop --json` is schema 7: remote reports drop `faucetUrl` and `policy`
   and add `amountTokens`; the remote dry run no longer plans `GET /v1/network`.
 - The error codes `faucet_service_error`, `network_descriptor_invalid`, and

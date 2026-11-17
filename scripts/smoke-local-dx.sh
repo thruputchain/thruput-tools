@@ -1305,7 +1305,7 @@ INTEGRATION_JSON="$(run_json "integration tests with hosted default" \
     || die "isolated integration tests failed"
 [[ "$(json_field data.profile.network "$INTEGRATION_JSON")" == "local" ]] \
     || die "integration report retained the hosted network"
-for field in faucetUrl networkHash defaultWallet runtimeArtifactsDir; do
+for field in networkHash defaultWallet runtimeArtifactsDir; do
     [[ "$(json_field "data.profile.$field" "$INTEGRATION_JSON")" == "null" ]] \
         || die "integration report retained hosted $field"
 done

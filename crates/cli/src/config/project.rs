@@ -22,15 +22,13 @@ pub struct ProjectProfile {
     pub network: Option<Network>,
     #[serde(default)]
     pub rpc_url: Option<String>,
-    /// Optional signing-network pin, as base58 encoding of exactly 32 bytes.
+    /// Signing-network pin, as base58 encoding of exactly 32 bytes.
     ///
     /// Bound into every transaction signature, so a profile carrying the wrong
-    /// one produces transactions the network rejects. Without a pin, hosted
-    /// profiles discover the identity from matching RPC and faucet metadata.
+    /// one produces transactions the network rejects. Signing requires it
+    /// unless the profile has a local runtime manifest.
     #[serde(default)]
     pub network_hash: Option<String>,
-    #[serde(default)]
-    pub faucet_url: Option<String>,
     #[serde(default)]
     pub default_key: Option<String>,
     #[serde(default)]
@@ -173,7 +171,6 @@ pub struct ResolvedProfile {
     pub rpc_url: Option<String>,
     /// Network the profile's endpoint serves, as base58 encoding of exactly 32 bytes.
     pub network_hash: Option<String>,
-    pub faucet_url: Option<String>,
     #[serde(skip)]
     #[schemars(skip)]
     pub rpc_url_cli_override: bool,
@@ -914,7 +911,6 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         network: profile.network,
         rpc_url: profile.rpc_url,
         network_hash: profile.network_hash,
-        faucet_url: profile.faucet_url,
         rpc_url_cli_override: false,
         default_key: profile.default_key,
         default_wallet: profile.default_wallet,
