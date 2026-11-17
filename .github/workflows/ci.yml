@@ -475,7 +475,7 @@ jobs:
       - name: Install browser test dependencies
         run: |
           npm ci --prefix scripts/scaffold-app
-          npm audit --prefix scripts/scaffold-app --audit-level=high
+          node scripts/scaffold-app/audit.mjs
           npx --prefix scripts/scaffold-app playwright install --with-deps chromium
       # smoke.mjs scaffolds under TMPDIR; see cli-smoke for why it is patched.
       - name: Use this checkout's thruput-json-rpc-client
