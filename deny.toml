@@ -15,8 +15,15 @@ all-features = true
 # 0.26.11 contains no certificates; it re-exports the patched 1.x package.
 # Keep this exception paired with the version bans below. Remove it when
 # jsonrpsee moves past rustls-platform-verifier 0.5 (wasm32 dependency).
+#
+# chrono is unmaintained (informational, not a vulnerability). The faucet's
+# AWS SDK pulls it in through aws-smithy-http-client's default HTTPS client:
+# aws-smithy-protocol-test -> cbor-diag -> chrono. No workspace crate uses it
+# directly. Remove this exception when aws-smithy-http-client drops the
+# dependency.
 ignore = [
     { id = "RUSTSEC-2026-0383", reason = "webpki-root-certs 0.26.11 re-exports 1.0.10; older certificate bundles are banned below" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; only reached through the AWS SDK's aws-smithy-protocol-test -> cbor-diag" },
 ]
 # Informational advisories (unsound, unmaintained) default to workspace-direct
 # dependencies only.
