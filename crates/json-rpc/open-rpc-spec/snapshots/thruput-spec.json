@@ -2305,7 +2305,7 @@
   },
   "info": {
     "title": "Thruput JSON-RPC",
-    "version": "14.5.0"
+    "version": "14.6.0"
   },
   "methods": [
     {
