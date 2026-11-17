@@ -37,11 +37,8 @@ fn stated_params_serialize_camel_case_and_unstated_ones_are_omitted() {
     );
 }
 
-// The protocol keeps this parameter for wire compatibility and configuration
-// hashing though nodes no longer enforce it. A chain that states it commits to
-// it in its config hash, so the reading reports it like any other.
 #[test]
-fn retired_sha256_buffer_bytes_is_reported_when_a_chain_still_states_it() {
+fn retired_sha256_buffer_bytes_is_dropped_when_a_chain_still_states_it() {
     let config = network_config(vec![
         ConfigParam::kConfigParamMaxSHA256BufferBytes {
             max_sha256_buffer_bytes: 8192,
@@ -57,13 +54,12 @@ fn retired_sha256_buffer_bytes_is_reported_when_a_chain_still_states_it() {
         params,
         NetworkConfigParams {
             max_savepoint_depth: Some(9),
-            max_sha256_buffer_bytes: Some(8192),
             ..NetworkConfigParams::default()
         }
     );
     assert_eq!(
         serde_json::to_value(params).unwrap(),
-        json!({ "maxSavepointDepth": 9, "maxSha256BufferBytes": 8192 })
+        json!({ "maxSavepointDepth": 9 })
     );
 }
 

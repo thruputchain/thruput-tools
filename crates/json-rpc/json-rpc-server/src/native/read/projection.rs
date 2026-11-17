@@ -31,7 +31,6 @@ fn limits(value: legacy::NetworkConfigParams) -> out::ConfigLimits {
         max_bytestring_len,
         max_contract_size_bytes,
         max_savepoint_depth,
-        max_sha256_buffer_bytes,
         max_auth_token_depth,
         max_rv32_code_bytes,
         max_rv32_memory_bytes,
@@ -49,7 +48,6 @@ fn limits(value: legacy::NetworkConfigParams) -> out::ConfigLimits {
         max_bytestring_len,
         max_contract_size_bytes,
         max_savepoint_depth,
-        max_sha256_buffer_bytes,
         max_auth_token_depth,
         max_rv32_code_bytes,
         max_rv32_memory_bytes,
@@ -163,7 +161,7 @@ mod tests {
         assert!(config(reading().with_execution(execution)).is_err());
     }
     #[test]
-    fn limits_carry_every_stated_parameter() {
+    fn limits_carry_every_reported_parameter() {
         let stated = legacy::NetworkConfigParams {
             max_sha256_buffers: Some(1),
             max_cross_invoke_depth: Some(2),
@@ -171,7 +169,6 @@ mod tests {
             max_bytestring_len: Some(4),
             max_contract_size_bytes: Some(5),
             max_savepoint_depth: Some(6),
-            max_sha256_buffer_bytes: Some(7),
             max_auth_token_depth: Some(8),
             max_rv32_code_bytes: Some(9),
             max_rv32_memory_bytes: Some(10),
@@ -191,7 +188,6 @@ mod tests {
                 "maxBytestringLen": 4,
                 "maxContractSizeBytes": 5,
                 "maxSavepointDepth": 6,
-                "maxSha256BufferBytes": 7,
                 "maxAuthTokenDepth": 8,
                 "maxRv32CodeBytes": 9,
                 "maxRv32MemoryBytes": 10,

@@ -675,7 +675,6 @@ Explicit configuration values. Omission means unavailable or unspecified.
 | `maxRv32CodeBytes` | integer (uint32) | no |  |
 | `maxRv32MemoryBytes` | integer (uint32) | no |  |
 | `maxSavepointDepth` | integer (uint32) | no |  |
-| `maxSha256BufferBytes` | integer (uint32) | no |  |
 | `maxSha256Buffers` | integer (uint32) | no |  |
 | `maxTxGas` | [`DecimalU64`](#decimalu64) | no |  |
 | `minRv32ArtifactVersion` | integer (uint32) | no |  |

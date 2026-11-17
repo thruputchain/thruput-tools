@@ -192,9 +192,6 @@ ConfigLimits {
     max_savepoint_depth: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     #[schemars(schema_with = "u32_schema")]
-    max_sha256_buffer_bytes: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
-    #[schemars(schema_with = "u32_schema")]
     max_auth_token_depth: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     #[schemars(schema_with = "u32_schema")]

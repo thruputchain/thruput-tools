@@ -147,10 +147,6 @@ pub struct NetworkConfigParams {
     /// Storage savepoints one transaction may have open at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_savepoint_depth: Option<u32>,
-    /// Legacy cumulative SHA-256 byte limit. The protocol keeps it for wire
-    /// compatibility and configuration hashing; nodes no longer enforce it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_sha256_buffer_bytes: Option<u32>,
     /// Levels of node nesting an auth token may carry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_auth_token_depth: Option<u32>,
@@ -254,11 +250,6 @@ impl NetworkConfigParams {
                 ConfigParam::kConfigParamMaxTxGas { max_tx_gas } => {
                     resolved.max_tx_gas = Some(*max_tx_gas);
                 }
-                ConfigParam::kConfigParamMaxSHA256BufferBytes {
-                    max_sha256_buffer_bytes,
-                } => {
-                    resolved.max_sha256_buffer_bytes = Some(*max_sha256_buffer_bytes);
-                }
                 ConfigParam::kConfigParamMaxAuthTokens { max_auth_tokens } => {
                     resolved.max_auth_tokens = Some(*max_auth_tokens);
                 }
@@ -280,9 +271,11 @@ impl NetworkConfigParams {
                 } => {
                     resolved.max_rv32_artifact_version = Some(*max_rv32_artifact_version);
                 }
-                // Every parameter this build's protocol names is read above.
-                // The catch-all exists only because the enum is
-                // `#[non_exhaustive]`; a new parameter needs an arm here.
+                // `kConfigParamMaxSHA256BufferBytes` is retired and no longer
+                // enforced, so it is not reported. Every other parameter this
+                // build's protocol names is read above; otherwise the
+                // catch-all exists only because the enum is
+                // `#[non_exhaustive]`, and a new parameter needs an arm here.
                 _ => {}
             }
         }

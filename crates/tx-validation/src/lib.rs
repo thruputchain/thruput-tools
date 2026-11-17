@@ -628,7 +628,6 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
                 max_bytestring_len: Some(4096),
                 max_contract_size_bytes: Some(131_072),
                 max_savepoint_depth: Some(9),
-                max_sha256_buffer_bytes: Some(2048),
                 max_auth_token_depth: Some(5),
                 max_rv32_code_bytes: Some(65536),
                 max_rv32_memory_bytes: Some(1_048_576),
