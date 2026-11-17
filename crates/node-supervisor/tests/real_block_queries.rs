@@ -278,11 +278,7 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
             .unwrap();
         hashes.push(result.transaction_hash);
     }
-    node.manual_block_producer()
-        .unwrap()
-        .produce_block()
-        .await
-        .unwrap();
+    node.block_producer().produce_block().await.unwrap();
     let height = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if let Some(receipt) = client
@@ -321,11 +317,7 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
             .block_hash
     );
     assert_eq!(block.prev_block_hash, genesis.block_hash);
-    node.manual_block_producer()
-        .unwrap()
-        .produce_block()
-        .await
-        .unwrap();
+    node.block_producer().produce_block().await.unwrap();
     let empty_height = client
         .request::<output::ChainTip, _>("getChainTip", NamedParams(input::EmptyRequest {}))
         .await

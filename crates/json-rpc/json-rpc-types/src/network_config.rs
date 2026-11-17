@@ -159,6 +159,18 @@ pub struct NetworkConfigParams {
     /// when unstated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rv32_memory_bytes: Option<u32>,
+    /// Auth token ids one call may carry in a list. The protocol fixes 64 as
+    /// the value in force when unstated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_auth_tokens: Option<u32>,
+    /// Bytes of calldata one invocation may be given. The protocol fixes
+    /// 65536 as the value in force when unstated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_calldata_len: Option<u32>,
+    /// Bytes one invocation frame may return. The protocol fixes 1024 as the
+    /// value in force when unstated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_return_buffer_len: Option<u32>,
     /// Gas one transaction may budget: the most a root invocation's
     /// `gasLimit` may state. The protocol fixes 1,000,000,000 as the value
     /// in force when unstated.
@@ -166,6 +178,14 @@ pub struct NetworkConfigParams {
     #[serde(with = "crate::decimal::option")]
     #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
     pub max_tx_gas: Option<u64>,
+    /// Lowest RV32 artifact format version an attached contract may use,
+    /// inclusive. Checked at attachment; deployed contracts stay runnable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rv32_artifact_version: Option<u32>,
+    /// Highest RV32 artifact format version an attached contract may use,
+    /// inclusive. Checked at attachment; deployed contracts stay runnable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rv32_artifact_version: Option<u32>,
 }
 
 impl NetworkConfigParams {
@@ -229,6 +249,27 @@ impl NetworkConfigParams {
                 }
                 ConfigParam::kConfigParamMaxTxGas { max_tx_gas } => {
                     resolved.max_tx_gas = Some(*max_tx_gas);
+                }
+                ConfigParam::kConfigParamMaxAuthTokens { max_auth_tokens } => {
+                    resolved.max_auth_tokens = Some(*max_auth_tokens);
+                }
+                ConfigParam::kConfigParamMaxCalldataLen { max_calldata_len } => {
+                    resolved.max_calldata_len = Some(*max_calldata_len);
+                }
+                ConfigParam::kConfigParamMaxReturnBufferLen {
+                    max_return_buffer_len,
+                } => {
+                    resolved.max_return_buffer_len = Some(*max_return_buffer_len);
+                }
+                ConfigParam::kConfigParamMinRv32ArtifactVersion {
+                    min_rv32_artifact_version,
+                } => {
+                    resolved.min_rv32_artifact_version = Some(*min_rv32_artifact_version);
+                }
+                ConfigParam::kConfigParamMaxRv32ArtifactVersion {
+                    max_rv32_artifact_version,
+                } => {
+                    resolved.max_rv32_artifact_version = Some(*max_rv32_artifact_version);
                 }
                 // `kConfigParamMaxSHA256BufferBytes` is retired; otherwise the
                 // catch-all exists only because the enum is `#[non_exhaustive]`.

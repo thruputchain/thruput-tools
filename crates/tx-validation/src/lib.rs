@@ -585,6 +585,9 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
             ConfigParam::kConfigParamMaxSavepointDepth {
                 max_savepoint_depth: 9,
             },
+            ConfigParam::kConfigParamMaxSHA256BufferBytes {
+                max_sha256_buffer_bytes: 2048,
+            },
             ConfigParam::kConfigParamMaxAuthTokenDepth {
                 max_auth_token_depth: 5,
             },
@@ -606,6 +609,12 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
             ConfigParam::kConfigParamMaxTxGas {
                 max_tx_gas: 5_000_000_000,
             },
+            ConfigParam::kConfigParamMinRv32ArtifactVersion {
+                min_rv32_artifact_version: 5,
+            },
+            ConfigParam::kConfigParamMaxRv32ArtifactVersion {
+                max_rv32_artifact_version: 7,
+            },
         ]);
 
         let params = NetworkConfigParams::from_network_config(&config).unwrap();
@@ -622,7 +631,12 @@ e62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d000000010000000050ec72db
                 max_auth_token_depth: Some(5),
                 max_rv32_code_bytes: Some(65536),
                 max_rv32_memory_bytes: Some(1_048_576),
+                max_auth_tokens: Some(64),
+                max_calldata_len: Some(65_536),
+                max_return_buffer_len: Some(1024),
                 max_tx_gas: Some(5_000_000_000),
+                min_rv32_artifact_version: Some(5),
+                max_rv32_artifact_version: Some(7),
             }
         );
     }

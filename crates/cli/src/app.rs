@@ -119,8 +119,12 @@ impl From<RpcTargetArgs> for crate::config::ProfileOverrides {
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
 enum NodeBlockDriverArg {
+    /// One block for each accepted transaction submission (default)
     Instant,
+    /// One block at a fixed interval (--block-interval-ms)
     Interval,
+    /// Blocks only when requested over JSON-RPC
+    Manual,
 }
 
 impl From<NodeBlockDriverArg> for crate::node::LocalNodeBlockDriverMode {
@@ -128,6 +132,7 @@ impl From<NodeBlockDriverArg> for crate::node::LocalNodeBlockDriverMode {
         match value {
             NodeBlockDriverArg::Instant => Self::Instant,
             NodeBlockDriverArg::Interval => Self::Interval,
+            NodeBlockDriverArg::Manual => Self::Manual,
         }
     }
 }
@@ -2631,6 +2636,17 @@ mod tests {
                 Cli::try_parse_from(["thruput", "node", "--network-config", invalid]).is_err(),
                 "{invalid}"
             );
+        }
+    }
+
+    #[test]
+    fn node_block_driver_accepts_manual_mode() {
+        let cli = Cli::parse_from(["thruput", "node", "--block-driver", "manual"]);
+        match cli.command {
+            Command::Node(NodeArgs { block_driver, .. }) => {
+                assert!(matches!(block_driver, Some(NodeBlockDriverArg::Manual)));
+            }
+            _ => panic!("expected node command"),
         }
     }
 

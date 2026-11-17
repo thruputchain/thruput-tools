@@ -69,6 +69,18 @@ macro_rules! native_methods {
             /// Read the local scheduler pending count.
             /// Accepts omitted params, `{}`, `[]`, or `null`; clients send `{}`.
             get_pending_transaction_count("dev_getPendingTransactionCount", empty, plain): $crate::types::requests::EmptyRequest => $crate::types::responses::PendingTransactionCount;
+            /// Produce one block now; it can be empty. With a timepoint, the block takes exactly
+            /// that time and later blocks continue from it. Blocks only move forward in time.
+            produce_block("dev_produceBlock", named, plain): $crate::types::requests::ProduceBlockRequest => $crate::types::responses::ProducedBlock;
+            /// Produce several blocks now, in order, optionally a fixed interval apart.
+            /// On error, blocks already produced stay committed.
+            produce_blocks("dev_produceBlocks", named, plain): $crate::types::requests::ProduceBlocksRequest => $crate::types::responses::ProducedBlocks;
+            /// Give the next block exactly this timepoint. Later blocks continue from it.
+            set_next_block_timepoint("dev_setNextBlockTimepoint", named, plain): $crate::types::requests::SetNextBlockTimepointRequest => $crate::types::responses::BlockClock;
+            /// Move the block clock forward for every later block. Produces no block.
+            increase_time("dev_increaseTime", named, plain): $crate::types::requests::IncreaseTimeRequest => $crate::types::responses::BlockClock;
+            /// Change how the local node produces blocks while it runs.
+            set_block_driver("dev_setBlockDriver", named, plain): $crate::types::requests::SetBlockDriverRequest => $crate::types::responses::BlockDriverStatus;
         }
     };
 }

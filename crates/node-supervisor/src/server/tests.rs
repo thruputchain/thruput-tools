@@ -16,8 +16,11 @@ use thruput_json_rpc_types::{
 };
 
 use super::*;
+use thruput_xdr::types::TimePoint;
+
 use crate::{
-    BlockDriverConfig, BlockProductionError, HogdDevConfig, LocalAirdropConfig,
+    BlockDriverConfig, BlockDriverMode, BlockProductionError, HogdDevConfig, LocalAirdropConfig,
+    MAX_BLOCKS_PER_REQUEST,
     canned_x23::{
         CANNED_GAS_USED_A, CANNED_HEIGHT_A, CANNED_STORAGE_HEIGHT, CANNED_STORAGE_KEY,
         CANNED_STORAGE_VALUE, CANNED_TX_HASH_A, CANNED_TX_HASH_UNKNOWN,
@@ -214,9 +217,14 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         .request::<out::VersionInfo, _>("getVersionInfo", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: version should report the embedding client identity");
-    assert_eq!(version.wire_format, "14.4.0");
+    assert_eq!(version.wire_format, "14.6.0");
     let expected = [
         "dev_getPendingTransactionCount",
+        "dev_increaseTime",
+        "dev_produceBlock",
+        "dev_produceBlocks",
+        "dev_setBlockDriver",
+        "dev_setNextBlockTimepoint",
         "getBalance",
         "getChainConfig",
         "getChainTip",
@@ -680,9 +688,7 @@ async fn manual_block_driver_only_commits_on_explicit_request() {
         BlockDriverConfig::manual().with_interval(Duration::from_millis(25)),
     )
     .await;
-    let producer = handle
-        .manual_block_producer()
-        .expect("bug: manual mode should expose a producer");
+    let producer = handle.block_producer();
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
     client
         .request::<out::SendTransactionResult, _>(
@@ -720,17 +726,11 @@ async fn manual_block_driver_only_commits_on_explicit_request() {
         .expect("bug: chainTip should dispatch to fake scheduler");
     assert_eq!(*after.block_height, 1);
 
-    let empty_error = producer
+    let empty = producer
         .produce_block()
         .await
-        .expect_err("bug: fake scheduler rejects nomination without pending submits");
-    assert!(matches!(
-        empty_error,
-        BlockProductionError::SchedulerRejected {
-            op: "schedulercoord_propose_block",
-            ..
-        }
-    ));
+        .expect("bug: an empty mempool should still produce an empty block");
+    assert_eq!(empty.height, 2);
 
     handle.stop().await.expect("bug: clean shutdown");
     let stopped = producer
@@ -744,9 +744,7 @@ async fn manual_block_driver_only_commits_on_explicit_request() {
 async fn manual_block_requests_are_serialized_without_coalescing() {
     let (handle, client) =
         start_fake_with_block_driver("automine-serialize-probe", BlockDriverConfig::manual()).await;
-    let producer = handle
-        .manual_block_producer()
-        .expect("bug: manual mode should expose a producer");
+    let producer = handle.block_producer();
     let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
     for _ in 0..2 {
         client
@@ -777,14 +775,489 @@ async fn manual_block_requests_are_serialized_without_coalescing() {
     handle.stop().await.expect("bug: clean shutdown");
 }
 
+const DAY: Duration = Duration::from_hours(24);
+
+fn wall_clock_nanos() -> u64 {
+    u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("bug: the wall clock is after the epoch")
+            .as_nanos(),
+    )
+    .expect("bug: the wall clock fits u64 nanoseconds")
+}
+
+fn nanos(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).expect("bug: test durations fit u64 nanoseconds")
+}
+
+#[tokio::test]
+async fn instant_mode_also_produces_requested_empty_blocks() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::instant()).await;
+    let producer = handle.block_producer();
+
+    let block = producer
+        .produce_block()
+        .await
+        .expect("bug: instant mode should accept explicit block requests");
+    assert_eq!(block.height, 1);
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_block_at_a_pinned_time_is_followed_by_blocks_that_continue_from_it() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+    let target = wall_clock_nanos() + nanos(3 * DAY);
+
+    let pinned = producer
+        .produce_block_at(TimePoint::new(target))
+        .await
+        .expect("bug: a future timepoint should be accepted");
+    assert_eq!(*pinned.timepoint, target);
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let next = producer
+        .produce_block()
+        .await
+        .expect("bug: the next block should follow the clock");
+    assert!(
+        *next.timepoint > target,
+        "time must keep moving after a jump"
+    );
+    assert!(
+        *next.timepoint < target + nanos(DAY),
+        "the next block must not jump again"
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_timepoint_before_the_tip_is_rejected_and_the_driver_keeps_working() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+    let target = wall_clock_nanos() + nanos(DAY);
+    producer
+        .produce_block_at(TimePoint::new(target))
+        .await
+        .expect("bug: a future timepoint should be accepted");
+
+    let error = producer
+        .produce_block_at(TimePoint::new(target - 1))
+        .await
+        .expect_err("bug: blocks only move forward in time");
+    assert!(matches!(
+        error,
+        BlockProductionError::TimepointBeforeTip { requested, tip }
+            if requested == target - 1 && tip == target
+    ));
+    let error = producer
+        .set_next_block_timepoint(TimePoint::new(target - 1))
+        .await
+        .expect_err("bug: the next block cannot be older than the tip");
+    assert!(matches!(
+        error,
+        BlockProductionError::TimepointBeforeTip { .. }
+    ));
+
+    let equal = producer
+        .produce_block_at(TimePoint::new(target))
+        .await
+        .expect("bug: hogd accepts a timepoint equal to the tip's");
+    assert_eq!(equal.height, 2);
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn the_next_block_timepoint_applies_to_the_next_block_only() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+    let target = wall_clock_nanos() + nanos(30 * DAY);
+
+    let preview = producer
+        .set_next_block_timepoint(TimePoint::new(target))
+        .await
+        .expect("bug: a future timepoint should be accepted");
+    assert_eq!(*preview, target);
+
+    let first = producer.produce_block().await.expect("bug: block commits");
+    assert_eq!(*first.timepoint, target);
+    let second = producer.produce_block().await.expect("bug: block commits");
+    assert!(*second.timepoint >= target);
+    assert!(*second.timepoint < target + nanos(DAY));
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn an_increase_after_setting_the_next_timepoint_moves_the_blocks_after_it() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+    let target = wall_clock_nanos() + nanos(DAY);
+
+    producer
+        .set_next_block_timepoint(TimePoint::new(target))
+        .await
+        .expect("bug: a future timepoint should be accepted");
+    let preview = producer
+        .increase_time(2 * DAY)
+        .await
+        .expect("bug: increasing time should succeed");
+    assert_eq!(*preview, target, "the pinned next block keeps its time");
+
+    let pinned = producer.produce_block().await.expect("bug: block commits");
+    assert_eq!(*pinned.timepoint, target);
+    let after = producer.produce_block().await.expect("bug: block commits");
+    assert!(
+        *after.timepoint >= target + nanos(2 * DAY),
+        "the increase must reach the blocks after the pinned one"
+    );
+    assert!(*after.timepoint < target + nanos(3 * DAY));
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn increasing_time_moves_every_later_block_forward() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+    let before = wall_clock_nanos();
+
+    let preview = producer
+        .increase_time(3 * DAY)
+        .await
+        .expect("bug: increasing time should succeed");
+    assert!(*preview >= before + nanos(3 * DAY));
+
+    let first = producer.produce_block().await.expect("bug: block commits");
+    let second = producer.produce_block().await.expect("bug: block commits");
+    assert!(*first.timepoint >= before + nanos(3 * DAY));
+    assert!(*second.timepoint >= *first.timepoint);
+    assert!(*second.timepoint < before + nanos(4 * DAY));
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn produce_blocks_spaces_blocks_by_the_requested_interval() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+
+    let blocks = producer
+        .produce_blocks(5, Some(Duration::from_secs(12)))
+        .await
+        .expect("bug: five blocks should commit");
+    let heights: Vec<_> = blocks.iter().map(|block| block.height).collect();
+    assert_eq!(heights, [1, 2, 3, 4, 5]);
+    for pair in blocks.windows(2) {
+        assert_eq!(
+            *pair[1].timepoint - *pair[0].timepoint,
+            nanos(Duration::from_secs(12))
+        );
+    }
+
+    for count in [0, MAX_BLOCKS_PER_REQUEST + 1] {
+        let error = producer
+            .produce_blocks(count, None)
+            .await
+            .expect_err("bug: out-of-range counts are rejected");
+        assert!(matches!(
+            error,
+            BlockProductionError::InvalidBlockCount { .. }
+        ));
+    }
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn an_interval_overflows_only_when_another_block_follows() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+    producer
+        .produce_block_at(TimePoint::new(u64::MAX - 5))
+        .await
+        .expect("bug: a far-future timepoint should be accepted");
+
+    let last = producer
+        .produce_blocks(1, Some(Duration::from_secs(10)))
+        .await
+        .expect("bug: a single block needs no next timepoint");
+    assert_eq!(last.len(), 1);
+    let error = producer
+        .produce_blocks(2, Some(Duration::from_secs(10)))
+        .await
+        .expect_err("bug: the second block's timepoint overflows");
+    assert!(matches!(error, BlockProductionError::TimepointOverflow));
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn switching_to_instant_mode_mines_pending_transactions() {
+    let (handle, client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let producer = handle.block_producer();
+    let tip = || async {
+        *client
+            .request::<out::ChainTip, _>("getChainTip", NamedParams(serde_json::json!({})))
+            .await
+            .expect("bug: chainTip should dispatch to fake scheduler")
+            .block_height
+    };
+
+    // Nothing pending: switching modes produces no block.
+    producer
+        .set_block_driver(BlockDriverMode::Instant, None)
+        .await
+        .expect("bug: switching mode should succeed");
+    producer
+        .set_block_driver(BlockDriverMode::Manual, None)
+        .await
+        .expect("bug: switching mode should succeed");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(tip().await, 0, "an empty pool must not produce a block");
+
+    client
+        .request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({
+                "signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")
+            })),
+        )
+        .await
+        .expect("bug: submit reaches fake scheduler");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(tip().await, 0, "manual mode must not automine");
+
+    // Like Anvil re-enabling automine, the pending transaction is mined
+    // without another submit.
+    let config = producer
+        .set_block_driver(BlockDriverMode::Instant, None)
+        .await
+        .expect("bug: switching mode should succeed");
+    assert_eq!(config.mode, BlockDriverMode::Instant);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while tip().await < 1 {
+        assert!(
+            Instant::now() < deadline,
+            "instant mode did not mine the pending transaction"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_failed_time_increase_leaves_the_clock_unchanged() {
+    let (handle, _client) = start_fake_with_block_driver(
+        "automine-runtime-get-tip-error",
+        BlockDriverConfig::manual(),
+    )
+    .await;
+    let producer = handle.block_producer();
+    let before = wall_clock_nanos();
+
+    producer
+        .increase_time(3 * DAY)
+        .await
+        .expect_err("bug: the fake fails the first runtime tip read");
+    let preview = producer
+        .increase_time(Duration::ZERO)
+        .await
+        .expect("bug: later tip reads succeed");
+    assert!(
+        *preview < before + nanos(DAY),
+        "a failed request must not move the clock, so a retry moves it once"
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_request_that_times_out_during_its_tip_read_leaves_the_clock_unchanged() {
+    // Each runtime tip read and commit takes 400 ms, and each request may wait
+    // one 500 ms timeout in the queue plus one for its tip read: 1000 ms.
+    let (handle, client) = start_fake_with_block_driver(
+        "automine-slow-coordinator",
+        BlockDriverConfig::instant().with_manual_request_timeout(Duration::from_millis(500)),
+    )
+    .await;
+    let producer = handle.block_producer();
+    let before = wall_clock_nanos();
+    client
+        .request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({
+                "signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")
+            })),
+        )
+        .await
+        .expect("bug: submit reaches fake scheduler");
+
+    // Automatic production (tip read + commit) holds the driver for about
+    // 800 ms. The request leaves the queue then, before its 1000 ms deadline,
+    // and its own 400 ms tip read outlasts that deadline.
+    let error = producer
+        .increase_time(3 * DAY)
+        .await
+        .expect_err("bug: the deadline passes during the tip read");
+    assert!(matches!(error, BlockProductionError::TimedOut { .. }));
+
+    let preview = producer
+        .increase_time(Duration::ZERO)
+        .await
+        .expect("bug: an idle driver answers");
+    assert!(
+        *preview < before + nanos(DAY),
+        "a request whose caller stopped waiting must not move the clock"
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_request_waiting_behind_hung_automatic_production_times_out() {
+    let (handle, client) = start_fake_with_block_driver(
+        "automine-hanging-commit",
+        BlockDriverConfig::instant().with_manual_request_timeout(Duration::from_millis(100)),
+    )
+    .await;
+    let producer = handle.block_producer();
+    client
+        .request::<out::SendTransactionResult, _>(
+            "sendTransaction",
+            NamedParams(serde_json::json!({
+                "signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")
+            })),
+        )
+        .await
+        .expect("bug: submit reaches fake scheduler");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The submit wake starts automatic production, which hangs in commit.
+    let error = tokio::time::timeout(Duration::from_secs(2), producer.increase_time(DAY))
+        .await
+        .expect("bug: the request deadline must include its wait in the queue")
+        .expect_err("bug: the driver is busy with the hung commit");
+    assert!(matches!(error, BlockProductionError::TimedOut { .. }));
+
+    tokio::time::timeout(Duration::from_secs(2), handle.stop())
+        .await
+        .expect("bug: shutdown should not wait for the hung commit")
+        .expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn block_control_rpc_methods_drive_the_local_block_clock() {
+    let (handle, client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let target = wall_clock_nanos() + nanos(3 * DAY);
+    let call = |method: &'static str, params: serde_json::Value| {
+        let client = &client;
+        async move {
+            client
+                .request::<serde_json::Value, _>(method, NamedParams(params))
+                .await
+        }
+    };
+
+    let block = call(
+        "dev_produceBlock",
+        serde_json::json!({"blockTimepoint": target.to_string()}),
+    )
+    .await
+    .expect("bug: a pinned block should commit");
+    assert_eq!(
+        block,
+        serde_json::json!({"blockHeight": "1", "blockTimepoint": target.to_string()})
+    );
+
+    let empty = call("dev_produceBlock", serde_json::json!({}))
+        .await
+        .expect("bug: an empty block should commit");
+    assert_eq!(empty["blockHeight"], "2");
+
+    let clock = call(
+        "dev_increaseTime",
+        serde_json::json!({"nanoseconds": nanos(DAY).to_string()}),
+    )
+    .await
+    .expect("bug: increasing time should succeed");
+    let next: u64 = clock["nextBlockTimepoint"]
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .expect("bug: the clock reports a decimal timepoint");
+    assert!(next >= target + nanos(DAY));
+
+    let clock = call(
+        "dev_setNextBlockTimepoint",
+        serde_json::json!({"blockTimepoint": (target + nanos(10 * DAY)).to_string()}),
+    )
+    .await
+    .expect("bug: a future timepoint should be accepted");
+    assert_eq!(
+        clock,
+        serde_json::json!({"nextBlockTimepoint": (target + nanos(10 * DAY)).to_string()})
+    );
+
+    let blocks = call(
+        "dev_produceBlocks",
+        serde_json::json!({"count": 2, "intervalNanoseconds": "1000"}),
+    )
+    .await
+    .expect("bug: two blocks should commit");
+    assert_eq!(
+        blocks,
+        serde_json::json!({"blocks": [
+            {"blockHeight": "3", "blockTimepoint": (target + nanos(10 * DAY)).to_string()},
+            {"blockHeight": "4", "blockTimepoint": (target + nanos(10 * DAY) + 1000).to_string()},
+        ]})
+    );
+
+    let error = call(
+        "dev_produceBlock",
+        serde_json::json!({"blockTimepoint": target.to_string()}),
+    )
+    .await
+    .expect_err("bug: a timepoint before the tip is rejected");
+    assert!(
+        matches!(error, ClientError::Call(ref error) if error.code() == codes::INVALID_PARAMS),
+        "{error}"
+    );
+
+    let status = call(
+        "dev_setBlockDriver",
+        serde_json::json!({"mode": "interval", "intervalMilliseconds": "250"}),
+    )
+    .await
+    .expect("bug: switching mode should succeed");
+    assert_eq!(
+        status,
+        serde_json::json!({"mode": "interval", "intervalMilliseconds": "250"})
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
 #[tokio::test]
 async fn malformed_scheduler_proposal_returns_typed_error_without_panicking_driver() {
     let (handle, client) =
         start_fake_with_block_driver("automine-malformed-proposal", BlockDriverConfig::manual())
             .await;
-    let producer = handle
-        .manual_block_producer()
-        .expect("bug: manual mode should expose a producer");
+    let producer = handle.block_producer();
     client
         .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
@@ -814,9 +1287,7 @@ async fn malformed_scheduler_proposal_returns_typed_error_without_panicking_driv
 async fn retained_commit_rejection_stops_manual_producer() {
     let (handle, client) =
         start_fake_with_block_driver("automine-commit-rejected", BlockDriverConfig::manual()).await;
-    let producer = handle
-        .manual_block_producer()
-        .expect("bug: manual mode should expose a producer");
+    let producer = handle.block_producer();
     client
         .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
@@ -850,9 +1321,7 @@ async fn manual_block_request_times_out_instead_of_hanging() {
         BlockDriverConfig::manual().with_manual_request_timeout(Duration::from_millis(100)),
     )
     .await;
-    let producer = handle
-        .manual_block_producer()
-        .expect("bug: manual mode should expose a producer");
+    let producer = handle.block_producer();
     client
         .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
@@ -882,9 +1351,7 @@ async fn shutdown_resolves_an_in_flight_manual_request() {
         BlockDriverConfig::manual().with_manual_request_timeout(Duration::from_secs(30)),
     ))
     .await;
-    let producer = handle
-        .manual_block_producer()
-        .expect("bug: manual mode should expose a producer");
+    let producer = handle.block_producer();
     client
         .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
@@ -912,9 +1379,7 @@ async fn commit_rpc_error_is_reconciled_against_the_scheduler_tip() {
     let (handle, client) =
         start_fake_with_block_driver("automine-commit-response-lost", BlockDriverConfig::manual())
             .await;
-    let producer = handle
-        .manual_block_producer()
-        .expect("bug: manual mode should expose a producer");
+    let producer = handle.block_producer();
     client
         .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
@@ -933,9 +1398,7 @@ async fn commit_rpc_error_is_reconciled_against_the_scheduler_tip() {
 async fn commit_rpc_error_without_tip_confirmation_is_indeterminate() {
     let (handle, client) =
         start_fake_with_block_driver("automine-commit-error", BlockDriverConfig::manual()).await;
-    let producer = handle
-        .manual_block_producer()
-        .expect("bug: manual mode should expose a producer");
+    let producer = handle.block_producer();
     client
         .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
         .await
@@ -963,9 +1426,7 @@ async fn runtime_scheduler_rpc_failures_are_typed() {
     for mode in ["automine-runtime-get-tip-error", "automine-nominate-error"] {
         let (handle, client) =
             start_fake_with_block_driver(mode, BlockDriverConfig::manual()).await;
-        let producer = handle
-            .manual_block_producer()
-            .expect("bug: manual mode should expose a producer");
+        let producer = handle.block_producer();
         client
             .request::<out::SendTransactionResult, _>("sendTransaction", NamedParams(serde_json::json!({"signedTransaction": format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")})))
             .await

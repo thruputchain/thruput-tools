@@ -85,14 +85,14 @@ thruput_json_rpc_api::native_methods!(exercise_clients);
 
 #[tokio::test]
 async fn all_typed_methods_roundtrip_through_actual_adapters() {
-    assert_eq!(METHOD_NAMES.len(), 24);
+    assert_eq!(METHOD_NAMES.len(), 29);
     let service = Service::default();
     let module = NativeModule::new(service.clone()).unwrap().finalize();
     assert_eq!(module.supported_methods(), sorted_methods());
     let (http, handle) = start(module.into_rpc()).await;
     let client = NativeClient::new(http.clone());
     exercise_clients(&client, &service).await;
-    assert_eq!(service.calls.lock().unwrap().len(), 24);
+    assert_eq!(service.calls.lock().unwrap().len(), 29);
     handle.stop().unwrap();
     handle.stopped().await;
 }
@@ -121,7 +121,10 @@ async fn strict_params_fail_before_any_handler_and_noarg_forms_normalize() {
                 -32602,
             );
             assert_eq!(service.calls.lock().unwrap().len(), before);
-            invalid.extend([json!({}), json!([]), Value::Null]);
+            invalid.extend([json!([]), Value::Null]);
+            if !fixtures::accepts_empty_object(method) {
+                invalid.push(json!({}));
+            }
         }
         for invalid in invalid {
             let before = service.calls.lock().unwrap().len();
@@ -183,7 +186,7 @@ async fn configured_subset_is_frozen_into_discovery_and_removed_methods_are_abse
     }
     let module = module.finalize();
     let expected = module.supported_methods().to_vec();
-    assert_eq!(expected.len(), 21);
+    assert_eq!(expected.len(), 26);
     let (http, handle) = start(module.into_rpc()).await;
     let client = NativeClient::new(http.clone());
     let DecodedResponse::Known(version) = client.get_version_info(EmptyRequest {}).await.unwrap()

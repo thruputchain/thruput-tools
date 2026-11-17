@@ -224,10 +224,7 @@ async fn fund_batch(
             .await?;
         hashes.push(result.transaction_hash);
     }
-    node.manual_block_producer()
-        .unwrap()
-        .produce_block()
-        .await?;
+    node.block_producer().produce_block().await?;
     let mut receipts = Vec::new();
     for transaction_hash in hashes {
         let receipt = tokio::time::timeout(Duration::from_secs(30), async {

@@ -3,7 +3,6 @@
 use std::fmt;
 
 use thruput_json_rpc_types::{responses::TransactionStatus, transaction::TxHash};
-use thruput_node_supervisor::BlockProductionError;
 
 /// Result alias used throughout `thruput-testkit`.
 pub type Result<T, E = TestkitError> = std::result::Result<T, E>;
@@ -143,6 +142,16 @@ pub enum TestkitError {
         /// The RPC method that failed.
         method: &'static str,
         /// Underlying error description.
+        detail: String,
+    },
+
+    /// A caller-supplied argument is outside what an operation accepts. The
+    /// harness rejects it before contacting the target.
+    #[error("invalid argument for `{operation}`: {detail}")]
+    InvalidArgument {
+        /// The operation that refused the argument.
+        operation: &'static str,
+        /// Why the argument is invalid.
         detail: String,
     },
 
@@ -351,18 +360,6 @@ pub enum TestkitError {
         tx_hash: String,
         /// Status observed instead of `Pending`.
         status: Box<TransactionStatus>,
-    },
-
-    /// Manual block production is unavailable for this target or driver mode.
-    #[error("manual block production requires a harness-owned local node in manual mode")]
-    ManualBlockProductionUnavailable,
-
-    /// The local supervisor failed to produce a manually-requested block.
-    #[error("manual block production failed: {source}")]
-    BlockProduction {
-        /// Underlying supervisor block-production error.
-        #[source]
-        source: BlockProductionError,
     },
 
     /// A contract artifact could not be read from disk.

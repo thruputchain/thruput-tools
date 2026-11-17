@@ -28,7 +28,8 @@ use thruput_xdr::PROTOCOL_VERSION;
 use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
     airdrop::{LocalAirdropContext, LocalAirdropRpc},
-    block_driver::{BlockDriverTask, ManualBlockProducer},
+    block_control::LocalBlockControl,
+    block_driver::{BlockDriverTask, BlockProducer},
     hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_runtime_identity},
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
@@ -146,7 +147,7 @@ pub struct NodeSupervisorHandle {
     rpc_handle: ServerHandle,
     rpc_addr: SocketAddr,
     backend_planes: BackendPlanes,
-    manual_block_producer: Option<ManualBlockProducer>,
+    block_producer: BlockProducer,
     block_driver: Option<BlockDriverTask>,
 }
 
@@ -232,7 +233,7 @@ impl NodeSupervisorHandle {
                     rpc_handle: started.handle,
                     rpc_addr: started.addr,
                     backend_planes: started.backend_planes,
-                    manual_block_producer: started.block_driver.manual_producer(),
+                    block_producer: started.block_driver.producer(),
                     block_driver: Some(started.block_driver),
                 })
             }
@@ -271,9 +272,9 @@ impl NodeSupervisorHandle {
         self.hogd.child_id()
     }
 
-    /// In-process block production control when the supervisor runs in manual mode.
-    pub fn manual_block_producer(&self) -> Option<ManualBlockProducer> {
-        self.manual_block_producer.clone()
+    /// In-process block production and block clock control, in every mode.
+    pub fn block_producer(&self) -> BlockProducer {
+        self.block_producer.clone()
     }
 
     /// Wait until either hogd-dev exits or the JSON-RPC server stops, then
@@ -608,6 +609,7 @@ where
 
     let block_driver = BlockDriverTask::start(
         scheduler_backend.scheduler_client().clone(),
+        scheduler_backend.scheduler_gateway_client().clone(),
         block_driver_config,
     );
     let block_driver_trigger = block_driver.trigger();
@@ -638,7 +640,8 @@ where
             matches!(backend_planes.view, PlaneStatus::ViewGateway),
         ),
     )
-    .with_local_pending_count();
+    .with_local_pending_count()
+    .with_block_control(LocalBlockControl::new(block_driver.producer()));
     let core_rpc = match bundle_identity.as_ref() {
         Some(identity) => core_rpc.with_bundle_identity(identity),
         None => core_rpc,
