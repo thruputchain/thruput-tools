@@ -30,6 +30,8 @@ pub enum LocalNodeBlockDriverMode {
     Instant,
     /// A fixed timer drives block production.
     Interval,
+    /// Blocks are produced only on request, through `dev_produceBlock`.
+    Manual,
 }
 
 /// Start the hog-devnode local node server with reusable local-node options.
@@ -1247,6 +1249,9 @@ fn local_node_config(
                     LocalNodeBlockDriverMode::Interval => {
                         thruput_node_supervisor::BlockDriverMode::Interval
                     }
+                    LocalNodeBlockDriverMode::Manual => {
+                        thruput_node_supervisor::BlockDriverMode::Manual
+                    }
                 });
             }
             if let Some(interval) = interval {
@@ -1903,6 +1908,20 @@ mod tests {
 
         fs::write(&legacy_path, "").expect("bug: legacy pid file should write");
         assert_eq!(local_node_pid_file(tmp.path()), legacy_path);
+    }
+
+    #[test]
+    fn local_node_config_selects_manual_block_production() {
+        let config = local_node_config(LocalNodeOptions {
+            block_driver: Some(LocalNodeBlockDriverMode::Manual),
+            ..LocalNodeOptions::default()
+        })
+        .expect("bug: manual mode needs no other option");
+
+        assert_eq!(
+            config.block_driver.mode,
+            thruput_node_supervisor::BlockDriverMode::Manual
+        );
     }
 
     #[test]

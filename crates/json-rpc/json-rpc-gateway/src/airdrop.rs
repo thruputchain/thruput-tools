@@ -541,6 +541,15 @@ mod tests {
             assert_eq!(registered.contains(&"faucet_requestAirdrop"), enabled);
             assert!(!registered.contains(&"dev_fundAccount"));
             assert!(!registered.contains(&"dev_getPendingTransactionCount"));
+            for block_control in [
+                "dev_produceBlock",
+                "dev_produceBlocks",
+                "dev_setNextBlockTimepoint",
+                "dev_increaseTime",
+                "dev_setBlockDriver",
+            ] {
+                assert!(!registered.contains(&block_control), "{block_control}");
+            }
             assert!(!registered.iter().any(|name| name.starts_with("groundhog_")));
             let (response, _) = module
                 .raw_json_request(
@@ -551,7 +560,7 @@ mod tests {
                 .unwrap();
             let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
             assert_eq!(response["result"]["supportedMethods"], json!(registered));
-            assert_eq!(response["result"]["wireFormat"], "14.5.0");
+            assert_eq!(response["result"]["wireFormat"], "14.6.0");
         }
         faucet.abort();
     }

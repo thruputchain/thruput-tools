@@ -7,6 +7,7 @@ use thruput_json_rpc_types::NetworkHash;
 
 use super::{
     FinalizedNativeModule, NativeModule,
+    block_control::NativeBlockControlPlane,
     funding::{FundingCapabilities, NativeFundingPlane},
     read::{
         NativeBlockPlane, NativeHistoryPlane, NativeReadCapabilities, NativeReadService,
@@ -30,6 +31,7 @@ pub struct NativeCapabilities {
     simulation: bool,
     funding: FundingCapabilities,
     local_pending_count: bool,
+    block_control: bool,
 }
 
 impl NativeCapabilities {
@@ -46,6 +48,7 @@ impl NativeCapabilities {
             simulation,
             funding: FundingCapabilities::None,
             local_pending_count: false,
+            block_control: false,
         }
     }
 
@@ -75,6 +78,11 @@ impl NativeCapabilities {
             ),
             "dev_fundAccount" => matches!(self.funding, FundingCapabilities::Local),
             "dev_getPendingTransactionCount" => self.local_pending_count,
+            "dev_produceBlock"
+            | "dev_produceBlocks"
+            | "dev_setNextBlockTimepoint"
+            | "dev_increaseTime"
+            | "dev_setBlockDriver" => self.block_control,
             _ => false,
         }
     }
@@ -96,11 +104,12 @@ impl NativeCapabilities {
 /// This assembles discovery, state, simulation, history and transaction lifecycle methods.
 /// Binaries select configured planes and bind the resulting module to a listener.
 #[derive(Debug)]
-pub struct NativeService<S, C, R, V, F = ()> {
+pub struct NativeService<S, C, R, V, F = (), B = ()> {
     reads: NativeReadService<C, R, V>,
     transactions: NativeTransactionService<S, C, R>,
     capabilities: NativeCapabilities,
     funding: F,
+    block_control: B,
 }
 
 impl<S, C: ChainPlane + Clone, R: Clone, V> NativeService<S, C, R, V> {
@@ -136,13 +145,17 @@ impl<S, C: ChainPlane + Clone, R: Clone, V> NativeService<S, C, R, V> {
             transactions,
             capabilities,
             funding: (),
+            block_control: (),
         }
     }
 }
 
-impl<S, C, R, V, F> NativeService<S, C, R, V, F> {
+impl<S, C, R, V, F, B> NativeService<S, C, R, V, F, B> {
     /// Attach configured optional funding before registration is finalized.
-    pub fn with_funding<N: NativeFundingPlane>(self, funding: N) -> NativeService<S, C, R, V, N> {
+    pub fn with_funding<N: NativeFundingPlane>(
+        self,
+        funding: N,
+    ) -> NativeService<S, C, R, V, N, B> {
         let mut capabilities = self.capabilities;
         capabilities.funding = funding.capabilities();
         NativeService {
@@ -150,6 +163,23 @@ impl<S, C, R, V, F> NativeService<S, C, R, V, F> {
             transactions: self.transactions,
             capabilities,
             funding,
+            block_control: self.block_control,
+        }
+    }
+
+    /// Attach local block production control. Hosted gateways must omit it.
+    pub fn with_block_control<N: NativeBlockControlPlane>(
+        self,
+        block_control: N,
+    ) -> NativeService<S, C, R, V, F, N> {
+        let mut capabilities = self.capabilities;
+        capabilities.block_control = block_control.enabled();
+        NativeService {
+            reads: self.reads,
+            transactions: self.transactions,
+            capabilities,
+            funding: self.funding,
+            block_control,
         }
     }
 
@@ -168,13 +198,14 @@ impl<S, C, R, V, F> NativeService<S, C, R, V, F> {
     }
 }
 
-impl<S, C, R, V, F> NativeService<S, C, R, V, F>
+impl<S, C, R, V, F, B> NativeService<S, C, R, V, F, B>
 where
     S: NativeSubmitPlane,
     C: ChainPlane,
     R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane + NativeHistoryPlane,
     V: NativeSimulationPlane,
     F: NativeFundingPlane,
+    B: NativeBlockControlPlane,
 {
     /// Remove unavailable and unimplemented methods, then freeze discovery.
     /// The caller supplies transport policy and owns the returned module.
@@ -278,6 +309,21 @@ macro_rules! dispatch {
     (get_pending_transaction_count, $s:expr, $r:expr) => {
         $s.reads.get_pending_transaction_count($r).await
     };
+    (produce_block, $s:expr, $r:expr) => {
+        $s.block_control.produce_block($r).await
+    };
+    (produce_blocks, $s:expr, $r:expr) => {
+        $s.block_control.produce_blocks($r).await
+    };
+    (set_next_block_timepoint, $s:expr, $r:expr) => {
+        $s.block_control.set_next_block_timepoint($r).await
+    };
+    (increase_time, $s:expr, $r:expr) => {
+        $s.block_control.increase_time($r).await
+    };
+    (set_block_driver, $s:expr, $r:expr) => {
+        $s.block_control.set_block_driver($r).await
+    };
     ($name:ident, $s:expr, $r:expr) => {{
         let _ = $r;
         Err(method_not_found())
@@ -286,13 +332,14 @@ macro_rules! dispatch {
 
 macro_rules! implement {
     ($( $(#[$doc:meta])* $name:ident($wire:literal,$parse:ident,$decorate:ident): $request:ty => $response:ty; )*) => {
-        impl<S, C, R, V, F> NativeApi for NativeService<S, C, R, V, F>
+        impl<S, C, R, V, F, B> NativeApi for NativeService<S, C, R, V, F, B>
         where
             S: NativeSubmitPlane,
             C: ChainPlane,
             R: NativeStatePlane + NativeTransactionReadPlane + NativeBlockPlane + NativeHistoryPlane,
             V: NativeSimulationPlane,
             F: NativeFundingPlane,
+            B: NativeBlockControlPlane,
         {
             $(
                 #[tracing::instrument(skip_all)]

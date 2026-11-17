@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use thruput_node_supervisor::{BlockDriverConfig, LogLevel, ManualBlockProducer, ProducedBlock};
+use thruput_node_supervisor::{BlockDriverConfig, BlockDriverMode, LogLevel};
 
 use thruput_json_rpc_client::native::{
     NativeClient, NativeClientError,
@@ -19,13 +19,13 @@ use thruput_json_rpc_types::{
     NetworkHash,
     requests::{self, EmptyRequest, EventQuery, TransactionQuery},
     responses::{
-        ChainTip, DecodedResponse, EventPage, SimulationResult, StorageResult, TransactionReceipt,
-        TransactionStatus,
+        BlockDriverStatus, ChainTip, DecodedResponse, EventPage, SimulationResult, StorageResult,
+        TransactionReceipt, TransactionStatus,
     },
 };
 use thruput_json_rpc_types::{base58::Base58, hex::HexBytes};
 use thruput_xdr::contract::ContractEntrypointID;
-use thruput_xdr::types::ContractAddress;
+use thruput_xdr::types::{ContractAddress, TimePoint};
 
 use crate::error::{Result, TestkitError};
 
@@ -182,7 +182,6 @@ struct NetworkInner {
     local_faucet: Option<ContractAddress>,
     local_funding:
         tokio::sync::Mutex<std::collections::HashMap<ContractAddress, LocalFundingAttempt>>,
-    manual_block_producer: Option<ManualBlockProducer>,
 }
 
 impl fmt::Debug for Network {
@@ -190,10 +189,6 @@ impl fmt::Debug for Network {
         f.debug_struct("Network")
             .field("rpc_url", &self.inner.rpc_url)
             .field("online", &self.inner.client.is_some())
-            .field(
-                "manual_block_production",
-                &self.inner.manual_block_producer.is_some(),
-            )
             .finish_non_exhaustive()
     }
 }
@@ -201,11 +196,7 @@ impl fmt::Debug for Network {
 impl Network {
     /// Connect to a live target, require it to serve the manifest's network, and
     /// retain its explicit bootstrap faucet adapter.
-    pub(crate) async fn connect(
-        rpc_url: &str,
-        manifest: &RuntimeManifest,
-        manual_block_producer: Option<ManualBlockProducer>,
-    ) -> Result<Self> {
+    pub(crate) async fn connect(rpc_url: &str, manifest: &RuntimeManifest) -> Result<Self> {
         let transport = HttpClientBuilder::default()
             .build(rpc_url)
             .map_err(|e| TestkitError::rpc("connect", e))?;
@@ -238,7 +229,6 @@ impl Network {
                 faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?),
                 local_faucet: local_faucet(manifest)?,
                 local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-                manual_block_producer,
             }),
         })
     }
@@ -253,7 +243,6 @@ impl Network {
                 faucet: tokio::sync::Mutex::new(None),
                 local_faucet: None,
                 local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-                manual_block_producer: None,
             }),
         }
     }
@@ -410,15 +399,111 @@ impl Network {
         })
     }
 
-    /// Produce one block through a harness-owned local node in manual mode.
+    /// Produce one block now; it can be empty. The block's timepoint follows
+    /// the node's block clock.
+    ///
+    /// Block control works on a local node (`thruput node` or a harness-owned
+    /// one) in every block driver mode. Hosted networks do not offer it.
     pub async fn produce_block(&self) -> Result<ProducedBlock> {
-        self.inner
-            .manual_block_producer
-            .as_ref()
-            .ok_or(TestkitError::ManualBlockProductionUnavailable)?
-            .produce_block()
-            .await
-            .map_err(|source| TestkitError::BlockProduction { source })
+        self.produce(None).await
+    }
+
+    /// Produce one block now at `timepoint`, in Unix nanoseconds. Later blocks
+    /// continue from it. Blocks only move forward in time, so `timepoint` must
+    /// be at or after the chain tip's.
+    pub async fn produce_block_at(&self, timepoint: TimePoint) -> Result<ProducedBlock> {
+        self.produce(Some(timepoint)).await
+    }
+
+    /// Produce `count` blocks now, in order, from 1 to
+    /// [`MAX_PRODUCE_BLOCKS`](requests::MAX_PRODUCE_BLOCKS). With an
+    /// `interval`, each block after the first is exactly `interval` later.
+    pub async fn produce_blocks(
+        &self,
+        count: u32,
+        interval: Option<Duration>,
+    ) -> Result<Vec<ProducedBlock>> {
+        const METHOD: &str = "dev_produceBlocks";
+        let request = requests::ProduceBlocksRequest {
+            count,
+            interval_nanoseconds: interval.map(|d| nanos(METHOD, d)).transpose()?,
+        };
+        let produced = known(
+            self.require_client(METHOD)?.produce_blocks(request).await,
+            METHOD,
+        )?;
+        Ok(produced
+            .blocks
+            .into_iter()
+            .map(ProducedBlock::from)
+            .collect())
+    }
+
+    /// Give the next block exactly `timepoint`. Later blocks continue from it.
+    /// Returns the timepoint the next block will receive.
+    pub async fn set_next_block_timepoint(&self, timepoint: TimePoint) -> Result<TimePoint> {
+        const METHOD: &str = "dev_setNextBlockTimepoint";
+        let request = requests::SetNextBlockTimepointRequest {
+            block_timepoint: timepoint,
+        };
+        known(
+            self.require_client(METHOD)?
+                .set_next_block_timepoint(request)
+                .await,
+            METHOD,
+        )
+        .map(|clock| clock.next_block_timepoint)
+    }
+
+    /// Move the block clock forward by `duration` for every later block. No
+    /// block is produced. Returns the timepoint the next block would receive.
+    pub async fn increase_time(&self, duration: Duration) -> Result<TimePoint> {
+        const METHOD: &str = "dev_increaseTime";
+        let request = requests::IncreaseTimeRequest {
+            nanoseconds: nanos(METHOD, duration)?,
+        };
+        known(
+            self.require_client(METHOD)?.increase_time(request).await,
+            METHOD,
+        )
+        .map(|clock| clock.next_block_timepoint)
+    }
+
+    /// Change how the node produces blocks. An `interval` replaces the one
+    /// used in interval mode.
+    pub async fn set_block_driver(
+        &self,
+        mode: BlockDriverMode,
+        interval: Option<Duration>,
+    ) -> Result<BlockDriverStatus> {
+        const METHOD: &str = "dev_setBlockDriver";
+        let mode = match mode {
+            BlockDriverMode::Instant => requests::BlockDriverMode::Instant,
+            BlockDriverMode::Interval => requests::BlockDriverMode::Interval,
+            BlockDriverMode::Manual => requests::BlockDriverMode::Manual,
+            _ => return Err(invalid_argument(METHOD, "unsupported block driver mode")),
+        };
+        let interval_milliseconds = interval.map(whole_millis).transpose()?;
+        known(
+            self.require_client(METHOD)?
+                .set_block_driver(requests::SetBlockDriverRequest {
+                    mode,
+                    interval_milliseconds,
+                })
+                .await,
+            METHOD,
+        )
+    }
+
+    async fn produce(&self, block_timepoint: Option<TimePoint>) -> Result<ProducedBlock> {
+        const METHOD: &str = "dev_produceBlock";
+        known(
+            self.require_client(METHOD)?
+                .produce_block(requests::ProduceBlockRequest { block_timepoint })
+                .await,
+            METHOD,
+        )
+        .map(ProducedBlock::from)
     }
 
     /// Read one latest-committed storage item at `address`/`key`.
@@ -603,6 +688,53 @@ impl Network {
     }
 }
 
+/// A block a local node produced on request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ProducedBlock {
+    /// The block's height.
+    pub height: i64,
+    /// The block's timepoint in Unix nanoseconds, as contracts read it.
+    pub timepoint: TimePoint,
+}
+
+impl From<thruput_json_rpc_types::responses::ProducedBlock> for ProducedBlock {
+    fn from(block: thruput_json_rpc_types::responses::ProducedBlock) -> Self {
+        Self {
+            height: *block.block_height,
+            timepoint: block.block_timepoint,
+        }
+    }
+}
+
+fn nanos(method: &'static str, duration: Duration) -> Result<u64> {
+    u64::try_from(duration.as_nanos())
+        .map_err(|_| invalid_argument(method, "duration does not fit u64 nanoseconds"))
+}
+
+/// The node takes the driver interval in whole milliseconds. Refuse a
+/// fraction rather than round it silently.
+fn whole_millis(interval: Duration) -> Result<u64> {
+    const METHOD: &str = "dev_setBlockDriver";
+    if !interval.subsec_nanos().is_multiple_of(1_000_000) {
+        return Err(invalid_argument(
+            METHOD,
+            "interval must be a whole number of milliseconds",
+        ));
+    }
+    u64::try_from(interval.as_millis())
+        .ok()
+        .filter(|millis| *millis > 0)
+        .ok_or_else(|| invalid_argument(METHOD, "interval must be at least 1 ms"))
+}
+
+fn invalid_argument(operation: &'static str, detail: &str) -> TestkitError {
+    TestkitError::InvalidArgument {
+        operation,
+        detail: detail.to_owned(),
+    }
+}
+
 fn known<T>(
     result: std::result::Result<DecodedResponse<T>, NativeClientError>,
     method: &'static str,
@@ -749,15 +881,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn block_driver_intervals_must_be_whole_milliseconds() {
+        assert_eq!(
+            super::whole_millis(std::time::Duration::from_millis(250)).unwrap(),
+            250
+        );
+        for invalid in [
+            std::time::Duration::from_micros(1_900),
+            std::time::Duration::ZERO,
+            std::time::Duration::from_nanos(1),
+        ] {
+            assert!(matches!(
+                super::whole_millis(invalid),
+                Err(TestkitError::InvalidArgument {
+                    operation: "dev_setBlockDriver",
+                    ..
+                })
+            ));
+        }
+    }
+
     #[tokio::test]
-    async fn offline_network_rejects_manual_block_production() {
+    async fn offline_network_rejects_block_production() {
         let error = Network::offline()
             .produce_block()
             .await
-            .expect_err("offline network must not expose manual production");
+            .expect_err("offline network must not expose block production");
         assert!(matches!(
             error,
-            TestkitError::ManualBlockProductionUnavailable
+            TestkitError::Offline {
+                operation: "dev_produceBlock"
+            }
         ));
     }
 }

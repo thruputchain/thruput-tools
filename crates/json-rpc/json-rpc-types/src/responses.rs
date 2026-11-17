@@ -184,6 +184,7 @@ impl<T: ResponseData> ResponseData for Option<T> {
     }
 }
 
+mod block_control;
 mod discovery;
 mod fields;
 mod funding;
@@ -191,6 +192,7 @@ mod history;
 mod simulation;
 mod state;
 mod transaction;
+pub use block_control::*;
 pub use discovery::*;
 pub use funding::*;
 pub use history::*;

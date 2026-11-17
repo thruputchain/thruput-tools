@@ -5,6 +5,7 @@
 //! the JSON-RPC facade that serves the same public API as the gateway.
 
 mod airdrop;
+mod block_control;
 mod block_driver;
 pub mod config;
 pub mod error;
@@ -40,7 +41,9 @@ mod service {
     pub(crate) const SCHEDULER_GATEWAY: &str = "hogd-dev scheduler gateway";
 }
 
-pub use block_driver::{BlockProductionError, ManualBlockProducer, ProducedBlock};
+pub use block_driver::{
+    BlockProducer, BlockProductionError, MAX_BLOCKS_PER_REQUEST, ProducedBlock,
+};
 pub use config::{
     BlockDriverConfig, BlockDriverMode, HogdDevConfig, LocalAirdropConfig, LogLevel,
     NodeSupervisorConfig,

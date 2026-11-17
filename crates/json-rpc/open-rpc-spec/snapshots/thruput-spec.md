@@ -2,7 +2,7 @@
 
 <!-- Generated from thruput-spec.json by tests/spec_snapshot.rs. Do not edit. -->
 
-Wire format `14.5.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
+Wire format `14.6.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
 
 This file lists all native methods. A server serves only the methods that its backends support; `getVersionInfo` lists them. For exact schemas, see [thruput-spec.json](thruput-spec.json).
 
@@ -34,6 +34,11 @@ This file lists all native methods. A server serves only the methods that its ba
 | [`faucet_requestAirdrop`](#faucet_requestairdrop) | Request one faucet funding attempt. Receipt polling is a separate operation. |
 | [`dev_fundAccount`](#dev_fundaccount) | Submit a local funding transfer. |
 | [`dev_getPendingTransactionCount`](#dev_getpendingtransactioncount) | Read the local scheduler pending count. Accepts omitted params, `{}`, `[]`, or `null`; clients send `{}`. |
+| [`dev_produceBlock`](#dev_produceblock) | Produce one block now; it can be empty. With a timepoint, the block takes exactly that time and later blocks continue from it. Blocks only move forward in time. |
+| [`dev_produceBlocks`](#dev_produceblocks) | Produce several blocks now, in order, optionally a fixed interval apart. On error, blocks already produced stay committed. |
+| [`dev_setNextBlockTimepoint`](#dev_setnextblocktimepoint) | Give the next block exactly this timepoint. Later blocks continue from it. |
+| [`dev_increaseTime`](#dev_increasetime) | Move the block clock forward for every later block. Produces no block. |
+| [`dev_setBlockDriver`](#dev_setblockdriver) | Change how the local node produces blocks while it runs. |
 
 ### `getVersionInfo`
 
@@ -477,6 +482,96 @@ No parameters.
 | -32053 | `Overloaded` | `"overloaded"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
+### `dev_produceBlock`
+
+Produce one block now; it can be empty. With a timepoint, the block takes exactly that time and later blocks continue from it. Blocks only move forward in time.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `blockTimepoint` | [`DecimalTimePoint`](#decimaltimepoint) | no | Unix nanoseconds, at or after the chain tip's timepoint. |
+
+**Result:** [`ProducedBlock`](#producedblock)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
+### `dev_produceBlocks`
+
+Produce several blocks now, in order, optionally a fixed interval apart. On error, blocks already produced stay committed.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `count` | integer (uint32) | yes | Number of blocks, from 1 to 1000. |
+| `intervalNanoseconds` | decimal string | no | Nanoseconds between consecutive blocks. |
+
+**Result:** [`ProducedBlocks`](#producedblocks)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
+### `dev_setNextBlockTimepoint`
+
+Give the next block exactly this timepoint. Later blocks continue from it.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `blockTimepoint` | [`DecimalTimePoint`](#decimaltimepoint) | yes | Unix nanoseconds, at or after the chain tip's timepoint. |
+
+**Result:** [`BlockClock`](#blockclock)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
+### `dev_increaseTime`
+
+Move the block clock forward for every later block. Produces no block.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `nanoseconds` | decimal string | yes | Nanoseconds to add to the block clock. |
+
+**Result:** [`BlockClock`](#blockclock)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
+### `dev_setBlockDriver`
+
+Change how the local node produces blocks while it runs.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `mode` | [`BlockDriverMode`](#blockdrivermode) | yes | How to produce blocks from now on. |
+| `intervalMilliseconds` | decimal string | no | Replaces the interval used in interval mode. |
+
+**Result:** [`BlockDriverStatus`](#blockdriverstatus)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+
 ## Errors
 
 The `kind` field identifies the shape of `data`.
@@ -498,6 +593,12 @@ The `kind` field identifies the shape of `data`.
 | -32602 | `InvalidParams` | Invalid params | `"invalidParams"` | `path?`: string, `reason?`: [`InvalidParamsReason`](#invalidparamsreason) |
 
 ## Types
+
+### `ActiveBlockDriverMode`
+
+How the local node produces blocks.
+
+Type: `"instant"` | `"interval"` | `"manual"`
 
 ### `Admission`
 
@@ -608,6 +709,29 @@ Unprefixed, case-sensitive Bitcoin/Solana base58; must decode to exactly 32 byte
 Type: string
 
 Constraints: length 32 to 45, pattern `^[1-9A-HJ-NP-Za-km-z]+$`
+
+### `BlockClock`
+
+The block clock after a time change.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `nextBlockTimepoint` | [`DecimalTimePoint`](#decimaltimepoint) | yes | Unix nanoseconds the next block receives if it is produced now. |
+
+### `BlockDriverMode`
+
+How a local node produces blocks.
+
+Type: `"instant"` | `"interval"` | `"manual"`
+
+### `BlockDriverStatus`
+
+The local node's block production settings.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `intervalMilliseconds` | [`DecimalU64`](#decimalu64) | yes | The interval used in interval mode. |
+| `mode` | [`ActiveBlockDriverMode`](#activeblockdrivermode) | yes | How the node produces blocks now. |
 
 ### `BlockInfo`
 
@@ -921,6 +1045,23 @@ This local runtime's pending pool observation, not a network-wide count.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `count` | [`DecimalU64`](#decimalu64) | yes |  |
+
+### `ProducedBlock`
+
+A block the local node produced on request.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `blockHeight` | decimal string | yes | Canonical decimal block height in the inclusive range 0 to 9223372036854775807. |
+| `blockTimepoint` | [`DecimalTimePoint`](#decimaltimepoint) | yes | Unix nanoseconds, as contracts read it. |
+
+### `ProducedBlocks`
+
+Blocks produced by one request, in height order.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `blocks` | [`ProducedBlock`](#producedblock)[] | yes | Produced blocks, lowest height first. |
 
 ### `PublicKey`
 

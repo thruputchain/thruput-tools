@@ -9,6 +9,11 @@ pub fn invocation() -> Value {
     json!({"address": address(), "entrypoint": "0x0102030405060708", "calldata": "0x"})
 }
 
+/// Named requests whose fields are all optional, so `{}` is valid.
+pub fn accepts_empty_object(method: &str) -> bool {
+    method == "dev_produceBlock"
+}
+
 pub fn request(method: &str) -> Value {
     match method {
         "sendTransaction" => json!({"signedTransaction": "0x0102"}),
@@ -35,6 +40,11 @@ pub fn request(method: &str) -> Value {
         "dev_fundAccount" => {
             json!({"recipient": address(), "rawAmount": "340282366920938463463374607431768211455", "clientNonce": "0x0102", "faucet": address()})
         }
+        "dev_produceBlock" => json!({"blockTimepoint": "18446744073709551615"}),
+        "dev_produceBlocks" => json!({"count": 1000, "intervalNanoseconds": "12000000000"}),
+        "dev_setNextBlockTimepoint" => json!({"blockTimepoint": "1700000000000000000"}),
+        "dev_increaseTime" => json!({"nanoseconds": "259200000000000"}),
+        "dev_setBlockDriver" => json!({"mode": "interval", "intervalMilliseconds": "250"}),
         "getVersionInfo"
         | "getNetworkInfo"
         | "getChainTip"
@@ -102,6 +112,16 @@ pub fn response(method: &str) -> Value {
             json!({"recipient": address(), "rawAmount": "1", "transactionHash": address(), "signedTransaction": "0x0102"})
         }
         "dev_getPendingTransactionCount" => json!({"count": "18446744073709551615"}),
+        "dev_produceBlock" => {
+            json!({"blockHeight": "9007199254740993", "blockTimepoint": "18446744073709551615"})
+        }
+        "dev_produceBlocks" => {
+            json!({"blocks": [{"blockHeight": "812", "blockTimepoint": "1700000000000000000"}]})
+        }
+        "dev_setNextBlockTimepoint" | "dev_increaseTime" => {
+            json!({"nextBlockTimepoint": "1700000000000000000"})
+        }
+        "dev_setBlockDriver" => json!({"mode": "manual", "intervalMilliseconds": "500"}),
         _ => panic!("no result fixture for {method}"),
     }
 }

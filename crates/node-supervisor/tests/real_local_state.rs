@@ -69,11 +69,7 @@ async fn persistent_funding_manual_production_and_lock_handoff() {
             .unwrap()
             .is_none()
     );
-    node.manual_block_producer()
-        .unwrap()
-        .produce_block()
-        .await
-        .unwrap();
+    node.block_producer().produce_block().await.unwrap();
     let receipt = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if let Some(receipt) = client
