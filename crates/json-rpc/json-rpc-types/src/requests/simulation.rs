@@ -96,8 +96,8 @@ SimulateInvocationRequest {
     )]
     #[schemars(schema_with = "gas_schema")]
     gas_limit: Option<u64>,
-    /// Freshness floor; not a historical-state selector. The server waits for
-    /// a snapshot at or above it, up to the view deadline.
+    /// Freshness floor; not a historical-state selector. A committed height
+    /// is waited for, up to the view deadline; a later one fails at once.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -115,8 +115,8 @@ SimulateInvocationsRequest {
     #[serde(deserialize_with = "read_invocations")]
     #[schemars(length(min = 1))]
     invocations: Vec<Invocation>,
-    /// Freshness floor; not a historical-state selector. The server waits for
-    /// a snapshot at or above it, up to the view deadline.
+    /// Freshness floor; not a historical-state selector. A committed height
+    /// is waited for, up to the view deadline; a later one fails at once.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

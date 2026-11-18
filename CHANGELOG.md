@@ -50,8 +50,12 @@ serve the previous snapshot for up to about 100 ms after a commit. Reading new
 state at a receipt's block height now works without a retry in the client, on
 a local node in every block driver mode and on the hosted gateway.
 
-- The wait ends at the view deadline (`view_timeout_ms`, 30 s by default).
-  Only then is `-32012` returned, with the observed height. It is retryable.
+- Only a committed height is waited for: the floor must be at or below the
+  chain tip. The wait ends at the view deadline (`view_timeout_ms`, 30 s by
+  default), and only then is `-32012` returned, with the observed height.
+- A floor above the committed tip still fails at once with `-32012`, as a
+  read of a future block does on Anvil. It is
+  retryable once the chain reaches the floor.
 - Requests without `minStateBlockHeight` do not wait.
 - Retries that apps added for `StateHeightUnavailable` after a commit can be
   removed. The wire format is 14.6.1, a documentation change.

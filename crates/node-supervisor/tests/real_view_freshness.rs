@@ -149,5 +149,27 @@ async fn read_after_each_commit(node: &NodeSupervisorHandle, sender: &LocalSigne
             .into());
         }
     }
+    // A floor beyond the committed tip is not waited for.
+    let tip = known(native.get_chain_tip(input::EmptyRequest {}).await?)?;
+    let started = std::time::Instant::now();
+    let future = native
+        .simulate_invocation(input::SimulateInvocationRequest {
+            address: Base58(ADDRESS_NATIVE_TOKEN),
+            entrypoint: HexBytes(NATIVE_TOKEN_TRANSFER_ENTRYPOINT.as_ref().to_vec()),
+            calldata: HexBytes(calldata),
+            caller: Some(Base58(account.address())),
+            assumed_auth: None,
+            gas_limit: Some(GAS),
+            min_state_block_height: Some((*tip.block_height + 1000).into()),
+        })
+        .await;
+    if future.is_ok() || started.elapsed() > Duration::from_secs(5) {
+        return Err(format!(
+            "a future floor should fail at once: {:?} after {:?}",
+            future.map(|_| ()),
+            started.elapsed()
+        )
+        .into());
+    }
     Ok(())
 }

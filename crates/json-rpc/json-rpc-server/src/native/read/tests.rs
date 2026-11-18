@@ -531,7 +531,8 @@ async fn simulation_floors_wait_for_the_view_to_reach_the_requested_height() {
                 .state_block_height
         };
         assert_eq!(*height, 42);
-        assert_eq!(backend.calls.load(Ordering::SeqCst), 3);
+        // Three views and one read of the committed tip.
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 4);
     }
 }
 #[tokio::test]
@@ -563,6 +564,36 @@ async fn simulation_floors_report_the_observed_height_at_the_view_deadline() {
         assert_eq!(data["requestedStateBlockHeight"], "42");
         assert_eq!(data["observedStateBlockHeight"], "41");
         assert!(backend.calls.load(Ordering::SeqCst) > 1);
+    }
+}
+#[tokio::test]
+async fn simulation_floors_above_the_committed_tip_fail_at_once() {
+    // The committed tip is 42. Without the db plane it cannot be read.
+    for (floor, db) in [(43, true), (42, false)] {
+        let service = service(
+            Backend::with_view_heights([41]),
+            RpcServerConfig::default(),
+            NativeReadCapabilities::new(db, true),
+        );
+        for batch_call in [false, true] {
+            let started = std::time::Instant::now();
+            let error = if batch_call {
+                service
+                    .simulate_invocations(batch(vec![call()], Some(floor)))
+                    .await
+                    .unwrap_err()
+            } else {
+                let mut request = invocation();
+                request.min_state_block_height = Some(floor.into());
+                service.simulate_invocation(request).await.unwrap_err()
+            };
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+            assert_eq!(error.code(), codes::STATE_HEIGHT_UNAVAILABLE);
+            let data: serde_json::Value =
+                serde_json::from_str(error.data().unwrap().get()).unwrap();
+            assert_eq!(data["requestedStateBlockHeight"], floor.to_string());
+            assert_eq!(data["observedStateBlockHeight"], "41");
+        }
     }
 }
 #[tokio::test]
