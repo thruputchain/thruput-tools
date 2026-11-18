@@ -25966,7 +25966,7 @@
         {
           "name": "minStateBlockHeight",
           "schema": {
-            "description": "Freshness floor; not a historical-state selector. A committed height\nis waited for, for up to 2 s; a later one fails at once.",
+            "description": "Freshness floor; not a historical-state selector. The server waits up\nto 2 s for a committed height to reach the view; a floor above the\ncommitted tip fails at once.",
             "maxLength": 19,
             "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
             "type": "string",
@@ -30007,7 +30007,7 @@
             "x-integer-minimum": "1"
           },
           "minStateBlockHeight": {
-            "description": "Freshness floor; not a historical-state selector. A committed height\nis waited for, for up to 2 s; a later one fails at once.",
+            "description": "Freshness floor; not a historical-state selector. The server waits up\nto 2 s for a committed height to reach the view; a floor above the\ncommitted tip fails at once.",
             "maxLength": 19,
             "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
             "type": "string",
@@ -30061,7 +30061,7 @@
         {
           "name": "minStateBlockHeight",
           "schema": {
-            "description": "Freshness floor; not a historical-state selector. A committed height\nis waited for, for up to 2 s; a later one fails at once.",
+            "description": "Freshness floor; not a historical-state selector. The server waits up\nto 2 s for a committed height to reach the view; a floor above the\ncommitted tip fails at once.",
             "maxLength": 19,
             "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
             "type": "string",
@@ -34082,7 +34082,7 @@
             "type": "array"
           },
           "minStateBlockHeight": {
-            "description": "Freshness floor; not a historical-state selector. A committed height\nis waited for, for up to 2 s; a later one fails at once.",
+            "description": "Freshness floor; not a historical-state selector. The server waits up\nto 2 s for a committed height to reach the view; a floor above the\ncommitted tip fails at once.",
             "maxLength": 19,
             "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
             "type": "string",

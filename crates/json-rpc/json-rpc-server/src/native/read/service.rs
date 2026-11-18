@@ -402,7 +402,11 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                 other => return other,
             };
             if behind.is_none() {
-                if !self.is_committed(context, requested).await {
+                // A tip read still running at the deadline counts as not
+                // committed, so the client gets this error, not a timeout.
+                let committed =
+                    tokio::time::timeout_at(deadline, self.is_committed(context, requested)).await;
+                if committed != Ok(true) {
                     return Err(error);
                 }
                 wait_until = deadline.min(tokio::time::Instant::now() + VIEW_HEIGHT_MAX_WAIT);

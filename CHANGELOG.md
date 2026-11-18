@@ -55,8 +55,8 @@ a local node in every block driver mode and on the hosted gateway.
   (`view_timeout_ms`) if that is sooner. A healthy node catches up in about
   100 ms. Only then is `-32012` returned, with the observed height.
 - A floor above the committed tip still fails at once with `-32012`, as a
-  read of a future block does on Anvil. It is
-  retryable once the chain reaches the floor.
+  read of a future block does on Anvil. It is retryable once the chain
+  reaches the floor.
 - Requests without `minStateBlockHeight` do not wait.
 - Retries that apps added for `StateHeightUnavailable` after a commit can be
   removed. The wire format is 14.6.1, a documentation change.

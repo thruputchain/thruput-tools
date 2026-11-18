@@ -194,7 +194,7 @@ Simulate an invocation without committing state.
 | `assumedAuth` | [`AssumedAuth`](#assumedauth) | no |  |
 | `caller` | [`Base58_ContractAddress`](#base58_contractaddress) | no |  |
 | `gasLimit` | decimal string | no | Canonical decimal integer in the inclusive range 0 to 18446744073709551615. |
-| `minStateBlockHeight` | decimal string | no | Freshness floor; not a historical-state selector. A committed height is waited for, for up to 2 s; a later one fails at once. |
+| `minStateBlockHeight` | decimal string | no | Freshness floor; not a historical-state selector. The server waits up to 2 s for a committed height to reach the view; a floor above the committed tip fails at once. |
 
 **Result:** [`SimulationResult`](#simulationresult)
 
@@ -214,7 +214,7 @@ Simulate a batch against one state snapshot.
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `invocations` | [`Invocation`](#invocation)[] (at least 1) | yes |  |
-| `minStateBlockHeight` | decimal string | no | Freshness floor; not a historical-state selector. A committed height is waited for, for up to 2 s; a later one fails at once. |
+| `minStateBlockHeight` | decimal string | no | Freshness floor; not a historical-state selector. The server waits up to 2 s for a committed height to reach the view; a floor above the committed tip fails at once. |
 
 **Result:** [`SimulationResults`](#simulationresults)
 

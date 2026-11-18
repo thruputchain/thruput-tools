@@ -11,12 +11,13 @@ use std::{error::Error, path::PathBuf, time::Duration};
 
 use jsonrpsee::http_client::HttpClientBuilder;
 use thruput_json_rpc_client::native::{
-    NativeClient,
+    NativeClient, NativeClientError,
     receipt::{ReceiptPollConfig, poll_receipt},
 };
 use thruput_json_rpc_types::{
-    base58::Base58, bootstrap_manifest::BootstrapManifestAllocation, hex::HexBytes,
-    requests as input, responses as output, transaction::TxHash,
+    base58::Base58, bootstrap_manifest::BootstrapManifestAllocation,
+    error::native::codes::STATE_HEIGHT_UNAVAILABLE, hex::HexBytes, requests as input,
+    responses as output, transaction::TxHash,
 };
 use thruput_node_supervisor::{
     BlockDriverConfig, HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle,
@@ -163,13 +164,18 @@ async fn read_after_each_commit(node: &NodeSupervisorHandle, sender: &LocalSigne
             min_state_block_height: Some((*tip.block_height + 1000).into()),
         })
         .await;
-    if future.is_ok() || started.elapsed() > Duration::from_secs(5) {
-        return Err(format!(
-            "a future floor should fail at once: {:?} after {:?}",
-            future.map(|_| ()),
-            started.elapsed()
-        )
-        .into());
+    let fast = started.elapsed() < Duration::from_secs(1);
+    match future {
+        Err(NativeClientError::Application { source, .. })
+            if source.code() == STATE_HEIGHT_UNAVAILABLE && fast => {}
+        other => {
+            return Err(format!(
+                "a future floor should fail at once with -32012: {:?} after {:?}",
+                other.map(|_| ()),
+                started.elapsed()
+            )
+            .into());
+        }
     }
     Ok(())
 }
