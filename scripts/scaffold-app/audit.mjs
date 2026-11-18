@@ -2,12 +2,10 @@
 // Fails on any high or critical advisory that is not listed in IGNORED.
 import { spawnSync } from "node:child_process";
 
-const IGNORED = new Map([
-  // picomatch ReDoS (<=4.0.7; fix is 4.0.8, not yet published). picomatch is
-  // Vite's glob matcher here: it only sees globs from this repository's own
-  // test harness. Remove once package-lock.json carries picomatch >=4.0.8.
-  ["GHSA-fc5q-39xc-vjpf", "picomatch"],
-]);
+// Entries map an advisory ID to its package name, for example
+// ["GHSA-xxxx-xxxx-xxxx", "picomatch"]. Remove an entry when the advisory no
+// longer applies: a stale entry fails the audit.
+const IGNORED = new Map();
 
 const run = spawnSync("npm", ["audit", "--json"], {
   cwd: import.meta.dirname,
