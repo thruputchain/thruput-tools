@@ -46,6 +46,13 @@ fn known<T>(result: output::DecodedResponse<T>) -> TestResult<T> {
     }
 }
 
+/// A fresh key for each run, so no fixed secret is used on chain.
+fn random_signer() -> TestResult<LocalSigner> {
+    let mut secret = zeroize::Zeroizing::new([0; 32]);
+    getrandom::fill(secret.as_mut()).map_err(|error| std::io::Error::other(error.to_string()))?;
+    Ok(LocalSigner::from_secret_key(*secret))
+}
+
 #[tokio::test]
 #[ignore = "requires an absolute THRUPUT_DEVNODE_BINARY for a compatible real runtime"]
 async fn instant_mode_view_at_the_receipt_height_needs_no_retry() {
@@ -53,7 +60,7 @@ async fn instant_mode_view_at_the_receipt_height_needs_no_retry() {
         std::env::var_os("THRUPUT_DEVNODE_BINARY")
             .expect("THRUPUT_DEVNODE_BINARY must name a compatible runtime"),
     );
-    let sender = LocalSigner::from_secret_key([0x31; 32]);
+    let sender = random_signer().unwrap();
     let node = NodeSupervisorHandle::start(
         NodeSupervisorConfig::default()
             .with_rpc_listen_address("127.0.0.1:0")
@@ -92,7 +99,7 @@ async fn read_after_each_commit(node: &NodeSupervisorHandle, sender: &LocalSigne
         .network_hash
         .to_network_hash();
     let account = PubkeyAccount::from_public_key_bytes(sender.verifying_key_bytes(), 0);
-    let recipient = LocalSigner::from_secret_key([0x32; 32]);
+    let recipient = random_signer()?;
     let recipient = PubkeyAccount::from_public_key_bytes(recipient.verifying_key_bytes(), 0);
     let calldata = native_token_transfer_calldata(&recipient.address(), AMOUNT)?;
     for nonce in 1..=ROUNDS {
