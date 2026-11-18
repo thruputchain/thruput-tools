@@ -23,6 +23,7 @@ const SNAPSHOT_PATH: &str = "tests/snapshots/error-metadata.txt";
 const SHARED_CODES: &[(&str, &str)] = &[
     ("missing_rpc_url", "LocalNodeUnavailable"),
     ("cargo_failed", "CargoFailedWithOutput"),
+    ("node_supervisor_error", "NodeExitedBeforeReady"),
     ("invalid_event_limit", "InvalidTokenTransferLimit"),
     ("invalid_event_cursor", "InvalidTokenTransferCursor"),
     ("invalid_event_options", "InvalidTokenTransferOptions"),
@@ -65,6 +66,34 @@ fn linker_script_failures_have_name_specific_hints() {
     let current = link_failure("thruput-rv32.ld").hint().unwrap();
     assert!(current.contains("linker search path"));
     assert!(!current.contains("groundhog-rv32.ld"));
+}
+
+#[test]
+fn node_exit_before_readiness_points_ldd_at_the_failed_binary() {
+    let exited = |program: &str, exit_code| CliError::NodeExitedBeforeReady {
+        message: "child process exited before readiness".into(),
+        program: program.into(),
+        exit_code,
+    };
+
+    for exit_code in [126, 127] {
+        let hint = exited("/opt/hog-devnode", Some(exit_code)).hint().unwrap();
+        assert!(hint.contains("run `ldd /opt/hog-devnode`"), "{hint}");
+    }
+    let quoted = exited("/opt/my node/hog-devnode", Some(127))
+        .hint()
+        .unwrap();
+    assert!(
+        quoted.contains("run `ldd '/opt/my node/hog-devnode'`"),
+        "{quoted}"
+    );
+    for exit_code in [Some(1), None] {
+        let hint = exited("/opt/hog-devnode", exit_code).hint().unwrap();
+        assert_eq!(
+            hint,
+            CliError::NodeSupervisor(String::new()).hint().unwrap()
+        );
+    }
 }
 
 #[test]

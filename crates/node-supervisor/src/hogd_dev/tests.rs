@@ -305,6 +305,23 @@ fn log_fields_tolerate_absent_metadata() {
 }
 
 #[test]
+fn stderr_tail_keeps_the_last_lines_truncated_on_a_char_boundary() {
+    let mut tail = std::collections::VecDeque::new();
+    for index in 0..super::STDERR_TAIL_LINES + 2 {
+        super::push_stderr_tail(&mut tail, &format!("line {index}"));
+    }
+    assert_eq!(tail.len(), super::STDERR_TAIL_LINES);
+    assert_eq!(tail.front().map(String::as_str), Some("line 2"));
+
+    let long = format!("{}é", "x".repeat(super::STDERR_TAIL_LINE_BYTES - 1));
+    super::push_stderr_tail(&mut tail, &long);
+    assert_eq!(
+        tail.back().map(String::as_str),
+        Some("x".repeat(super::STDERR_TAIL_LINE_BYTES - 1).as_str())
+    );
+}
+
+#[test]
 fn forward_log_line_reports_malformed_json() {
     let outcome = super::forward_log_line("not json");
 
@@ -1210,16 +1227,27 @@ async fn dropping_persistent_process_sends_sigterm_and_preserves_pid_file() {
 }
 
 #[tokio::test]
-async fn fake_child_exit_before_readiness_is_typed() {
+async fn fake_child_exit_before_readiness_reports_unstructured_stderr() {
     let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
     let err = start_fake_hogd_dev(&config, "exit-before-ready")
         .await
         .expect_err("bug: early child exit should fail");
 
-    assert!(matches!(
-        err,
-        NodeSupervisorError::ExitedBeforeReady { status, .. } if status.code() == Some(9)
+    let NodeSupervisorError::ExitedBeforeReady { status, stderr, .. } = &err else {
+        panic!("unexpected startup error: {err:?}");
+    };
+    assert_eq!(status.code(), Some(127));
+    assert_eq!(
+        stderr,
+        &[
+            "hog-devnode: error while loading shared libraries: libjemalloc.so.2: \
+           cannot open shared object file: No such file or directory"
+        ]
+    );
+    assert!(err.to_string().ends_with(
+        "with status exit status: 127; stderr: hog-devnode: error while loading shared \
+         libraries: libjemalloc.so.2: cannot open shared object file: No such file or directory"
     ));
 }
 

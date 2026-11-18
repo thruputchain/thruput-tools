@@ -1320,6 +1320,13 @@ fn map_node_supervisor_error(err: &thruput_node_supervisor::NodeSupervisorError)
             message,
             expected_protocol: expected_protocol.clone(),
         },
+        thruput_node_supervisor::NodeSupervisorError::ExitedBeforeReady {
+            program, status, ..
+        } => CliError::NodeExitedBeforeReady {
+            message,
+            program: program.clone(),
+            exit_code: status.code(),
+        },
         _ => CliError::NodeSupervisor(message),
     }
 }
