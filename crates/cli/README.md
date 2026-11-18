@@ -918,8 +918,11 @@ header by default, like Anvil. Any web page you open can then call the node,
 including its funding and `dev_` methods. `--allow-origin ORIGIN` (repeatable)
 allows only the listed origins, such as `http://127.0.0.1:5173`; `*` allows
 any. `--no-cors` sends no CORS headers, so browsers block cross-origin calls.
-When the listener binds beyond loopback and allows every origin, the node logs
-a warning. Nodes that `thruput test --integration` starts send no CORS headers.
+These flags control HTTP CORS only. The listener also accepts WebSocket
+connections without checking their `Origin`, so a web page that can reach the
+listener can call every method over WebSocket whichever flag is set. When the
+listener binds beyond loopback and allows every origin, the node logs a
+warning. Nodes that `thruput test --integration` starts send no CORS headers.
 
 The supervisor owns a random private faucet with 1,000,000 native tokens. Its
 key stays with the chain directory. The selected stored key receives 100 native

@@ -142,6 +142,9 @@ pub struct NodeSupervisorConfig {
 /// do not expose their node to web pages. `thruput node` opts in to
 /// [`RpcCors::AllowAny`], as Anvil does, so a browser app can call a local
 /// node the same way it calls a hosted gateway.
+///
+/// This controls HTTP CORS only. The listener also accepts WebSocket
+/// connections and does not check their `Origin`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RpcCors {
@@ -162,21 +165,15 @@ pub fn validate_cors_origin(origin: &str) -> Result<(), String> {
     normalize_cors_origin(origin).map(drop)
 }
 
-/// Spell `origin` the way a browser sends it in an `Origin` header.
-///
-/// CORS compares origins exactly, so the configured value must match the
-/// browser's serialization byte for byte. The WHATWG URL parser, which
-/// browsers implement, produces it: a lowercase scheme and host, canonical
-/// IPv4 (`127.1` becomes `127.0.0.1`) and IPv6 (`[0:0:0:0:0:0:0:1]` becomes
-/// `[::1]`) addresses, and no port when it is the scheme's default.
+/// CORS compares origins byte for byte, so this returns the WHATWG (browser)
+/// spelling: lowercase scheme and host, canonical IP forms, default port dropped.
 pub fn normalize_cors_origin(origin: &str) -> Result<String, String> {
     let invalid = || {
         format!(
             "`{origin}` is not a valid origin; use scheme://host[:port], such as http://127.0.0.1:5173"
         )
     };
-    // `http::Uri` checks the shape the WHATWG parser would otherwise repair:
-    // a scheme, `//`, an authority, and nothing after it.
+    // `http::Uri` checks the shape (scheme://authority) that WHATWG would repair.
     let uri: http::Uri = origin
         .parse()
         .map_err(|error| format!("`{origin}` is not a valid origin: {error}"))?;
@@ -187,16 +184,15 @@ pub fn normalize_cors_origin(origin: &str) -> Result<String, String> {
         return Err(invalid());
     }
     let authority = uri.authority().ok_or_else(invalid)?;
-    // `http::Uri` reports the path of `http://host` as `/`; the text must
-    // not end in one, so only the implicit root path passes. Browsers never
-    // send user information in an origin.
-    let bare = uri.path() == "/" && uri.query().is_none() && !origin.ends_with('/');
+    // Reject any path, query, fragment, or userinfo: an origin is scheme://host[:port].
+    let bare = uri.path() == "/"
+        && uri.query().is_none()
+        && !origin.ends_with('/')
+        && !origin.contains('#');
     if !bare || authority.as_str().contains('@') {
         return Err(invalid());
     }
-    // `http::Uri` accepts any text after the colon, and `port_u16` returns
-    // `None` for ports such as `abc` or `99999`. Reject them rather than
-    // fall back to the default port, which is a different origin.
+    // `port_u16` is `None` for `abc` or `99999`; reject rather than use the default port.
     let port_is_valid = match authority.port() {
         Some(port) => {
             port.as_str().bytes().all(|byte| byte.is_ascii_digit())

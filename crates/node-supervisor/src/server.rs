@@ -577,7 +577,7 @@ fn cors_layer(cors: &RpcCors) -> Result<Option<CorsLayer>, NodeSupervisorError> 
                     // them exactly.
                     normalize_cors_origin(origin)
                         .and_then(|origin| {
-                            HeaderValue::from_str(&origin).map_err(|e| e.to_string())
+                            HeaderValue::from_str(&origin).map_err(|error| error.to_string())
                         })
                         .map_err(|reason| NodeSupervisorError::InvalidRpcCorsOrigin { reason })
                 })
@@ -605,7 +605,7 @@ fn listener_addr<H, R>(
     if *cors == RpcCors::AllowAny && !rpc_addr.ip().is_loopback() {
         tracing::warn!(
             %rpc_addr,
-            "JSON-RPC listens beyond loopback and allows browser requests from any origin; any web page can call this node, including its funding and dev_ methods. Use --allow-origin or --no-cors to limit it"
+            "JSON-RPC listens beyond loopback and allows HTTP CORS from any origin; any web page can call funding and dev_ methods. --allow-origin and --no-cors limit HTTP only, not WebSocket"
         );
     }
     Ok(rpc_addr)

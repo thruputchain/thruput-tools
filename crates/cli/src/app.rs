@@ -125,10 +125,7 @@ fn parse_allow_origin(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
-/// CORS for `thruput node`, as Anvil sets it: any origin unless origins are
-/// listed, and none with `--no-cors`. `*` among the origins allows any.
-/// Other local nodes, such as integration test nodes, keep the supervisor's
-/// default of no CORS headers.
+/// Anvil-style CORS: any origin unless origins are listed, none with `--no-cors`.
 fn rpc_cors(no_cors: bool, origins: Vec<String>) -> thruput_node_supervisor::RpcCors {
     use thruput_node_supervisor::RpcCors;
     if no_cors {
@@ -1192,11 +1189,13 @@ struct NodeArgs {
     /// Maximum simultaneous public JSON-RPC connections
     #[arg(long)]
     rpc_max_connections: Option<u32>,
-    /// Browser origin allowed to call the JSON-RPC listener: an http or https
-    /// scheme, a host, and an optional port (repeatable). Default: any origin (*)
+    /// Browser origin allowed to call the JSON-RPC listener over HTTP (CORS): an
+    /// http or https scheme, a host, and an optional port (repeatable). Default:
+    /// any origin (*). WebSocket connections are not origin-checked
     #[arg(long, value_name = "ORIGIN", value_parser = parse_allow_origin, conflicts_with = "no_cors")]
     allow_origin: Vec<String>,
     /// Send no CORS headers, so browser apps on other origins cannot call the node
+    /// over HTTP. WebSocket connections are not origin-checked
     #[arg(long)]
     no_cors: bool,
 
