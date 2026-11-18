@@ -96,7 +96,9 @@ SimulateInvocationRequest {
     )]
     #[schemars(schema_with = "gas_schema")]
     gas_limit: Option<u64>,
-    /// Fail-fast freshness floor; not a historical-state selector.
+    /// Freshness floor; not a historical-state selector. The server waits up
+    /// to 2 s for a committed height to reach the view; a floor above the
+    /// committed tip fails at once.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -114,7 +116,9 @@ SimulateInvocationsRequest {
     #[serde(deserialize_with = "read_invocations")]
     #[schemars(length(min = 1))]
     invocations: Vec<Invocation>,
-    /// Fail-fast freshness floor; not a historical-state selector.
+    /// Freshness floor; not a historical-state selector. The server waits up
+    /// to 2 s for a committed height to reach the view; a floor above the
+    /// committed tip fails at once.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
