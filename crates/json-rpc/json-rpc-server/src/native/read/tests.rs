@@ -26,6 +26,10 @@ struct Backend {
     /// Snapshot heights the view plane reports, one per simulation. The last
     /// height repeats. When set, a batch below its floor fails as hogd's does.
     view_heights: Option<Arc<std::sync::Mutex<std::collections::VecDeque<i64>>>>,
+    /// After this many simulations, each one stalls until the request
+    /// deadline and then times out, as a backend that enforces it does.
+    stall_after_views: Option<usize>,
+    views: Arc<AtomicUsize>,
 }
 impl Backend {
     fn with_view_heights(heights: impl IntoIterator<Item = i64>) -> Self {
@@ -35,6 +39,16 @@ impl Backend {
             ))),
             ..Default::default()
         }
+    }
+    async fn maybe_stall(&self, context: RpcRequestContext) -> Result<(), RpcServerError> {
+        let view = self.views.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.stall_after_views.is_some_and(|limit| view > limit) {
+            if let Some(deadline) = context.deadline() {
+                tokio::time::sleep_until(deadline.into()).await;
+            }
+            return Err(RpcServerError::BackendTimeout);
+        }
+        Ok(())
     }
     fn view_height(&self) -> i64 {
         let Some(heights) = &self.view_heights else {
@@ -145,11 +159,12 @@ impl NativeStatePlane for Backend {
 impl NativeSimulationPlane for Backend {
     async fn simulate(
         &self,
-        _: RpcRequestContext,
+        context: RpcRequestContext,
         _: input::SimulateInvocationRequest,
         gas_limit: u64,
     ) -> Result<out::SimulationResult, RpcServerError> {
         self.check().await?;
+        self.maybe_stall(context).await?;
         assert!(gas_limit > 0);
         Ok(out::SimulationResult {
             state_block_height: self.view_height().into(),
@@ -162,12 +177,13 @@ impl NativeSimulationPlane for Backend {
     }
     async fn simulate_batch(
         &self,
-        _: RpcRequestContext,
+        context: RpcRequestContext,
         request: input::SimulateInvocationsRequest,
         _: u64,
         _: ViewBatchConfig,
     ) -> Result<out::SimulationResults, RpcServerError> {
         self.check().await?;
+        self.maybe_stall(context).await?;
         let height = self.view_height();
         if let Some(requested) = request
             .min_state_block_height
@@ -592,6 +608,64 @@ async fn simulation_floors_stop_waiting_for_a_view_that_does_not_catch_up() {
         assert!(waited < std::time::Duration::from_secs(3), "{waited:?}");
         assert_eq!(error.code(), codes::STATE_HEIGHT_UNAVAILABLE);
         assert!(backend.calls.load(Ordering::SeqCst) > 2);
+    }
+}
+/// A view behind the floor, then retries that stall until the request
+/// deadline and time out. Returns the time waited for single and batch reads,
+/// after checking that each kept the observed height.
+async fn stalled_retry_waits(view_timeout_ms: u64) -> Vec<std::time::Duration> {
+    let mut waits = vec![];
+    for batch_call in [false, true] {
+        let backend = Backend {
+            stall_after_views: Some(1),
+            ..Backend::with_view_heights([41])
+        };
+        let service = service(
+            backend,
+            RpcServerConfig {
+                view_timeout_ms,
+                ..RpcServerConfig::default()
+            },
+            NativeReadCapabilities::new(true, true),
+        );
+        let started = tokio::time::Instant::now();
+        let error = if batch_call {
+            service
+                .simulate_invocations(batch(vec![call()], Some(42)))
+                .await
+                .unwrap_err()
+        } else {
+            let mut request = invocation();
+            request.min_state_block_height = Some(42.into());
+            service.simulate_invocation(request).await.unwrap_err()
+        };
+        waits.push(started.elapsed());
+        assert_eq!(error.code(), codes::STATE_HEIGHT_UNAVAILABLE);
+        let data: serde_json::Value = serde_json::from_str(error.data().unwrap().get()).unwrap();
+        assert_eq!(data["observedStateBlockHeight"], "41");
+    }
+    waits
+}
+#[tokio::test(start_paused = true)]
+async fn simulation_floors_bound_a_stalled_retry_by_the_wait_limit() {
+    // The view timeout is 30 s; a stalled retry still ends at 2 s.
+    for waited in stalled_retry_waits(30_000).await {
+        assert!(waited >= std::time::Duration::from_secs(2), "{waited:?}");
+        assert!(
+            waited < std::time::Duration::from_millis(2_050),
+            "{waited:?}"
+        );
+    }
+}
+#[tokio::test]
+async fn simulation_floors_keep_the_observed_height_when_the_view_deadline_ends_first() {
+    // Real time: the request deadline comes from the system clock.
+    for waited in stalled_retry_waits(150).await {
+        assert!(
+            waited >= std::time::Duration::from_millis(150),
+            "{waited:?}"
+        );
+        assert!(waited < std::time::Duration::from_secs(1), "{waited:?}");
     }
 }
 #[tokio::test]

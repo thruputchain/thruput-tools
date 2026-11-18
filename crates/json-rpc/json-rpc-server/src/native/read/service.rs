@@ -387,9 +387,11 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
         let deadline = tokio::time::Instant::from_std(deadline);
         let mut pause = VIEW_HEIGHT_RETRY_FIRST;
         let mut behind = None;
+        // Until a view is known to be behind, an attempt may use the whole
+        // view deadline. After that, every retry ends by `wait_until`.
         let mut wait_until = deadline;
         loop {
-            let Ok(outcome) = tokio::time::timeout_at(deadline, attempt()).await else {
+            let Ok(outcome) = tokio::time::timeout_at(wait_until, attempt()).await else {
                 return Err(behind.unwrap_or(RpcServerError::BackendTimeout));
             };
             let (error, requested) = match outcome {
@@ -398,6 +400,10 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                 {
                     let requested = *value.requested;
                     (RpcServerError::ViewHeightUnavailable(value), requested)
+                }
+                // A retry that reached the deadline keeps the observed height.
+                Err(RpcServerError::BackendTimeout) => {
+                    return Err(behind.unwrap_or(RpcServerError::BackendTimeout));
                 }
                 other => return other,
             };
@@ -415,8 +421,12 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
             if now >= wait_until {
                 return Err(error);
             }
-            behind = Some(error);
             tokio::time::sleep_until(wait_until.min(now + pause)).await;
+            // No retry starts once the wait is over.
+            if tokio::time::Instant::now() >= wait_until {
+                return Err(error);
+            }
+            behind = Some(error);
             pause = (pause * 2).min(VIEW_HEIGHT_RETRY_MAX);
         }
     }
