@@ -3,10 +3,9 @@
 //!
 //! Both batchers follow the same dispatch pattern: bounded ingress
 //! channel per shard, BDP-style cap on in-flight batches, drain
-//! everything currently in the channel into one batch on each fire,
-//! no time-based flush. At low load a single arrival fires immediately
-//! as a batch of one; at high load arrivals pile up while a batch is
-//! in flight and drain together when it completes.
+//! queued items into each batch up to its size cap, and optionally wait
+//! for more items until the batch reaches its linger target or deadline.
+//! By default, a single arrival fires immediately when a slot is free.
 //!
 //! What differs between callsites is the *processor*: how the drained
 //! `Vec<Item>` becomes a backend RPC, and how the response fans out
@@ -20,10 +19,12 @@
 //! (`inflight < max_inflight`).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::task::{AbortHandle, JoinError, JoinSet};
+use tokio::time::{Instant, sleep_until};
 use tracing::Instrument;
 
 pub(crate) use thruput_hogd_backend::submit::deadline_cohorts;
@@ -56,12 +57,22 @@ struct Shard<P: BatchProcessor> {
     ingress: mpsc::Receiver<(P::Item, tracing::Span)>,
     max_inflight: u32,
     max_size: usize,
+    linger: Duration,
+    linger_target_size: usize,
     processor: Arc<P>,
     component: &'static str,
     metrics: GatewayMetrics,
 }
 
 impl<P: BatchProcessor> Shard<P> {
+    fn report_worker_result(&self, result: Result<(), JoinError>) {
+        if let Err(error) = result
+            && !error.is_cancelled()
+        {
+            tracing::error!(component = self.component, %error, "adaptive batch worker failed");
+        }
+    }
+
     async fn run(mut self) {
         let mut workers = JoinSet::new();
         loop {
@@ -69,15 +80,7 @@ impl<P: BatchProcessor> Shard<P> {
                 biased;
 
                 Some(result) = workers.join_next(), if !workers.is_empty() => {
-                    if let Err(error) = result
-                        && !error.is_cancelled()
-                    {
-                        tracing::error!(
-                            component = self.component,
-                            %error,
-                            "adaptive batch worker failed"
-                        );
-                    }
+                    self.report_worker_result(result);
                 }
 
                 // Only read from ingress when we have capacity to fire.
@@ -86,6 +89,7 @@ impl<P: BatchProcessor> Shard<P> {
                 // at which point handlers see `Overloaded` from `try_send`.
                 maybe_item = self.ingress.recv(), if workers.len() < self.max_inflight as usize => {
                     let Some((first_item, parent)) = maybe_item else { break; };
+                    let deadline = (!self.linger.is_zero()).then(|| Instant::now() + self.linger);
                     let mut items = Vec::with_capacity(self.max_size.min(64));
                     let span = crate::telemetry::shared_work_span(self.component, &parent);
                     crate::telemetry::link_request(&span, &parent);
@@ -97,6 +101,29 @@ impl<P: BatchProcessor> Shard<P> {
                                 items.push(item);
                             }
                             Err(_) => break,
+                        }
+                    }
+                    if let Some(deadline) = deadline
+                        && items.len() < self.linger_target_size
+                    {
+                        let timer = sleep_until(deadline);
+                        tokio::pin!(timer);
+                        // This batch already has a free slot. Reap workers while
+                        // waiting, and give the deadline priority over more ingress.
+                        while items.len() < self.linger_target_size {
+                            tokio::select! {
+                                biased;
+
+                                Some(result) = workers.join_next(), if !workers.is_empty() => {
+                                    self.report_worker_result(result);
+                                }
+                                () = &mut timer => break,
+                                maybe_item = self.ingress.recv() => {
+                                    let Some((item, parent)) = maybe_item else { break; };
+                                    crate::telemetry::link_request(&span, &parent);
+                                    items.push(item);
+                                }
+                            }
                         }
                     }
                     let in_flight = self.metrics.internal_batch_in_flight_guard(self.component);
@@ -165,6 +192,7 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
         P: BatchProcessor<Item = I>,
     {
         let n_shards = config.shards.max(1);
+        let max_size = config.max_size.max(1);
         let mut senders = Vec::with_capacity(n_shards);
         let mut tasks = Vec::with_capacity(n_shards);
         for _ in 0..n_shards {
@@ -172,7 +200,9 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
             let shard = Shard {
                 ingress,
                 max_inflight: config.max_inflight_batches.max(1),
-                max_size: config.max_size.max(1),
+                max_size,
+                linger: Duration::from_micros(config.linger_us),
+                linger_target_size: config.linger_target_size.min(max_size),
                 processor: processor.clone(),
                 component,
                 metrics: metrics.clone(),
@@ -311,7 +341,121 @@ mod tests {
             max_inflight_batches: 1,
             max_size: 10,
             ingress_queue_depth: 10,
+            ..AdaptiveBatchConfig::default()
         }
+    }
+
+    const LINGER: Duration = Duration::from_millis(20);
+
+    struct RecordingProcessor(tokio::sync::mpsc::UnboundedSender<Vec<u8>>);
+
+    #[async_trait]
+    impl BatchProcessor for RecordingProcessor {
+        type Item = u8;
+
+        async fn process(&self, items: Vec<u8>) {
+            self.0.send(items).unwrap();
+        }
+    }
+
+    fn recording_batcher(
+        config: &AdaptiveBatchConfig,
+    ) -> (
+        AdaptiveBatcher<u8>,
+        tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    ) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let batcher = AdaptiveBatcher::spawn(
+            "test batcher",
+            "test_batcher",
+            config,
+            &Arc::new(RecordingProcessor(sender)),
+            GatewayMetrics::for_tests(),
+        );
+        (batcher, receiver)
+    }
+
+    fn linger_config() -> AdaptiveBatchConfig {
+        AdaptiveBatchConfig {
+            linger_us: LINGER.as_micros().try_into().unwrap(),
+            ..test_config()
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn zero_linger_dispatches_a_lone_item_immediately() {
+        let (batcher, mut received) = recording_batcher(&test_config());
+        let start = tokio::time::Instant::now();
+        batcher.try_send(1, 0).unwrap();
+        assert_eq!(received.recv().await.unwrap(), [1]);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn linger_waits_until_the_deadline_for_a_lone_item() {
+        let (batcher, mut received) = recording_batcher(&linger_config());
+        let start = tokio::time::Instant::now();
+        batcher.try_send(1, 0).unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::sleep(LINGER.checked_sub(Duration::from_millis(2)).unwrap()).await;
+        assert!(matches!(
+            received.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert_eq!(received.recv().await.unwrap(), [1]);
+        assert!((LINGER..=LINGER + Duration::from_millis(1)).contains(&start.elapsed()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn arrivals_during_linger_share_the_first_items_deadline() {
+        let (batcher, mut received) = recording_batcher(&linger_config());
+        let start = tokio::time::Instant::now();
+        batcher.try_send(1, 0).unwrap();
+        tokio::time::sleep(LINGER / 2).await;
+        batcher.try_send(2, 0).unwrap();
+        assert_eq!(received.recv().await.unwrap(), [1, 2]);
+        assert!((LINGER..=LINGER + Duration::from_millis(1)).contains(&start.elapsed()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn linger_target_dispatches_early() {
+        let (batcher, mut received) = recording_batcher(&AdaptiveBatchConfig {
+            linger_target_size: 2,
+            ..linger_config()
+        });
+        let start = tokio::time::Instant::now();
+        batcher.try_send(1, 0).unwrap();
+        tokio::time::sleep(LINGER / 2).await;
+        batcher.try_send(2, 0).unwrap();
+        assert_eq!(received.recv().await.unwrap(), [1, 2]);
+        assert!(start.elapsed() < LINGER);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn max_size_caps_the_linger_target_and_the_batch() {
+        let (batcher, mut received) = recording_batcher(&AdaptiveBatchConfig {
+            max_size: 2,
+            ..linger_config()
+        });
+        let start = tokio::time::Instant::now();
+        batcher.try_send(1, 0).unwrap();
+        tokio::time::sleep(LINGER / 2).await;
+        batcher.try_send(2, 0).unwrap();
+        batcher.try_send(3, 0).unwrap();
+        assert_eq!(received.recv().await.unwrap(), [1, 2]);
+        assert!(start.elapsed() < LINGER);
+        assert_eq!(received.recv().await.unwrap(), [3]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropping_the_batcher_aborts_a_lingering_batch() {
+        let (batcher, mut received) = recording_batcher(&linger_config());
+        let start = tokio::time::Instant::now();
+        batcher.try_send(1, 0).unwrap();
+        tokio::time::sleep(LINGER / 2).await;
+        drop(batcher);
+        assert_eq!(received.recv().await, None);
+        assert!(start.elapsed() < LINGER);
     }
 
     struct ReplyProcessor;
@@ -370,6 +514,8 @@ mod tests {
                 ingress,
                 max_inflight: 1,
                 max_size: 200,
+                linger: Duration::ZERO,
+                linger_target_size: 64,
                 processor: Arc::new(ReplyProcessor),
                 component: "test",
                 metrics: GatewayMetrics::for_tests(),
