@@ -19,24 +19,26 @@ fn hash<T: xdrs::WriteXDR>(value: &T) -> Result<[u8; 32]> {
     Ok(Sha256::digest(xdrs::txs::encode(value)?).into())
 }
 
+// Mirrors node-supervisor's proposal_txs_compatibility_hash, which matches
+// hogd/xdr/proposal_hash.h.
 fn batch_hash(batch: &ParallelBatch) -> Result<[u8; 32]> {
     batch.validate().map_err(|e| e.to_string())?;
-    let mut base = batch.clone();
-    base.xdr.0.clear();
-    let mut hash = hash(&base)?;
+    let mut index = batch.clone();
+    index.xdr.0.clear();
+    let mut hasher = Sha256::new();
+    hasher.update(b"\x00\x0dParallelBatch");
+    hasher.update(hash(&index)?);
     let mut offset = 0;
     for &size in &batch.segment_bytes.0 {
         let end = offset + size as usize;
         let part = batch.xdr.0.get(offset..end).ok_or("bad segment range")?;
-        for (dst, src) in hash.iter_mut().zip(Sha256::digest(part)) {
-            *dst ^= src;
-        }
+        hasher.update(Sha256::digest(part));
         offset = end;
     }
     if offset != batch.xdr.len() {
         return Err("bad segment length".into());
     }
-    Ok(hash)
+    Ok(hasher.finalize().into())
 }
 
 fn proposal_hash(txs: &ProposalTxs) -> Result<ProposalTxsHash> {
@@ -47,14 +49,14 @@ fn proposal_hash(txs: &ProposalTxs) -> Result<ProposalTxsHash> {
         batch.segment_bytes.0.clear();
         batch.xdr.0.clear();
     }
-    let mut result = hash(&base)?;
-    let batches: [&ParallelBatch; 2] = [&txs.signed_hash, &txs.nondeterministic_data];
-    for batch in batches {
-        for (dst, src) in result.iter_mut().zip(batch_hash(batch)?) {
-            *dst ^= src;
-        }
-    }
-    Ok(ProposalTxsHash::new(SHA256Hash::from(result)))
+    let mut hasher = Sha256::new();
+    hasher.update(b"\x00\x0bProposalTxs");
+    hasher.update(hash(&base)?);
+    hasher.update(batch_hash(&txs.signed_hash)?);
+    hasher.update(batch_hash(&txs.nondeterministic_data)?);
+    Ok(ProposalTxsHash::new(SHA256Hash::from(<[u8; 32]>::from(
+        hasher.finalize(),
+    ))))
 }
 
 #[tokio::main]
