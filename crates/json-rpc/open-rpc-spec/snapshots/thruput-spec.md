@@ -2,7 +2,7 @@
 
 <!-- Generated from thruput-spec.json by tests/spec_snapshot.rs. Do not edit. -->
 
-Wire format `14.6.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
+Wire format `14.6.1`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
 
 This file lists all native methods. A server serves only the methods that its backends support; `getVersionInfo` lists them. For exact schemas, see [thruput-spec.json](thruput-spec.json).
 
@@ -194,7 +194,7 @@ Simulate an invocation without committing state.
 | `assumedAuth` | [`AssumedAuth`](#assumedauth) | no |  |
 | `caller` | [`Base58_ContractAddress`](#base58_contractaddress) | no |  |
 | `gasLimit` | decimal string | no | Canonical decimal integer in the inclusive range 0 to 18446744073709551615. |
-| `minStateBlockHeight` | decimal string | no | Fail-fast freshness floor; not a historical-state selector. |
+| `minStateBlockHeight` | decimal string | no | Freshness floor; not a historical-state selector. The server waits up to 2 s for a committed height to reach the view; a floor above the committed tip fails at once. |
 
 **Result:** [`SimulationResult`](#simulationresult)
 
@@ -214,7 +214,7 @@ Simulate a batch against one state snapshot.
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `invocations` | [`Invocation`](#invocation)[] (at least 1) | yes |  |
-| `minStateBlockHeight` | decimal string | no | Fail-fast freshness floor; not a historical-state selector. |
+| `minStateBlockHeight` | decimal string | no | Freshness floor; not a historical-state selector. The server waits up to 2 s for a committed height to reach the view; a floor above the committed tip fails at once. |
 
 **Result:** [`SimulationResults`](#simulationresults)
 
