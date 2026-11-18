@@ -573,15 +573,13 @@ fn cors_layer(cors: &RpcCors) -> Result<Option<CorsLayer>, NodeSupervisorError> 
             let origins = origins
                 .iter()
                 .map(|origin| {
-                    // Browsers send origins normalized, and CORS compares
-                    // them exactly.
-                    normalize_cors_origin(origin)
-                        .and_then(|origin| {
-                            HeaderValue::from_str(&origin).map_err(|error| error.to_string())
-                        })
-                        .map_err(|reason| NodeSupervisorError::InvalidRpcCorsOrigin { reason })
+                    // Browsers send origins normalized, and CORS compares them exactly.
+                    let origin = normalize_cors_origin(origin)
+                        .map_err(|source| NodeSupervisorError::InvalidRpcCorsOrigin { source })?;
+                    Ok(HeaderValue::from_str(&origin)
+                        .expect("bug: an ASCII origin serialization is a valid header value"))
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, NodeSupervisorError>>()?;
             AllowOrigin::list(origins)
         }
     };

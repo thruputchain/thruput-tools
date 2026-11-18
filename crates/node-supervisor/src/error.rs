@@ -61,10 +61,11 @@ pub enum NodeSupervisorError {
         reason: &'static str,
     },
     /// A configured CORS origin is not a browser origin.
-    #[error("invalid JSON-RPC CORS origin: {reason}")]
+    #[error("invalid JSON-RPC CORS origin: {source}")]
     InvalidRpcCorsOrigin {
         /// Why the origin is invalid.
-        reason: String,
+        #[source]
+        source: crate::CorsOriginError,
     },
     /// The configured protocol override is not the wire width of a token.
     #[error("invalid protocol override: {source}")]

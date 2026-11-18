@@ -118,7 +118,7 @@ impl From<RpcTargetArgs> for crate::config::ProfileOverrides {
 }
 
 /// Accept `*` or a browser origin for `--allow-origin`.
-fn parse_allow_origin(value: &str) -> Result<String, String> {
+fn parse_allow_origin(value: &str) -> Result<String, thruput_node_supervisor::CorsOriginError> {
     if value != "*" {
         thruput_node_supervisor::validate_cors_origin(value)?;
     }

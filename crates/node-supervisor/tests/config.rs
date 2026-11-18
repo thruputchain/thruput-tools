@@ -128,6 +128,8 @@ fn cors_origins_are_scheme_host_and_optional_port() {
         "http://localhost:5173#panel",
         "http://localhost:5173/#panel",
         "http://localhost:5173#",
+        "http://*.example.com",
+        "http://*",
         "*",
         "",
     ] {
@@ -191,6 +193,7 @@ fn cors_origins_with_malformed_ports_are_rejected() {
         "http://localhost:+80",
         "http://localhost:",
         "http://[::1]:abc",
+        "http://localhost:0",
     ] {
         assert!(normalize_cors_origin(invalid).is_err(), "{invalid}");
     }
@@ -198,4 +201,37 @@ fn cors_origins_with_malformed_ports_are_rejected() {
         normalize_cors_origin("http://localhost:65535").as_deref(),
         Ok("http://localhost:65535")
     );
+}
+
+#[test]
+fn cors_origin_errors_say_what_is_wrong() {
+    use thruput_node_supervisor::{CorsOriginError, normalize_cors_origin};
+
+    assert!(matches!(
+        normalize_cors_origin("http://localhost:5173/app"),
+        Err(CorsOriginError::NotAnOrigin { .. })
+    ));
+    for bad_port in [
+        "http://localhost:abc",
+        "http://localhost:99999",
+        "http://localhost:",
+        "http://localhost:0",
+        "http://[::1]:abc",
+    ] {
+        assert!(
+            matches!(
+                normalize_cors_origin(bad_port),
+                Err(CorsOriginError::InvalidPort { .. })
+            ),
+            "{bad_port}"
+        );
+    }
+    assert!(matches!(
+        normalize_cors_origin("http://*.example.com"),
+        Err(CorsOriginError::WildcardHost { .. })
+    ));
+    assert!(matches!(
+        normalize_cors_origin("http://256.0.0.1"),
+        Err(CorsOriginError::Unparsable { .. })
+    ));
 }

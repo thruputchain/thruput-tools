@@ -152,64 +152,113 @@ pub enum RpcCors {
     /// opens can then call the node, including its funding and `dev_`
     /// methods.
     AllowAny,
-    /// Allow only these origins, such as `http://127.0.0.1:5173`.
+    /// Allow only these origins, such as `http://127.0.0.1:5173`. An empty
+    /// list allows none.
     Origins(Vec<String>),
     /// Send no CORS headers, so browsers block cross-origin calls.
     #[default]
     Disabled,
 }
 
+/// Why a configured CORS origin is not a browser origin.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CorsOriginError {
+    /// Not `http(s)://host[:port]`: another scheme, a path, query, fragment,
+    /// or user information.
+    #[error(
+        "`{origin}` is not a valid origin; use scheme://host[:port], such as http://127.0.0.1:5173"
+    )]
+    NotAnOrigin {
+        /// The configured value.
+        origin: String,
+    },
+    /// The value does not parse as a URL.
+    #[error("`{origin}` is not a valid origin: {reason}")]
+    Unparsable {
+        /// The configured value.
+        origin: String,
+        /// The parser's explanation.
+        reason: String,
+    },
+    /// The explicit port is not a number from 1 to 65535.
+    #[error("`{origin}` is not a valid origin: the port must be a number from 1 to 65535")]
+    InvalidPort {
+        /// The configured value.
+        origin: String,
+    },
+    /// The host contains `*`. Browsers never send one, so it matches nothing.
+    #[error(
+        "`{origin}` is not a valid origin: wildcard hosts are not supported; list each origin, or use `*` alone to allow any"
+    )]
+    WildcardHost {
+        /// The configured value.
+        origin: String,
+    },
+}
+
 /// Check that `origin` is a browser origin: `http` or `https`, a host, an
 /// optional port, and nothing else.
-pub fn validate_cors_origin(origin: &str) -> Result<(), String> {
+pub fn validate_cors_origin(origin: &str) -> Result<(), CorsOriginError> {
     normalize_cors_origin(origin).map(drop)
 }
 
 /// CORS compares origins byte for byte, so this returns the WHATWG (browser)
 /// spelling: lowercase scheme and host, canonical IP forms, default port dropped.
-pub fn normalize_cors_origin(origin: &str) -> Result<String, String> {
-    let invalid = || {
-        format!(
-            "`{origin}` is not a valid origin; use scheme://host[:port], such as http://127.0.0.1:5173"
-        )
+pub fn normalize_cors_origin(origin: &str) -> Result<String, CorsOriginError> {
+    let not_an_origin = || CorsOriginError::NotAnOrigin {
+        origin: origin.to_owned(),
+    };
+    let unparsable = |reason: String| CorsOriginError::Unparsable {
+        origin: origin.to_owned(),
+        reason,
     };
     // `http::Uri` checks the shape (scheme://authority) that WHATWG would repair.
     let uri: http::Uri = origin
         .parse()
-        .map_err(|error| format!("`{origin}` is not a valid origin: {error}"))?;
+        .map_err(|error: http::uri::InvalidUri| unparsable(error.to_string()))?;
     if !matches!(
         uri.scheme_str().map(str::to_ascii_lowercase).as_deref(),
         Some("http" | "https")
     ) {
-        return Err(invalid());
+        return Err(not_an_origin());
     }
-    let authority = uri.authority().ok_or_else(invalid)?;
+    let authority = uri.authority().ok_or_else(not_an_origin)?;
     // Reject any path, query, fragment, or userinfo: an origin is scheme://host[:port].
     let bare = uri.path() == "/"
         && uri.query().is_none()
         && !origin.ends_with('/')
         && !origin.contains('#');
     if !bare || authority.as_str().contains('@') {
-        return Err(invalid());
+        return Err(not_an_origin());
     }
-    // `port_u16` is `None` for `abc` or `99999`; reject rather than use the default port.
-    let port_is_valid = match authority.port() {
+    if authority.host().contains('*') {
+        return Err(CorsOriginError::WildcardHost {
+            origin: origin.to_owned(),
+        });
+    }
+    // `Authority::port` is `None` for `abc` or `99999`, so read the text after
+    // the host and reject a bad port rather than use the default one.
+    let port = authority
+        .as_str()
+        .strip_prefix(authority.host())
+        .ok_or_else(not_an_origin)?;
+    let port_is_valid = match port.strip_prefix(':') {
+        None => port.is_empty(),
         Some(port) => {
-            port.as_str().bytes().all(|byte| byte.is_ascii_digit())
-                && port.as_str().parse::<u16>().is_ok()
+            port.bytes().all(|byte| byte.is_ascii_digit())
+                && port.parse::<u16>().is_ok_and(|port| port != 0)
         }
-        None => !authority.as_str().ends_with(':'),
     };
     if !port_is_valid {
-        return Err(format!(
-            "`{origin}` is not a valid origin: the port must be a number from 0 to 65535"
-        ));
+        return Err(CorsOriginError::InvalidPort {
+            origin: origin.to_owned(),
+        });
     }
-    let url = url::Url::parse(origin)
-        .map_err(|error| format!("`{origin}` is not a valid origin: {error}"))?;
+    let url = url::Url::parse(origin).map_err(|error| unparsable(error.to_string()))?;
     match url.origin() {
         origin @ url::Origin::Tuple(..) => Ok(origin.ascii_serialization()),
-        url::Origin::Opaque(_) => Err(invalid()),
+        url::Origin::Opaque(_) => Err(not_an_origin()),
     }
 }
 

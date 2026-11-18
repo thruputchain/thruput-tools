@@ -56,6 +56,8 @@ pattern locally and on Futurenet, without a development proxy.
   --integration` and the Rust testkit start send no CORS headers.
 - `thruput-node-supervisor` adds `NodeSupervisorConfig::rpc_cors` (`RpcCors`).
   It defaults to `RpcCors::Disabled`, so embedders opt in to browser access.
+  `validate_cors_origin` and `normalize_cors_origin` check an origin and spell it
+  the way browsers send it, returning `CorsOriginError` when it is invalid.
 
 ### `getChainConfig` reports every enforced config parameter
 
