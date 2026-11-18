@@ -566,6 +566,34 @@ async fn simulation_floors_report_the_observed_height_at_the_view_deadline() {
         assert!(backend.calls.load(Ordering::SeqCst) > 1);
     }
 }
+#[tokio::test(start_paused = true)]
+async fn simulation_floors_stop_waiting_for_a_view_that_does_not_catch_up() {
+    for batch_call in [false, true] {
+        let backend = Backend::with_view_heights([41]);
+        let service = service(
+            backend.clone(),
+            RpcServerConfig::default(),
+            NativeReadCapabilities::new(true, true),
+        );
+        let started = tokio::time::Instant::now();
+        let error = if batch_call {
+            service
+                .simulate_invocations(batch(vec![call()], Some(42)))
+                .await
+                .unwrap_err()
+        } else {
+            let mut request = invocation();
+            request.min_state_block_height = Some(42.into());
+            service.simulate_invocation(request).await.unwrap_err()
+        };
+        // The view timeout is 30 s; the wait stops at 2 s.
+        let waited = started.elapsed();
+        assert!(waited >= std::time::Duration::from_secs(2), "{waited:?}");
+        assert!(waited < std::time::Duration::from_secs(3), "{waited:?}");
+        assert_eq!(error.code(), codes::STATE_HEIGHT_UNAVAILABLE);
+        assert!(backend.calls.load(Ordering::SeqCst) > 2);
+    }
+}
 #[tokio::test]
 async fn simulation_floors_above_the_committed_tip_fail_at_once() {
     // The committed tip is 42. Without the db plane it cannot be read.

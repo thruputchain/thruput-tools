@@ -59,7 +59,7 @@ pub const ERROR_INFOS: &[RpcErrorInfo] = &[
         name: "StateHeightUnavailable",
         code: codes::STATE_HEIGHT_UNAVAILABLE,
         message: "Requested state height unavailable",
-        description: "The simulation snapshot is below the requested floor: the floor is above the committed tip, or the view did not reach it by the view deadline. Retryable once the chain reaches the floor.",
+        description: "The simulation snapshot is below the requested floor: the floor is above the committed tip, or the view did not reach it within the wait. Retryable once the chain reaches the floor.",
     },
     RpcErrorInfo {
         name: "HistoryUnavailable",

@@ -51,8 +51,9 @@ state at a receipt's block height now works without a retry in the client, on
 a local node in every block driver mode and on the hosted gateway.
 
 - Only a committed height is waited for: the floor must be at or below the
-  chain tip. The wait ends at the view deadline (`view_timeout_ms`, 30 s by
-  default), and only then is `-32012` returned, with the observed height.
+  chain tip. The wait lasts up to 2 s, or to the view deadline
+  (`view_timeout_ms`) if that is sooner. A healthy node catches up in about
+  100 ms. Only then is `-32012` returned, with the observed height.
 - A floor above the committed tip still fails at once with `-32012`, as a
   read of a future block does on Anvil. It is
   retryable once the chain reaches the floor.

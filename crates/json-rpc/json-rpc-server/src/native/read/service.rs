@@ -365,8 +365,9 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
     ///
     /// A block's receipt can arrive before the view plane serves its state, so
     /// a read at a committed height waits here for the view to catch up. The
-    /// wait ends at the request's view deadline, and then the last
-    /// `ViewHeightUnavailable` is returned, not a timeout.
+    /// wait ends after [`VIEW_HEIGHT_MAX_WAIT`] or at the request's view
+    /// deadline, whichever is first. Then the last `ViewHeightUnavailable` is
+    /// returned, not a timeout.
     ///
     /// A floor above the committed tip fails at once, as Anvil does for a
     /// future block and Solana does for `minContextSlot`. So does any floor
@@ -386,6 +387,7 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
         let deadline = tokio::time::Instant::from_std(deadline);
         let mut pause = VIEW_HEIGHT_RETRY_FIRST;
         let mut behind = None;
+        let mut wait_until = deadline;
         loop {
             let Ok(outcome) = tokio::time::timeout_at(deadline, attempt()).await else {
                 return Err(behind.unwrap_or(RpcServerError::BackendTimeout));
@@ -399,15 +401,18 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                 }
                 other => return other,
             };
-            if behind.is_none() && !self.is_committed(context, requested).await {
-                return Err(error);
+            if behind.is_none() {
+                if !self.is_committed(context, requested).await {
+                    return Err(error);
+                }
+                wait_until = deadline.min(tokio::time::Instant::now() + VIEW_HEIGHT_MAX_WAIT);
             }
             let now = tokio::time::Instant::now();
-            if now >= deadline {
+            if now >= wait_until {
                 return Err(error);
             }
             behind = Some(error);
-            tokio::time::sleep_until(deadline.min(now + pause)).await;
+            tokio::time::sleep_until(wait_until.min(now + pause)).await;
             pause = (pause * 2).min(VIEW_HEIGHT_RETRY_MAX);
         }
     }
@@ -537,6 +542,10 @@ const VIEW_HEIGHT_RETRY_FIRST: Duration = Duration::from_millis(10);
 /// Longest pause between floored view attempts. hogd's view gateway checks
 /// for a newer committed tip about every 100 ms.
 const VIEW_HEIGHT_RETRY_MAX: Duration = Duration::from_millis(100);
+/// Longest wait for the view to reach a committed floor. A healthy view
+/// gateway catches up in about 100 ms; a view still behind after this is not
+/// catching up, and the client gets `StateHeightUnavailable` to retry.
+const VIEW_HEIGHT_MAX_WAIT: Duration = Duration::from_secs(2);
 
 pub(super) fn snapshot(height: &BlockHeight) -> Result<(), RpcServerError> {
     if **height == -1 {
