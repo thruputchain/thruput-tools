@@ -23,8 +23,30 @@ struct Backend {
     history_error: Option<RpcServerError>,
     deployment: Option<out::ContractDeployment>,
     default_wallet: Option<out::ContractDeployment>,
+    /// Snapshot heights the view plane reports, one per simulation. The last
+    /// height repeats. When set, a batch below its floor fails as hogd's does.
+    view_heights: Option<Arc<std::sync::Mutex<std::collections::VecDeque<i64>>>>,
 }
 impl Backend {
+    fn with_view_heights(heights: impl IntoIterator<Item = i64>) -> Self {
+        Self {
+            view_heights: Some(Arc::new(std::sync::Mutex::new(
+                heights.into_iter().collect(),
+            ))),
+            ..Default::default()
+        }
+    }
+    fn view_height(&self) -> i64 {
+        let Some(heights) = &self.view_heights else {
+            return self.height.unwrap_or(42);
+        };
+        let mut heights = heights.lock().unwrap();
+        if heights.len() > 1 {
+            heights.pop_front().unwrap()
+        } else {
+            *heights.front().unwrap()
+        }
+    }
     async fn check(&self) -> Result<(), RpcServerError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.slow {
@@ -130,7 +152,7 @@ impl NativeSimulationPlane for Backend {
         self.check().await?;
         assert!(gas_limit > 0);
         Ok(out::SimulationResult {
-            state_block_height: self.height.unwrap_or(42).into(),
+            state_block_height: self.view_height().into(),
             output: out::InvocationOutput::Return {
                 return_data: HexBytes(vec![3]),
             },
@@ -146,8 +168,21 @@ impl NativeSimulationPlane for Backend {
         _: ViewBatchConfig,
     ) -> Result<out::SimulationResults, RpcServerError> {
         self.check().await?;
+        let height = self.view_height();
+        if let Some(requested) = request
+            .min_state_block_height
+            .clone()
+            .filter(|min| self.view_heights.is_some() && **min > height)
+        {
+            return Err(RpcServerError::ViewHeightUnavailable(
+                thruput_json_rpc_types::view::ViewHeightUnavailable {
+                    requested,
+                    observed: height.into(),
+                },
+            ));
+        }
         Ok(out::SimulationResults {
-            state_block_height: self.height.unwrap_or(42).into(),
+            state_block_height: height.into(),
             results: request
                 .invocations
                 .iter()
@@ -438,7 +473,10 @@ async fn simulation_bounds_accept_values_equal_to_each_limit() {
 async fn simulation_floors_accept_snapshots_at_or_above_the_requested_height() {
     let service = service(
         Backend::default(),
-        RpcServerConfig::default(),
+        RpcServerConfig {
+            view_timeout_ms: 20,
+            ..RpcServerConfig::default()
+        },
         NativeReadCapabilities::new(true, true),
     );
     for floor in [0, 41, 42] {
@@ -467,6 +505,77 @@ async fn simulation_floors_accept_snapshots_at_or_above_the_requested_height() {
             .code(),
         codes::BACKEND_DATA_INVALID
     );
+}
+#[tokio::test]
+async fn simulation_floors_wait_for_the_view_to_reach_the_requested_height() {
+    for batch_call in [false, true] {
+        let backend = Backend::with_view_heights([40, 41, 42]);
+        let service = service(
+            backend.clone(),
+            RpcServerConfig::default(),
+            NativeReadCapabilities::new(true, true),
+        );
+        let height = if batch_call {
+            service
+                .simulate_invocations(batch(vec![call()], Some(42)))
+                .await
+                .unwrap()
+                .state_block_height
+        } else {
+            let mut request = invocation();
+            request.min_state_block_height = Some(42.into());
+            service
+                .simulate_invocation(request)
+                .await
+                .unwrap()
+                .state_block_height
+        };
+        assert_eq!(*height, 42);
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 3);
+    }
+}
+#[tokio::test]
+async fn simulation_floors_report_the_observed_height_at_the_view_deadline() {
+    for batch_call in [false, true] {
+        let backend = Backend::with_view_heights([41]);
+        let service = service(
+            backend.clone(),
+            RpcServerConfig {
+                view_timeout_ms: 80,
+                ..RpcServerConfig::default()
+            },
+            NativeReadCapabilities::new(true, true),
+        );
+        let started = std::time::Instant::now();
+        let error = if batch_call {
+            service
+                .simulate_invocations(batch(vec![call()], Some(42)))
+                .await
+                .unwrap_err()
+        } else {
+            let mut request = invocation();
+            request.min_state_block_height = Some(42.into());
+            service.simulate_invocation(request).await.unwrap_err()
+        };
+        assert!(started.elapsed() >= std::time::Duration::from_millis(80));
+        assert_eq!(error.code(), codes::STATE_HEIGHT_UNAVAILABLE);
+        let data: serde_json::Value = serde_json::from_str(error.data().unwrap().get()).unwrap();
+        assert_eq!(data["requestedStateBlockHeight"], "42");
+        assert_eq!(data["observedStateBlockHeight"], "41");
+        assert!(backend.calls.load(Ordering::SeqCst) > 1);
+    }
+}
+#[tokio::test]
+async fn simulation_without_a_floor_does_not_wait() {
+    let backend = Backend::with_view_heights([41, 42]);
+    let service = service(
+        backend.clone(),
+        RpcServerConfig::default(),
+        NativeReadCapabilities::new(true, true),
+    );
+    let result = service.simulate_invocation(invocation()).await.unwrap();
+    assert_eq!(*result.state_block_height, 41);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
 async fn direct_producers_refuse_unconfigured_planes_without_probing() {
@@ -688,7 +797,7 @@ async fn assembly_registers_each_configured_plane_independently() {
             before["result"]["supportedMethods"],
             serde_json::json!(expected)
         );
-        assert_eq!(before["result"]["wireFormat"], "14.6.0");
+        assert_eq!(before["result"]["wireFormat"], "14.6.1");
         assert_eq!(before["result"]["implementation"], "test-build");
         assert!(before["result"].get("releaseVersion").is_none());
         assert!(before["result"].get("bundleManifestDigest").is_none());
@@ -789,7 +898,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
             .request("getVersionInfo", ObjectParams::new())
             .await
             .unwrap();
-        assert_eq!(version["wireFormat"], "14.6.0");
+        assert_eq!(version["wireFormat"], "14.6.1");
         assert_eq!(version["supportedMethods"], serde_json::json!(expected));
         let limits: serde_json::Value = client
             .request("getServerLimits", ObjectParams::new())
@@ -915,7 +1024,7 @@ async fn candidate_http_serves_native_shapes_and_fixed_capabilities_during_outag
         handle.stop().unwrap();
         handle.stopped().await;
     }
-    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.6.0");
+    assert_eq!(thruput_json_rpc_api::WIRE_FORMAT_VERSION, "14.6.1");
 }
 
 #[test]

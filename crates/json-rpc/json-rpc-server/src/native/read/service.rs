@@ -378,17 +378,24 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                 &self.config,
             )?;
             let min = request.min_state_block_height.clone();
-            let result = self.simulation.simulate(context, request, gas).await?;
-            snapshot(&result.state_block_height)?;
-            if let Some(requested) = min.filter(|min| result.state_block_height < *min) {
-                return Err(RpcServerError::ViewHeightUnavailable(
-                    thruput_json_rpc_types::view::ViewHeightUnavailable {
-                        requested,
-                        observed: result.state_block_height,
-                    },
-                ));
-            }
-            Ok(result)
+            await_view_height(context, || async {
+                let result = self
+                    .simulation
+                    .simulate(context, request.clone(), gas)
+                    .await?;
+                snapshot(&result.state_block_height)?;
+                if let Some(requested) = min.clone().filter(|min| result.state_block_height < *min)
+                {
+                    return Err(RpcServerError::ViewHeightUnavailable(
+                        thruput_json_rpc_types::view::ViewHeightUnavailable {
+                            requested,
+                            observed: result.state_block_height,
+                        },
+                    ));
+                }
+                Ok(result)
+            })
+            .await
         })
         .await
     }
@@ -432,15 +439,15 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                     })?;
             }
             let min = request.min_state_block_height.clone();
-            let result = self
-                .simulation
-                .simulate_batch(
+            let result = await_view_height(context, || {
+                self.simulation.simulate_batch(
                     context,
-                    request,
+                    request.clone(),
                     self.config.view_gas_limit,
                     self.config.view_batch,
                 )
-                .await?;
+            })
+            .await?;
             snapshot(&result.state_block_height)?;
             if result.results.len() != count {
                 return Err(RpcServerError::invalid_data(
@@ -458,6 +465,56 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
         .await
     }
 }
+/// First pause before a floored view is retried. The pause doubles up to
+/// [`VIEW_HEIGHT_RETRY_MAX`].
+const VIEW_HEIGHT_RETRY_FIRST: Duration = Duration::from_millis(10);
+/// Longest pause between floored view attempts. hogd's view gateway checks
+/// for a newer committed tip about every 100 ms.
+const VIEW_HEIGHT_RETRY_MAX: Duration = Duration::from_millis(100);
+
+/// Run a view that has a `minStateBlockHeight`, and repeat it while the view
+/// snapshot is below that height.
+///
+/// A block's receipt can arrive before the view plane serves its state, so
+/// a read at the receipt height waits here instead of failing. The wait ends
+/// at the request's view deadline. Then the last `ViewHeightUnavailable` is
+/// returned, not a timeout, so the client still learns the observed height.
+async fn await_view_height<T, F, Fut>(
+    context: RpcRequestContext,
+    mut attempt: F,
+) -> Result<T, RpcServerError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, RpcServerError>>,
+{
+    let Some(deadline) = context.deadline() else {
+        return attempt().await;
+    };
+    let deadline = tokio::time::Instant::from_std(deadline);
+    let mut pause = VIEW_HEIGHT_RETRY_FIRST;
+    let mut behind = None;
+    loop {
+        let Ok(outcome) = tokio::time::timeout_at(deadline, attempt()).await else {
+            return Err(behind.unwrap_or(RpcServerError::BackendTimeout));
+        };
+        let error = match outcome {
+            Err(RpcServerError::ViewHeightUnavailable(value))
+                if *value.observed >= 0 && value.observed < value.requested =>
+            {
+                RpcServerError::ViewHeightUnavailable(value)
+            }
+            other => return other,
+        };
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(error);
+        }
+        behind = Some(error);
+        tokio::time::sleep_until(deadline.min(now + pause)).await;
+        pause = (pause * 2).min(VIEW_HEIGHT_RETRY_MAX);
+    }
+}
+
 pub(super) fn snapshot(height: &BlockHeight) -> Result<(), RpcServerError> {
     if **height == -1 {
         return Err(RpcServerError::BackendUnavailable(

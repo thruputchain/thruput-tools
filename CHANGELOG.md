@@ -41,6 +41,21 @@ digest is gone and every later field sits 8 bytes earlier than in v5 and v6.
   `SYSCALL_API_MINOR_OFFSET`. `declared_syscall_api` reads the version back.
 - `thruput-rv32-lower`: `Lowered` gains `syscall_api`.
 
+### Views at a just-committed height wait instead of failing
+
+`simulateInvocation` and `simulateInvocations` with `minStateBlockHeight` now
+wait for a snapshot at that height. Before, a view right after a receipt could
+fail with `-32012` (`StateHeightUnavailable`), because hogd's view gateway can
+serve the previous snapshot for up to about 100 ms after a commit. Reading new
+state at a receipt's block height now works without a retry in the client, on
+a local node in every block driver mode and on the hosted gateway.
+
+- The wait ends at the view deadline (`view_timeout_ms`, 30 s by default).
+  Only then is `-32012` returned, with the observed height. It is retryable.
+- Requests without `minStateBlockHeight` do not wait.
+- Retries that apps added for `StateHeightUnavailable` after a commit can be
+  removed. The wire format is 14.6.1, a documentation change.
+
 ### `getChainConfig` reports every enforced config parameter
 
 `stated` and `execution.effectiveLimits` now carry every parameter a node

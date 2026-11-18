@@ -8,7 +8,8 @@ pub mod codes {
     pub const TRANSACTION_INVALID: i32 = -32000;
     /// Local expiry or explicit scheduler authentication refusal for this attempt.
     pub const TRANSACTION_REJECTED: i32 = -32001;
-    /// The selected simulation snapshot is below the requested floor.
+    /// The simulation snapshot stayed below the requested floor until the view
+    /// deadline. Retryable.
     pub const STATE_HEIGHT_UNAVAILABLE: i32 = -32012;
     /// The backend proved that required historical data cannot be served.
     pub const HISTORY_UNAVAILABLE: i32 = -32013;
@@ -58,7 +59,7 @@ pub const ERROR_INFOS: &[RpcErrorInfo] = &[
         name: "StateHeightUnavailable",
         code: codes::STATE_HEIGHT_UNAVAILABLE,
         message: "Requested state height unavailable",
-        description: "The selected simulation snapshot is below the requested floor.",
+        description: "The simulation snapshot stayed below the requested floor until the view deadline. Retryable: a later request can observe a newer snapshot.",
     },
     RpcErrorInfo {
         name: "HistoryUnavailable",

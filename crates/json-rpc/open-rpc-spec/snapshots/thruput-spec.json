@@ -2305,7 +2305,7 @@
   },
   "info": {
     "title": "Thruput JSON-RPC",
-    "version": "14.6.0"
+    "version": "14.6.1"
   },
   "methods": [
     {
@@ -25966,7 +25966,7 @@
         {
           "name": "minStateBlockHeight",
           "schema": {
-            "description": "Fail-fast freshness floor; not a historical-state selector.",
+            "description": "Freshness floor; not a historical-state selector. The server waits for\na snapshot at or above it, up to the view deadline.",
             "maxLength": 19,
             "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
             "type": "string",
@@ -30007,7 +30007,7 @@
             "x-integer-minimum": "1"
           },
           "minStateBlockHeight": {
-            "description": "Fail-fast freshness floor; not a historical-state selector.",
+            "description": "Freshness floor; not a historical-state selector. The server waits for\na snapshot at or above it, up to the view deadline.",
             "maxLength": 19,
             "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
             "type": "string",
@@ -30061,7 +30061,7 @@
         {
           "name": "minStateBlockHeight",
           "schema": {
-            "description": "Fail-fast freshness floor; not a historical-state selector.",
+            "description": "Freshness floor; not a historical-state selector. The server waits for\na snapshot at or above it, up to the view deadline.",
             "maxLength": 19,
             "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
             "type": "string",
@@ -34082,7 +34082,7 @@
             "type": "array"
           },
           "minStateBlockHeight": {
-            "description": "Fail-fast freshness floor; not a historical-state selector.",
+            "description": "Freshness floor; not a historical-state selector. The server waits for\na snapshot at or above it, up to the view deadline.",
             "maxLength": 19,
             "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
             "type": "string",
