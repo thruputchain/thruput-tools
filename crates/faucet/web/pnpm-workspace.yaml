@@ -4,10 +4,3 @@ allowBuilds:
 minimumReleaseAge: 11520 # 8 days, in minutes
 minimumReleaseAgeExclude:
   - "@thruputchain/*" # first-party packages
-auditConfig:
-  ignoreGhsas:
-    # picomatch ReDoS (<=4.0.7; fix is 4.0.8, not yet published). picomatch is
-    # Vite's build-time glob matcher: it only sees globs from this repository's
-    # own config and is not in the browser bundle. Remove this entry once the
-    # lockfile carries picomatch >=4.0.8.
-    - GHSA-fc5q-39xc-vjpf
