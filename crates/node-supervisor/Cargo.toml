@@ -49,6 +49,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+url = { workspace = true }
 xdr-common = { workspace = true }
 xdrs = { workspace = true }
 

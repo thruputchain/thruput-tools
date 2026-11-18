@@ -162,28 +162,30 @@ pub fn validate_cors_origin(origin: &str) -> Result<(), String> {
     normalize_cors_origin(origin).map(drop)
 }
 
-/// Spell `origin` the way a browser sends it in an `Origin` header: a
-/// lowercase scheme and host, and no port when it is the scheme's default.
-/// CORS compares origins exactly, so `http://LOCALHOST:80` must become
-/// `http://localhost` to match.
+/// Spell `origin` the way a browser sends it in an `Origin` header.
+///
+/// CORS compares origins exactly, so the configured value must match the
+/// browser's serialization byte for byte. The WHATWG URL parser, which
+/// browsers implement, produces it: a lowercase scheme and host, canonical
+/// IPv4 (`127.1` becomes `127.0.0.1`) and IPv6 (`[0:0:0:0:0:0:0:1]` becomes
+/// `[::1]`) addresses, and no port when it is the scheme's default.
 pub fn normalize_cors_origin(origin: &str) -> Result<String, String> {
     let invalid = || {
         format!(
             "`{origin}` is not a valid origin; use scheme://host[:port], such as http://127.0.0.1:5173"
         )
     };
+    // `http::Uri` checks the shape the WHATWG parser would otherwise repair:
+    // a scheme, `//`, an authority, and nothing after it.
     let uri: http::Uri = origin
         .parse()
         .map_err(|error| format!("`{origin}` is not a valid origin: {error}"))?;
-    let scheme = uri
-        .scheme_str()
-        .map(str::to_ascii_lowercase)
-        .ok_or_else(invalid)?;
-    let default_port = match scheme.as_str() {
-        "http" => 80,
-        "https" => 443,
-        _ => return Err(invalid()),
-    };
+    if !matches!(
+        uri.scheme_str().map(str::to_ascii_lowercase).as_deref(),
+        Some("http" | "https")
+    ) {
+        return Err(invalid());
+    }
     let authority = uri.authority().ok_or_else(invalid)?;
     // `http::Uri` reports the path of `http://host` as `/`; the text must
     // not end in one, so only the implicit root path passes. Browsers never
@@ -192,11 +194,27 @@ pub fn normalize_cors_origin(origin: &str) -> Result<String, String> {
     if !bare || authority.as_str().contains('@') {
         return Err(invalid());
     }
-    let host = authority.host().to_ascii_lowercase();
-    Ok(match authority.port_u16() {
-        Some(port) if port != default_port => format!("{scheme}://{host}:{port}"),
-        _ => format!("{scheme}://{host}"),
-    })
+    // `http::Uri` accepts any text after the colon, and `port_u16` returns
+    // `None` for ports such as `abc` or `99999`. Reject them rather than
+    // fall back to the default port, which is a different origin.
+    let port_is_valid = match authority.port() {
+        Some(port) => {
+            port.as_str().bytes().all(|byte| byte.is_ascii_digit())
+                && port.as_str().parse::<u16>().is_ok()
+        }
+        None => !authority.as_str().ends_with(':'),
+    };
+    if !port_is_valid {
+        return Err(format!(
+            "`{origin}` is not a valid origin: the port must be a number from 0 to 65535"
+        ));
+    }
+    let url = url::Url::parse(origin)
+        .map_err(|error| format!("`{origin}` is not a valid origin: {error}"))?;
+    match url.origin() {
+        origin @ url::Origin::Tuple(..) => Ok(origin.ascii_serialization()),
+        url::Origin::Opaque(_) => Err(invalid()),
+    }
 }
 
 impl Default for NodeSupervisorConfig {

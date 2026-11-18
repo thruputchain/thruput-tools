@@ -151,6 +151,19 @@ fn cors_origins_are_spelled_the_way_browsers_send_them() {
         ("http://127.0.0.1:5173", "http://127.0.0.1:5173"),
         ("https://app.example:80", "https://app.example:80"),
         ("http://[::1]:5173", "http://[::1]:5173"),
+        ("http://[0:0:0:0:0:0:0:1]:5173", "http://[::1]:5173"),
+        (
+            "http://[::FFFF:127.0.0.1]:5173",
+            "http://[::ffff:7f00:1]:5173",
+        ),
+        ("http://127.1:5173", "http://127.0.0.1:5173"),
+        ("http://0x7f.0.0.1:5173", "http://127.0.0.1:5173"),
+        ("http://2130706433:5173", "http://127.0.0.1:5173"),
+        ("http://localhost:05173", "http://localhost:5173"),
+        (
+            "https://XN--BCHER-KVA.example",
+            "https://xn--bcher-kva.example",
+        ),
     ] {
         assert_eq!(
             normalize_cors_origin(configured).as_deref(),
@@ -159,4 +172,27 @@ fn cors_origins_are_spelled_the_way_browsers_send_them() {
         );
     }
     assert!(normalize_cors_origin("http://user@localhost:5173").is_err());
+}
+
+#[test]
+fn cors_origins_with_malformed_ports_are_rejected() {
+    use thruput_node_supervisor::normalize_cors_origin;
+
+    // Each of these would otherwise fall back to the default port and allow
+    // a different origin than the one configured.
+    for invalid in [
+        "http://localhost:abc",
+        "http://localhost:99999",
+        "http://localhost:65536",
+        "http://localhost:-1",
+        "http://localhost:+80",
+        "http://localhost:",
+        "http://[::1]:abc",
+    ] {
+        assert!(normalize_cors_origin(invalid).is_err(), "{invalid}");
+    }
+    assert_eq!(
+        normalize_cors_origin("http://localhost:65535").as_deref(),
+        Ok("http://localhost:65535")
+    );
 }
