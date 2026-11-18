@@ -69,18 +69,26 @@ fn linker_script_failures_have_name_specific_hints() {
 }
 
 #[test]
-fn node_exit_before_readiness_points_missing_libraries_at_ldd() {
-    let exited = |exit_code| CliError::NodeExitedBeforeReady {
-        message: "child process `hog-devnode` exited before readiness".into(),
+fn node_exit_before_readiness_points_ldd_at_the_failed_binary() {
+    let exited = |program: &str, exit_code| CliError::NodeExitedBeforeReady {
+        message: "child process exited before readiness".into(),
+        program: program.into(),
         exit_code,
     };
 
     for exit_code in [126, 127] {
-        let hint = exited(Some(exit_code)).hint().unwrap();
-        assert!(hint.contains(r#"ldd "$(thruput toolchain which)""#));
+        let hint = exited("/opt/hog-devnode", Some(exit_code)).hint().unwrap();
+        assert!(hint.contains("run `ldd /opt/hog-devnode`"), "{hint}");
     }
+    let quoted = exited("/opt/my node/hog-devnode", Some(127))
+        .hint()
+        .unwrap();
+    assert!(
+        quoted.contains("run `ldd '/opt/my node/hog-devnode'`"),
+        "{quoted}"
+    );
     for exit_code in [Some(1), None] {
-        let hint = exited(exit_code).hint().unwrap();
+        let hint = exited("/opt/hog-devnode", exit_code).hint().unwrap();
         assert_eq!(
             hint,
             CliError::NodeSupervisor(String::new()).hint().unwrap()

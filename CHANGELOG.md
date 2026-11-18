@@ -92,8 +92,8 @@ When hog-devnode exits before it is ready, the error now ends with its last
 stderr lines that are not log records, such as a dynamic loader error naming a
 missing shared library. Before, it reported only the exit status.
 
-- On exit status 126 or 127, the hint suggests
-  `ldd "$(thruput toolchain which)"` to find missing shared libraries.
+- On exit status 126 or 127, the hint suggests running `ldd` on the binary that
+  failed, to find missing shared libraries.
 - `thruput-node-supervisor`: `NodeSupervisorError::ExitedBeforeReady` gains
   `stderr`.
 

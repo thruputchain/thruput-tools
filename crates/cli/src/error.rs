@@ -379,9 +379,10 @@ pub enum CliError {
     NodeSupervisor(String),
     #[error("node supervisor error: {message}")]
     #[code("node_supervisor_error")]
-    #[hint(expr = Some(node_exited_before_ready_hint(*exit_code)))]
+    #[hint(expr = Some(node_exited_before_ready_hint(program, *exit_code)))]
     NodeExitedBeforeReady {
         message: String,
+        program: String,
         exit_code: Option<i32>,
     },
     #[error("node supervisor error: {message}")]
@@ -820,17 +821,15 @@ fn cargo_failure_hint(stderr: &str) -> Cow<'static, str> {
     )
 }
 
-/// Hint for a hog-devnode that exited before readiness. The shell exit codes
-/// 126 and 127 mean the binary could not run, most often because a shared
-/// library is missing.
-fn node_exited_before_ready_hint(exit_code: Option<i32>) -> Cow<'static, str> {
-    Cow::Borrowed(match exit_code {
-        Some(126 | 127) => {
-            "hog-devnode could not run; run `ldd \"$(thruput toolchain which)\"` \
-             to find missing shared libraries"
-        }
-        _ => NODE_SUPERVISOR_HINT,
-    })
+/// Hint for a hog-devnode that exited before readiness; 126 and 127 mean it could not run.
+fn node_exited_before_ready_hint(program: &str, exit_code: Option<i32>) -> Cow<'static, str> {
+    match exit_code {
+        Some(126 | 127) => Cow::Owned(format!(
+            "hog-devnode could not run; run `ldd {}` to find missing shared libraries",
+            render_shell_arg(program),
+        )),
+        _ => Cow::Borrowed(NODE_SUPERVISOR_HINT),
+    }
 }
 
 /// Hint for a rejected protocol intro, naming the protocol to pass when the
