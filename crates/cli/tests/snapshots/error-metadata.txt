@@ -249,6 +249,10 @@ NodeSupervisor
   code: node_supervisor_error
   hint text: check `--hog-devnode-binary`; if contract artifacts are installed elsewhere, pass `--contract-artifacts-dir <DIR>`, then inspect the hog-devnode process output and local node logs
 
+NodeExitedBeforeReady
+  code: node_supervisor_error
+  hint: computed
+
 NodeSupervisorProtocolIntroRejected
   code: protocol_intro_rejected
   hint: computed

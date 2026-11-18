@@ -186,7 +186,7 @@ fn main() {
         Ok("spawn-helper-then-exit") => run_with_helper_then_exit(),
         Ok("helper-ready-ignore-term") => run_ready_ignore_term_helper(),
         Ok("ignore-term") => run_ignore_term(),
-        Ok("exit-before-ready") => process::exit(9),
+        Ok("exit-before-ready") => run_exit_before_ready(),
         Ok("timeout") => {
             eprintln!(r#"{{"level":"info","message":"waiting"}}"#);
             loop {
@@ -226,6 +226,17 @@ fn main() {
         ),
         _ => {}
     }
+}
+
+/// Exit the way the dynamic loader does when a shared library is missing,
+/// after one structured log record.
+fn run_exit_before_ready() -> ! {
+    eprintln!(r#"{{"level":"info","message":"starting"}}"#);
+    eprintln!(
+        "hog-devnode: error while loading shared libraries: libjemalloc.so.2: \
+         cannot open shared object file: No such file or directory"
+    );
+    process::exit(127);
 }
 
 fn run_ready_then_exit() {

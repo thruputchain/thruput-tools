@@ -23,6 +23,7 @@ const SNAPSHOT_PATH: &str = "tests/snapshots/error-metadata.txt";
 const SHARED_CODES: &[(&str, &str)] = &[
     ("missing_rpc_url", "LocalNodeUnavailable"),
     ("cargo_failed", "CargoFailedWithOutput"),
+    ("node_supervisor_error", "NodeExitedBeforeReady"),
     ("invalid_event_limit", "InvalidTokenTransferLimit"),
     ("invalid_event_cursor", "InvalidTokenTransferCursor"),
     ("invalid_event_options", "InvalidTokenTransferOptions"),
@@ -65,6 +66,26 @@ fn linker_script_failures_have_name_specific_hints() {
     let current = link_failure("thruput-rv32.ld").hint().unwrap();
     assert!(current.contains("linker search path"));
     assert!(!current.contains("groundhog-rv32.ld"));
+}
+
+#[test]
+fn node_exit_before_readiness_points_missing_libraries_at_ldd() {
+    let exited = |exit_code| CliError::NodeExitedBeforeReady {
+        message: "child process `hog-devnode` exited before readiness".into(),
+        exit_code,
+    };
+
+    for exit_code in [126, 127] {
+        let hint = exited(Some(exit_code)).hint().unwrap();
+        assert!(hint.contains(r#"ldd "$(thruput toolchain which)""#));
+    }
+    for exit_code in [Some(1), None] {
+        let hint = exited(exit_code).hint().unwrap();
+        assert_eq!(
+            hint,
+            CliError::NodeSupervisor(String::new()).hint().unwrap()
+        );
+    }
 }
 
 #[test]
