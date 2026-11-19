@@ -1,5 +1,5 @@
-//! Contract reads use the highest block the handle has seen as their
-//! freshness floor, and retry a server that cannot reach it yet.
+//! Contract and storage reads use the highest block the handle has seen as
+//! their freshness floor, and retry a server that cannot reach it yet.
 
 use std::{
     sync::{Arc, Mutex},
@@ -23,12 +23,15 @@ mod common;
 use common::{native_runtime_document, serve_manifest_network_info};
 
 /// Recorded `simulateInvocation` params, how many calls to refuse first, and
-/// how long each refusal takes.
+/// how long each refusal takes; and how many `getStorage` calls were made and
+/// how many to answer from block 6 before block 7.
 #[derive(Default)]
 struct Node {
     reads: Mutex<Vec<Value>>,
     refuse: Mutex<u32>,
     refusal_delay: Mutex<Duration>,
+    storage_reads: Mutex<u32>,
+    storage_lag: Mutex<u32>,
 }
 
 /// A transaction whose receipt reports `height`: the hash's first byte.
@@ -93,6 +96,19 @@ async fn mock_node(node: Arc<Node>) -> (String, jsonrpsee::server::ServerHandle)
                 "events": [],
                 "gasUsed": "1",
             }))
+        })
+        .unwrap();
+    module
+        .register_method("getStorage", |_, node, _| {
+            *node.storage_reads.lock().unwrap() += 1;
+            let mut lag = node.storage_lag.lock().unwrap();
+            let height = if *lag > 0 {
+                *lag -= 1;
+                "6"
+            } else {
+                "7"
+            };
+            Ok::<_, ErrorObjectOwned>(json!({"stateBlockHeight": height, "item": null}))
         })
         .unwrap();
     (url, server.start(module))
@@ -233,6 +249,74 @@ async fn a_read_gives_up_after_the_floor_wait() {
                 ..
             }
         ),
+        "{error}"
+    );
+    assert!(
+        (Duration::from_millis(1_900)..Duration::from_millis(2_500)).contains(&waited),
+        "{waited:?}"
+    );
+    handle.stop().unwrap();
+}
+
+/// Read a storage item and return the height it was read at.
+async fn read_storage(scenario: &Scenario) -> thruput_testkit::Result<i64> {
+    scenario
+        .network()
+        .get_storage_at(ContractAddress::from([1; 32]), &[3; 32])
+        .await
+        .map(|storage| *storage.state_block_height)
+}
+
+#[tokio::test]
+async fn a_storage_read_before_any_block_takes_any_state() {
+    let node = Arc::new(Node::default());
+    let (url, handle) = mock_node(node.clone()).await;
+    let (scenario, _manifest) = scenario(&url).await;
+
+    *node.storage_lag.lock().unwrap() = 1;
+    assert_eq!(read_storage(&scenario).await.unwrap(), 6);
+    assert_eq!(*node.storage_reads.lock().unwrap(), 1);
+    handle.stop().unwrap();
+}
+
+#[tokio::test]
+async fn a_storage_read_below_the_floor_is_read_again() {
+    let node = Arc::new(Node::default());
+    let (url, handle) = mock_node(node.clone()).await;
+    let (scenario, _manifest) = scenario(&url).await;
+    scenario.network().produce_block().await.unwrap();
+
+    *node.storage_lag.lock().unwrap() = 2;
+    assert_eq!(read_storage(&scenario).await.unwrap(), 7);
+    assert_eq!(*node.storage_reads.lock().unwrap(), 3);
+    handle.stop().unwrap();
+}
+
+#[tokio::test]
+async fn a_storage_read_gives_up_when_the_state_stays_below_the_floor() {
+    let node = Arc::new(Node::default());
+    let (url, handle) = mock_node(node.clone()).await;
+    let (scenario, _manifest) = scenario(&url).await;
+    scenario.network().produce_block().await.unwrap();
+
+    *node.storage_lag.lock().unwrap() = u32::MAX;
+    let started = tokio::time::Instant::now();
+    let error = read_storage(&scenario).await.unwrap_err();
+    let waited = started.elapsed();
+    assert!(
+        matches!(
+            error,
+            TestkitError::Rpc {
+                method: "getStorage",
+                ..
+            }
+        ),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("state at block 6 is below block 7"),
         "{error}"
     );
     assert!(
