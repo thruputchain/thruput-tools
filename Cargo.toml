@@ -248,7 +248,7 @@ debug = "line-tables-only"
 debug = false
 
 # TEMPORARY (GH-662): protocol crates with TransactionViewQuery.block_timepoint
-# from thruput-protocol-rs#384, until they are published as 0.66.3. Remove before merge.
+# from thruput-protocol-rs#384, until they are published as 0.67.0. Remove before merge.
 [patch.crates-io]
 thruput-xdr-macros = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
 thruput-syscall = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
