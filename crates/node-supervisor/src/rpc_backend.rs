@@ -7,6 +7,7 @@
 //! `DbGateway` endpoints.
 
 use async_trait::async_trait;
+use rpc_driver::{ConnectionConfig, ServiceMap};
 use std::{fmt, net::SocketAddr};
 use thruput_db_gateway::DbGateway_DbGateway1_Client;
 use thruput_hogd_backend::{db_gateway as shared_db_gateway, intro};
@@ -18,7 +19,9 @@ use thruput_node_rpc::{
     DbTip, ExpectedDBTip, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
     sched_gateway::SchedGateway_SchedGateway1_Client,
 };
-use thruput_x23_transport::{connect_with_config, hogd_large_message_config};
+use thruput_x23_transport::{
+    HOGD_PROPOSAL_MESSAGE_SIZE, connect_with_config, hogd_large_message_config,
+};
 
 use crate::{
     NodeSupervisorError,
@@ -62,7 +65,7 @@ impl HogdDevSchedulerBackend {
             "hogd-dev scheduler coordinator",
             &coordinator_endpoint.to_string(),
             SCHEDULER_COORD_POOL_SIZE,
-            hogd_large_message_config(),
+            ConnectionConfig::new(Some(HOGD_PROPOSAL_MESSAGE_SIZE), ServiceMap::new()),
             SchedulerCoord_SchedulerCoord1_Client::new,
         )
         .await
