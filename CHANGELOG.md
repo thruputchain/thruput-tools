@@ -23,6 +23,18 @@ tick and have every transaction in the tick carry exactly the tick's time.
 - Rust: `BlockProducer::set_block_time_step`, `BlockDriverConfig::time_step`
   and `with_time_step`, and testkit `Network::set_block_time_step`.
 
+### testkit reads see the blocks the test produced
+
+A contract read through testkit (`Network::view_call`, and a typed proxy's
+`simulate()` or read-only call) now runs on a state at least as new as the
+highest block the test has seen, from a receipt or a produced block. Before,
+a read right after `produce_block` or a receipt often ran on the previous
+block, so it saw the old block time and the old state.
+
+- testkit sends that height as `minStateBlockHeight`. Servers from wire
+  format 14.6.1 wait up to 2 s for it; against an older server, testkit
+  retries `stateHeightUnavailable` for up to 2 s itself.
+
 ## 0.46.1
 
 ### Contract views on a local node see moved block time

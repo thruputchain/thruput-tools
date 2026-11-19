@@ -49,24 +49,21 @@ fn wall_clock_nanos() -> u64 {
 ///
 /// The view gateway can serve the previous snapshot for a moment after a
 /// commit (GH-652), so wait for the snapshot rather than assert on a stale one.
+/// One view of `now()`. Testkit floors the read at the highest block it has
+/// seen, so the first read already runs on a state at or after `height`.
 async fn view_now(ctx: &AgentContext, contract: ContractAddress, height: i64) -> Result<u64> {
     let now = entrypoint_id(INTERFACE, VERSION, "now");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let response = ctx.network().view_call(contract, now, &[], None).await?;
-        if *response.state_block_height >= height {
-            let InvocationOutput::Return { return_data } = response.output else {
-                panic!("now() did not return a value: {:?}", response.output);
-            };
-            return Ok(thruput_testkit::xdrs::cxs::decode::<u64>(&return_data.0)
-                .expect("now() return decodes as a u64"));
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "views never reached height {height}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let response = ctx.network().view_call(contract, now, &[], None).await?;
+    assert!(
+        *response.state_block_height >= height,
+        "a read after block {height} ran on state {}",
+        *response.state_block_height
+    );
+    let InvocationOutput::Return { return_data } = response.output else {
+        panic!("now() did not return a value: {:?}", response.output);
+    };
+    Ok(thruput_testkit::xdrs::cxs::decode::<u64>(&return_data.0)
+        .expect("now() return decodes as a u64"))
 }
 
 #[tokio::test]
