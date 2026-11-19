@@ -18,8 +18,8 @@ tick and have every transaction in the tick carry exactly the tick's time.
 - Pins (`dev_setNextBlockTimepoint`, `dev_produceBlock` with a
   `blockTimepoint`), `dev_increaseTime`, and `dev_produceBlocks` with an
   `intervalNanoseconds` work as before; the step applies to every other block.
-- While the chain tip is a fresh chain's genesis block, the next block still
-  takes the wall clock. Clearing the step continues from the tip's time.
+- While the chain tip is one of a fresh chain's initial blocks, the next block
+  still takes the wall clock. Clearing the step continues from the tip's time.
 - Rust: `BlockProducer::set_block_time_step`, `BlockDriverConfig::time_step`
   and `with_time_step`, and testkit `Network::set_block_time_step`.
 

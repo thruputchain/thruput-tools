@@ -266,9 +266,10 @@ pub struct BlockDriverConfig {
     ///
     /// `None` follows the wall clock. `Some(step)` gives such a block its
     /// parent's timepoint plus `step`; [`Duration::ZERO`] freezes the clock
-    /// until the next pin or time increase. While the chain tip is a fresh
-    /// chain's genesis block (timepoint 0), the next block still takes the
-    /// wall clock.
+    /// until the next pin or time increase. While the chain tip is one of a
+    /// fresh chain's initial blocks (hog-devnode's genesis and genesis
+    /// ceremony, both at timepoint 0), the next block still takes the wall
+    /// clock.
     pub time_step: Option<Duration>,
 }
 

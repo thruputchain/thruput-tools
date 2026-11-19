@@ -1021,8 +1021,8 @@ block times exact instead: with `--block-time-step-ms 0` or
 pin or time increase carries the same time. A simulation can then pin one
 block per tick with `dev_produceBlock` and have every transaction in the tick
 carry the tick's time. The step changes only what time a block gets; the block
-driver still decides when blocks are produced. While the tip is a fresh chain's
-genesis block, the next block still takes the wall clock. Clearing the step
+driver still decides when blocks are produced. While the tip is one of a fresh
+chain's initial blocks, the next block still takes the wall clock. Clearing the step
 continues from the tip's time, not from today.
 
 A contract view sees a time change only after a block exists at the new time,

@@ -1151,6 +1151,14 @@ fn local_node_config(
             "block interval must be at least 1 ms".into(),
         ));
     }
+    if options
+        .block_time_step
+        .is_some_and(|step| u64::try_from(step.as_nanos()).is_err())
+    {
+        return Err(CliError::Other(
+            "block time step must be at most 18446744073709 ms".into(),
+        ));
+    }
     if options.block_interval.is_some()
         && !matches!(
             options.block_driver,
@@ -1953,6 +1961,22 @@ mod tests {
         .expect_err("zero interval should be rejected");
 
         assert!(matches!(err, CliError::Other(message) if message.contains("block interval")));
+    }
+
+    #[test]
+    fn local_node_config_rejects_a_block_time_step_beyond_u64_nanoseconds() {
+        let err = local_node_config(LocalNodeOptions {
+            block_time_step: Some(Duration::from_millis(18_446_744_073_710)),
+            ..LocalNodeOptions::default()
+        })
+        .expect_err("a step beyond u64 nanoseconds should be rejected");
+        assert!(matches!(err, CliError::Other(message) if message.contains("block time step")));
+
+        local_node_config(LocalNodeOptions {
+            block_time_step: Some(Duration::from_millis(18_446_744_073_709)),
+            ..LocalNodeOptions::default()
+        })
+        .expect("the largest step that fits is accepted");
     }
 
     #[test]

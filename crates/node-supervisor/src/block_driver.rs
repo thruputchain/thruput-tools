@@ -490,6 +490,11 @@ impl Parent {
     /// hog-devnode commits a fresh chain's genesis block at height 0 and its
     /// genesis ceremony (the bootstrap accounts) at height 1, both at
     /// timepoint 0. Blocks a user produces start at height 2.
+    ///
+    /// Checked against hog-devnode 0.1.34 and 0.1.35. A runtime that commits
+    /// more initial blocks would date the first stepped block near 1970;
+    /// `a_step_from_startup_still_dates_the_first_block_now` in
+    /// `tests/real_block_time.rs` catches that when the runtime pin changes.
     const LAST_INITIAL_HEIGHT: i64 = 1;
 
     fn of(header: &ProposalHeader) -> Self {
@@ -580,6 +585,9 @@ impl BlockDriverTask {
             gateway,
             config,
             clock: BlockClock {
+                // `thruput node` refuses a step longer than u64 nanoseconds
+                // (about 584 years). A longer step set by another embedder
+                // saturates, so the next block takes the largest timepoint.
                 step: config
                     .time_step
                     .map(|step| u64::try_from(step.as_nanos()).unwrap_or(u64::MAX)),
@@ -764,6 +772,8 @@ impl Driver {
                     })
                     .await;
                 if result.is_ok() {
+                    // `BlockProducer::set_block_driver` returns this config,
+                    // so keep its step current.
                     self.config.time_step = step.map(Duration::from_nanos);
                     tracing::info!(step = ?self.config.time_step, "hogd-dev block time step changed");
                 }
