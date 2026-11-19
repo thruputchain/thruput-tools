@@ -117,6 +117,26 @@ impl From<RpcTargetArgs> for crate::config::ProfileOverrides {
     }
 }
 
+/// Accept `*` or a browser origin for `--allow-origin`.
+fn parse_allow_origin(value: &str) -> Result<String, thruput_node_supervisor::CorsOriginError> {
+    if value != "*" {
+        thruput_node_supervisor::validate_cors_origin(value)?;
+    }
+    Ok(value.to_owned())
+}
+
+/// Anvil-style CORS: any origin unless origins are listed, none with `--no-cors`.
+fn rpc_cors(no_cors: bool, origins: Vec<String>) -> thruput_node_supervisor::RpcCors {
+    use thruput_node_supervisor::RpcCors;
+    if no_cors {
+        RpcCors::Disabled
+    } else if origins.is_empty() || origins.iter().any(|origin| origin == "*") {
+        RpcCors::AllowAny
+    } else {
+        RpcCors::Origins(origins)
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy)]
 enum NodeBlockDriverArg {
     /// One block for each accepted transaction submission (default)
@@ -1173,6 +1193,15 @@ struct NodeArgs {
     /// Maximum simultaneous public JSON-RPC connections
     #[arg(long)]
     rpc_max_connections: Option<u32>,
+    /// Browser origin allowed to call the JSON-RPC listener over HTTP (CORS): an
+    /// http or https scheme, a host, and an optional port (repeatable). Default:
+    /// any origin (*). WebSocket connections are not origin-checked
+    #[arg(long, value_name = "ORIGIN", value_parser = parse_allow_origin, conflicts_with = "no_cors")]
+    allow_origin: Vec<String>,
+    /// Send no CORS headers, so browser apps on other origins cannot call the node
+    /// over HTTP. WebSocket connections are not origin-checked
+    #[arg(long)]
+    no_cors: bool,
 
     /// Concurrent entries per JSON-RPC array (1..=1024, default 128)
     #[arg(long)]
@@ -1222,6 +1251,7 @@ impl NodeArgs {
             .block_time_step_ms
             .map(std::time::Duration::from_millis);
         options.rpc_max_connections = self.rpc_max_connections;
+        options.rpc_cors = rpc_cors(self.no_cors, self.allow_origin);
         options.rpc_batch_concurrency = self.rpc_batch_concurrency;
         options.ramdb_bytes = self.ramdb_bytes;
         options.network_config_overrides = crate::node::with_profile_network_config(
@@ -2644,6 +2674,48 @@ mod tests {
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn node_cors_flags_select_the_listener_policy() {
+        use thruput_node_supervisor::RpcCors;
+
+        let parse = |args: &[&str]| {
+            let mut argv = vec!["thruput", "node"];
+            argv.extend_from_slice(args);
+            match Cli::try_parse_from(argv).map(|cli| cli.command) {
+                Ok(Command::Node(NodeArgs {
+                    allow_origin,
+                    no_cors,
+                    ..
+                })) => Ok(rpc_cors(no_cors, allow_origin)),
+                Ok(_) => panic!("expected node command"),
+                Err(error) => Err(error),
+            }
+        };
+
+        assert_eq!(
+            parse(&[]).unwrap(),
+            RpcCors::AllowAny,
+            "default: any origin"
+        );
+        assert_eq!(parse(&["--allow-origin", "*"]).unwrap(), RpcCors::AllowAny);
+        assert_eq!(
+            parse(&[
+                "--allow-origin",
+                "http://127.0.0.1:5173",
+                "--allow-origin",
+                "https://app.example",
+            ])
+            .unwrap(),
+            RpcCors::Origins(vec![
+                "http://127.0.0.1:5173".into(),
+                "https://app.example".into()
+            ])
+        );
+        assert_eq!(parse(&["--no-cors"]).unwrap(), RpcCors::Disabled);
+        assert!(parse(&["--allow-origin", "127.0.0.1:5173"]).is_err());
+        assert!(parse(&["--no-cors", "--allow-origin", "http://localhost:3000"]).is_err());
     }
 
     #[test]

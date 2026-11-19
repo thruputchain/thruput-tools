@@ -106,3 +106,132 @@ fn hogd_dev_config_lowers_to_public_allocations() {
         100 * 10_000_000
     );
 }
+
+#[test]
+fn cors_origins_are_scheme_host_and_optional_port() {
+    use thruput_node_supervisor::validate_cors_origin;
+
+    for valid in [
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "https://app.example",
+    ] {
+        assert!(validate_cors_origin(valid).is_ok(), "{valid}");
+    }
+    for invalid in [
+        "127.0.0.1:5173",
+        "localhost",
+        "ftp://example.com",
+        "http://127.0.0.1:5173/",
+        "http://127.0.0.1:5173/app",
+        "http://example.com?x=1",
+        "http://localhost:5173#panel",
+        "http://localhost:5173/#panel",
+        "http://localhost:5173#",
+        "http://*.example.com",
+        "http://*",
+        "*",
+        "",
+    ] {
+        assert!(validate_cors_origin(invalid).is_err(), "{invalid}");
+    }
+}
+
+#[test]
+fn rpc_cors_sends_no_cors_headers_by_default() {
+    assert_eq!(
+        thruput_node_supervisor::NodeSupervisorConfig::default().rpc_cors,
+        thruput_node_supervisor::RpcCors::Disabled
+    );
+}
+
+#[test]
+fn cors_origins_are_spelled_the_way_browsers_send_them() {
+    use thruput_node_supervisor::normalize_cors_origin;
+
+    for (configured, browser) in [
+        ("http://localhost:80", "http://localhost"),
+        ("https://app.example:443", "https://app.example"),
+        ("HTTP://LocalHost:5173", "http://localhost:5173"),
+        ("http://127.0.0.1:5173", "http://127.0.0.1:5173"),
+        ("https://app.example:80", "https://app.example:80"),
+        ("http://[::1]:5173", "http://[::1]:5173"),
+        ("http://[0:0:0:0:0:0:0:1]:5173", "http://[::1]:5173"),
+        (
+            "http://[::FFFF:127.0.0.1]:5173",
+            "http://[::ffff:7f00:1]:5173",
+        ),
+        ("http://127.1:5173", "http://127.0.0.1:5173"),
+        ("http://0x7f.0.0.1:5173", "http://127.0.0.1:5173"),
+        ("http://2130706433:5173", "http://127.0.0.1:5173"),
+        ("http://localhost:05173", "http://localhost:5173"),
+        (
+            "https://XN--BCHER-KVA.example",
+            "https://xn--bcher-kva.example",
+        ),
+    ] {
+        assert_eq!(
+            normalize_cors_origin(configured).as_deref(),
+            Ok(browser),
+            "{configured}"
+        );
+    }
+    assert!(normalize_cors_origin("http://user@localhost:5173").is_err());
+}
+
+#[test]
+fn cors_origins_with_malformed_ports_are_rejected() {
+    use thruput_node_supervisor::normalize_cors_origin;
+
+    // Each of these would otherwise fall back to the default port and allow
+    // a different origin than the one configured.
+    for invalid in [
+        "http://localhost:abc",
+        "http://localhost:99999",
+        "http://localhost:65536",
+        "http://localhost:-1",
+        "http://localhost:+80",
+        "http://localhost:",
+        "http://[::1]:abc",
+        "http://localhost:0",
+    ] {
+        assert!(normalize_cors_origin(invalid).is_err(), "{invalid}");
+    }
+    assert_eq!(
+        normalize_cors_origin("http://localhost:65535").as_deref(),
+        Ok("http://localhost:65535")
+    );
+}
+
+#[test]
+fn cors_origin_errors_say_what_is_wrong() {
+    use thruput_node_supervisor::{CorsOriginError, normalize_cors_origin};
+
+    assert!(matches!(
+        normalize_cors_origin("http://localhost:5173/app"),
+        Err(CorsOriginError::NotAnOrigin { .. })
+    ));
+    for bad_port in [
+        "http://localhost:abc",
+        "http://localhost:99999",
+        "http://localhost:",
+        "http://localhost:0",
+        "http://[::1]:abc",
+    ] {
+        assert!(
+            matches!(
+                normalize_cors_origin(bad_port),
+                Err(CorsOriginError::InvalidPort { .. })
+            ),
+            "{bad_port}"
+        );
+    }
+    assert!(matches!(
+        normalize_cors_origin("http://*.example.com"),
+        Err(CorsOriginError::WildcardHost { .. })
+    ));
+    assert!(matches!(
+        normalize_cors_origin("http://256.0.0.1"),
+        Err(CorsOriginError::Unparsable { .. })
+    ));
+}

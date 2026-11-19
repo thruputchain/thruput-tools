@@ -4499,9 +4499,11 @@ dependencies = [
  "async-trait",
  "getrandom 0.4.3",
  "hex",
+ "http",
  "jsonrpsee",
  "libc",
  "nix",
+ "reqwest",
  "serde",
  "serde_json",
  "serial_test",
@@ -4528,8 +4530,11 @@ dependencies = [
  "thruput-xdr-common",
  "thruput-xdrs",
  "tokio",
+ "tower",
+ "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
+ "url",
  "zeroize",
 ]
 

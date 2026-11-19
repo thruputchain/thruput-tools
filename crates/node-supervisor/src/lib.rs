@@ -45,8 +45,8 @@ pub use block_driver::{
     BlockProducer, BlockProductionError, MAX_BLOCKS_PER_REQUEST, ProducedBlock,
 };
 pub use config::{
-    BlockDriverConfig, BlockDriverMode, HogdDevConfig, LocalAirdropConfig, LogLevel,
-    NodeSupervisorConfig,
+    BlockDriverConfig, BlockDriverMode, CorsOriginError, HogdDevConfig, LocalAirdropConfig,
+    LogLevel, NodeSupervisorConfig, RpcCors, normalize_cors_origin, validate_cors_origin,
 };
 pub use error::NodeSupervisorError;
 pub use hogd_dev::{
