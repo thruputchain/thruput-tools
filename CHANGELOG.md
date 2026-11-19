@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Contract views run at the chain's time
+
+A contract view (`simulateInvocation`, `simulateInvocations`) now runs at the
+time the next block would get, so `get_block_timepoint()` agrees in views and
+transactions. Before, hog-devnode 0.1.35 ran a view at the later of the wall
+clock and the tip's time, so a chain dated in the past showed today's date in
+views.
+
+- On a local node, a pinned, increased, stepped or frozen block clock applies
+  to views too. A chain pinned to 2000 and frozen shows exactly that time.
+- On the hosted gateway, a view runs at the gateway's wall clock.
+- If a block lands between choosing the time and running the view, the view
+  is retried once at the new tip's time.
+- Needs hog-devnode 0.1.36 and protocol crates 0.67.0: the view query now
+  states its block time (`TransactionViewQuery.block_timepoint`). Upgrade the
+  hosted gateway and hogd together.
+- `thruput-json-rpc-server`: `TipReading` gains `block_timepoint` and
+  `with_block_timepoint`.
+- `thruput-hogd-backend`: `view_query` and `view_batch_query` take the block
+  timepoint; `view_timepoint_refused` and `wall_clock_timepoint` are new.
+
 ### Browser apps can call a local node
 
 `thruput node` now answers CORS preflight requests and allows every origin by
