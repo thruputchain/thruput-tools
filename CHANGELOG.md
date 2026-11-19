@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.46.1
+
+### Contract views on a local node see moved block time
+
+The managed runtime is now hog-devnode 0.1.35. It runs contract views at the
+later of the wall clock and the chain tip's time, so after `dev_increaseTime`
+or a pinned block time, a view sees the moved time once a block exists at it.
+hog-devnode 0.1.34 ran views at the wall clock.
+
+- `thruput node` installs 0.1.35 on first start unless it runs offline;
+  `thruput toolchain install` installs it ahead of time. A version pinned with
+  `thruput toolchain use` stays selected.
+- hog-devnode 0.1.35 is a patch release of 0.1.34 with only this change.
+- The macOS bundle is signed with a Developer ID and notarized again.
+- `scripts/smoke-testkit-local.sh` always runs the contract view block time
+  check; `THRUPUT_SMOKE_VIEW_TIME` is gone.
+
 ## 0.46.0
 
 ### RV32 artifact format v7 declares a syscall API version instead of a gas schedule

@@ -1016,8 +1016,8 @@ the chain tip's returns `-32602`.
 A contract view sees a time change only after a block exists at the new time,
 so produce one. The view time also depends on the runtime. hog-devnode 0.1.34
 and earlier run views at the wall clock, so a view does not see a block time
-ahead of it. Later runtimes run views at the later of the wall clock and the
-tip's time. For example, move 30 days ahead with an empty block:
+ahead of it. hog-devnode 0.1.35, the managed default, and later run views at
+the later of the wall clock and the tip's time. For example, move 30 days ahead with an empty block:
 
 ```bash
 curl -s http://127.0.0.1:9545 -H 'content-type: application/json' \

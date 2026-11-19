@@ -11,12 +11,7 @@
 # REQUIRES:
 # - thruput CLI and installed toolchain
 # - the thruput-examples repo, adjacent to this one, or THRUPUT_EXAMPLES_ROOT
-#
-# OPTIONAL:
-# - THRUPUT_SMOKE_VIEW_TIME=1 also checks that a contract view reads moved
-#   block time. It needs a hog-devnode whose views use the tip's timepoint
-#   when it is ahead of the wall clock; hog-devnode 0.1.34 does not. Point
-#   THRUPUT_DEVNODE_BINARY at such a build until the managed runtime has it.
+# - hog-devnode 0.1.35 or later, for the contract view block time check
 
 set -euo pipefail
 
@@ -53,13 +48,9 @@ fi
 TARGET_DIR="$WORKDIR"
 export THRUPUT_TESTKIT_ARTIFACT_ROOT="${TARGET_DIR}/thruput"
 
-log "building caller-counter fixture"
+log "building caller-counter and block-clock fixtures"
 (cd "$EXAMPLES_ROOT" && thruput build -p caller-counter --target-dir "$TARGET_DIR")
-
-if [[ "${THRUPUT_SMOKE_VIEW_TIME:-0}" == "1" ]]; then
-    log "building block-clock fixture"
-    (cd "$EXAMPLES_ROOT" && thruput build -p block-clock --target-dir "$TARGET_DIR")
-fi
+(cd "$EXAMPLES_ROOT" && thruput build -p block-clock --target-dir "$TARGET_DIR")
 
 run_test() {
     test_crate="$1"
@@ -88,11 +79,7 @@ run_test trivial_scenario local_two_agents_live_smoke
 log "running testkit block time smoke"
 run_test block_time_live block_time_controls_on_a_real_node
 
-if [[ "${THRUPUT_SMOKE_VIEW_TIME:-0}" == "1" ]]; then
-    log "running testkit contract view block time smoke"
-    run_test contract_block_time a_view_reads_the_block_time_after_a_jump
-else
-    log "skipping contract view block time smoke (set THRUPUT_SMOKE_VIEW_TIME=1)"
-fi
+log "running testkit contract view block time smoke"
+run_test contract_block_time a_view_reads_the_block_time_after_a_jump
 
 log "testkit live contract smoke passed"
