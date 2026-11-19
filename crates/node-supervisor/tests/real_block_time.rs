@@ -312,3 +312,39 @@ async fn fund_and_wait(node: &NodeSupervisorHandle, client: &HttpClient) -> u64 
     .expect("instant mode should mine the transaction");
     u64::try_from(*receipt.block_height).unwrap()
 }
+
+#[tokio::test]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY pointing to a compatible real runtime"]
+async fn a_step_from_startup_still_dates_the_first_block_now() {
+    // hog-devnode commits its own blocks at heights 0 and 1, both at
+    // timepoint 0. A step must not continue from them, or the first block
+    // would be dated 1970.
+    let binary = std::env::var_os("THRUPUT_DEVNODE_BINARY").expect("runtime binary is required");
+    let dir = tempfile::tempdir().unwrap();
+    let config = NodeSupervisorConfig::default()
+        .with_rpc_listen_address("127.0.0.1:0")
+        .with_block_driver(BlockDriverConfig::manual().with_time_step(Some(Duration::ZERO)))
+        .with_hogd_dev(
+            HogdDevConfig::default()
+                .with_binary_path(binary)
+                .with_data_dir(dir.path())
+                .with_ramdb_bytes(ramdb::ramdb_bytes(256 * ramdb::MIB)),
+        );
+    let config = match std::env::var("GROUNDHOG_DEVNODE_PROTOCOL") {
+        Ok(protocol) => config.with_hogd_protocol_override(protocol),
+        Err(_) => config,
+    };
+    let node = NodeSupervisorHandle::start(config).await.unwrap();
+    let client = HttpClientBuilder::default()
+        .build(format!("http://{}", node.rpc_addr()))
+        .unwrap();
+
+    let before = wall_clock_nanos();
+    let first = call(&client, "dev_produceBlock", json!({})).await.unwrap();
+    let first_timepoint = decimal(&first["blockTimepoint"]);
+    assert!((before..wall_clock_nanos() + 1).contains(&first_timepoint));
+    let next = call(&client, "dev_produceBlock", json!({})).await.unwrap();
+    assert_eq!(decimal(&next["blockTimepoint"]), first_timepoint, "frozen");
+
+    node.stop().await.unwrap();
+}
