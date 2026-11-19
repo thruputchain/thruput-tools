@@ -4,6 +4,7 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use thruput_node_supervisor::{BlockDriverConfig, BlockDriverMode, LogLevel};
@@ -16,7 +17,8 @@ use thruput_json_rpc_client::{HttpClient, HttpClientBuilder};
 use thruput_json_rpc_types::runtime_manifest::RuntimeManifest;
 use thruput_json_rpc_types::transaction::TxHash;
 use thruput_json_rpc_types::{
-    NetworkHash,
+    BlockHeight, NetworkHash,
+    error::native::codes,
     requests::{self, EmptyRequest, EventQuery, TransactionQuery},
     responses::{
         BlockDriverStatus, ChainTip, DecodedResponse, EventPage, SimulationResult, StorageResult,
@@ -31,6 +33,9 @@ use crate::error::{Result, TestkitError};
 
 const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Retry budget for `stateHeightUnavailable` against pre-14.6.1 servers.
+const READ_FLOOR_WAIT: Duration = Duration::from_secs(2);
+const READ_FLOOR_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const PENDING_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const PENDING_POLL_ATTEMPTS: usize = 400; // ~10 seconds at the interval above.
 
@@ -182,6 +187,10 @@ struct NetworkInner {
     local_faucet: Option<ContractAddress>,
     local_funding:
         tokio::sync::Mutex<std::collections::HashMap<ContractAddress, LocalFundingAttempt>>,
+    /// Highest committed block height this handle has seen in a receipt or a
+    /// produced block; 0 before any. Contract reads use it as their freshness
+    /// floor, so a read after a block or receipt never runs on an older state.
+    observed_height: AtomicI64,
 }
 
 impl fmt::Debug for Network {
@@ -229,6 +238,7 @@ impl Network {
                 faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?),
                 local_faucet: local_faucet(manifest)?,
                 local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                observed_height: AtomicI64::new(0),
             }),
         })
     }
@@ -243,6 +253,7 @@ impl Network {
                 faucet: tokio::sync::Mutex::new(None),
                 local_faucet: None,
                 local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                observed_height: AtomicI64::new(0),
             }),
         }
     }
@@ -299,6 +310,9 @@ impl Network {
                 receipt: Box::new(observed.clone()),
             });
         }
+        if let Some(receipt) = &receipt {
+            self.observe_height(*receipt.block_height);
+        }
         if receipt
             .as_ref()
             .is_some_and(|r| r.transaction_hash == tx_hash)
@@ -339,6 +353,7 @@ impl Network {
         .map_err(|source| TestkitError::ReceiptWait {
             source: Box::new(source),
         })?;
+        self.observe_height(*receipt.block_height);
         self.inner.local_funding.lock().await.retain(|_, attempt| {
             !attempt
                 .admitted
@@ -432,11 +447,15 @@ impl Network {
             self.require_client(METHOD)?.produce_blocks(request).await,
             METHOD,
         )?;
-        Ok(produced
+        let blocks: Vec<ProducedBlock> = produced
             .blocks
             .into_iter()
             .map(ProducedBlock::from)
-            .collect())
+            .collect();
+        if let Some(last) = blocks.last() {
+            self.observe_height(last.height);
+        }
+        Ok(blocks)
     }
 
     /// Give the next block exactly `timepoint`. Later blocks continue from it.
@@ -519,13 +538,29 @@ impl Network {
 
     async fn produce(&self, block_timepoint: Option<TimePoint>) -> Result<ProducedBlock> {
         const METHOD: &str = "dev_produceBlock";
-        known(
+        let block = known(
             self.require_client(METHOD)?
                 .produce_block(requests::ProduceBlockRequest { block_timepoint })
                 .await,
             METHOD,
         )
-        .map(ProducedBlock::from)
+        .map(ProducedBlock::from)?;
+        self.observe_height(block.height);
+        Ok(block)
+    }
+
+    /// Record a committed block height seen in a receipt or a produced block.
+    fn observe_height(&self, height: i64) {
+        self.inner
+            .observed_height
+            .fetch_max(height, Ordering::AcqRel);
+    }
+
+    /// The freshness floor for contract reads: the highest committed height
+    /// this handle has seen, if any.
+    fn read_floor(&self) -> Option<BlockHeight> {
+        let height = self.inner.observed_height.load(Ordering::Acquire);
+        (height > 0).then_some(BlockHeight::from(height))
     }
 
     /// Read one latest-committed storage item at `address`/`key`.
@@ -549,6 +584,9 @@ impl Network {
     ///
     /// `caller` sets the simulated `msg.sender`; pass an agent's own address to
     /// read state keyed by that caller.
+    ///
+    /// Runs on a state at least as new as the highest block this handle has
+    /// seen; a server that is behind is retried briefly.
     pub async fn view_call(
         &self,
         contract: ContractAddress,
@@ -556,21 +594,37 @@ impl Network {
         calldata: &[u8],
         caller: Option<ContractAddress>,
     ) -> Result<SimulationResult> {
+        const METHOD: &str = "simulateInvocation";
+        let client = self.require_client(METHOD)?;
+        let min_state_block_height = self.read_floor();
         let request = requests::SimulateInvocationRequest {
             assumed_auth: None,
-            min_state_block_height: None,
+            min_state_block_height: min_state_block_height.clone(),
             address: Base58(contract),
             entrypoint: HexBytes(entrypoint.into_inner().to_vec()),
             calldata: HexBytes(calldata.to_vec()),
             caller: caller.map(Base58),
             gas_limit: None,
         };
-        known(
-            self.require_client("simulateInvocation")?
-                .simulate_invocation(request)
-                .await,
-            "simulateInvocation",
-        )
+        // The budget covers the first request too; retries get only what is
+        // left, and a retry cut short keeps the last refusal.
+        let deadline = tokio::time::Instant::now() + READ_FLOOR_WAIT;
+        let mut result = client.simulate_invocation(request.clone()).await;
+        while min_state_block_height.is_some() && below_floor(&result) {
+            if deadline.saturating_duration_since(tokio::time::Instant::now())
+                <= READ_FLOOR_RETRY_INTERVAL
+            {
+                break;
+            }
+            tokio::time::sleep(READ_FLOOR_RETRY_INTERVAL).await;
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, client.simulate_invocation(request.clone())).await
+            {
+                Ok(next) => result = next,
+                Err(_) => break,
+            }
+        }
+        known(result, METHOD)
     }
 
     /// Query events using native opaque pagination cursors.
@@ -755,6 +809,15 @@ fn invalid_argument(operation: &'static str, detail: &str) -> TestkitError {
         operation,
         detail: detail.to_owned(),
     }
+}
+
+/// Whether a read failed because the server's state is below its floor.
+fn below_floor<T>(result: &std::result::Result<T, NativeClientError>) -> bool {
+    matches!(
+        result,
+        Err(NativeClientError::Application { source, .. })
+            if source.code() == codes::STATE_HEIGHT_UNAVAILABLE
+    )
 }
 
 fn known<T>(
