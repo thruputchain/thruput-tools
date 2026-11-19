@@ -36,21 +36,22 @@ pub async fn native_block_by_height(
         .await
         .clone()
         .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
-    timed_backend_call(
+    let result = timed_backend_call(
         &ctx.metrics,
+        &ctx.lanes.indexer_point,
+        1,
         HealthBackend::Indexer,
         "get_block_by_height",
         INDEXER,
         backend_deadline(context, ctx.config.backend_request_timeout())?,
-        async {
-            client
-                .get_block_by_height(&height)
-                .await
-                .map(|result| thruput_hogd_backend::native::block_lookup(&height, result))
+        {
+            let height = height.clone();
+            async move { client.get_block_by_height(&height).await }
         },
-        Result::is_ok,
+        |_| true,
     )
-    .await?
+    .await?;
+    thruput_hogd_backend::native::block_lookup(&height, result)
 }
 
 /// Number of transactions in the mempool.

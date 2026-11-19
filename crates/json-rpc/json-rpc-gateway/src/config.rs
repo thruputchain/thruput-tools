@@ -10,6 +10,87 @@ use thruput_json_rpc_types::{
     },
 };
 
+/// Maximum time spent waiting for a direct backend lane (milliseconds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "u32")]
+pub struct LaneWaitMs(u32);
+
+impl LaneWaitMs {
+    /// Return the validated wait in milliseconds.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl TryFrom<u32> for LaneWaitMs {
+    type Error = InvalidLaneWaitMs;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if (1..=60000).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(InvalidLaneWaitMs)
+        }
+    }
+}
+
+/// Invalid backend lane wait.
+#[derive(Debug, thiserror::Error)]
+#[error("lane_wait_ms must be in 1..=60000")]
+pub struct InvalidLaneWaitMs;
+
+/// Validated direct backend lane capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "u32")]
+pub struct LaneSize(u32);
+
+impl LaneSize {
+    /// Return the validated permit count.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl TryFrom<u32> for LaneSize {
+    type Error = InvalidLaneSize;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if (1..=4096).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(InvalidLaneSize)
+        }
+    }
+}
+
+/// Invalid backend lane capacity.
+#[derive(Debug, thiserror::Error)]
+#[error("backend lane size must be in 1..=4096")]
+pub struct InvalidLaneSize;
+
+/// Admission bounds for direct indexer and view backend calls.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AdmissionConfig {
+    /// Maximum lane acquisition wait in milliseconds (1..=60000).
+    pub lane_wait_ms: LaneWaitMs,
+    /// Concurrent indexer point-read permits (1..=4096).
+    pub indexer_point_lane: LaneSize,
+    /// Concurrent indexer scan permits (1..=4096).
+    pub indexer_scan_lane: LaneSize,
+    /// Concurrent simulation permits, one per invocation (1..=4096).
+    pub view_lane: LaneSize,
+}
+
+impl Default for AdmissionConfig {
+    fn default() -> Self {
+        Self {
+            lane_wait_ms: LaneWaitMs(250),
+            indexer_point_lane: LaneSize(64),
+            indexer_scan_lane: LaneSize(8),
+            view_lane: LaneSize(16),
+        }
+    }
+}
+
 // Total lookup admission is independent of the configurable execution width.
 pub(crate) const SCHEDULER_LOOKUP_MAX_OUTSTANDING: usize = 68;
 
@@ -379,6 +460,8 @@ pub struct GatewayConfig {
 
     /// Request coalescing for `chainTip`.
     pub tip: TipConfig,
+    /// Concurrency and wait bounds for direct backend calls.
+    pub admission: AdmissionConfig,
 }
 
 impl Default for GatewayConfig {
@@ -420,6 +503,7 @@ impl Default for GatewayConfig {
             batch: AdaptiveBatchConfig::default(),
             storage: AdaptiveBatchConfig::default(),
             tip: TipConfig::default(),
+            admission: AdmissionConfig::default(),
         }
     }
 }
@@ -614,6 +698,56 @@ pub enum RuntimeManifestConfigError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn admission_defaults_and_effective_config_round_trip() {
+        let config: super::GatewayConfig = toml::from_str("").unwrap();
+        assert_eq!(config.admission.lane_wait_ms.get(), 250);
+        assert_eq!(config.admission.indexer_point_lane.get(), 64);
+        assert_eq!(config.admission.indexer_scan_lane.get(), 8);
+        assert_eq!(config.admission.view_lane.get(), 16);
+        let config: super::GatewayConfig = toml::from_str("[admission]\nlane_wait_ms = 60000\nindexer_point_lane = 1\nindexer_scan_lane = 4096\nview_lane = 32").unwrap();
+        let dumped = toml::to_string_pretty(&config).unwrap();
+        assert!(dumped.contains("[admission]"));
+        let restored: super::GatewayConfig = toml::from_str(&dumped).unwrap();
+        assert_eq!(restored.admission.lane_wait_ms.get(), 60000);
+        assert_eq!(restored.admission.indexer_point_lane.get(), 1);
+        assert_eq!(restored.admission.indexer_scan_lane.get(), 4096);
+        assert_eq!(restored.admission.view_lane.get(), 32);
+        // The CLI's --dump-effective-config uses this JSON serialization.
+        let dumped = serde_json::to_string_pretty(&config).unwrap();
+        let restored: super::GatewayConfig = serde_json::from_str(&dumped).unwrap();
+        assert_eq!(restored.admission.lane_wait_ms.get(), 60000);
+        assert_eq!(restored.admission.indexer_point_lane.get(), 1);
+        assert_eq!(restored.admission.indexer_scan_lane.get(), 4096);
+        assert_eq!(restored.admission.view_lane.get(), 32);
+    }
+
+    #[test]
+    fn admission_rejects_invalid_bounds_and_unknown_fields() {
+        for (field, upper) in [
+            ("lane_wait_ms", 60000),
+            ("indexer_point_lane", 4096),
+            ("indexer_scan_lane", 4096),
+            ("view_lane", 4096),
+        ] {
+            for value in [0, upper + 1] {
+                let error = toml::from_str::<super::GatewayConfig>(&format!(
+                    "[admission]\n{field} = {value}"
+                ))
+                .unwrap_err();
+                assert!(
+                    error.to_string().contains(&format!("1..={upper}")),
+                    "{error}"
+                );
+            }
+        }
+        assert!(
+            toml::from_str::<super::GatewayConfig>("[admission]\nview_lnae = 1")
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field")
+        );
+    }
     #[test]
     fn batch_policy_is_operator_configurable_with_shared_defaults() {
         let config: super::GatewayConfig = toml::from_str(
