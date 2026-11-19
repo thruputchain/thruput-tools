@@ -55,6 +55,11 @@ async fn mock_node(calls: Calls) -> (String, jsonrpsee::server::ServerHandle) {
     );
     record(
         &mut module,
+        "dev_setBlockTimeStep",
+        json!({"stepNanoseconds": "0", "nextBlockTimepoint": "1800259200000000000"}),
+    );
+    record(
+        &mut module,
         "dev_setBlockDriver",
         json!({"mode": "interval", "intervalMilliseconds": "250"}),
     );
@@ -104,6 +109,12 @@ async fn block_controls_send_decimal_nanoseconds_and_decode_results() {
         .await
         .unwrap();
     assert_eq!(*next, 1_800_259_200_000_000_000);
+    let next = network
+        .set_block_time_step(Some(Duration::ZERO))
+        .await
+        .unwrap();
+    assert_eq!(*next, 1_800_259_200_000_000_000);
+    network.set_block_time_step(None).await.unwrap();
     network
         .set_block_driver(BlockDriverMode::Interval, Some(Duration::from_millis(250)))
         .await
@@ -129,6 +140,8 @@ async fn block_controls_send_decimal_nanoseconds_and_decode_results() {
                 "dev_increaseTime",
                 json!({"nanoseconds": "259200000000000"})
             ),
+            ("dev_setBlockTimeStep", json!({"stepNanoseconds": "0"})),
+            ("dev_setBlockTimeStep", json!({})),
             (
                 "dev_setBlockDriver",
                 json!({"mode": "interval", "intervalMilliseconds": "250"})

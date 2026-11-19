@@ -122,7 +122,8 @@ mod history;
 mod simulation;
 pub use block_control::{
     BlockDriverMode, IncreaseTimeRequest, MAX_PRODUCE_BLOCKS, ProduceBlockRequest,
-    ProduceBlocksRequest, SetBlockDriverRequest, SetNextBlockTimepointRequest,
+    ProduceBlocksRequest, SetBlockDriverRequest, SetBlockTimeStepRequest,
+    SetNextBlockTimepointRequest,
 };
 pub use funding::{AirdropRequest, FundAccountRequest};
 pub use history::{

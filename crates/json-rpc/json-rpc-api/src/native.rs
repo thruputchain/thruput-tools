@@ -79,6 +79,9 @@ macro_rules! native_methods {
             set_next_block_timepoint("dev_setNextBlockTimepoint", named, plain): $crate::types::requests::SetNextBlockTimepointRequest => $crate::types::responses::BlockClock;
             /// Move the block clock forward for every later block. Produces no block.
             increase_time("dev_increaseTime", named, plain): $crate::types::requests::IncreaseTimeRequest => $crate::types::responses::BlockClock;
+            /// Give blocks without a pinned timepoint a fixed step from their parent, or follow
+            /// the wall clock again. A step of 0 freezes the clock. Produces no block.
+            set_block_time_step("dev_setBlockTimeStep", named, plain): $crate::types::requests::SetBlockTimeStepRequest => $crate::types::responses::BlockTimeStep;
             /// Change how the local node produces blocks while it runs.
             set_block_driver("dev_setBlockDriver", named, plain): $crate::types::requests::SetBlockDriverRequest => $crate::types::responses::BlockDriverStatus;
         }

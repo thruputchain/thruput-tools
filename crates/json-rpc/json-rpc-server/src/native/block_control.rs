@@ -40,6 +40,11 @@ pub trait NativeBlockControlPlane: Send + Sync + 'static {
         &self,
         request: input::IncreaseTimeRequest,
     ) -> RpcResult<out::BlockClock>;
+    /// Set or clear the fixed step between unpinned blocks.
+    async fn set_block_time_step(
+        &self,
+        request: input::SetBlockTimeStepRequest,
+    ) -> RpcResult<out::BlockTimeStep>;
     /// Change how blocks are produced.
     async fn set_block_driver(
         &self,
@@ -68,6 +73,12 @@ impl NativeBlockControlPlane for () {
         Err(super::service::method_not_found())
     }
     async fn increase_time(&self, _: input::IncreaseTimeRequest) -> RpcResult<out::BlockClock> {
+        Err(super::service::method_not_found())
+    }
+    async fn set_block_time_step(
+        &self,
+        _: input::SetBlockTimeStepRequest,
+    ) -> RpcResult<out::BlockTimeStep> {
         Err(super::service::method_not_found())
     }
     async fn set_block_driver(

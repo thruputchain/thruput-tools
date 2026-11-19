@@ -228,6 +228,9 @@ pub struct LocalNodeOptions {
     pub block_driver: Option<LocalNodeBlockDriverMode>,
     /// Override the interval used by timer-driven block production.
     pub block_interval: Option<Duration>,
+    /// Fixed step between blocks without a pinned timepoint; zero freezes the
+    /// block clock. `None` follows the wall clock.
+    pub block_time_step: Option<Duration>,
     /// Override the public JSON-RPC simultaneous connection cap.
     pub rpc_max_connections: Option<u32>,
     /// Override active plus buffered entries per JSON-RPC array (1..=1024).
@@ -1237,9 +1240,13 @@ fn local_node_config(
         Some(concurrency) => config.with_rpc_batch_concurrency(concurrency),
         None => config,
     };
-    let config = match (options.block_driver, options.block_interval) {
-        (None, None) => config,
-        (mode, interval) => {
+    let config = match (
+        options.block_driver,
+        options.block_interval,
+        options.block_time_step,
+    ) {
+        (None, None, None) => config,
+        (mode, interval, time_step) => {
             let mut block_driver = config.block_driver;
             if let Some(mode) = mode {
                 block_driver = block_driver.with_mode(match mode {
@@ -1256,6 +1263,9 @@ fn local_node_config(
             }
             if let Some(interval) = interval {
                 block_driver = block_driver.with_interval(interval);
+            }
+            if time_step.is_some() {
+                block_driver = block_driver.with_time_step(time_step);
             }
             config.with_block_driver(block_driver)
         }
@@ -1588,6 +1598,7 @@ mod tests {
             ],
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
+            block_time_step: Some(Duration::ZERO),
             rpc_max_connections: Some(512),
             rpc_batch_concurrency: Some(17.try_into().unwrap()),
             ramdb_bytes: Some(2_147_483_648),
@@ -1638,6 +1649,7 @@ mod tests {
             thruput_node_supervisor::BlockDriverMode::Interval
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
+        assert_eq!(config.block_driver.time_step, Some(Duration::ZERO));
         assert_eq!(config.rpc_max_connections, 512);
         assert_eq!(config.rpc_batch_concurrency.get(), 17);
         assert_eq!(config.bundle_identity.as_ref(), Some(&supplied_identity));

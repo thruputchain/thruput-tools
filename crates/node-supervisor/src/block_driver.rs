@@ -276,6 +276,19 @@ impl BlockProducer {
             .await
     }
 
+    /// Give blocks without a pinned timepoint a fixed `step` from their
+    /// parent, or follow the wall clock again with `None`.
+    /// [`Duration::ZERO`] freezes the clock until the next pin or time
+    /// increase. Returns the timepoint the next block would receive now.
+    pub async fn set_block_time_step(
+        &self,
+        step: Option<Duration>,
+    ) -> Result<TimePoint, BlockProductionError> {
+        let step = step.map(duration_nanos).transpose()?;
+        self.request(1, |reply| Command::SetTimeStep { step, reply })
+            .await
+    }
+
     /// Change how blocks are produced while the node runs. An `interval`
     /// replaces the configured one; it only affects interval mode.
     pub async fn set_block_driver(
@@ -364,6 +377,10 @@ enum Command {
         nanos: u64,
         reply: Reply<TimePoint>,
     },
+    SetTimeStep {
+        step: Option<u64>,
+        reply: Reply<TimePoint>,
+    },
     SetMode {
         mode: BlockDriverMode,
         interval: Option<Duration>,
@@ -375,9 +392,9 @@ impl Command {
     fn is_abandoned(&self) -> bool {
         match self {
             Self::Produce { reply, .. } => reply.is_closed(),
-            Self::SetNextTimepoint { reply, .. } | Self::IncreaseTime { reply, .. } => {
-                reply.is_closed()
-            }
+            Self::SetNextTimepoint { reply, .. }
+            | Self::IncreaseTime { reply, .. }
+            | Self::SetTimeStep { reply, .. } => reply.is_closed(),
             Self::SetMode { reply, .. } => reply.is_closed(),
         }
     }
@@ -393,19 +410,34 @@ impl Command {
 ///
 /// Time increased while a next timepoint is pinned leaves that block at its
 /// exact timepoint, as Anvil does, and moves every block after it.
+///
+/// With a fixed step, a block without a pinned timepoint takes its parent's
+/// timepoint plus the step, plus any time increased since the last block.
+/// The offset still follows each committed block, so clearing the step
+/// continues from the tip instead of jumping back to the wall clock. While
+/// the parent is a fresh chain's genesis block (timepoint 0), the next block
+/// takes the wall clock, so a step does not date the first block in 1970.
 #[derive(Debug, Default)]
 struct BlockClock {
     offset_nanos: i128,
     next: Option<u64>,
     increase_after_next: i128,
+    step: Option<u64>,
+    increase_since_last: u64,
 }
 
 impl BlockClock {
     fn timepoint_after(&self, parent: u64, now: SystemTime) -> u64 {
-        let clock = self.next.unwrap_or_else(|| {
-            let shifted = unix_nanos(now).saturating_add(self.offset_nanos);
-            u64::try_from(shifted.max(0)).unwrap_or(u64::MAX)
-        });
+        let clock = match (self.next, self.step) {
+            (Some(pinned), _) => pinned,
+            (None, Some(step)) if parent != GENESIS_TIMEPOINT => parent
+                .saturating_add(step)
+                .saturating_add(self.increase_since_last),
+            (None, _) => {
+                let shifted = unix_nanos(now).saturating_add(self.offset_nanos);
+                u64::try_from(shifted.max(0)).unwrap_or(u64::MAX)
+            }
+        };
         clock.max(parent)
     }
 
@@ -413,15 +445,20 @@ impl BlockClock {
         self.next = Some(timepoint);
         self.offset_nanos = i128::from(timepoint) - unix_nanos(now);
         self.increase_after_next = 0;
+        self.increase_since_last = 0;
     }
 
     fn advance(&mut self, nanos: u64) {
-        let nanos = i128::from(nanos);
         if self.next.is_some() {
-            self.increase_after_next = self.increase_after_next.saturating_add(nanos);
+            self.increase_after_next = self.increase_after_next.saturating_add(i128::from(nanos));
         } else {
-            self.offset_nanos = self.offset_nanos.saturating_add(nanos);
+            self.offset_nanos = self.offset_nanos.saturating_add(i128::from(nanos));
+            self.increase_since_last = self.increase_since_last.saturating_add(nanos);
         }
+    }
+
+    fn set_step(&mut self, step: Option<u64>) {
+        self.step = step;
     }
 
     fn committed(&mut self, timepoint: u64, now: SystemTime) {
@@ -430,9 +467,18 @@ impl BlockClock {
             self.pin(timepoint, now);
             self.next = None;
             self.offset_nanos = self.offset_nanos.saturating_add(increase);
+            self.increase_since_last = u64::try_from(increase.max(0)).unwrap_or(u64::MAX);
+        } else {
+            if self.step.is_some() {
+                self.offset_nanos = i128::from(timepoint) - unix_nanos(now);
+            }
+            self.increase_since_last = 0;
         }
     }
 }
+
+/// A fresh chain's genesis block timepoint.
+const GENESIS_TIMEPOINT: u64 = 0;
 
 fn unix_nanos(now: SystemTime) -> i128 {
     match now.duration_since(UNIX_EPOCH) {
@@ -507,7 +553,12 @@ impl BlockDriverTask {
             scheduler,
             gateway,
             config,
-            clock: BlockClock::default(),
+            clock: BlockClock {
+                step: config
+                    .time_step
+                    .map(|step| u64::try_from(step.as_nanos()).unwrap_or(u64::MAX)),
+                ..BlockClock::default()
+            },
             notify,
             instant,
             ticker: None,
@@ -674,6 +725,24 @@ impl Driver {
                     .await;
                 let _ = reply.send(result);
                 step
+            }
+            Command::SetTimeStep { step, reply } => {
+                // As for time increases, change the clock only after the tip
+                // read succeeds.
+                let (result, step_outcome) = self
+                    .with_tip(shutdown, &reply, |clock, tip| {
+                        clock.set_step(step);
+                        Ok(TimePoint::new(
+                            clock.timepoint_after(tip, SystemTime::now()),
+                        ))
+                    })
+                    .await;
+                if result.is_ok() {
+                    self.config.time_step = step.map(Duration::from_nanos);
+                    tracing::info!(step = ?self.config.time_step, "hogd-dev block time step changed");
+                }
+                let _ = reply.send(result);
+                step_outcome
             }
             Command::SetMode {
                 mode,
@@ -1174,7 +1243,7 @@ async fn reconcile_commit(
 mod clock_tests {
     use std::time::{Duration, UNIX_EPOCH};
 
-    use super::BlockClock;
+    use super::{BlockClock, GENESIS_TIMEPOINT};
 
     const DAY: u64 = 24 * 60 * 60 * 1_000_000_000;
     const NOW: u64 = 1_760_000_000_123_456_789;
@@ -1271,6 +1340,105 @@ mod clock_tests {
             clock.timepoint_after(pinned, at(NOW + 12)),
             NOW + 3 * DAY + 7
         );
+    }
+
+    fn stepped(step: u64) -> BlockClock {
+        let mut clock = BlockClock::default();
+        clock.set_step(Some(step));
+        clock
+    }
+
+    #[test]
+    fn a_step_follows_the_parent_not_the_wall_clock() {
+        let mut clock = stepped(1_000);
+        assert_eq!(clock.timepoint_after(NOW, at(NOW + 5 * DAY)), NOW + 1_000);
+        clock.committed(NOW + 1_000, at(NOW + 5 * DAY));
+        assert_eq!(
+            clock.timepoint_after(NOW + 1_000, at(NOW + 9 * DAY)),
+            NOW + 2_000
+        );
+    }
+
+    #[test]
+    fn a_zero_step_freezes_the_clock() {
+        let mut clock = stepped(0);
+        for wall in [NOW, NOW + 1, NOW + DAY] {
+            assert_eq!(clock.timepoint_after(NOW, at(wall)), NOW);
+            clock.committed(NOW, at(wall));
+        }
+    }
+
+    #[test]
+    fn a_pin_wins_and_the_step_continues_from_it() {
+        let mut clock = stepped(0);
+        clock.pin(NOW + DAY, at(NOW));
+        let pinned = clock.timepoint_after(NOW, at(NOW + 5));
+        assert_eq!(pinned, NOW + DAY);
+        clock.committed(pinned, at(NOW + 5));
+
+        // Frozen at the pinned time, however much wall time passes.
+        assert_eq!(clock.timepoint_after(pinned, at(NOW + 7 * DAY)), NOW + DAY);
+    }
+
+    #[test]
+    fn an_increase_moves_the_next_stepped_block_once() {
+        let mut clock = stepped(0);
+        clock.advance(DAY);
+        let next = clock.timepoint_after(NOW, at(NOW));
+        assert_eq!(next, NOW + DAY);
+        clock.committed(next, at(NOW));
+        assert_eq!(clock.timepoint_after(next, at(NOW + 1)), NOW + DAY);
+    }
+
+    #[test]
+    fn an_increase_after_a_pin_applies_to_the_stepped_block_after_it() {
+        let mut clock = stepped(0);
+        clock.pin(NOW + DAY, at(NOW));
+        clock.advance(2 * DAY);
+        let pinned = clock.timepoint_after(NOW, at(NOW));
+        assert_eq!(pinned, NOW + DAY);
+        clock.committed(pinned, at(NOW));
+        let next = clock.timepoint_after(pinned, at(NOW + 1));
+        assert_eq!(next, NOW + 3 * DAY);
+        clock.committed(next, at(NOW + 1));
+        assert_eq!(clock.timepoint_after(next, at(NOW + 2)), NOW + 3 * DAY);
+    }
+
+    #[test]
+    fn increases_from_wall_clock_blocks_do_not_carry_into_a_later_step() {
+        let mut clock = BlockClock::default();
+        clock.advance(DAY);
+        let next = clock.timepoint_after(0, at(NOW));
+        clock.committed(next, at(NOW));
+        clock.set_step(Some(0));
+        assert_eq!(clock.timepoint_after(next, at(NOW + 1)), next);
+    }
+
+    #[test]
+    fn the_first_block_after_genesis_takes_the_wall_clock() {
+        let clock = stepped(0);
+        assert_eq!(clock.timepoint_after(GENESIS_TIMEPOINT, at(NOW)), NOW);
+    }
+
+    #[test]
+    fn clearing_the_step_continues_from_the_tip() {
+        // A simulated chain in the past: frozen at 2000-01-01.
+        const Y2000: u64 = 946_684_800_000_000_000;
+        let mut clock = stepped(0);
+        clock.pin(Y2000, at(NOW));
+        clock.committed(Y2000, at(NOW));
+        clock.committed(Y2000, at(NOW + DAY));
+        clock.set_step(None);
+
+        // Continues from the tip plus the wall time since its commit, not
+        // from today.
+        assert_eq!(clock.timepoint_after(Y2000, at(NOW + DAY + 9)), Y2000 + 9);
+    }
+
+    #[test]
+    fn a_step_saturates_instead_of_wrapping() {
+        let clock = stepped(u64::MAX);
+        assert_eq!(clock.timepoint_after(NOW, at(NOW)), u64::MAX);
     }
 
     #[test]

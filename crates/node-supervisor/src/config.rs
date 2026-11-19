@@ -262,6 +262,14 @@ pub struct BlockDriverConfig {
     /// times one more than its block count (one block for time and mode
     /// requests). A request that misses its deadline returns `TimedOut`.
     pub manual_request_timeout: Duration,
+    /// Fixed step between blocks that have no pinned timepoint.
+    ///
+    /// `None` follows the wall clock. `Some(step)` gives such a block its
+    /// parent's timepoint plus `step`; [`Duration::ZERO`] freezes the clock
+    /// until the next pin or time increase. While the chain tip is a fresh
+    /// chain's genesis block (timepoint 0), the next block still takes the
+    /// wall clock.
+    pub time_step: Option<Duration>,
 }
 
 impl BlockDriverConfig {
@@ -272,6 +280,7 @@ impl BlockDriverConfig {
             mode: BlockDriverMode::Instant,
             interval: DEFAULT_BLOCK_DRIVER_INTERVAL,
             manual_request_timeout: DEFAULT_MANUAL_BLOCK_REQUEST_TIMEOUT,
+            time_step: None,
         }
     }
 
@@ -282,6 +291,7 @@ impl BlockDriverConfig {
             mode: BlockDriverMode::Interval,
             interval,
             manual_request_timeout: DEFAULT_MANUAL_BLOCK_REQUEST_TIMEOUT,
+            time_step: None,
         }
     }
 
@@ -292,6 +302,7 @@ impl BlockDriverConfig {
             mode: BlockDriverMode::Manual,
             interval: DEFAULT_BLOCK_DRIVER_INTERVAL,
             manual_request_timeout: DEFAULT_MANUAL_BLOCK_REQUEST_TIMEOUT,
+            time_step: None,
         }
     }
 
@@ -306,6 +317,14 @@ impl BlockDriverConfig {
     #[must_use]
     pub const fn with_interval(mut self, interval: Duration) -> Self {
         self.interval = interval;
+        self
+    }
+
+    /// Return a copy with a fixed step between unpinned blocks; see
+    /// [`Self::time_step`].
+    #[must_use]
+    pub const fn with_time_step(mut self, step: Option<Duration>) -> Self {
+        self.time_step = step;
         self
     }
 

@@ -206,3 +206,109 @@ async fn transaction_waits_for_a_requested_block(node: &NodeSupervisorHandle, cl
         decimal(&block["blockHeight"])
     );
 }
+
+#[tokio::test]
+#[ignore = "requires THRUPUT_DEVNODE_BINARY pointing to a compatible real runtime"]
+async fn a_frozen_clock_gives_every_transaction_block_the_tick_time() {
+    // A simulation in the style of fir: a chain in the past, the clock frozen,
+    // one pinned block per tick, and transactions mined in instant mode.
+    const Y2000: u64 = 946_684_800_000_000_000;
+    const HOUR: u64 = 60 * 60 * 1_000_000_000;
+    let binary = std::env::var_os("THRUPUT_DEVNODE_BINARY").expect("runtime binary is required");
+    let dir = tempfile::tempdir().unwrap();
+    let config = NodeSupervisorConfig::default()
+        .with_rpc_listen_address("127.0.0.1:0")
+        .with_block_driver(BlockDriverConfig::instant())
+        .with_hogd_dev(
+            HogdDevConfig::default()
+                .with_binary_path(binary)
+                .with_data_dir(dir.path())
+                .with_ramdb_bytes(ramdb::ramdb_bytes(256 * ramdb::MIB)),
+        );
+    let config = match std::env::var("GROUNDHOG_DEVNODE_PROTOCOL") {
+        Ok(protocol) => config.with_hogd_protocol_override(protocol),
+        Err(_) => config,
+    };
+    let node = NodeSupervisorHandle::start(config).await.unwrap();
+    let client = HttpClientBuilder::default()
+        .build(format!("http://{}", node.rpc_addr()))
+        .unwrap();
+
+    let frozen = call(
+        &client,
+        "dev_setBlockTimeStep",
+        json!({"stepNanoseconds": "0"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(frozen["stepNanoseconds"], "0");
+
+    for tick in [Y2000, Y2000 + HOUR] {
+        let block = call(
+            &client,
+            "dev_produceBlock",
+            json!({"blockTimepoint": tick.to_string()}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(decimal(&block["blockTimepoint"]), tick);
+        for _ in 0..3 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let height = fund_and_wait(&node, &client).await;
+            assert_eq!(
+                committed_timepoint(&client, height).await,
+                tick,
+                "a transaction block in the tick carries the tick time"
+            );
+        }
+    }
+
+    // Clearing the step continues from the tip, not from today.
+    let wall = call(&client, "dev_setBlockTimeStep", json!({}))
+        .await
+        .unwrap();
+    assert!(wall.get("stepNanoseconds").is_none());
+    let next = decimal(&wall["nextBlockTimepoint"]);
+    assert!((Y2000 + HOUR..Y2000 + HOUR + DAY).contains(&next));
+
+    node.stop().await.unwrap();
+}
+
+/// Fund a fresh account and return the height of the block it lands in.
+async fn fund_and_wait(node: &NodeSupervisorHandle, client: &HttpClient) -> u64 {
+    let manifest = node.hogd_readiness().runtime_manifest.as_ref().unwrap();
+    let faucet = manifest.bootstrap_accounts[0].wallet_address;
+    let run: [u8; 32] = Sha256::digest(wall_clock_nanos().to_be_bytes()).into();
+    let funded = client
+        .request::<output::FundingSubmission, _>(
+            "dev_fundAccount",
+            NamedParams(FundAccountRequest {
+                recipient: Base58(ContractAddress::from(run)),
+                faucet,
+                raw_amount: 123_456_789,
+                client_nonce: ClientNonce::new(run.to_vec()).unwrap(),
+            }),
+        )
+        .await
+        .unwrap();
+    let receipt = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let receipt = client
+                .request::<output::ReceiptResult, _>(
+                    "getTransactionReceipt",
+                    NamedParams(input::TransactionQuery {
+                        transaction_hash: funded.transaction_hash,
+                    }),
+                )
+                .await
+                .unwrap();
+            if let Some(receipt) = receipt {
+                return receipt;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("instant mode should mine the transaction");
+    u64::try_from(*receipt.block_height).unwrap()
+}
