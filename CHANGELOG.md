@@ -2,6 +2,78 @@
 
 ## Unreleased
 
+### Browser apps can call a local node
+
+`thruput node` now answers CORS preflight requests and allows every origin by
+default, like Anvil and the hosted gateway. A browser app uses the same RPC URL
+pattern locally and on Futurenet, without a development proxy.
+
+- Only `thruput node` enables HTTP CORS by default. Nodes that `thruput test
+  --integration` and the Rust testkit start, and other embedders of
+  `thruput-node-supervisor`, send no CORS headers.
+- `--allow-origin ORIGIN` (repeatable) allows only the listed origins; `--no-cors`
+  sends no CORS headers. Both control HTTP CORS only.
+- No node checks the `Origin` of WebSocket connections, including integration
+  nodes and embedders that send no CORS headers.
+- The node logs a warning when its listener binds beyond loopback and allows
+  every origin, because any web page can then call it.
+- `thruput-node-supervisor` adds `NodeSupervisorConfig::rpc_cors` (`RpcCors`).
+  It defaults to `RpcCors::Disabled`, so embedders opt in to browser access.
+  `validate_cors_origin` and `normalize_cors_origin` check an origin and spell it
+  the way browsers send it, returning `CorsOriginError` when it is invalid.
+
+### A fixed block time step on a local node
+
+A local node can give blocks without a pinned time their parent's time plus a
+fixed step, instead of the wall clock. A step of 0 freezes the block clock:
+every block until the next pinned time or time increase carries the same time,
+as `anvil_setBlockTimestampInterval(0)` does. A simulation can pin one block per
+tick and have every transaction in the tick carry exactly the tick's time.
+
+- New local-only JSON-RPC method `dev_setBlockTimeStep`:
+  `{"stepNanoseconds": "0"}` sets a step; `{}` follows the wall clock again.
+  The result reports the step and the next block's time. The hosted gateway
+  does not serve it. The wire format is 14.7.0.
+- `thruput node --block-time-step-ms <MS>` starts the node with a step.
+- Pins (`dev_setNextBlockTimepoint`, `dev_produceBlock` with a
+  `blockTimepoint`), `dev_increaseTime`, and `dev_produceBlocks` with an
+  `intervalNanoseconds` work as before; the step applies to every other block.
+- While the chain tip is one of a fresh chain's initial blocks, the next block
+  still takes the wall clock. Clearing the step continues from the tip's time.
+- Rust: `BlockProducer::set_block_time_step`, `BlockDriverConfig::time_step`
+  and `with_time_step`, and testkit `Network::set_block_time_step`.
+
+### testkit reads see the blocks the test produced
+
+A contract read through testkit (`Network::view_call`, and a typed proxy's
+`simulate()` or read-only call) now runs on a state at least as new as the
+highest block the test has seen, from a receipt or a produced block. Before,
+a read right after `produce_block` or a receipt often ran on the previous
+block, so it saw the old block time and the old state.
+
+- testkit sends that height as `minStateBlockHeight`. Servers from wire
+  format 14.6.1 wait up to 2 s for it; against an older server, testkit
+  retries `stateHeightUnavailable` for up to 2 s itself.
+
+## 0.46.1
+
+### Contract views on a local node see moved block time
+
+The managed runtime is now hog-devnode 0.1.35. It runs contract views at the
+later of the wall clock and the chain tip's time, so after `dev_increaseTime`
+or a pinned block time, a view sees the moved time once a block exists at it.
+hog-devnode 0.1.34 ran views at the wall clock.
+
+- `thruput node` installs 0.1.35 on first start unless it runs offline;
+  `thruput toolchain install` installs it ahead of time. A version pinned with
+  `thruput toolchain use` stays selected.
+- hog-devnode 0.1.35 is a patch release of 0.1.34 with only this change.
+- The macOS bundle is signed with a Developer ID and notarized again.
+- `scripts/smoke-testkit-local.sh` always runs the contract view block time
+  check; `THRUPUT_SMOKE_VIEW_TIME` is gone.
+
+## 0.46.0
+
 ### RV32 artifact format v7 declares a syscall API version instead of a gas schedule
 
 The CLI now writes RV32 artifact format v7. A v7 header carries the syscall API
@@ -41,23 +113,25 @@ digest is gone and every later field sits 8 bytes earlier than in v5 and v6.
   `SYSCALL_API_MINOR_OFFSET`. `declared_syscall_api` reads the version back.
 - `thruput-rv32-lower`: `Lowered` gains `syscall_api`.
 
-### Browser apps can call a local node
+### Views at a just-committed height wait instead of failing
 
-`thruput node` now answers CORS preflight requests and allows every origin by
-default, like Anvil and the hosted gateway. A browser app uses the same RPC URL
-pattern locally and on Futurenet, without a development proxy.
+`simulateInvocation` and `simulateInvocations` with `minStateBlockHeight` now
+wait for a snapshot at that height. Before, a view right after a receipt could
+fail with `-32012` (`StateHeightUnavailable`), because hogd's view gateway can
+serve the previous snapshot for up to about 100 ms after a commit. Reading new
+state at a receipt's block height now works without a retry in the client, on
+a local node in every block driver mode and on the hosted gateway.
 
-- `--allow-origin ORIGIN` (repeatable) allows only the listed origins; `--no-cors`
-  sends no CORS headers. Both control HTTP CORS only: WebSocket connections are
-  not origin-checked.
-- The node logs a warning when its listener binds beyond loopback and allows
-  every origin, because any web page can then call it.
-- Only `thruput node` allows browser access. Nodes that `thruput test
-  --integration` and the Rust testkit start send no CORS headers.
-- `thruput-node-supervisor` adds `NodeSupervisorConfig::rpc_cors` (`RpcCors`).
-  It defaults to `RpcCors::Disabled`, so embedders opt in to browser access.
-  `validate_cors_origin` and `normalize_cors_origin` check an origin and spell it
-  the way browsers send it, returning `CorsOriginError` when it is invalid.
+- Only a committed height is waited for: the floor must be at or below the
+  chain tip. The wait lasts up to 2 s, or to the view deadline
+  (`view_timeout_ms`) if that is sooner. A healthy node catches up in about
+  100 ms. Only then is `-32012` returned, with the observed height.
+- A floor above the committed tip still fails at once with `-32012`, as a
+  read of a future block does on Anvil. It is retryable once the chain
+  reaches the floor.
+- Requests without `minStateBlockHeight` do not wait.
+- Retries that apps added for `StateHeightUnavailable` after a commit can be
+  removed. The wire format is 14.6.1, a documentation change.
 
 ### `getChainConfig` reports every enforced config parameter
 
@@ -103,6 +177,17 @@ depend on time, such as vesting, expiry, auctions, and interest.
 - `thruput-node-supervisor` renames `ManualBlockProducer` to `BlockProducer`
   and `manual_block_producer()` to `block_producer()`, which works in every
   mode.
+
+### `thruput node` shows why hog-devnode failed to start
+
+When hog-devnode exits before it is ready, the error now ends with its last
+stderr lines that are not log records, such as a dynamic loader error naming a
+missing shared library. Before, it reported only the exit status.
+
+- On exit status 126 or 127, the hint suggests running `ldd` on the binary that
+  failed, to find missing shared libraries.
+- `thruput-node-supervisor`: `NodeSupervisorError::ExitedBeforeReady` gains
+  `stderr`.
 
 ## 0.45.2
 

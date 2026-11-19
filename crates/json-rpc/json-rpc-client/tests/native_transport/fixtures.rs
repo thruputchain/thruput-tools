@@ -11,7 +11,7 @@ pub fn invocation() -> Value {
 
 /// Named requests whose fields are all optional, so `{}` is valid.
 pub fn accepts_empty_object(method: &str) -> bool {
-    method == "dev_produceBlock"
+    matches!(method, "dev_produceBlock" | "dev_setBlockTimeStep")
 }
 
 pub fn request(method: &str) -> Value {
@@ -44,6 +44,7 @@ pub fn request(method: &str) -> Value {
         "dev_produceBlocks" => json!({"count": 1000, "intervalNanoseconds": "12000000000"}),
         "dev_setNextBlockTimepoint" => json!({"blockTimepoint": "1700000000000000000"}),
         "dev_increaseTime" => json!({"nanoseconds": "259200000000000"}),
+        "dev_setBlockTimeStep" => json!({"stepNanoseconds": "1000000000"}),
         "dev_setBlockDriver" => json!({"mode": "interval", "intervalMilliseconds": "250"}),
         "getVersionInfo"
         | "getNetworkInfo"
@@ -120,6 +121,9 @@ pub fn response(method: &str) -> Value {
         }
         "dev_setNextBlockTimepoint" | "dev_increaseTime" => {
             json!({"nextBlockTimepoint": "1700000000000000000"})
+        }
+        "dev_setBlockTimeStep" => {
+            json!({"stepNanoseconds": "1000000000", "nextBlockTimepoint": "1700000000000000000"})
         }
         "dev_setBlockDriver" => json!({"mode": "manual", "intervalMilliseconds": "500"}),
         _ => panic!("no result fixture for {method}"),

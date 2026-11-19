@@ -1021,16 +1021,28 @@ strings; contracts read the same value with `get_block_timepoint()`.
 | `dev_setNextBlockTimepoint` | `evm_setNextBlockTimestamp` | Set the time of the next block. |
 | `dev_increaseTime` | `evm_increaseTime` | Move the clock forward by `nanoseconds` for every later block. |
 | `dev_setBlockDriver` | `evm_setAutomine` | Change the block driver mode while the node runs. Switching to `instant` mines pending transactions. |
+| `dev_setBlockTimeStep` | `anvil_setBlockTimestampInterval` | Give blocks without a pinned time their parent's time plus `stepNanoseconds`. `"0"` freezes the clock; omit the field to follow the wall clock again. |
 
 After a time change, later blocks continue from the new time; they do not fall
 back to the wall clock. Blocks never move backward: a timepoint earlier than
 the chain tip's returns `-32602`.
 
+By default, a block without a pinned time takes the wall clock, so blocks
+produced after a time change land a little after it. A block time step makes
+block times exact instead: with `--block-time-step-ms 0` or
+`dev_setBlockTimeStep` `{"stepNanoseconds":"0"}`, every block until the next
+pin or time increase carries the same time. A simulation can then pin one
+block per tick with `dev_produceBlock` and have every transaction in the tick
+carry the tick's time. The step changes only what time a block gets; the block
+driver still decides when blocks are produced. While the tip is one of a fresh
+chain's initial blocks, the next block still takes the wall clock. Clearing the step
+continues from the tip's time, not from today.
+
 A contract view sees a time change only after a block exists at the new time,
 so produce one. The view time also depends on the runtime. hog-devnode 0.1.34
 and earlier run views at the wall clock, so a view does not see a block time
-ahead of it. Later runtimes run views at the later of the wall clock and the
-tip's time. For example, move 30 days ahead with an empty block:
+ahead of it. hog-devnode 0.1.35, the managed default, and later run views at
+the later of the wall clock and the tip's time. For example, move 30 days ahead with an empty block:
 
 ```bash
 curl -s http://127.0.0.1:9545 -H 'content-type: application/json' \

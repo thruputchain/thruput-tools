@@ -16,6 +16,8 @@ pub enum RpcServerError {
         cause: Option<Box<RpcServerError>>,
     },
     /// The selected committed snapshot did not meet the freshness floor.
+    /// The read service retries it for a short while when the floor is
+    /// committed.
     #[error("view height unavailable: requested {}, observed {}", *.0.requested, *.0.observed)]
     ViewHeightUnavailable(thruput_json_rpc_types::view::ViewHeightUnavailable),
     /// Transaction was malformed.

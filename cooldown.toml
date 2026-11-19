@@ -12,6 +12,12 @@ global-min-publish-age = "8 days"
 # Exceptions for specific releases, such as an urgent security fix, go here as
 # [[allow.exact]] entries (crate, version) with a comment giving the reason.
 
+# Security fix for RUSTSEC-2026-0574 to RUSTSEC-2026-0582 (heapless unsound
+# APIs, fixed in 0.9.4). Remove once 0.9.4 is past the cooldown (2026-11-26).
+[[allow.exact]]
+crate = "heapless"
+version = "0.9.4"
+
 # Exemptions for first-party (thruput-*) crates.
 [[allow.package]]
 crates = [

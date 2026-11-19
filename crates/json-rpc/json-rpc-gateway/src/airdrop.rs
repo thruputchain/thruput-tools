@@ -546,6 +546,7 @@ mod tests {
                 "dev_produceBlocks",
                 "dev_setNextBlockTimepoint",
                 "dev_increaseTime",
+                "dev_setBlockTimeStep",
                 "dev_setBlockDriver",
             ] {
                 assert!(!registered.contains(&block_control), "{block_control}");
@@ -560,7 +561,7 @@ mod tests {
                 .unwrap();
             let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
             assert_eq!(response["result"]["supportedMethods"], json!(registered));
-            assert_eq!(response["result"]["wireFormat"], "14.6.0");
+            assert_eq!(response["result"]["wireFormat"], "14.7.0");
         }
         faucet.abort();
     }

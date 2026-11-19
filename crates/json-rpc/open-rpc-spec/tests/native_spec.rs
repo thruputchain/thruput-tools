@@ -132,6 +132,7 @@ fn request(name: &str) -> Value {
         }
         "dev_produceBlocks" => json!({"count": 3, "intervalNanoseconds": "12000000000"}),
         "dev_increaseTime" => json!({"nanoseconds": "259200000000000"}),
+        "dev_setBlockTimeStep" => json!({"stepNanoseconds": "0"}),
         "dev_setBlockDriver" => json!({"mode": "manual"}),
         _ => panic!("missing request fixture: {name}"),
     }
@@ -195,6 +196,9 @@ fn result(name: &str) -> Value {
         "dev_setNextBlockTimepoint" | "dev_increaseTime" => {
             json!({"nextBlockTimepoint": "1700000000000000000"})
         }
+        "dev_setBlockTimeStep" => {
+            json!({"stepNanoseconds": "0", "nextBlockTimepoint": "1700000000000000000"})
+        }
         "dev_setBlockDriver" => json!({"mode": "manual", "intervalMilliseconds": "500"}),
         "getContractDeployment" => {
             json!({"address": ADDRESS, "stateBlockHeight": "42", "deployment": null})
@@ -216,7 +220,7 @@ fn receipt() -> Value {
 fn native_contract_is_the_canonical_serving_artifact() {
     assert_eq!(native::build_spec(), build_spec());
     assert_eq!(build_spec()["info"]["version"], WIRE_FORMAT_VERSION);
-    assert_eq!(WIRE_FORMAT_VERSION, "14.6.0");
+    assert_eq!(WIRE_FORMAT_VERSION, "14.7.0");
 }
 
 #[test]
@@ -227,7 +231,7 @@ fn complete_method_map_has_strict_named_params_required_first_and_error_parity()
         .iter()
         .map(|m| m["name"].as_str().unwrap())
         .collect();
-    assert_eq!(methods.len(), 29);
+    assert_eq!(methods.len(), 30);
     assert_eq!(names, METHOD_NAMES.iter().copied().collect());
     assert_eq!(names, errors::METHODS.iter().copied().collect());
     for method in methods {

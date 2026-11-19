@@ -96,6 +96,8 @@
 //! - [`Network::produce_blocks`] produces several, optionally an interval apart.
 //! - [`Network::set_next_block_timepoint`] pins the next block's timepoint.
 //! - [`Network::increase_time`] moves the clock forward without a block.
+//! - [`Network::set_block_time_step`] gives unpinned blocks a fixed step from
+//!   their parent instead of the wall clock; a zero step freezes the clock.
 //! - [`Network::set_block_driver`] switches between instant, interval and
 //!   manual block production.
 //!

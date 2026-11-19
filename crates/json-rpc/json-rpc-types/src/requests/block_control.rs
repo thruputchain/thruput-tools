@@ -68,6 +68,24 @@ IncreaseTimeRequest {
 }
 }
 
+object_request! {
+/// Give blocks without a pinned timepoint a fixed step from their parent, or
+/// follow the wall clock again. A step of 0 freezes the clock until the next
+/// pinned timepoint or time increase.
+SetBlockTimeStepRequest {
+    /// Nanoseconds from each block to the next unpinned one. Omit to follow
+    /// the wall clock.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::decimal::option::serialize",
+        deserialize_with = "read_optional_u64"
+    )]
+    #[schemars(schema_with = "u64_schema")]
+    step_nanoseconds: Option<u64>,
+}
+}
+
 /// How a local node produces blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +185,34 @@ mod tests {
             json!({"other": "1"}),
         ] {
             assert!(serde_json::from_value::<ProduceBlockRequest>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn block_time_step_is_a_decimal_or_omitted() {
+        let frozen: SetBlockTimeStepRequest =
+            serde_json::from_value(json!({"stepNanoseconds": "0"})).unwrap();
+        assert_eq!(frozen.step_nanoseconds, Some(0));
+        assert_eq!(
+            serde_json::to_value(&frozen).unwrap(),
+            json!({"stepNanoseconds": "0"})
+        );
+
+        let wall: SetBlockTimeStepRequest = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(wall.step_nanoseconds, None);
+        assert_eq!(serde_json::to_value(&wall).unwrap(), json!({}));
+
+        for invalid in [
+            json!({"stepNanoseconds": 0}),
+            json!({"stepNanoseconds": null}),
+            json!({"stepNanoseconds": "-1"}),
+            json!({"stepNanoseconds": "18446744073709551616"}),
+            json!({"step": "0"}),
+        ] {
+            assert!(
+                serde_json::from_value::<SetBlockTimeStepRequest>(invalid.clone()).is_err(),
+                "{invalid}"
+            );
         }
     }
 

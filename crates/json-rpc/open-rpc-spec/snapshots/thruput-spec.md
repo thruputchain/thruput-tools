@@ -2,7 +2,7 @@
 
 <!-- Generated from thruput-spec.json by tests/spec_snapshot.rs. Do not edit. -->
 
-Wire format `14.6.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
+Wire format `14.7.0`. Requests use JSON-RPC 2.0 with named parameters. Fields marked `?` are optional.
 
 This file lists all native methods. A server serves only the methods that its backends support; `getVersionInfo` lists them. For exact schemas, see [thruput-spec.json](thruput-spec.json).
 
@@ -38,6 +38,7 @@ This file lists all native methods. A server serves only the methods that its ba
 | [`dev_produceBlocks`](#dev_produceblocks) | Produce several blocks now, in order, optionally a fixed interval apart. On error, blocks already produced stay committed. |
 | [`dev_setNextBlockTimepoint`](#dev_setnextblocktimepoint) | Give the next block exactly this timepoint. Later blocks continue from it. |
 | [`dev_increaseTime`](#dev_increasetime) | Move the block clock forward for every later block. Produces no block. |
+| [`dev_setBlockTimeStep`](#dev_setblocktimestep) | Give blocks without a pinned timepoint a fixed step from their parent, or follow the wall clock again. A step of 0 freezes the clock. Produces no block. |
 | [`dev_setBlockDriver`](#dev_setblockdriver) | Change how the local node produces blocks while it runs. |
 
 ### `getVersionInfo`
@@ -194,7 +195,7 @@ Simulate an invocation without committing state.
 | `assumedAuth` | [`AssumedAuth`](#assumedauth) | no |  |
 | `caller` | [`Base58_ContractAddress`](#base58_contractaddress) | no |  |
 | `gasLimit` | decimal string | no | Canonical decimal integer in the inclusive range 0 to 18446744073709551615. |
-| `minStateBlockHeight` | decimal string | no | Fail-fast freshness floor; not a historical-state selector. |
+| `minStateBlockHeight` | decimal string | no | Freshness floor; not a historical-state selector. The server waits up to 2 s for a committed height to reach the view; a floor above the committed tip fails at once. |
 
 **Result:** [`SimulationResult`](#simulationresult)
 
@@ -214,7 +215,7 @@ Simulate a batch against one state snapshot.
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `invocations` | [`Invocation`](#invocation)[] (at least 1) | yes |  |
-| `minStateBlockHeight` | decimal string | no | Fail-fast freshness floor; not a historical-state selector. |
+| `minStateBlockHeight` | decimal string | no | Freshness floor; not a historical-state selector. The server waits up to 2 s for a committed height to reach the view; a floor above the committed tip fails at once. |
 
 **Result:** [`SimulationResults`](#simulationresults)
 
@@ -555,6 +556,24 @@ Move the block clock forward for every later block. Produces no block.
 | -32053 | `Overloaded` | `"overloaded"` |
 | -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
 
+### `dev_setBlockTimeStep`
+
+Give blocks without a pinned timepoint a fixed step from their parent, or follow the wall clock again. A step of 0 freezes the clock. Produces no block.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `stepNanoseconds` | decimal string | no | Nanoseconds from each block to the next unpinned one. Omit to follow the wall clock. |
+
+**Result:** [`BlockTimeStep`](#blocktimestep)
+
+| Code | [Error](#errors) | Data `kind` |
+| --- | --- | --- |
+| -32602 | `InvalidParams` | `"invalidParams"` |
+| -32050 | `BackendUnavailable` | `"backendUnavailable"` |
+| -32051 | `BackendTimeout` | `"backendTimeout"` |
+| -32053 | `Overloaded` | `"overloaded"` |
+| -32054 | `BackendDataInvalid` | `"backendDataInvalid"` |
+
 ### `dev_setBlockDriver`
 
 Change how the local node produces blocks while it runs.
@@ -762,6 +781,15 @@ Initial exact-block position has a direction, with no range anchor.
 | `order` | [`IterationOrder`](#iterationorder) | yes |  |
 
 The server rejects unknown fields.
+
+### `BlockTimeStep`
+
+The block clock after a step change.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `nextBlockTimepoint` | [`DecimalTimePoint`](#decimaltimepoint) | yes | Unix nanoseconds the next block receives if it is produced now. |
+| `stepNanoseconds` | [`DecimalU64`](#decimalu64) | no | Nanoseconds from each block to the next unpinned one. Absent while blocks follow the wall clock. |
 
 ### `ChainConfig`
 

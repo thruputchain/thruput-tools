@@ -176,12 +176,18 @@ pub enum NodeSupervisorError {
     },
 
     /// The child process exited before reporting readiness.
-    #[error("child process `{program}` exited before readiness with status {status}")]
+    #[error(
+        "child process `{program}` exited before readiness with status {status}{}",
+        stderr_tail_message(.stderr)
+    )]
     ExitedBeforeReady {
         /// Program path or name.
         program: String,
         /// Child exit status.
         status: ExitStatus,
+        /// Last stderr lines that were not structured log records, such as a
+        /// dynamic loader error.
+        stderr: Vec<String>,
     },
 
     /// The supervisor could not read the readiness line.
@@ -622,6 +628,15 @@ impl NodeSupervisorError {
             expected_protocol: expected_protocol.map(str::to_string),
         }
     }
+}
+
+/// Render stderr lines on one line, because the CLI escapes newlines in
+/// error messages.
+fn stderr_tail_message(stderr: &[String]) -> String {
+    if stderr.is_empty() {
+        return String::new();
+    }
+    format!("; stderr: {}", stderr.join("; "))
 }
 
 fn intro_rejected_message(

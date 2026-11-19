@@ -2,7 +2,7 @@
 
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     env,
     ffi::OsString,
     fs::{self, File},
@@ -57,6 +57,12 @@ pub const MAX_READINESS_LINE_BYTES: usize = 64 * 1024;
 
 /// Maximum accepted hogd-dev stderr log line length.
 pub const MAX_LOG_LINE_BYTES: usize = 64 * 1024;
+
+/// Unstructured stderr lines kept to explain an exit before readiness.
+const STDERR_TAIL_LINES: usize = 8;
+
+/// Bytes kept from each unstructured stderr line.
+const STDERR_TAIL_LINE_BYTES: usize = 1024;
 
 /// Maximum accepted runtime manifest size.
 pub const MAX_RUNTIME_MANIFEST_BYTES: usize = 1024 * 1024;
@@ -246,7 +252,7 @@ pub(crate) fn validate_runtime_identity(
 pub struct HogdDevProcess {
     readiness: HogdDevReadiness,
     child: SupervisedChild,
-    stderr_task: Option<JoinHandle<()>>,
+    stderr_task: Option<JoinHandle<Vec<String>>>,
     shutdown_grace: Duration,
     data_dir: Option<PathBuf>,
     pid_file: Option<PathBuf>,
@@ -380,8 +386,11 @@ impl HogdDevProcess {
             read_readiness_line(&mut child, stdout, config.startup_timeout).await;
         let readiness = match readiness_result {
             Ok(readiness) => readiness,
-            Err(error) => {
-                wait_for_stderr_task(stderr_task.take()).await;
+            Err(mut error) => {
+                let stderr_tail = wait_for_stderr_task(stderr_task.take()).await;
+                if let NodeSupervisorError::ExitedBeforeReady { stderr, .. } = &mut error {
+                    *stderr = stderr_tail;
+                }
                 return Err(error);
             }
         };
@@ -1306,7 +1315,11 @@ async fn read_readiness_line(
             // `None` and misclassify a clean exit as `ReadinessRead`. Bridge
             // the race with a short `wait()` before giving up.
             if let Some(status) = wait_briefly_for_exit(child).await? {
-                return Err(NodeSupervisorError::ExitedBeforeReady { program, status });
+                return Err(NodeSupervisorError::ExitedBeforeReady {
+                    program,
+                    status,
+                    stderr: Vec::new(),
+                });
             }
             kill_unready_child(child).await;
             Err(NodeSupervisorError::ReadinessRead {
@@ -1579,15 +1592,21 @@ async fn kill_unready_process_group(child: &mut SupervisedChild) {
     }
 }
 
-fn spawn_stderr_forwarder(stderr: ChildStderr) -> JoinHandle<()> {
+/// Forward hog-devnode's stderr log records, and return the last lines that
+/// were not log records, such as a dynamic loader error.
+fn spawn_stderr_forwarder(stderr: ChildStderr) -> JoinHandle<Vec<String>> {
     tokio::spawn(async move {
         let mut stderr = BufReader::new(stderr);
+        let mut tail = VecDeque::with_capacity(STDERR_TAIL_LINES);
 
         loop {
             match read_capped_line_discarding_tail(&mut stderr, MAX_LOG_LINE_BYTES).await {
                 Ok(CappedLine::Eof) => break,
                 Ok(CappedLine::Line(line)) => {
-                    forward_log_line(line.trim_end_matches(['\r', '\n']));
+                    let line = line.trim_end_matches(['\r', '\n']);
+                    if forward_log_line(line) == ForwardLogOutcome::InvalidJson {
+                        push_stderr_tail(&mut tail, line);
+                    }
                 }
                 Ok(CappedLine::TooLarge) => {
                     tracing::warn!(
@@ -1602,7 +1621,17 @@ fn spawn_stderr_forwarder(stderr: ChildStderr) -> JoinHandle<()> {
                 }
             }
         }
+        tail.into()
     })
+}
+
+/// Keep `line` among the last [`STDERR_TAIL_LINES`] unstructured stderr
+/// lines, truncated to [`STDERR_TAIL_LINE_BYTES`].
+fn push_stderr_tail(tail: &mut VecDeque<String>, line: &str) {
+    if tail.len() == STDERR_TAIL_LINES {
+        tail.pop_front();
+    }
+    tail.push_back(line[..line.floor_char_boundary(STDERR_TAIL_LINE_BYTES)].to_owned());
 }
 
 #[derive(Debug, Deserialize)]
@@ -1774,20 +1803,24 @@ fn parse_log_fields(fields: Option<&serde_json::Value>) -> ForwardedLogFields {
     }
 }
 
-async fn wait_for_stderr_task(task: Option<JoinHandle<()>>) {
+/// Wait for the stderr forwarder after a failed startup, and return the
+/// unstructured stderr lines it kept.
+async fn wait_for_stderr_task(task: Option<JoinHandle<Vec<String>>>) -> Vec<String> {
     const STDERR_DRAIN: Duration = Duration::from_millis(500);
 
     let Some(mut task) = task else {
-        return;
+        return Vec::new();
     };
-    if time::timeout(STDERR_DRAIN, &mut task).await.is_err() {
+    let Ok(result) = time::timeout(STDERR_DRAIN, &mut task).await else {
         tracing::warn!(
             timeout = ?STDERR_DRAIN,
             "hog-devnode stderr remained open after failed startup; aborting log forwarding"
         );
         task.abort();
         let _ = task.await;
-    }
+        return Vec::new();
+    };
+    result.unwrap_or_default()
 }
 
 #[cfg(test)]

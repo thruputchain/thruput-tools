@@ -627,6 +627,7 @@ async fn check_discovery(native: &NativeClient<HttpClient>) -> TestResult {
         "dev_produceBlocks",
         "dev_setNextBlockTimepoint",
         "dev_increaseTime",
+        "dev_setBlockTimeStep",
         "dev_setBlockDriver",
         "getVersionInfo",
         "getNetworkInfo",

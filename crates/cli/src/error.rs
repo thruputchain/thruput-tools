@@ -33,6 +33,11 @@ const PAGE_LIMIT_HINT: &str =
 const TOOLCHAIN_RETRY_HINT: &str =
     "check the artifact source and cache permissions, then retry `thruput toolchain install`";
 
+/// Next step for a local node that failed to start.
+const NODE_SUPERVISOR_HINT: &str = "check `--hog-devnode-binary`; if contract artifacts are installed elsewhere, \
+     pass `--contract-artifacts-dir <DIR>`, then inspect the hog-devnode process \
+     output and local node logs";
+
 /// All errors returned by CLI commands.
 ///
 /// Every variant carries its own metadata beside its message, and
@@ -370,12 +375,16 @@ pub enum CliError {
     CommandReportedFailure,
     #[error("node supervisor error: {0}")]
     #[code("node_supervisor_error")]
-    #[hint(
-        "check `--hog-devnode-binary`; if contract artifacts are installed elsewhere, \
-         pass `--contract-artifacts-dir <DIR>`, then inspect the hog-devnode process \
-         output and local node logs"
-    )]
+    #[hint(text = NODE_SUPERVISOR_HINT)]
     NodeSupervisor(String),
+    #[error("node supervisor error: {message}")]
+    #[code("node_supervisor_error")]
+    #[hint(expr = Some(node_exited_before_ready_hint(program, *exit_code)))]
+    NodeExitedBeforeReady {
+        message: String,
+        program: String,
+        exit_code: Option<i32>,
+    },
     #[error("node supervisor error: {message}")]
     #[code("protocol_intro_rejected")]
     #[hint(expr = Some(protocol_intro_hint(expected_protocol.as_deref())))]
@@ -810,6 +819,17 @@ fn cargo_failure_hint(stderr: &str) -> Cow<'static, str> {
             CARGO_FAILED_HINT
         },
     )
+}
+
+/// Hint for a hog-devnode that exited before readiness; 126 and 127 mean it could not run.
+fn node_exited_before_ready_hint(program: &str, exit_code: Option<i32>) -> Cow<'static, str> {
+    match exit_code {
+        Some(126 | 127) => Cow::Owned(format!(
+            "hog-devnode could not run; run `ldd {}` to find missing shared libraries",
+            render_shell_arg(program),
+        )),
+        _ => Cow::Borrowed(NODE_SUPERVISOR_HINT),
+    }
 }
 
 /// Hint for a rejected protocol intro, naming the protocol to pass when the

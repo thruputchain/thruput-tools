@@ -89,6 +89,30 @@ async fn block_time_controls_on_a_real_node() {
         assert_eq!(*pair[1].timepoint - *pair[0].timepoint, 12_000_000_000);
     }
 
+    // A zero step freezes the clock; a one-second step spaces blocks exactly.
+    let tick = *blocks[2].timepoint + DAY;
+    network
+        .produce_block_at(TimePoint::new(tick))
+        .await
+        .unwrap();
+    let frozen = network
+        .set_block_time_step(Some(Duration::ZERO))
+        .await
+        .unwrap();
+    assert_eq!(*frozen, tick);
+    for block in network.produce_blocks(3, None).await.unwrap() {
+        assert_eq!(*block.timepoint, tick);
+    }
+    network
+        .set_block_time_step(Some(Duration::from_secs(1)))
+        .await
+        .unwrap();
+    let stepped = network.produce_blocks(2, None).await.unwrap();
+    assert_eq!(*stepped[0].timepoint, tick + 1_000_000_000);
+    assert_eq!(*stepped[1].timepoint, tick + 2_000_000_000);
+    let resumed = network.set_block_time_step(None).await.unwrap();
+    assert!((tick + 2_000_000_000..tick + DAY).contains(&*resumed));
+
     // Switching modes reports the active settings.
     let status = network
         .set_block_driver(BlockDriverMode::Interval, Some(Duration::from_millis(250)))

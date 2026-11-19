@@ -1186,6 +1186,10 @@ struct NodeArgs {
     /// Timer interval for --block-driver interval
     #[arg(long)]
     block_interval_ms: Option<u64>,
+    /// Give blocks without a pinned time their parent's time plus this many
+    /// milliseconds, instead of the wall clock; 0 freezes the block clock
+    #[arg(long, value_name = "MS")]
+    block_time_step_ms: Option<u64>,
     /// Maximum simultaneous public JSON-RPC connections
     #[arg(long)]
     rpc_max_connections: Option<u32>,
@@ -1243,6 +1247,9 @@ impl NodeArgs {
         }
         options.block_driver = self.block_driver.map(Into::into);
         options.block_interval = self.block_interval_ms.map(std::time::Duration::from_millis);
+        options.block_time_step = self
+            .block_time_step_ms
+            .map(std::time::Duration::from_millis);
         options.rpc_max_connections = self.rpc_max_connections;
         options.rpc_cors = rpc_cors(self.no_cors, self.allow_origin);
         options.rpc_batch_concurrency = self.rpc_batch_concurrency;

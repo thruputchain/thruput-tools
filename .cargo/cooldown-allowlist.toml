@@ -4,6 +4,12 @@
 # Exceptions for specific releases go here as [[allow.exact]] entries (crate,
 # version), matching ../cooldown.toml.
 
+# Security fix for RUSTSEC-2026-0574 to RUSTSEC-2026-0582 (heapless unsound
+# APIs, fixed in 0.9.4). Remove once 0.9.4 is past the cooldown (2026-11-26).
+[[allow.exact]]
+crate = "heapless"
+version = "0.9.4"
+
 # Exemptions for first-party (thruput-*) crates.
 
 # from thruputchain/xdrs
