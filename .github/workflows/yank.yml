@@ -45,7 +45,7 @@ jobs:
       # Without a packages list, the action yanks every workspace crate that
       # isn't publish = false.
       - name: Yank
-        uses: thruputchain/actions/cargo-yank@af495ed44f45e032e437b2a8f6e6550a4b9390cc
+        uses: thruputchain/actions/cargo-yank@d5d241c3611578714646650d06cded86817e37f9
         with:
           version: ${{ inputs.version }}
           undo: ${{ inputs.undo }}
