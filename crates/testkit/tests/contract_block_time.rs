@@ -44,13 +44,8 @@ fn wall_clock_nanos() -> u64 {
     .expect("bug: the wall clock fits u64 nanoseconds")
 }
 
-/// Call `now()` as a view on a snapshot at or above `height`, and decode its
-/// CXS `u64`.
-///
-/// The view gateway can serve the previous snapshot for a moment after a
-/// commit (GH-652), so wait for the snapshot rather than assert on a stale one.
-/// One view of `now()`. Testkit floors the read at the highest block it has
-/// seen, so the first read already runs on a state at or after `height`.
+/// Call `now()` as a view and decode its CXS `u64`. Testkit floors the read
+/// at the highest block it has seen, so it already runs at or after `height`.
 async fn view_now(ctx: &AgentContext, contract: ContractAddress, height: i64) -> Result<u64> {
     let now = entrypoint_id(INTERFACE, VERSION, "now");
     let response = ctx.network().view_call(contract, now, &[], None).await?;

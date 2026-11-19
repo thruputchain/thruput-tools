@@ -33,9 +33,7 @@ use crate::error::{Result, TestkitError};
 
 const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a contract read retries `stateHeightUnavailable` against a server
-/// older than wire format 14.6.1, which does not wait for its floor itself.
-/// Newer servers wait up to the same 2 s.
+/// Retry budget for `stateHeightUnavailable` against pre-14.6.1 servers.
 const READ_FLOOR_WAIT: Duration = Duration::from_secs(2);
 const READ_FLOOR_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const PENDING_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -562,7 +560,7 @@ impl Network {
     /// this handle has seen, if any.
     fn read_floor(&self) -> Option<BlockHeight> {
         let height = self.inner.observed_height.load(Ordering::Acquire);
-        (height > 0).then(|| BlockHeight::from(height))
+        (height > 0).then_some(BlockHeight::from(height))
     }
 
     /// Read one latest-committed storage item at `address`/`key`.
@@ -587,11 +585,8 @@ impl Network {
     /// `caller` sets the simulated `msg.sender`; pass an agent's own address to
     /// read state keyed by that caller.
     ///
-    /// The read runs on a state at least as new as the highest block this
-    /// handle has seen, from a receipt or a produced block, so it observes
-    /// that block's effects and timepoint. Servers from wire format 14.6.1
-    /// wait for that height; on older servers, which fail at once with
-    /// `stateHeightUnavailable`, the read is retried for up to 2 s.
+    /// Runs on a state at least as new as the highest block this handle has
+    /// seen; a server that is behind is retried briefly.
     pub async fn view_call(
         &self,
         contract: ContractAddress,
@@ -611,20 +606,25 @@ impl Network {
             caller: caller.map(Base58),
             gas_limit: None,
         };
+        // The budget covers the first request too; retries get only what is
+        // left, and a retry cut short keeps the last refusal.
         let deadline = tokio::time::Instant::now() + READ_FLOOR_WAIT;
-        loop {
-            let result = client.simulate_invocation(request.clone()).await;
-            let behind = min_state_block_height.is_some()
-                && matches!(
-                    &result,
-                    Err(NativeClientError::Application { source, .. })
-                        if source.code() == codes::STATE_HEIGHT_UNAVAILABLE
-                );
-            if !behind || tokio::time::Instant::now() >= deadline {
-                return known(result, METHOD);
+        let mut result = client.simulate_invocation(request.clone()).await;
+        while min_state_block_height.is_some() && below_floor(&result) {
+            if deadline.saturating_duration_since(tokio::time::Instant::now())
+                <= READ_FLOOR_RETRY_INTERVAL
+            {
+                break;
             }
             tokio::time::sleep(READ_FLOOR_RETRY_INTERVAL).await;
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, client.simulate_invocation(request.clone())).await
+            {
+                Ok(next) => result = next,
+                Err(_) => break,
+            }
         }
+        known(result, METHOD)
     }
 
     /// Query events using native opaque pagination cursors.
@@ -809,6 +809,15 @@ fn invalid_argument(operation: &'static str, detail: &str) -> TestkitError {
         operation,
         detail: detail.to_owned(),
     }
+}
+
+/// Whether a read failed because the server's state is below its floor.
+fn below_floor<T>(result: &std::result::Result<T, NativeClientError>) -> bool {
+    matches!(
+        result,
+        Err(NativeClientError::Application { source, .. })
+            if source.code() == codes::STATE_HEIGHT_UNAVAILABLE
+    )
 }
 
 fn known<T>(
