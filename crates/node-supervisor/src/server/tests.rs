@@ -217,13 +217,14 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         .request::<out::VersionInfo, _>("getVersionInfo", NamedParams(serde_json::json!({})))
         .await
         .expect("bug: version should report the embedding client identity");
-    assert_eq!(version.wire_format, "14.6.1");
+    assert_eq!(version.wire_format, "14.7.0");
     let expected = [
         "dev_getPendingTransactionCount",
         "dev_increaseTime",
         "dev_produceBlock",
         "dev_produceBlocks",
         "dev_setBlockDriver",
+        "dev_setBlockTimeStep",
         "dev_setNextBlockTimepoint",
         "getBalance",
         "getChainConfig",
@@ -1158,6 +1159,128 @@ async fn a_request_waiting_behind_hung_automatic_production_times_out() {
         .await
         .expect("bug: shutdown should not wait for the hung commit")
         .expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_block_time_step_replaces_the_wall_clock_over_rpc() {
+    let (handle, client) =
+        start_fake_with_block_driver("automine", BlockDriverConfig::manual()).await;
+    let tick = wall_clock_nanos() + nanos(DAY);
+    let call = |method: &'static str, params: serde_json::Value| {
+        let client = &client;
+        async move {
+            client
+                .request::<serde_json::Value, _>(method, NamedParams(params))
+                .await
+        }
+    };
+    let timepoint = |value: &serde_json::Value, field: &str| -> u64 {
+        value[field]
+            .as_str()
+            .expect("bug: timepoints are decimal strings")
+            .parse()
+            .expect("bug: timepoints are u64")
+    };
+
+    let frozen = call(
+        "dev_setBlockTimeStep",
+        serde_json::json!({"stepNanoseconds": "0"}),
+    )
+    .await
+    .expect("bug: a zero step should be accepted");
+    assert_eq!(frozen["stepNanoseconds"], "0");
+    call(
+        "dev_produceBlock",
+        serde_json::json!({"blockTimepoint": tick.to_string()}),
+    )
+    .await
+    .expect("bug: a pinned block should commit");
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let block = call("dev_produceBlock", serde_json::json!({}))
+            .await
+            .expect("bug: a frozen block should commit");
+        assert_eq!(
+            timepoint(&block, "blockTimepoint"),
+            tick,
+            "frozen at the tick"
+        );
+    }
+
+    let second = call(
+        "dev_setBlockTimeStep",
+        serde_json::json!({"stepNanoseconds": nanos(Duration::from_secs(1)).to_string()}),
+    )
+    .await
+    .expect("bug: a one-second step should be accepted");
+    assert_eq!(
+        timepoint(&second, "nextBlockTimepoint"),
+        tick + nanos(Duration::from_secs(1))
+    );
+    let stepped = call("dev_produceBlocks", serde_json::json!({"count": 3}))
+        .await
+        .expect("bug: stepped blocks should commit");
+    let times: Vec<u64> = stepped["blocks"]
+        .as_array()
+        .expect("bug: blocks is an array")
+        .iter()
+        .map(|block| timepoint(block, "blockTimepoint"))
+        .collect();
+    let second_nanos = nanos(Duration::from_secs(1));
+    assert_eq!(
+        times,
+        [
+            tick + second_nanos,
+            tick + 2 * second_nanos,
+            tick + 3 * second_nanos
+        ]
+    );
+
+    let wall = call("dev_setBlockTimeStep", serde_json::json!({}))
+        .await
+        .expect("bug: clearing the step should be accepted");
+    assert!(wall.get("stepNanoseconds").is_none());
+    let resumed = timepoint(&wall, "nextBlockTimepoint");
+    assert!(resumed >= times[2], "clearing never moves the clock back");
+    assert!(
+        resumed < times[2] + nanos(Duration::from_mins(1)),
+        "clearing continues from the tip, not from today"
+    );
+
+    let error = call(
+        "dev_setBlockTimeStep",
+        serde_json::json!({"stepNanoseconds": 5}),
+    )
+    .await
+    .expect_err("bug: a numeric step is invalid");
+    assert!(
+        matches!(error, ClientError::Call(ref error) if error.code() == codes::INVALID_PARAMS),
+        "{error}"
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_configured_step_applies_from_startup() {
+    let config = BlockDriverConfig::manual().with_time_step(Some(Duration::ZERO));
+    let (handle, _client) = start_fake_with_block_driver("automine", config).await;
+    let producer = handle.block_producer();
+    let tick = wall_clock_nanos() + nanos(DAY);
+
+    let pinned = producer
+        .produce_block_at(TimePoint::new(tick))
+        .await
+        .expect("bug: a pinned block should commit");
+    assert_eq!(*pinned.timepoint, tick);
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let next = producer.produce_block().await.expect("bug: block commits");
+    assert_eq!(
+        *next.timepoint, tick,
+        "a zero step from the config freezes the clock"
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
 }
 
 #[tokio::test]

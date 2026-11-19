@@ -228,6 +228,9 @@ pub struct LocalNodeOptions {
     pub block_driver: Option<LocalNodeBlockDriverMode>,
     /// Override the interval used by timer-driven block production.
     pub block_interval: Option<Duration>,
+    /// Fixed step between blocks without a pinned timepoint; zero freezes the
+    /// block clock. `None` follows the wall clock.
+    pub block_time_step: Option<Duration>,
     /// Override the public JSON-RPC simultaneous connection cap.
     pub rpc_max_connections: Option<u32>,
     /// Override active plus buffered entries per JSON-RPC array (1..=1024).
@@ -1148,6 +1151,14 @@ fn local_node_config(
             "block interval must be at least 1 ms".into(),
         ));
     }
+    if options
+        .block_time_step
+        .is_some_and(|step| u64::try_from(step.as_nanos()).is_err())
+    {
+        return Err(CliError::Other(
+            "block time step must be at most 18446744073709 ms".into(),
+        ));
+    }
     if options.block_interval.is_some()
         && !matches!(
             options.block_driver,
@@ -1237,9 +1248,13 @@ fn local_node_config(
         Some(concurrency) => config.with_rpc_batch_concurrency(concurrency),
         None => config,
     };
-    let config = match (options.block_driver, options.block_interval) {
-        (None, None) => config,
-        (mode, interval) => {
+    let config = match (
+        options.block_driver,
+        options.block_interval,
+        options.block_time_step,
+    ) {
+        (None, None, None) => config,
+        (mode, interval, time_step) => {
             let mut block_driver = config.block_driver;
             if let Some(mode) = mode {
                 block_driver = block_driver.with_mode(match mode {
@@ -1256,6 +1271,9 @@ fn local_node_config(
             }
             if let Some(interval) = interval {
                 block_driver = block_driver.with_interval(interval);
+            }
+            if time_step.is_some() {
+                block_driver = block_driver.with_time_step(time_step);
             }
             config.with_block_driver(block_driver)
         }
@@ -1588,6 +1606,7 @@ mod tests {
             ],
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
+            block_time_step: Some(Duration::ZERO),
             rpc_max_connections: Some(512),
             rpc_batch_concurrency: Some(17.try_into().unwrap()),
             ramdb_bytes: Some(2_147_483_648),
@@ -1638,6 +1657,7 @@ mod tests {
             thruput_node_supervisor::BlockDriverMode::Interval
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
+        assert_eq!(config.block_driver.time_step, Some(Duration::ZERO));
         assert_eq!(config.rpc_max_connections, 512);
         assert_eq!(config.rpc_batch_concurrency.get(), 17);
         assert_eq!(config.bundle_identity.as_ref(), Some(&supplied_identity));
@@ -1941,6 +1961,22 @@ mod tests {
         .expect_err("zero interval should be rejected");
 
         assert!(matches!(err, CliError::Other(message) if message.contains("block interval")));
+    }
+
+    #[test]
+    fn local_node_config_rejects_a_block_time_step_beyond_u64_nanoseconds() {
+        let err = local_node_config(LocalNodeOptions {
+            block_time_step: Some(Duration::from_millis(18_446_744_073_710)),
+            ..LocalNodeOptions::default()
+        })
+        .expect_err("a step beyond u64 nanoseconds should be rejected");
+        assert!(matches!(err, CliError::Other(message) if message.contains("block time step")));
+
+        local_node_config(LocalNodeOptions {
+            block_time_step: Some(Duration::from_millis(18_446_744_073_709)),
+            ..LocalNodeOptions::default()
+        })
+        .expect("the largest step that fits is accepted");
     }
 
     #[test]

@@ -469,6 +469,28 @@ impl Network {
         .map(|clock| clock.next_block_timepoint)
     }
 
+    /// Give blocks without a pinned timepoint their parent's timepoint plus
+    /// `step`, instead of the wall clock; `None` follows the wall clock again.
+    /// [`Duration::ZERO`] freezes the clock, so every block until the next
+    /// pin or time increase carries the same timepoint. Returns the timepoint
+    /// the next block would receive now.
+    ///
+    /// To start a harness-owned node with a step, set
+    /// [`BlockDriverConfig::with_time_step`] on [`LocalNetworkConfig::block_driver`].
+    pub async fn set_block_time_step(&self, step: Option<Duration>) -> Result<TimePoint> {
+        const METHOD: &str = "dev_setBlockTimeStep";
+        let request = requests::SetBlockTimeStepRequest {
+            step_nanoseconds: step.map(|step| nanos(METHOD, step)).transpose()?,
+        };
+        known(
+            self.require_client(METHOD)?
+                .set_block_time_step(request)
+                .await,
+            METHOD,
+        )
+        .map(|clock| clock.next_block_timepoint)
+    }
+
     /// Change how the node produces blocks. An `interval` replaces the one
     /// used in interval mode.
     pub async fn set_block_driver(

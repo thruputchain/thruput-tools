@@ -141,6 +141,7 @@ pub const METHODS: &[&str] = &[
     "dev_produceBlocks",
     "dev_setNextBlockTimepoint",
     "dev_increaseTime",
+    "dev_setBlockTimeStep",
     "dev_setBlockDriver",
 ];
 
@@ -221,7 +222,8 @@ pub fn method_error_codes(method: &str) -> Option<&'static [i32]> {
         | "dev_produceBlock"
         | "dev_produceBlocks"
         | "dev_setNextBlockTimepoint"
-        | "dev_increaseTime" => &[
+        | "dev_increaseTime"
+        | "dev_setBlockTimeStep" => &[
             INVALID_PARAMS,
             BACKEND_UNAVAILABLE,
             BACKEND_TIMEOUT,

@@ -37,6 +37,30 @@ BlockClock {
 }
 }
 
+response_object! {
+/// The block clock after a step change.
+BlockTimeStep {
+    /// Nanoseconds from each block to the next unpinned one. Absent while
+    /// blocks follow the wall clock.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::decimal::option::serialize",
+        deserialize_with = "read_optional_step"
+    )]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
+    step_nanoseconds: Option<u64>,
+    /// Unix nanoseconds the next block receives if it is produced now.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<TimePoint>")]
+    next_block_timepoint: TimePoint,
+}
+}
+
+fn read_optional_step<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    crate::decimal::Decimal::<u64>::deserialize(d).map(|value| Some(value.0))
+}
+
 response_strings! {
 /// How the local node produces blocks.
 ActiveBlockDriverMode {
@@ -63,6 +87,19 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn block_time_step_omits_a_wall_clock_step() {
+        let frozen = json!({"stepNanoseconds": "0", "nextBlockTimepoint": "17"});
+        let decoded: BlockTimeStep = serde_json::from_value(frozen.clone()).unwrap();
+        assert_eq!(decoded.step_nanoseconds, Some(0));
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), frozen);
+
+        let wall = json!({"nextBlockTimepoint": "17"});
+        let decoded: BlockTimeStep = serde_json::from_value(wall.clone()).unwrap();
+        assert_eq!(decoded.step_nanoseconds, None);
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), wall);
+    }
 
     #[test]
     fn produced_blocks_use_decimal_strings() {

@@ -82,6 +82,7 @@ impl NativeCapabilities {
             | "dev_produceBlocks"
             | "dev_setNextBlockTimepoint"
             | "dev_increaseTime"
+            | "dev_setBlockTimeStep"
             | "dev_setBlockDriver" => self.block_control,
             _ => false,
         }
@@ -320,6 +321,9 @@ macro_rules! dispatch {
     };
     (increase_time, $s:expr, $r:expr) => {
         $s.block_control.increase_time($r).await
+    };
+    (set_block_time_step, $s:expr, $r:expr) => {
+        $s.block_control.set_block_time_step($r).await
     };
     (set_block_driver, $s:expr, $r:expr) => {
         $s.block_control.set_block_driver($r).await

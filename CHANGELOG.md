@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### A fixed block time step on a local node
+
+A local node can give blocks without a pinned time their parent's time plus a
+fixed step, instead of the wall clock. A step of 0 freezes the block clock:
+every block until the next pinned time or time increase carries the same time,
+as `anvil_setBlockTimestampInterval(0)` does. A simulation can pin one block per
+tick and have every transaction in the tick carry exactly the tick's time.
+
+- New local-only JSON-RPC method `dev_setBlockTimeStep`:
+  `{"stepNanoseconds": "0"}` sets a step; `{}` follows the wall clock again.
+  The result reports the step and the next block's time. The hosted gateway
+  does not serve it. The wire format is 14.7.0.
+- `thruput node --block-time-step-ms <MS>` starts the node with a step.
+- Pins (`dev_setNextBlockTimepoint`, `dev_produceBlock` with a
+  `blockTimepoint`), `dev_increaseTime`, and `dev_produceBlocks` with an
+  `intervalNanoseconds` work as before; the step applies to every other block.
+- While the chain tip is one of a fresh chain's initial blocks, the next block
+  still takes the wall clock. Clearing the step continues from the tip's time.
+- Rust: `BlockProducer::set_block_time_step`, `BlockDriverConfig::time_step`
+  and `with_time_step`, and testkit `Network::set_block_time_step`.
+
 ## 0.46.1
 
 ### Contract views on a local node see moved block time

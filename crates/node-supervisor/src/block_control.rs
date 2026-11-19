@@ -85,6 +85,21 @@ impl NativeBlockControlPlane for LocalBlockControl {
             .map_err(|error| rpc_failure(&error))
     }
 
+    async fn set_block_time_step(
+        &self,
+        request: input::SetBlockTimeStepRequest,
+    ) -> RpcResult<out::BlockTimeStep> {
+        let step_nanoseconds = request.step_nanoseconds;
+        self.producer
+            .set_block_time_step(step_nanoseconds.map(Duration::from_nanos))
+            .await
+            .map(|next_block_timepoint| out::BlockTimeStep {
+                step_nanoseconds,
+                next_block_timepoint,
+            })
+            .map_err(|error| rpc_failure(&error))
+    }
+
     async fn set_block_driver(
         &self,
         request: input::SetBlockDriverRequest,
