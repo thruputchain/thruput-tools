@@ -246,3 +246,18 @@ debug = "line-tables-only"
 # Build scripts and proc macros are build-time machinery nobody debugs.
 [profile.dev.build-override]
 debug = false
+
+# TEMPORARY (GH-662): protocol crates with TransactionViewQuery.block_timepoint
+# from thruput-protocol-rs#384, until they are published as 0.66.3. Remove before merge.
+[patch.crates-io]
+thruput-xdr-macros = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-syscall = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-xdr = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-scp = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-trace = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-node-types = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-node-rpc = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-indexer = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-db-gateway = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-view = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }
+thruput-spec = { git = "https://github.com/thruputchain/thruput-protocol-rs", branch = "auto-update/protocol" }

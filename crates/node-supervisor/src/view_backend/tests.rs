@@ -24,6 +24,8 @@ enum FakeViewGatewayMode {
     IntroRejected,
     ViewSlow,
     Batch,
+    /// Return the timepoint a view ran at.
+    EchoTimepoint,
 }
 
 struct FakeViewGateway {
@@ -98,13 +100,18 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
         if self.mode == FakeViewGatewayMode::ViewSlow {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
+        let return_buffer = if self.mode == FakeViewGatewayMode::EchoTimepoint {
+            query.block_timepoint.to_be_bytes().to_vec()
+        } else {
+            vec![1, 2, 3]
+        };
 
         Ok(ViewGatewayResult::ViewGatewayOk {
             payload: ViewGatewayPayload {
                 gas_consumed: query.invocation.gas_limit,
                 height: 42.into(),
                 output: InvocationFrameOutput::Return {
-                    return_buffer: BytesM(vec![1, 2, 3]),
+                    return_buffer: BytesM(return_buffer),
                 },
                 events: VecM(vec![]),
             },
@@ -152,6 +159,8 @@ async fn batch_pending_io_respects_the_public_deadline() {
         &protocol_text(&PROTOCOL_VERSION),
         None,
         Duration::from_secs(30),
+        crate::block_driver::SharedBlockClock::default(),
+        None,
     )
     .await
     .unwrap();
@@ -176,6 +185,8 @@ async fn connect_optional_without_endpoint_uses_stub() {
         &protocol_text(&PROTOCOL_VERSION),
         None,
         Duration::from_secs(1),
+        crate::block_driver::SharedBlockClock::default(),
+        None,
     )
     .await
     .expect("missing endpoint should not fail startup");
@@ -198,6 +209,8 @@ async fn connect_to_dead_view_gateway_port_fails_startup_probe() {
             &protocol_text(&PROTOCOL_VERSION),
             None,
             Duration::from_secs(1),
+            crate::block_driver::SharedBlockClock::default(),
+            None,
         ),
     )
     .await
@@ -228,6 +241,8 @@ async fn connect_to_intro_rejected_view_gateway_fails_startup_probe() {
         "hogp/sent00000000000",
         Some("hogp/expected0000000"),
         Duration::from_secs(1),
+        crate::block_driver::SharedBlockClock::default(),
+        None,
     )
     .await;
 
@@ -268,6 +283,8 @@ async fn view_gateway_rpc_timeout_maps_to_backend_timeout() {
         &protocol_text(&PROTOCOL_VERSION),
         None,
         Duration::from_millis(10),
+        crate::block_driver::SharedBlockClock::default(),
+        None,
     )
     .await
     .expect("fake ViewGateway should connect");
@@ -304,6 +321,8 @@ async fn native_local_simulation_preserves_snapshot_and_deadline() {
             &protocol_text(&PROTOCOL_VERSION),
             None,
             Duration::from_secs(30),
+            crate::block_driver::SharedBlockClock::default(),
+            None,
         )
         .await
         .unwrap();
@@ -351,6 +370,8 @@ async fn native_local_batch_preserves_order_and_freshness_evidence() {
         &protocol_text(&PROTOCOL_VERSION),
         None,
         Duration::from_mins(1),
+        crate::block_driver::SharedBlockClock::default(),
+        None,
     )
     .await
     .unwrap();
@@ -402,5 +423,46 @@ async fn native_local_batch_preserves_order_and_freshness_evidence() {
             ));
         }
     }
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_local_view_runs_at_the_next_block_time() {
+    use thruput_json_rpc_types::{requests, responses};
+    // 2000-01-01, far behind the wall clock.
+    const Y2K: u64 = 946_684_800_000_000_000;
+    let (addr, task) = start_fake_view_gateway(FakeViewGatewayMode::EchoTimepoint).await;
+    let backend = HogdDevViewBackend::connect_optional(
+        Some(addr),
+        &protocol_text(&PROTOCOL_VERSION),
+        None,
+        Duration::from_secs(30),
+        crate::block_driver::SharedBlockClock::frozen_at(Y2K),
+        None,
+    )
+    .await
+    .unwrap();
+    let request = requests::SimulateInvocationRequest {
+        address: thruput_json_rpc_types::base58::Base58(thruput_xdr::types::ContractAddress::from(
+            [7; 32],
+        )),
+        entrypoint: HexBytes(vec![8; 8]),
+        calldata: HexBytes(vec![1, 2, 3]),
+        caller: None,
+        assumed_auth: None,
+        gas_limit: Some(100),
+        min_state_block_height: None,
+    };
+    let result = backend
+        .simulate(RpcRequestContext::unbounded(), request, 100)
+        .await
+        .unwrap();
+    let responses::InvocationOutput::Return { return_data } = result.output else {
+        panic!("bug: the fake returns the view's timepoint");
+    };
+    assert_eq!(
+        u64::from_be_bytes(return_data.0.as_slice().try_into().unwrap()),
+        Y2K
+    );
     task.abort();
 }

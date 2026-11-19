@@ -1,16 +1,21 @@
 //! hogd-dev ViewGateway-backed simulation adapter.
 
-use std::{fmt, net::SocketAddr, time::Duration};
+use std::{fmt, net::SocketAddr, time::Duration, time::SystemTime};
 
 use async_trait::async_trait;
 use thruput_hogd_backend::{intro, view as shared_view};
 use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
 use thruput_json_rpc_types::protocol_token::protocol_from_text;
+use thruput_node_rpc::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use thruput_view::ViewGateway_ViewGateway1_Client;
 use thruput_x23_transport::connect;
+use thruput_xdr::types::TimePoint;
 
 use crate::{
-    NodeSupervisorError, request_deadline::within_request_deadline, service::VIEW_GATEWAY,
+    NodeSupervisorError,
+    block_driver::{SharedBlockClock, tip_parent},
+    request_deadline::within_request_deadline,
+    service::VIEW_GATEWAY,
     stub_backend::StubBackend,
 };
 
@@ -22,6 +27,12 @@ pub(crate) enum HogdDevViewBackend {
     Gateway {
         client: ViewGateway_ViewGateway1_Client,
         request_timeout: Duration,
+        /// The block driver's clock: a view runs at the next block's time.
+        clock: SharedBlockClock,
+        /// Read only to judge a refused view; see
+        /// [`HogdDevViewBackend::retry_timepoint`]. Without it, a refusal is
+        /// returned as is.
+        scheduler: Option<SchedulerCoord_SchedulerCoord1_Client>,
     },
     Stub(StubBackend),
 }
@@ -41,6 +52,8 @@ impl HogdDevViewBackend {
         protocol_version: &str,
         expected_protocol: Option<&str>,
         request_timeout: Duration,
+        clock: SharedBlockClock,
+        scheduler: Option<SchedulerCoord_SchedulerCoord1_Client>,
     ) -> Result<Self, NodeSupervisorError> {
         let Some(endpoint) = endpoint else {
             tracing::info!(
@@ -78,7 +91,32 @@ impl HogdDevViewBackend {
         Ok(Self::Gateway {
             client,
             request_timeout,
+            clock,
+            scheduler,
         })
+    }
+
+    /// The timepoint a view runs at: the one the next block would get, or the
+    /// wall clock before the block driver has seen a tip.
+    fn view_timepoint(clock: &SharedBlockClock) -> TimePoint {
+        clock
+            .next_block_timepoint(SystemTime::now())
+            .unwrap_or_else(shared_view::wall_clock_timepoint)
+    }
+
+    /// After hogd refused a view stated at `stated`, the timepoint to retry
+    /// it at, if a newer tip is why: hogd picks its snapshot after the view
+    /// is stated, so a block committed in between can be later than `stated`.
+    async fn retry_timepoint(
+        clock: &SharedBlockClock,
+        scheduler: Option<&SchedulerCoord_SchedulerCoord1_Client>,
+        stated: &TimePoint,
+    ) -> Option<TimePoint> {
+        let tip = TimePoint::new(tip_parent(scheduler?).await.ok()?.timepoint);
+        if !shared_view::view_timepoint_refused(stated, &tip) {
+            return None;
+        }
+        Some(Self::view_timepoint(clock).max(tip))
     }
 
     pub(crate) const fn plane_status(&self) -> crate::server::PlaneStatus {
