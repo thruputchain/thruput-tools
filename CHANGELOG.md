@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.46.0
 
 ### RV32 artifact format v7 declares a syscall API version instead of a gas schedule
 
