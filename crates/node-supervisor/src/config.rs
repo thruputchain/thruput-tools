@@ -138,13 +138,14 @@ pub struct NodeSupervisorConfig {
 
 /// Browser (CORS) access to the public JSON-RPC listener.
 ///
-/// The default sends no CORS headers, so embedders such as test harnesses
-/// do not expose their node to web pages. `thruput node` opts in to
+/// Only `thruput node` enables HTTP CORS by default: it opts in to
 /// [`RpcCors::AllowAny`], as Anvil does, so a browser app can call a local
-/// node the same way it calls a hosted gateway.
+/// node the same way it calls a hosted gateway. The default here sends no
+/// CORS headers, so integration nodes, the testkit and other embedders do not
+/// expose their node to web pages over HTTP.
 ///
-/// This controls HTTP CORS only. The listener also accepts WebSocket
-/// connections and does not check their `Origin`.
+/// This controls HTTP CORS only. Every node, including one with CORS
+/// disabled, accepts WebSocket connections without checking their `Origin`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RpcCors {
