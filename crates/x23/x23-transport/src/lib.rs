@@ -45,6 +45,10 @@ use rpc_driver::{
 /// private, trusted network.
 pub const HOGD_LARGE_MESSAGE_SIZE: u32 = 64 * 1024 * 1024;
 
+/// The scheduler coordinator can return a full proposal up to hogd's bulk RPC
+/// limit. This is the RPC record ceiling because the high bit marks the final fragment.
+pub const HOGD_PROPOSAL_MESSAGE_SIZE: u32 = 0x7FFF_FFFF;
+
 /// Build a client configuration that accepts protocol-sized responses from a
 /// trusted hogd endpoint.
 pub fn hogd_large_message_config() -> ConnectionConfig {

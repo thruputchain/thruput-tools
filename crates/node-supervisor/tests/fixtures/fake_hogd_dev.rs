@@ -151,6 +151,9 @@ fn main() {
             run_ready_with_scheduler(FakeSchedulerMode::SubmitBatchProbe);
         }
         Ok("automine") => run_ready_with_scheduler(FakeSchedulerMode::Automine),
+        Ok("automine-large-proposal") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineLargeProposal);
+        }
         Ok("automine-slow-coordinator") => {
             run_ready_with_scheduler(FakeSchedulerMode::AutomineSlowCoordinator);
         }
@@ -194,17 +197,7 @@ fn main() {
             }
         }
         Ok("timeout-record-term-ignore") => run_record_term_then_ignore(),
-        Ok("oversized-readiness") => {
-            io::stdout()
-                .write_all(&vec![b'x'; 70_000])
-                .expect("bug: fake child stdout should be writable");
-            io::stdout()
-                .flush()
-                .expect("bug: fake child stdout should flush");
-            loop {
-                thread::sleep(Duration::from_mins(1));
-            }
-        }
+        Ok("oversized-readiness") => run_oversized_readiness(),
         Ok("exit-7") => process::exit(7),
         Ok("hang") => loop {
             thread::sleep(Duration::from_mins(1));
@@ -225,6 +218,18 @@ fn main() {
             FakeDbGatewayMode::IntroRejected,
         ),
         _ => {}
+    }
+}
+
+fn run_oversized_readiness() -> ! {
+    io::stdout()
+        .write_all(&vec![b'x'; 70_000])
+        .expect("bug: fake child stdout should be writable");
+    io::stdout()
+        .flush()
+        .expect("bug: fake child stdout should flush");
+    loop {
+        thread::sleep(Duration::from_mins(1));
     }
 }
 
@@ -803,6 +808,7 @@ enum FakeSchedulerMode {
     Normal,
     SubmitBatchProbe,
     Automine,
+    AutomineLargeProposal,
     AutomineSlowCommit,
     /// Runtime coordinator tip reads and commits each take
     /// [`SLOW_COORDINATOR_DELAY`], so tests can time a request's deadline
@@ -830,6 +836,7 @@ impl FakeSchedulerMode {
         matches!(
             self,
             Self::Automine
+                | Self::AutomineLargeProposal
                 | Self::AutomineSlowCommit
                 | Self::AutomineSlowCoordinator
                 | Self::AutomineSerializeProbe
@@ -1109,13 +1116,18 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
                 .lock()
                 .expect("bug: fake candidate mutex poisoned") = Some((block_id, expected));
         }
+        let batch_bytes = if self.mode == FakeSchedulerMode::AutomineLargeProposal {
+            thruput_x23_transport::HOGD_LARGE_MESSAGE_SIZE + 1
+        } else {
+            1
+        };
         Ok(SchedulerProposalResult::SchedulerProposalOK {
             proposed_block: SchedulerProposedBlock {
                 block_id,
                 txs: ParallelSignedTransactionBatch::new(ParallelBatch {
                     segment_tokens: VecM(vec![1]),
-                    segment_bytes: VecM(vec![1]),
-                    xdr: BytesM(vec![0x01]),
+                    segment_bytes: VecM(vec![batch_bytes]),
+                    xdr: BytesM(vec![0x01; batch_bytes as usize]),
                 }),
                 proposal: Proposal {
                     header,

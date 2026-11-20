@@ -1504,6 +1504,19 @@ async fn block_control_rpc_methods_drive_the_local_block_clock() {
 }
 
 #[tokio::test]
+async fn scheduler_coordinator_accepts_proposal_over_64_mib() {
+    let (handle, _client) =
+        start_fake_with_block_driver("automine-large-proposal", BlockDriverConfig::manual()).await;
+    let block = handle
+        .block_producer()
+        .produce_block()
+        .await
+        .expect("bug: large proposal should commit");
+    assert_eq!(block.batch_xdr_bytes, 64 * 1024 * 1024 + 1);
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
 async fn malformed_scheduler_proposal_returns_typed_error_without_panicking_driver() {
     let (handle, client) =
         start_fake_with_block_driver("automine-malformed-proposal", BlockDriverConfig::manual())
