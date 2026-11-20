@@ -72,6 +72,10 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
         let active = state.active.fetch_add(1, Ordering::SeqCst) + 1;
         state.peak.fetch_max(active, Ordering::SeqCst);
         tokio::time::sleep(state.delay).await;
+        // Stop counting before the response goes out. Once the client has
+        // it, the client can send its next request, which must not overlap
+        // this one in the count.
+        state.active.fetch_sub(1, Ordering::SeqCst);
     }
     let body =
         serde_json::to_vec(&json!({"jsonrpc":"2.0","id":request["id"],"result":result})).unwrap();
@@ -81,9 +85,6 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
     );
     let _ = socket.write_all(header.as_bytes()).await;
     let _ = socket.write_all(&body).await;
-    if is_read {
-        state.active.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 async fn benchmark(
