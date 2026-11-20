@@ -4276,6 +4276,7 @@ dependencies = [
  "thruput-indexer",
  "thruput-json-rpc-types",
  "thruput-node-rpc",
+ "thruput-node-supervisor",
  "thruput-rpc-driver",
  "thruput-signing",
  "thruput-x23-transport",

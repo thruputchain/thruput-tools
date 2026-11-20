@@ -43,6 +43,7 @@ mod service {
 
 pub use block_driver::{
     BlockProducer, BlockProductionError, MAX_BLOCKS_PER_REQUEST, ProducedBlock,
+    proposal_consensus_value,
 };
 pub use config::{
     BlockDriverConfig, BlockDriverMode, CorsOriginError, HogdDevConfig, LocalAirdropConfig,

@@ -1217,11 +1217,7 @@ async fn commit_proposed_block(
     let batch_xdr_bytes = proposed_block.txs.xdr.0.len();
     let height = proposed_block.proposal.header.block_height.clone();
     let timepoint = *proposed_block.proposal.header.block_timepoint;
-    let value = consensus_value(
-        &parent_value,
-        proposed_block.proposal.header,
-        &proposed_block.proposal.transactions,
-    )?;
+    let value = proposal_consensus_value(&parent_value, proposed_block.proposal)?;
 
     let outcome = match scheduler
         .schedulercoord_commit_block(&block_id, &value)
@@ -1252,17 +1248,17 @@ async fn commit_proposed_block(
     })
 }
 
-fn consensus_value(
+/// Build the commit value for a local scheduler proposal and its parent.
+pub fn proposal_consensus_value(
     parent: &ConsensusValue,
-    proposal_header: ProposalHeader,
-    proposal_txs: &thruput_node_rpc::ProposalTxs,
+    proposal: thruput_node_rpc::Proposal,
 ) -> Result<ConsensusValue, BlockProductionError> {
     Ok(ConsensusValue {
         protocol: Protocol::new(0),
         ext: ExtensionPoint::_0,
         prev_hash: hash_consensus_value(parent)?,
-        proposal_header,
-        proposal_txs_hash: proposal_txs_compatibility_hash(proposal_txs)?,
+        proposal_header: proposal.header,
+        proposal_txs_hash: proposal_txs_compatibility_hash(proposal.transactions)?,
         upgrades: xdrs::VecM::default(),
     })
 }
@@ -1305,16 +1301,13 @@ const fn domain_separator_cxs<const N: usize>(name: &[u8]) -> [u8; N] {
 // where base is the ProposalTxs with both batches emptied. hogd rejects a
 // commit whose hash differs, so this changes only in lockstep with hogd.
 fn proposal_txs_compatibility_hash(
-    proposal_txs: &thruput_node_rpc::ProposalTxs,
+    proposal_txs: thruput_node_rpc::ProposalTxs,
 ) -> Result<ProposalTxsHash, BlockProductionError> {
-    let mut base = proposal_txs.clone();
-    base.signed_hash.segment_tokens.0.clear();
-    base.signed_hash.segment_bytes.0.clear();
-    base.signed_hash.xdr.0.clear();
-    base.nondeterministic_data.segment_tokens.0.clear();
-    base.nondeterministic_data.segment_bytes.0.clear();
-    base.nondeterministic_data.xdr.0.clear();
-
+    let base = thruput_node_rpc::ProposalTxs {
+        signed_hash: thruput_node_rpc::ParallelBatch::empty().into(),
+        nondeterministic_data: thruput_node_rpc::ParallelBatch::empty().into(),
+        ..proposal_txs
+    };
     let base_hash =
         hash_xdr(&base).map_err(|source| BlockProductionError::ConsensusHashEncoding {
             value: "proposal transactions base",
@@ -1326,11 +1319,11 @@ fn proposal_txs_compatibility_hash(
     hasher.update(base_hash.into_inner());
     hasher.update(hash_parallel_batch_compatibility(
         "signed_hash",
-        &proposal_txs.signed_hash,
+        proposal_txs.signed_hash.into_inner(),
     )?);
     hasher.update(hash_parallel_batch_compatibility(
         "nondeterministic_data",
-        &proposal_txs.nondeterministic_data,
+        proposal_txs.nondeterministic_data.into_inner(),
     )?);
     Ok(ProposalTxsHash::new(SHA256Hash::from(<[u8; 32]>::from(
         hasher.finalize(),
@@ -1342,7 +1335,7 @@ fn proposal_txs_compatibility_hash(
 // where index is the batch with its payload emptied.
 fn hash_parallel_batch_compatibility(
     batch_name: &'static str,
-    batch: &thruput_node_rpc::ParallelBatch,
+    mut batch: thruput_node_rpc::ParallelBatch,
 ) -> Result<[u8; 32], BlockProductionError> {
     batch
         .validate()
@@ -1351,10 +1344,9 @@ fn hash_parallel_batch_compatibility(
             detail: error.to_string(),
         })?;
 
-    let mut index = batch.clone();
-    index.xdr.0.clear();
+    let payload = std::mem::take(&mut batch.xdr.0);
     let index_hash =
-        hash_xdr(&index).map_err(|source| BlockProductionError::ConsensusHashEncoding {
+        hash_xdr(&batch).map_err(|source| BlockProductionError::ConsensusHashEncoding {
             value: batch_name,
             source,
         })?;
@@ -1363,34 +1355,12 @@ fn hash_parallel_batch_compatibility(
     hasher.update(PARALLEL_BATCH_DOMAIN_SEPARATOR_CXS);
     hasher.update(index_hash.into_inner());
 
-    let mut offset = 0usize;
+    // validate() checked that the lengths cover the payload exactly.
+    let mut remaining = payload.as_slice();
     for &segment_size in &batch.segment_bytes.0 {
-        let end = offset.checked_add(segment_size as usize).ok_or_else(|| {
-            BlockProductionError::MalformedSchedulerProposal {
-                batch: batch_name,
-                detail: "segment byte offset overflowed usize".into(),
-            }
-        })?;
-        let segment = batch.xdr.0.get(offset..end).ok_or_else(|| {
-            BlockProductionError::MalformedSchedulerProposal {
-                batch: batch_name,
-                detail: format!(
-                    "segment range {offset}..{end} exceeds {}-byte payload",
-                    batch.xdr.len()
-                ),
-            }
-        })?;
+        let (segment, rest) = remaining.split_at(segment_size as usize);
         hasher.update(Sha256::digest(segment));
-        offset = end;
-    }
-    if offset != batch.xdr.len() {
-        return Err(BlockProductionError::MalformedSchedulerProposal {
-            batch: batch_name,
-            detail: format!(
-                "segment lengths cover {offset} bytes, payload has {} bytes",
-                batch.xdr.len()
-            ),
-        });
+        remaining = rest;
     }
     Ok(hasher.finalize().into())
 }
@@ -1841,7 +1811,7 @@ mod hash_tests {
         };
 
         assert_eq!(
-            proposal_txs_compatibility_hash(&proposal_txs)
+            proposal_txs_compatibility_hash(proposal_txs)
                 .expect("bug: valid proposal transactions should hash")
                 .into_inner(),
             // hogd's Mempool.ProposalTxsCompatibilityHashGoldenVector.
@@ -1862,7 +1832,7 @@ mod hash_tests {
     }
 
     fn hash_of(signed_hash: ParallelBatch, nondeterministic_data: ParallelBatch) -> SHA256Hash {
-        proposal_txs_compatibility_hash(&ProposalTxs {
+        proposal_txs_compatibility_hash(ProposalTxs {
             ext: ExtensionPoint::_0,
             signed_hash: ParallelSignedTransactionHashBatch::new(signed_hash),
             nondeterministic_data: ParallelNondeterministicProposalDataBatch::new(
@@ -1918,7 +1888,7 @@ mod hash_tests {
             ),
         };
 
-        let error = proposal_txs_compatibility_hash(&proposal_txs)
+        let error = proposal_txs_compatibility_hash(proposal_txs)
             .expect_err("bug: mismatched segment metadata should fail");
         assert!(matches!(
             error,
@@ -1943,7 +1913,7 @@ mod hash_tests {
             ),
         };
 
-        let error = proposal_txs_compatibility_hash(&proposal_txs)
+        let error = proposal_txs_compatibility_hash(proposal_txs)
             .expect_err("bug: segment lengths outside the payload should fail");
         assert!(matches!(
             error,
