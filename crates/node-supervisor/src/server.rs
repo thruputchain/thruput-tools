@@ -33,7 +33,7 @@ use crate::{
     RpcCors,
     airdrop::{LocalAirdropContext, LocalAirdropRpc},
     block_control::LocalBlockControl,
-    block_driver::{BlockDriverTask, BlockProducer},
+    block_driver::{BlockDriverTask, BlockProducer, Parent, SharedBlockClock},
     hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_runtime_identity},
     normalize_cors_origin,
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
@@ -382,6 +382,38 @@ impl NodeSupervisorHandle {
     }
 }
 
+/// Connect the scheduler and the view backend. Views run at the timepoint of
+/// the next block, from a clock the block driver will publish. The clock
+/// starts from the tip validated at startup, so a restarted chain keeps its
+/// time in views.
+async fn connect_scheduler_and_view(
+    config: &NodeSupervisorConfig,
+    readiness: &HogdDevReadiness,
+    protocol_version: &str,
+) -> Result<
+    (
+        HogdDevSchedulerBackend,
+        HogdDevViewBackend,
+        SharedBlockClock,
+    ),
+    NodeSupervisorError,
+> {
+    let (scheduler_backend, startup_tip) =
+        connect_scheduler_backend(readiness, protocol_version).await?;
+    let shared_clock = SharedBlockClock::default();
+    shared_clock.seed_tip(startup_tip);
+    let view = HogdDevViewBackend::connect_optional(
+        readiness.endpoints.view_gateway,
+        protocol_version,
+        readiness.protocol.as_deref(),
+        config.view_timeout,
+        shared_clock.clone(),
+        Some(scheduler_backend.scheduler_client().clone()),
+    )
+    .await?;
+    Ok((scheduler_backend, view, shared_clock))
+}
+
 async fn start_rpc_server(
     config: &NodeSupervisorConfig,
     readiness: &HogdDevReadiness,
@@ -399,15 +431,8 @@ async fn start_rpc_server(
     })?;
     let network_hash = manifest.network_hash.to_network_hash().into_inner();
     let network_info = NetworkInfo::new(NetworkHash::from(network_hash));
-    let scheduler_backend = connect_scheduler_backend(readiness, protocol_version).await?;
-
-    let view = HogdDevViewBackend::connect_optional(
-        readiness.endpoints.view_gateway,
-        protocol_version,
-        readiness.protocol.as_deref(),
-        config.view_timeout,
-    )
-    .await?;
+    let (scheduler_backend, view, shared_clock) =
+        connect_scheduler_and_view(config, readiness, protocol_version).await?;
     let view_status = view.plane_status();
     let db_gateway = readiness.endpoints.db_gateway;
 
@@ -435,6 +460,7 @@ async fn start_rpc_server(
             view,
             rpc_server_options(
                 config,
+                shared_clock.clone(),
                 network_info,
                 Some(local_airdrop),
                 BackendPlanes {
@@ -461,6 +487,7 @@ async fn start_rpc_server(
             view,
             rpc_server_options(
                 config,
+                shared_clock.clone(),
                 network_info,
                 None,
                 BackendPlanes::hogd_dev_storage_only(view_status),
@@ -478,6 +505,7 @@ async fn start_rpc_server(
             view,
             rpc_server_options(
                 config,
+                shared_clock.clone(),
                 network_info,
                 None,
                 BackendPlanes {
@@ -490,10 +518,11 @@ async fn start_rpc_server(
     }
 }
 
+/// Connect to the scheduler and return it with the tip it validated.
 async fn connect_scheduler_backend(
     readiness: &HogdDevReadiness,
     protocol_version: &str,
-) -> Result<HogdDevSchedulerBackend, NodeSupervisorError> {
+) -> Result<(HogdDevSchedulerBackend, Parent), NodeSupervisorError> {
     let scheduler_gateway = readiness.endpoints.scheduler_gateway.ok_or_else(|| {
         NodeSupervisorError::InvalidRuntimeManifest {
             program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
@@ -507,14 +536,15 @@ async fn connect_scheduler_backend(
         readiness.protocol.as_deref(),
     )
     .await?;
-    scheduler_backend
+    let tip = scheduler_backend
         .require_dev_genesis(&readiness.network_hash)
         .await?;
-    Ok(scheduler_backend)
+    Ok((scheduler_backend, Parent::of(&tip.value.proposal_header)))
 }
 
 fn rpc_server_options(
     config: &NodeSupervisorConfig,
+    shared_clock: SharedBlockClock,
     network_info: NetworkInfo,
     local_airdrop: Option<LocalAirdropContext>,
     backend_planes: BackendPlanes,
@@ -527,6 +557,7 @@ fn rpc_server_options(
         view_batch: config.view_batch,
         view_timeout_ms: u64::try_from(config.view_timeout.as_millis()).unwrap_or(u64::MAX),
         block_driver_config: config.block_driver,
+        shared_clock,
         rpc_max_connections: config.rpc_max_connections,
         rpc_batch_concurrency: config.rpc_batch_concurrency,
         bundle_identity: config.bundle_identity.clone(),
@@ -556,6 +587,7 @@ struct RpcServerOptions {
     backend_planes: BackendPlanes,
     view_gas_limit: u64,
     block_driver_config: BlockDriverConfig,
+    shared_clock: SharedBlockClock,
     rpc_max_connections: u32,
     rpc_batch_concurrency: thruput_json_rpc_server::batch::RpcBatchConcurrency,
     bundle_identity: Option<BundleIdentity>,
@@ -633,6 +665,7 @@ where
         backend_planes,
         view_gas_limit,
         block_driver_config,
+        shared_clock,
         rpc_max_connections,
         rpc_batch_concurrency,
         bundle_identity,
@@ -668,6 +701,7 @@ where
         scheduler_backend.scheduler_client().clone(),
         scheduler_backend.scheduler_gateway_client().clone(),
         block_driver_config,
+        shared_clock,
     );
     let block_driver_trigger = block_driver.trigger();
     let scheduler_backend = scheduler_backend.with_block_driver(block_driver_trigger.clone());
@@ -679,7 +713,7 @@ where
             block_driver_trigger,
         )
     });
-    let core_rpc = NativeService::new(
+    let mut core_rpc = NativeService::new(
         scheduler_backend.clone(),
         scheduler_backend,
         read,
@@ -699,10 +733,9 @@ where
     )
     .with_local_pending_count()
     .with_block_control(LocalBlockControl::new(block_driver.producer()));
-    let core_rpc = match bundle_identity.as_ref() {
-        Some(identity) => core_rpc.with_bundle_identity(identity),
-        None => core_rpc,
-    };
+    if let Some(identity) = &bundle_identity {
+        core_rpc = core_rpc.with_bundle_identity(identity);
+    }
     let module = match local_airdrop {
         Some(funding) => core_rpc
             .with_funding(funding)
