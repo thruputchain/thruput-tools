@@ -587,7 +587,7 @@ impl Network {
             |result| {
                 floor
                     .as_ref()
-                    .is_some_and(|floor| storage_below(result, floor))
+                    .is_some_and(|floor| storage_below_floor(result, floor))
             },
         )
         .await;
@@ -632,10 +632,10 @@ impl Network {
             caller: caller.map(Base58),
             gas_limit: None,
         };
-        let floored = min_state_block_height.is_some();
+        let has_floor = min_state_block_height.is_some();
         let result = read_until_floor(
             || client.simulate_invocation(request.clone()),
-            |result| floored && below_floor(result),
+            |result| has_floor && below_floor(result),
         )
         .await;
         known(result, METHOD)
@@ -860,7 +860,7 @@ fn below_floor<T>(result: &std::result::Result<T, NativeClientError>) -> bool {
 }
 
 /// Whether a storage read answered from a state below `floor`.
-fn storage_below<E>(
+fn storage_below_floor<E>(
     result: &std::result::Result<DecodedResponse<StorageResult>, E>,
     floor: &BlockHeight,
 ) -> bool {

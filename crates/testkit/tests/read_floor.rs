@@ -22,15 +22,18 @@ use thruput_xdr::contract::ContractEntrypointID;
 mod common;
 use common::{native_runtime_document, serve_manifest_network_info};
 
-/// Recorded `simulateInvocation` params, how many calls to refuse first, and
-/// how long each refusal takes; and how many `getStorage` calls were made and
-/// how many to answer from block 6 before block 7.
+/// Mock node state the tests steer and inspect.
 #[derive(Default)]
 struct Node {
+    /// Recorded `simulateInvocation` params.
     reads: Mutex<Vec<Value>>,
+    /// How many `simulateInvocation` calls to refuse first.
     refuse: Mutex<u32>,
+    /// How long each refusal takes.
     refusal_delay: Mutex<Duration>,
+    /// How many `getStorage` calls were made.
     storage_reads: Mutex<u32>,
+    /// How many `getStorage` calls to answer from block 6 before block 7.
     storage_lag: Mutex<u32>,
 }
 
