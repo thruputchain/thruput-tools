@@ -5,6 +5,7 @@
 use std::{collections::hash_map::RandomState, future::Future, hash::BuildHasher, time::Duration};
 
 use jsonrpsee::core::client::{ClientT, Error as TransportError};
+use serde::Deserialize;
 use thruput_json_rpc_types::{
     BlockHeight, NetworkHash,
     error::native::{DecodedError, ErrorData},
@@ -305,7 +306,7 @@ fn finish_receipt(
         DecodedResponse::Unsupported { raw } => {
             // The transport validated known fields before declaring support.
             // Re-read those fields to retain commitment with an unknown outcome.
-            let checked = match serde_json::from_value::<TransactionReceipt>(raw.clone()) {
+            let checked = match TransactionReceipt::deserialize(&raw) {
                 Ok(receipt) => evidence.commit(receipt.transaction_hash, &receipt.block_height),
                 Err(_) => Err("unsupported receipt has invalid identity or shape"),
             };
