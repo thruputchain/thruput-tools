@@ -491,7 +491,7 @@ impl Parent {
     /// genesis ceremony (the bootstrap accounts) at height 1, both at
     /// timepoint 0. Blocks a user produces start at height 2.
     ///
-    /// Checked against hog-devnode 0.1.34 and 0.1.35. A runtime that commits
+    /// Checked against hog-devnode 0.1.34 to 0.1.36. A runtime that commits
     /// more initial blocks would date the first stepped block near 1970;
     /// `a_step_from_startup_still_dates_the_first_block_now` in
     /// `tests/real_block_time.rs` catches that when the runtime pin changes.
