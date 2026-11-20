@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.47.0
 
 ### Contract views run at the chain's time
 
@@ -26,6 +26,21 @@ views.
   `with_block_timepoint`.
 - `thruput-hogd-backend`: `view_query` and `view_batch_query` take the block
   timepoint; `view_timepoint_refused` and `wall_clock_timepoint` are new.
+
+### hog-devnode 0.1.36, protocol 0.67.0 and SDK 0.62.0
+
+The managed runtime is now hog-devnode 0.1.36, the first release from hogd
+`main` since 0.1.34. Tools move to protocol crates 0.67.0 and SDK 0.62.0 to
+match it, and the local block driver combines `ProposalTxsHash` parts in
+order, as hogd now does.
+
+- `thruput node` installs 0.1.36 on first start unless it runs offline. A
+  runtime pinned to 0.1.35 or earlier no longer starts, because it uses the
+  earlier protocol. Select 0.1.36 with `thruput toolchain use`.
+- New projects pin SDK 0.62.0, which adds `env.set_block_time_step` for
+  contract unit tests.
+- The Linux binaries link their dependencies statically. The macOS bundle is
+  signed with a Developer ID and notarized.
 
 ### Browser apps can call a local node
 
