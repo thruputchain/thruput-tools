@@ -14,7 +14,7 @@ type PubkeyClaimKeyField = Option<thruput_xdr::types::PublicKey>;
 /// Compile-time guard tying the hand-decoded field types to the fields they
 /// stand in for.
 ///
-/// [`DecodedTransaction::decode`] hand-decodes the fields of
+/// [`validate_raw_transaction_bytes`] hand-decodes the fields of
 /// `SignedTransaction` rather than decoding the struct, so a change to a
 /// field's type — including a tighter `VecM` bound — or a new field must fail
 /// the build instead of silently letting the gateway accept what a
@@ -50,88 +50,65 @@ pub fn validate_raw_transaction_bytes(
     tx_bytes: Vec<u8>,
     params: &NetworkConfigParams,
 ) -> Result<ValidatedTransaction, RpcServerError> {
-    let decoded = DecodedTransaction::decode(tx_bytes)?;
-    decoded.check_bounds(params)?;
-    Ok(decoded.into_validated())
-}
-
-/// The decoded body and its exact extent in the original signed envelope.
-pub(crate) struct DecodedTransaction {
-    bytes: Vec<u8>,
-    tx: thruput_xdr::transaction::Transaction,
-    tx_end: usize,
-}
-
-impl DecodedTransaction {
-    pub(crate) fn decode(tx_bytes: Vec<u8>) -> Result<Self, RpcServerError> {
-        if u32::try_from(tx_bytes.len()).is_err() {
-            return Err(RpcServerError::TxInvalid("transaction too large".into()));
-        }
-
-        // `SignedTransaction` is `{ tx, signatures, pubkey_claim_key }`, so the inner `Transaction`
-        // occupies a contiguous prefix of `tx_bytes`. Hash that prefix directly
-        // instead of re-encoding the decoded value: it avoids an allocation on the
-        // submit path, and it hashes exactly the bytes the client signed rather
-        // than trusting XDR to round-trip bit-for-bit.
-        //
-        // This assumes TXS decoding stays canonical — non-zero padding is rejected,
-        // so an accepted encoding is the only encoding of its value. Enabling the
-        // `xdrs/permissive` feature would break that and make this hash disagree
-        // with a re-encode; `prefix_hash_matches_reencoded_inner_transaction` below
-        // is what catches it.
-        let mut reader = xdrs::txs::buf_reader::BufReader::new(&tx_bytes);
-
-        let tx: thruput_xdr::transaction::Transaction = xdrs::read_xdr(&mut reader)
-            .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
-        let tx_end = reader.position();
-
-        // Decode the signatures and claim key too, and reject trailing bytes, so
-        // this accepts exactly what a whole-buffer
-        // `xdrs::txs::decode::<SignedTransaction>` would have accepted. The types
-        // must stay in step with the fields they stand in for; the compile-time
-        // guard above enforces that.
-        let _signatures: SignaturesField = xdrs::read_xdr(&mut reader)
-            .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
-        let pubkey_claim_key: PubkeyClaimKeyField = xdrs::read_xdr(&mut reader)
-            .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
-        if reader.remaining() > 0 {
-            return Err(RpcServerError::TxInvalid(
-                "invalid XDR: trailing bytes after signed transaction".into(),
-            ));
-        }
-        // The node also checks that the key hashes to the claimed one; presence
-        // is checked here so a client omitting or misplacing it learns why.
-        let pubkey_claim = matches!(
-            tx.auth_claim,
-            thruput_xdr::auth_claim::AuthClaim::kPubkeySignature { .. }
-        );
-        if pubkey_claim != pubkey_claim_key.is_some() {
-            return Err(RpcServerError::TxInvalid(if pubkey_claim {
-                "pubkey signature claim requires pubkey_claim_key".into()
-            } else {
-                "pubkey_claim_key is only allowed with a pubkey signature claim".into()
-            }));
-        }
-
-        Ok(Self {
-            bytes: tx_bytes,
-            tx,
-            tx_end,
-        })
+    if u32::try_from(tx_bytes.len()).is_err() {
+        return Err(RpcServerError::TxInvalid("transaction too large".into()));
     }
 
-    pub(crate) fn check_bounds(&self, params: &NetworkConfigParams) -> Result<(), RpcServerError> {
-        check_transaction(&self.tx, params).map_err(RpcServerError::TxInvalidDetailed)
+    // `SignedTransaction` is `{ tx, signatures, pubkey_claim_key }`, so the inner `Transaction`
+    // occupies a contiguous prefix of `tx_bytes`. Hash that prefix directly
+    // instead of re-encoding the decoded value: it avoids an allocation on the
+    // submit path, and it hashes exactly the bytes the client signed rather
+    // than trusting XDR to round-trip bit-for-bit.
+    //
+    // This assumes TXS decoding stays canonical — non-zero padding is rejected,
+    // so an accepted encoding is the only encoding of its value. Enabling the
+    // `xdrs/permissive` feature would break that and make this hash disagree
+    // with a re-encode; `prefix_hash_matches_reencoded_inner_transaction` below
+    // is what catches it.
+    let mut reader = xdrs::txs::buf_reader::BufReader::new(&tx_bytes);
+
+    let tx: thruput_xdr::transaction::Transaction = xdrs::read_xdr(&mut reader)
+        .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
+    let tx_end = reader.position();
+
+    // Decode the signatures and claim key too, and reject trailing bytes, so
+    // this accepts exactly what a whole-buffer
+    // `xdrs::txs::decode::<SignedTransaction>` would have accepted. The types
+    // must stay in step with the fields they stand in for; the compile-time
+    // guard above enforces that.
+    let _signatures: SignaturesField = xdrs::read_xdr(&mut reader)
+        .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
+    let pubkey_claim_key: PubkeyClaimKeyField = xdrs::read_xdr(&mut reader)
+        .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
+    if reader.remaining() > 0 {
+        return Err(RpcServerError::TxInvalid(
+            "invalid XDR: trailing bytes after signed transaction".into(),
+        ));
+    }
+    // The node also checks that the key hashes to the claimed one; presence
+    // is checked here so a client omitting or misplacing it learns why.
+    let pubkey_claim = matches!(
+        tx.auth_claim,
+        thruput_xdr::auth_claim::AuthClaim::kPubkeySignature { .. }
+    );
+    if pubkey_claim != pubkey_claim_key.is_some() {
+        return Err(RpcServerError::TxInvalid(if pubkey_claim {
+            "pubkey signature claim requires pubkey_claim_key".into()
+        } else {
+            "pubkey_claim_key is only allowed with a pubkey signature claim".into()
+        }));
     }
 
-    pub(crate) fn into_validated(self) -> ValidatedTransaction {
-        let hash_bytes: [u8; 32] = sha2::Sha256::digest(&self.bytes[..self.tx_end]).into();
-        ValidatedTransaction {
-            bytes: self.bytes,
-            hash: TxHash(Base58(thruput_xdr::types::SHA256Hash::from(hash_bytes))),
-            block_expiry_height: self.tx.uniquifier.block_expiry_height,
-        }
-    }
+    check_transaction(&tx, params).map_err(RpcServerError::TxInvalidDetailed)?;
+
+    let hash_bytes: [u8; 32] = sha2::Sha256::digest(&tx_bytes[..tx_end]).into();
+    let hash = TxHash(Base58(thruput_xdr::types::SHA256Hash::from(hash_bytes)));
+
+    Ok(ValidatedTransaction {
+        bytes: tx_bytes,
+        hash,
+        block_expiry_height: tx.uniquifier.block_expiry_height,
+    })
 }
 
 /// Signed-transaction fixtures shared by this crate's unit tests.

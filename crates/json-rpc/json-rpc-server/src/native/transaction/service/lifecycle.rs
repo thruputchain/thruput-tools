@@ -4,7 +4,8 @@ use crate::native::transaction::{
     within_native_read_deadline,
 };
 use crate::{
-    ChainPlane, RpcRequestContext, RpcServerError, ValidatedTransaction, tx::DecodedTransaction,
+    ChainPlane, RpcRequestContext, RpcServerError, ValidatedTransaction,
+    tx::validate_raw_transaction_bytes,
 };
 use jsonrpsee::core::RpcResult;
 use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
@@ -20,31 +21,13 @@ impl<S, C: ChainPlane, R> NativeTransactionService<S, C, R> {
         // The pre-checks are advisory mirrors of what the scheduler and
         // executor enforce authoritatively: an unavailable tip reading
         // skips the chain-dependent checks rather than blocking submission.
-        let mut tip = self.cached_tip_state(context).await;
-        let params = tip
-            .state
-            .as_ref()
-            .and_then(|tip| tip.params)
-            .unwrap_or_default();
-        let decoded = DecodedTransaction::decode(tx_bytes)?;
-        if let Err(error) = decoded.check_bounds(&params) {
-            // A cached config can lag an upgrade that raised this bound.
-            if tip.probed {
-                return Err(error);
-            }
-            tip = self.fresh_tip_state(context).await;
-            let fresh_params = tip
-                .state
-                .as_ref()
-                .and_then(|tip| tip.params)
-                .unwrap_or(params);
-            decoded.check_bounds(&fresh_params)?;
-        }
-        let tx = decoded.into_validated();
+        let tip = self.cached_tip_state(context).await;
+        let params = tip.as_ref().and_then(|tip| tip.params).unwrap_or_default();
+        let tx = validate_raw_transaction_bytes(tx_bytes, &params)?;
         *hash = Some(tx.hash);
         // A transaction can only be included at heights strictly above the
         // current tip, so `expiry <= tip` can never commit.
-        if let Some(tip_height) = tip.state.as_ref().map(|tip| tip.height)
+        if let Some(tip_height) = tip.as_ref().map(|tip| tip.height)
             && *tx.block_expiry_height <= tip_height
         {
             return Err(RpcServerError::TxRejected(format!(
