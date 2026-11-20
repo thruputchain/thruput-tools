@@ -463,14 +463,17 @@ async fn native_local_batch_preserves_order_and_freshness_evidence() {
     task.abort();
 }
 
-/// A scheduler that serves only its tip, at a height and timepoint the test sets.
+/// A scheduler that serves only its tip: a height and timepoint, or an error
+/// when `None`.
 #[derive(Clone)]
-struct FakeTipScheduler(std::sync::Arc<std::sync::Mutex<(i64, u64)>>);
+struct FakeTipScheduler(Option<(i64, u64)>);
 
 #[allow(refining_impl_trait)]
 impl SchedulerCoord_SchedulerCoord1 for FakeTipScheduler {
     async fn schedcoord_get_tip(&self) -> Result<SchedulerGetTipResult, ProgramError> {
-        let (height, timepoint) = *self.0.lock().unwrap();
+        let Some((height, timepoint)) = self.0 else {
+            return Err(ProgramError::msg("fake get_tip failure"));
+        };
         Ok(SchedulerGetTipResult::SchedulerGetTipOK {
             db_tip: db_tip(height, timepoint),
         })
@@ -591,11 +594,17 @@ async fn start_fake_tip_scheduler(
     SchedulerCoord_SchedulerCoord1_Client,
     tokio::task::JoinHandle<Result<(), std::io::Error>>,
 ) {
+    start_scheduler(FakeTipScheduler(Some((height, timepoint)))).await
+}
+
+async fn start_scheduler(
+    scheduler: FakeTipScheduler,
+) -> (
+    SchedulerCoord_SchedulerCoord1_Client,
+    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let scheduler = FakeTipScheduler(std::sync::Arc::new(std::sync::Mutex::new((
-        height, timepoint,
-    ))));
     let mut services = ServiceMap::new();
     services.add_service(Box::new(SchedulerCoord_SchedulerCoord1_Dispatcher::new(
         Box::new(scheduler),
@@ -771,5 +780,39 @@ async fn a_rerun_overtaken_by_another_block_fails_instead_of_using_a_stale_time(
         "{result:?}"
     );
     assert_eq!(views, 2);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_view_on_a_newer_snapshot_fails_when_the_tip_cannot_be_read() {
+    // Block 5 committed before the view's snapshot, so its time may be stale.
+    // Without the tip, nothing confirms it, so the view fails.
+    let (scheduler, task) = start_scheduler(FakeTipScheduler(None)).await;
+    let clock = crate::block_driver::SharedBlockClock::stepped_from(SECOND, 4, Y2K);
+    let (result, views) = local_view(
+        FakeViewGatewayMode::EchoTimepoint(5),
+        clock,
+        Some(scheduler),
+    )
+    .await;
+    assert!(
+        matches!(&result, Err(RpcServerError::BackendUnavailable(message)) if message.contains("tip could not be read")),
+        "{result:?}"
+    );
+    assert_eq!(views, 1);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_refusal_stands_when_the_tip_cannot_be_read() {
+    let (scheduler, task) = start_scheduler(FakeTipScheduler(None)).await;
+    let clock = crate::block_driver::SharedBlockClock::stepped_from(SECOND, 4, Y2K);
+    let mode = FakeViewGatewayMode::RefuseBefore(u64::MAX, 4);
+    let (result, views) = local_view(mode, clock, Some(scheduler)).await;
+    assert!(
+        matches!(result, Err(RpcServerError::InvalidParam(_))),
+        "{result:?}"
+    );
+    assert_eq!(views, 1);
     task.abort();
 }

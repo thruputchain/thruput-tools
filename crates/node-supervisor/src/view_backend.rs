@@ -141,18 +141,30 @@ impl HogdDevViewBackend {
     /// A refusal reruns only if the tip is later than `stated`, so an
     /// unrelated invalid request is not resent. A view on a newer snapshot
     /// reruns if the next block's time changed.
+    ///
+    /// If the tip cannot be read, a refusal stands as it is. A view on a newer
+    /// snapshot fails instead: its result may be at a stale time, and nothing
+    /// confirms that it is not.
     async fn rerun_time(
         clock: &SharedBlockClock,
         scheduler: Option<&SchedulerCoord_SchedulerCoord1_Client>,
         stated: &TimePoint,
         stale: StaleView,
-    ) -> Option<NextBlockTime> {
-        let (tip, next) = Self::fresh_view_time(clock, scheduler).await?;
+    ) -> Result<Option<NextBlockTime>, RpcServerError> {
+        let Some((tip, next)) = Self::fresh_view_time(clock, scheduler).await else {
+            return match stale {
+                StaleView::Refused => Ok(None),
+                StaleView::NewerSnapshot => Err(RpcServerError::BackendUnavailable(format!(
+                    "{VIEW_GATEWAY}: a block committed during the view and the tip could not \
+                     be read; retry the view"
+                ))),
+            };
+        };
         let explained = match stale {
             StaleView::Refused => shared_view::view_timepoint_refused(stated, &tip),
             StaleView::NewerSnapshot => next.timepoint != *stated,
         };
-        explained.then_some(next)
+        Ok(explained.then_some(next))
     }
 
     pub(crate) const fn plane_status(&self) -> crate::server::PlaneStatus {

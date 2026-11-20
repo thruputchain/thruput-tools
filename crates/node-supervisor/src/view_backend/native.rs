@@ -39,7 +39,7 @@ impl NativeSimulationPlane for HogdDevViewBackend {
             let Some(stale) = stale_view(refused, snapshot_height(&result), parent_height) else {
                 return Ok(result);
             };
-            let Some(rerun) = Self::rerun_time(clock, scheduler.as_ref(), &stated, stale).await
+            let Some(rerun) = Self::rerun_time(clock, scheduler.as_ref(), &stated, stale).await?
             else {
                 return Ok(result);
             };
@@ -85,7 +85,7 @@ impl NativeSimulationPlane for HogdDevViewBackend {
             else {
                 return Ok((query, result));
             };
-            let Some(rerun) = Self::rerun_time(clock, scheduler.as_ref(), &stated, stale).await
+            let Some(rerun) = Self::rerun_time(clock, scheduler.as_ref(), &stated, stale).await?
             else {
                 return Ok((query, result));
             };
