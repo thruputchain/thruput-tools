@@ -4,8 +4,7 @@ use crate::native::transaction::{
     within_native_read_deadline,
 };
 use crate::{
-    ChainPlane, RpcRequestContext, RpcServerError, ValidatedTransaction,
-    tx::validate_raw_transaction_bytes,
+    ChainPlane, RpcRequestContext, RpcServerError, ValidatedTransaction, tx::DecodedTransaction,
 };
 use jsonrpsee::core::RpcResult;
 use thruput_json_rpc_types::error::native::BackendDataInvalidReason;
@@ -27,23 +26,21 @@ impl<S, C: ChainPlane, R> NativeTransactionService<S, C, R> {
             .as_ref()
             .and_then(|tip| tip.params)
             .unwrap_or_default();
-        // Keep the bytes for the fresh-tip retry below.
-        let tx = match validate_raw_transaction_bytes(tx_bytes.clone(), &params) {
-            Ok(tx) => tx,
-            // A cached config can lag an upgrade that raised this
-            // bound, so re-read the tip before rejecting. One this
-            // request fetched itself is already current.
-            Err(RpcServerError::TxInvalidDetailed(_)) if !tip.probed => {
-                tip = self.fresh_tip_state(context).await;
-                let params = tip
-                    .state
-                    .as_ref()
-                    .and_then(|tip| tip.params)
-                    .unwrap_or(params);
-                validate_raw_transaction_bytes(tx_bytes, &params)?
+        let decoded = DecodedTransaction::decode(tx_bytes)?;
+        if let Err(error) = decoded.check_bounds(&params) {
+            // A cached config can lag an upgrade that raised this bound.
+            if tip.probed {
+                return Err(error);
             }
-            Err(error) => return Err(error),
-        };
+            tip = self.fresh_tip_state(context).await;
+            let fresh_params = tip
+                .state
+                .as_ref()
+                .and_then(|tip| tip.params)
+                .unwrap_or(params);
+            decoded.check_bounds(&fresh_params)?;
+        }
+        let tx = decoded.into_validated();
         *hash = Some(tx.hash);
         // A transaction can only be included at heights strictly above the
         // current tip, so `expiry <= tip` can never commit.
