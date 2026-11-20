@@ -511,48 +511,93 @@ impl Parent {
     }
 }
 
-/// The block driver's clock and tip as of its last commit or clock change.
+/// The block driver's clock, and the tip as of its last commit or clock change.
 ///
 /// Contract views run at the timepoint the next block would get. The view
 /// path reads it here rather than asking the driver, so a view never waits
-/// behind block production or costs a scheduler call. Until the driver
-/// commits or changes its clock, the next block takes the wall clock, which
-/// is what views use while this is empty.
+/// behind block production. The driver publishes its clock when it starts and
+/// the tip after each commit. Until then, as on a restarted chain, a view reads
+/// the tip itself once and seeds it here.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct SharedBlockClock(Arc<std::sync::Mutex<Option<(BlockClock, Parent)>>>);
+pub(crate) struct SharedBlockClock(Arc<std::sync::Mutex<SharedClockState>>);
+
+#[derive(Debug, Default)]
+struct SharedClockState {
+    clock: BlockClock,
+    tip: Option<Parent>,
+}
+
+/// The timepoint the next block would get, and the height of the tip it
+/// builds on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NextBlockTime {
+    pub(crate) timepoint: TimePoint,
+    pub(crate) parent_height: i64,
+}
 
 impl SharedBlockClock {
     /// A clock frozen at `timepoint`, past the initial blocks.
     #[cfg(test)]
     pub(crate) fn frozen_at(timepoint: u64) -> Self {
-        let mut clock = BlockClock::default();
-        clock.set_step(Some(0));
-        let shared = Self::default();
-        shared.publish(
-            &clock,
-            Parent {
-                height: Parent::LAST_INITIAL_HEIGHT + 1,
-                timepoint,
-            },
-        );
+        Self::stepped_from(0, Parent::LAST_INITIAL_HEIGHT + 1, timepoint)
+    }
+
+    /// A clock with a fixed `step`, published with the tip at `height` and
+    /// `timepoint`.
+    #[cfg(test)]
+    pub(crate) fn stepped_from(step: u64, height: i64, timepoint: u64) -> Self {
+        let shared = Self::unseeded(step);
+        let clock = shared.lock().clock.clone();
+        shared.publish(&clock, Parent { height, timepoint });
         shared
     }
 
+    /// A clock with a fixed `step` and no known tip, as on a restarted chain
+    /// before its first commit.
+    #[cfg(test)]
+    pub(crate) fn unseeded(step: u64) -> Self {
+        let mut clock = BlockClock::default();
+        clock.set_step(Some(step));
+        let shared = Self::default();
+        shared.set_clock(&clock);
+        shared
+    }
+
+    fn set_clock(&self, clock: &BlockClock) {
+        self.lock().clock = clock.clone();
+    }
+
     fn publish(&self, clock: &BlockClock, tip: Parent) {
-        *self.lock() = Some((clock.clone(), tip));
+        *self.lock() = SharedClockState {
+            clock: clock.clone(),
+            tip: Some(tip),
+        };
     }
 
-    /// The timepoint the next block would get at `now`, once the driver has
-    /// seen a tip.
-    pub(crate) fn next_block_timepoint(&self, now: SystemTime) -> Option<TimePoint> {
+    /// The next block's time at `now`, once a tip is known.
+    pub(crate) fn next_block_time(&self, now: SystemTime) -> Option<NextBlockTime> {
         let state = self.lock();
-        let (clock, tip) = state.as_ref()?;
-        Some(TimePoint::new(clock.timepoint_after(*tip, now)))
+        let tip = state.tip?;
+        Some(NextBlockTime {
+            timepoint: TimePoint::new(state.clock.timepoint_after(tip, now)),
+            parent_height: tip.height,
+        })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<(BlockClock, Parent)>> {
-        // The guarded value is replaced whole, so a poisoned lock still holds
-        // a consistent snapshot.
+    /// The next block's time after `tip`, which the caller read from the
+    /// scheduler. Seeds the tip when none is known yet.
+    pub(crate) fn next_block_time_after(&self, tip: Parent, now: SystemTime) -> NextBlockTime {
+        let mut state = self.lock();
+        state.tip.get_or_insert(tip);
+        NextBlockTime {
+            timepoint: TimePoint::new(state.clock.timepoint_after(tip, now)),
+            parent_height: tip.height,
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, SharedClockState> {
+        // Each update writes whole fields, so a poisoned lock still holds a
+        // consistent snapshot.
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -647,6 +692,7 @@ impl BlockDriverTask {
             instant,
             ticker: None,
         };
+        driver.shared_clock.set_clock(&driver.clock);
         driver.apply_mode();
         let join = tokio::spawn(driver.run(receiver, shutdown_rx));
         Self {
@@ -1392,7 +1438,7 @@ async fn reconcile_commit(
 mod clock_tests {
     use std::time::{Duration, UNIX_EPOCH};
 
-    use super::{BlockClock, Parent, SharedBlockClock};
+    use super::{BlockClock, NextBlockTime, Parent, SharedBlockClock};
     use thruput_xdr::types::TimePoint;
 
     const DAY: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -1647,12 +1693,16 @@ mod clock_tests {
         assert_eq!(clock.timepoint_after(block(0), at(NOW)), u64::MAX);
     }
 
+    fn next(timepoint: u64, parent_height: i64) -> NextBlockTime {
+        NextBlockTime {
+            timepoint: TimePoint::new(timepoint),
+            parent_height,
+        }
+    }
+
     #[test]
-    fn views_have_no_clock_until_the_driver_publishes_one() {
-        assert_eq!(
-            SharedBlockClock::default().next_block_timepoint(at(NOW)),
-            None
-        );
+    fn views_have_no_clock_until_a_tip_is_known() {
+        assert_eq!(SharedBlockClock::default().next_block_time(at(NOW)), None);
     }
 
     #[test]
@@ -1660,17 +1710,41 @@ mod clock_tests {
         let shared = SharedBlockClock::default();
         let mut clock = stepped(0);
         shared.publish(&clock, block(NOW));
-        assert_eq!(
-            shared.next_block_timepoint(at(NOW + DAY)),
-            Some(TimePoint::new(NOW))
-        );
+        assert_eq!(shared.next_block_time(at(NOW + DAY)), Some(next(NOW, 2)));
 
         clock.pin(NOW + 5, at(NOW));
         shared.publish(&clock, block(NOW));
         assert_eq!(
-            shared.next_block_timepoint(at(NOW + DAY)),
-            Some(TimePoint::new(NOW + 5))
+            shared.next_block_time(at(NOW + DAY)),
+            Some(next(NOW + 5, 2))
         );
+    }
+
+    #[test]
+    fn a_restarted_chain_seeds_its_tip_from_the_first_view() {
+        // A frozen clock restarted on a chain dated NOW, a day behind the wall
+        // clock: the driver has published its step but no tip yet.
+        let shared = SharedBlockClock::default();
+        shared.set_clock(&stepped(0));
+        assert_eq!(shared.next_block_time(at(NOW + DAY)), None);
+
+        let seeded = shared.next_block_time_after(block(NOW), at(NOW + DAY));
+        assert_eq!(seeded, next(NOW, 2));
+        assert_eq!(shared.next_block_time(at(NOW + DAY)), Some(next(NOW, 2)));
+    }
+
+    #[test]
+    fn a_tip_read_by_a_view_does_not_replace_the_published_one() {
+        let shared = SharedBlockClock::frozen_at(NOW);
+        let later = Parent {
+            height: 9,
+            timepoint: NOW + DAY,
+        };
+        assert_eq!(
+            shared.next_block_time_after(later, at(NOW)),
+            next(NOW + DAY, 9)
+        );
+        assert_eq!(shared.next_block_time(at(NOW)), Some(next(NOW, 2)));
     }
 }
 

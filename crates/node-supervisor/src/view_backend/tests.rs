@@ -6,6 +6,10 @@ use thruput_json_rpc_server::native::read::NativeSimulationPlane;
 use thruput_json_rpc_types::ContractAddress;
 use thruput_json_rpc_types::hex::HexBytes;
 use thruput_json_rpc_types::protocol_token::protocol_text;
+use thruput_node_rpc::SchedulerGetTipResult;
+use thruput_node_rpc::sched_coord::{
+    SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher,
+};
 use thruput_scp::network::ProtocolCommit as Protocol;
 use thruput_view::{
     ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayIntroOutcome,
@@ -24,8 +28,8 @@ enum FakeViewGatewayMode {
     IntroRejected,
     ViewSlow,
     Batch,
-    /// Return the timepoint a view ran at.
-    EchoTimepoint,
+    /// Return the timepoint a view ran at, from a snapshot at this height.
+    EchoTimepoint(i64),
 }
 
 struct FakeViewGateway {
@@ -100,16 +104,17 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
         if self.mode == FakeViewGatewayMode::ViewSlow {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        let return_buffer = if self.mode == FakeViewGatewayMode::EchoTimepoint {
-            query.block_timepoint.to_be_bytes().to_vec()
-        } else {
-            vec![1, 2, 3]
+        let (height, return_buffer) = match self.mode {
+            FakeViewGatewayMode::EchoTimepoint(height) => {
+                (height, query.block_timepoint.to_be_bytes().to_vec())
+            }
+            _ => (42, vec![1, 2, 3]),
         };
 
         Ok(ViewGatewayResult::ViewGatewayOk {
             payload: ViewGatewayPayload {
                 gas_consumed: query.invocation.gas_limit,
-                height: 42.into(),
+                height: height.into(),
                 output: InvocationFrameOutput::Return {
                     return_buffer: BytesM(return_buffer),
                 },
@@ -426,19 +431,169 @@ async fn native_local_batch_preserves_order_and_freshness_evidence() {
     task.abort();
 }
 
-#[tokio::test]
-async fn a_local_view_runs_at_the_next_block_time() {
+/// A scheduler that serves only its tip, at a height and timepoint the test sets.
+#[derive(Clone)]
+struct FakeTipScheduler(std::sync::Arc<std::sync::Mutex<(i64, u64)>>);
+
+#[allow(refining_impl_trait)]
+impl SchedulerCoord_SchedulerCoord1 for FakeTipScheduler {
+    async fn schedcoord_get_tip(&self) -> Result<SchedulerGetTipResult, ProgramError> {
+        let (height, timepoint) = *self.0.lock().unwrap();
+        Ok(SchedulerGetTipResult::SchedulerGetTipOK {
+            db_tip: db_tip(height, timepoint),
+        })
+    }
+    async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
+        Ok(())
+    }
+    async fn schedulercoord_intro_coord(
+        &self,
+        _card: thruput_node_rpc::CoordCard,
+    ) -> Result<thruput_node_rpc::CoordinatorRegistrationOutcome, ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+    async fn schedulercoord_submit_unvetted(
+        &self,
+        _batch: thruput_node_rpc::ParallelSignedTransactionBatch,
+    ) -> Result<(), ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+    async fn schedulercoord_submit_vetted(
+        &self,
+        _validator_id: thruput_xdr::validator::ValidatorID,
+        _batch: thruput_node_rpc::ParallelSignedTransactionBatch,
+    ) -> Result<(), ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+    async fn schedulercoord_propose_block(
+        &self,
+        _onto: thruput_node_rpc::BlockID,
+        _context: thruput_xdr::header::ProposalContext,
+    ) -> Result<thruput_node_rpc::SchedulerProposalResult, ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+    async fn schedulercoord_validate_block(
+        &self,
+        _onto: thruput_node_rpc::BlockID,
+        _proposal: thruput_node_rpc::Proposal,
+    ) -> Result<thruput_node_rpc::SchedulerValidationResult, ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+    async fn schedulercoord_commit_block(
+        &self,
+        _block_id: thruput_node_rpc::BlockID,
+        _value: thruput_node_rpc::ConsensusValue,
+    ) -> Result<thruput_node_rpc::SchedulerCommitOutcome, ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+    async fn schedcoord_load_genesis_configuration(
+        &self,
+        _config: thruput_xdr::genesis::GenesisConfiguration,
+    ) -> Result<thruput_node_rpc::DbSchedResult, ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+    async fn schedulercoord_commit_genesis_ceremony(
+        &self,
+        _request: thruput_node_rpc::GenesisCeremonyRequest,
+    ) -> Result<thruput_node_rpc::GenesisCeremonyResult, ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+    async fn schedcoord_lookup_transactions(
+        &self,
+        _hashes: thruput_xdr::transaction::SignedTransactionHashBatch,
+    ) -> Result<thruput_xdr::transaction::OptSignedTransactionBatch, ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+    async fn schedcoord_lookup_transaction_outcomes(
+        &self,
+        _hashes: thruput_xdr::transaction::TransactionHashBatch,
+    ) -> Result<thruput_node_rpc::SchedulerTransactionOutcomeBatch, ProgramError> {
+        Err(ProgramError::msg("not served"))
+    }
+}
+
+fn db_tip(height: i64, timepoint: u64) -> thruput_node_rpc::DbTip {
+    use thruput_xdr::types::{
+        BlockHeight, ConfigHash, ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash,
+        Protocol, SHA256Hash, StorageShortHash, TimePoint, TxsHash,
+    };
+    let hash = || SHA256Hash::from([0; 32]);
+    thruput_node_rpc::DbTip {
+        id: 0,
+        storage_long_hash: [0u8; 2048].into(),
+        default_wallet: thruput_xdr::contract::DeployedContractHash {
+            hash: hash(),
+            contract_size: 0,
+            contract_type: thruput_xdr::contract::ContractType::kNative,
+        },
+        network_config: thruput_xdr::network_config::NetworkConfig::_0 {
+            v0: thruput_xdr::network_config::NetworkConfigV0 {
+                params: VecM(vec![]),
+            },
+        },
+        value: thruput_node_rpc::ConsensusValue {
+            protocol: Protocol::new(0),
+            ext: ExtensionPoint::_0,
+            prev_hash: ConsensusValueHash::new(hash()),
+            proposal_header: thruput_xdr::header::ProposalHeader {
+                ext: ExtensionPoint::_0,
+                network_hash: NetworkHash::new(hash()),
+                config_hash: ConfigHash::new(hash()),
+                proposer: thruput_xdr::validator::ValidatorID::default(),
+                block_timepoint: TimePoint::new(timepoint),
+                block_height: BlockHeight::from(height),
+                txs_hash: TxsHash::new(hash()),
+                storage_hash: StorageShortHash::new(hash()),
+                events_hash: EventsHash::new(hash()),
+            },
+            proposal_txs_hash: thruput_node_rpc::ProposalTxsHash::new(hash()),
+            upgrades: VecM::default(),
+        },
+    }
+}
+
+async fn start_fake_tip_scheduler(
+    height: i64,
+    timepoint: u64,
+) -> (
+    SchedulerCoord_SchedulerCoord1_Client,
+    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let scheduler = FakeTipScheduler(std::sync::Arc::new(std::sync::Mutex::new((
+        height, timepoint,
+    ))));
+    let mut services = ServiceMap::new();
+    services.add_service(Box::new(SchedulerCoord_SchedulerCoord1_Dispatcher::new(
+        Box::new(scheduler),
+    )));
+    let handle = RpcServer::new(listener, services).start().await;
+    let socket = rpc_driver::FixedSerialPool::connect(&addr, 1)
+        .await
+        .unwrap();
+    (
+        SchedulerCoord_SchedulerCoord1_Client::new(std::sync::Arc::new(socket)),
+        handle,
+    )
+}
+
+/// The timepoint a local view runs at, read back from the echoing fake.
+async fn local_view_timepoint(
+    snapshot_height: i64,
+    clock: crate::block_driver::SharedBlockClock,
+    scheduler: Option<SchedulerCoord_SchedulerCoord1_Client>,
+) -> u64 {
     use thruput_json_rpc_types::{requests, responses};
-    // 2000-01-01, far behind the wall clock.
-    const Y2K: u64 = 946_684_800_000_000_000;
-    let (addr, task) = start_fake_view_gateway(FakeViewGatewayMode::EchoTimepoint).await;
+    let (addr, task) =
+        start_fake_view_gateway(FakeViewGatewayMode::EchoTimepoint(snapshot_height)).await;
     let backend = HogdDevViewBackend::connect_optional(
         Some(addr),
         &protocol_text(&PROTOCOL_VERSION),
         None,
         Duration::from_secs(30),
-        crate::block_driver::SharedBlockClock::frozen_at(Y2K),
-        None,
+        clock,
+        scheduler,
     )
     .await
     .unwrap();
@@ -457,12 +612,42 @@ async fn a_local_view_runs_at_the_next_block_time() {
         .simulate(RpcRequestContext::unbounded(), request, 100)
         .await
         .unwrap();
+    task.abort();
     let responses::InvocationOutput::Return { return_data } = result.output else {
         panic!("bug: the fake returns the view's timepoint");
     };
+    u64::from_be_bytes(return_data.0.as_slice().try_into().unwrap())
+}
+
+/// 2000-01-01, far behind the wall clock.
+const Y2K: u64 = 946_684_800_000_000_000;
+const SECOND: u64 = 1_000_000_000;
+
+#[tokio::test]
+async fn a_local_view_runs_at_the_next_block_time() {
+    let clock = crate::block_driver::SharedBlockClock::frozen_at(Y2K);
+    assert_eq!(local_view_timepoint(2, clock, None).await, Y2K);
+}
+
+#[tokio::test]
+async fn the_first_view_on_a_restarted_chain_runs_at_the_saved_tip() {
+    // Restarted frozen, with the saved tip at height 5 in 2000 and no block
+    // produced since: the view reads the tip rather than the wall clock.
+    let (scheduler, task) = start_fake_tip_scheduler(5, Y2K).await;
+    let clock = crate::block_driver::SharedBlockClock::unseeded(0);
+    assert_eq!(local_view_timepoint(5, clock, Some(scheduler)).await, Y2K);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_view_on_a_newer_snapshot_reruns_at_its_next_block_time() {
+    // The time was chosen from height 4, stepping 1 s; block 5 committed
+    // before hogd opened the snapshot. The view reruns at block 6's time.
+    let (scheduler, task) = start_fake_tip_scheduler(5, Y2K + SECOND).await;
+    let clock = crate::block_driver::SharedBlockClock::stepped_from(SECOND, 4, Y2K);
     assert_eq!(
-        u64::from_be_bytes(return_data.0.as_slice().try_into().unwrap()),
-        Y2K
+        local_view_timepoint(5, clock, Some(scheduler)).await,
+        Y2K + 2 * SECOND
     );
     task.abort();
 }

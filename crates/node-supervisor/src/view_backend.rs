@@ -13,7 +13,7 @@ use thruput_xdr::types::TimePoint;
 
 use crate::{
     NodeSupervisorError,
-    block_driver::{SharedBlockClock, tip_parent},
+    block_driver::{NextBlockTime, SharedBlockClock, tip_parent},
     request_deadline::within_request_deadline,
     service::VIEW_GATEWAY,
     stub_backend::StubBackend,
@@ -29,9 +29,9 @@ pub(crate) enum HogdDevViewBackend {
         request_timeout: Duration,
         /// The block driver's clock: a view runs at the next block's time.
         clock: SharedBlockClock,
-        /// Read only to judge a refused view; see
-        /// [`HogdDevViewBackend::retry_timepoint`]. Without it, a refusal is
-        /// returned as is.
+        /// Read for a view's tip before the block driver publishes one, and
+        /// to rerun a stale view; see [`HogdDevViewBackend::fresh_view_time`].
+        /// Without it, views use the wall clock until a tip is published.
         scheduler: Option<SchedulerCoord_SchedulerCoord1_Client>,
     },
     Stub(StubBackend),
@@ -96,27 +96,35 @@ impl HogdDevViewBackend {
         })
     }
 
-    /// The timepoint a view runs at: the one the next block would get, or the
-    /// wall clock before the block driver has seen a tip.
-    fn view_timepoint(clock: &SharedBlockClock) -> TimePoint {
-        clock
-            .next_block_timepoint(SystemTime::now())
-            .unwrap_or_else(shared_view::wall_clock_timepoint)
-    }
-
-    /// After hogd refused a view stated at `stated`, the timepoint to retry
-    /// it at, if a newer tip is why: hogd picks its snapshot after the view
-    /// is stated, so a block committed in between can be later than `stated`.
-    async fn retry_timepoint(
+    /// The time a view runs at: the time the next block would get, and the
+    /// height of the tip it builds on. Without a known tip or a scheduler,
+    /// the wall clock and no height.
+    async fn view_time(
         clock: &SharedBlockClock,
         scheduler: Option<&SchedulerCoord_SchedulerCoord1_Client>,
-        stated: &TimePoint,
-    ) -> Option<TimePoint> {
-        let tip = TimePoint::new(tip_parent(scheduler?).await.ok()?.timepoint);
-        if !shared_view::view_timepoint_refused(stated, &tip) {
-            return None;
+    ) -> (TimePoint, Option<i64>) {
+        let next = match clock.next_block_time(SystemTime::now()) {
+            Some(next) => Some(next),
+            None => Self::fresh_view_time(clock, scheduler).await,
+        };
+        match next {
+            Some(next) => (next.timepoint, Some(next.parent_height)),
+            None => (shared_view::wall_clock_timepoint(), None),
         }
-        Some(Self::view_timepoint(clock).max(tip))
+    }
+
+    /// The next block's time after the scheduler's current tip.
+    ///
+    /// hogd opens a view's snapshot after the view's time is chosen, so a
+    /// block committed in between can make that time stale: hogd refuses it
+    /// when the new tip is later, or runs the view on the new block with the
+    /// old time. Either way the view reruns once at this time.
+    async fn fresh_view_time(
+        clock: &SharedBlockClock,
+        scheduler: Option<&SchedulerCoord_SchedulerCoord1_Client>,
+    ) -> Option<NextBlockTime> {
+        let tip = tip_parent(scheduler?).await.ok()?;
+        Some(clock.next_block_time_after(tip, SystemTime::now()))
     }
 
     pub(crate) const fn plane_status(&self) -> crate::server::PlaneStatus {

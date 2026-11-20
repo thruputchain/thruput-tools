@@ -11,10 +11,14 @@ clock and the tip's time, so a chain dated in the past showed today's date in
 views.
 
 - On a local node, a pinned, increased, stepped or frozen block clock applies
-  to views too. A chain pinned to 2000 and frozen shows exactly that time.
-- On the hosted gateway, a view runs at the gateway's wall clock.
-- If a block lands between choosing the time and running the view, the view
-  is retried once at the new tip's time.
+  to views too. A chain pinned to 2000 and frozen shows exactly that time,
+  also after a restart with `--data-dir`.
+- On a local node, a block can land between choosing the time and running
+  the view. The view then reruns once at the next block's time.
+- On the hosted gateway, a view runs at the gateway's wall clock. If hogd
+  refuses that time because a newer block landed, the gateway retries once
+  when it can read the newer tip. During a DbGateway reconnect it cannot, and
+  returns the refusal.
 - Needs hog-devnode 0.1.36 and protocol crates 0.67.0: the view query now
   states its block time (`TransactionViewQuery.block_timepoint`). Upgrade the
   hosted gateway and hogd together.

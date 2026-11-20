@@ -30,19 +30,29 @@ impl NativeSimulationPlane for HogdDevViewBackend {
         };
         let min_height = request.min_state_block_height.clone();
         let request = decode::simulation_request(request)?;
-        let stated = Self::view_timepoint(clock);
-        let query = shared_view::view_query(request.clone(), gas_limit, stated.clone())?;
         let result = within_request_deadline(context.capped(*request_timeout), async {
-            let view = |query| async move {
-                client.viewgateway_view(&query).await.map_err(|source| {
-                    RpcServerError::BackendUnavailable(format!("{VIEW_GATEWAY}: {source}"))
-                })
+            let (stated, parent_height) = Self::view_time(clock, scheduler.as_ref()).await;
+            let view = |timepoint| {
+                let query = shared_view::view_query(request.clone(), gas_limit, timepoint);
+                async move {
+                    client.viewgateway_view(&query?).await.map_err(|source| {
+                        RpcServerError::BackendUnavailable(format!("{VIEW_GATEWAY}: {source}"))
+                    })
+                }
             };
-            let result = view(query).await?;
-            if matches!(result, ViewGatewayResult::ViewGatewayInvalidInput { .. })
-                && let Some(retry) = Self::retry_timepoint(clock, scheduler.as_ref(), &stated).await
+            let result = view(stated.clone()).await?;
+            let stale = match &result {
+                ViewGatewayResult::ViewGatewayInvalidInput { .. } => true,
+                ViewGatewayResult::ViewGatewayOk { payload } => {
+                    parent_height.is_some_and(|height| *payload.height != height)
+                }
+                _ => false,
+            };
+            if stale
+                && let Some(fresh) = Self::fresh_view_time(clock, scheduler.as_ref()).await
+                && fresh.timepoint != stated
             {
-                return view(shared_view::view_query(request, gas_limit, retry)?).await;
+                return view(fresh.timepoint).await;
             }
             Ok(result)
         })
@@ -77,8 +87,8 @@ impl NativeSimulationPlane for HogdDevViewBackend {
                 timepoint,
             )
         };
-        let stated = Self::view_timepoint(clock);
         let (query, result) = within_request_deadline(context, async {
+            let (stated, parent_height) = Self::view_time(clock, scheduler.as_ref()).await;
             let view = |query: ViewGatewayBatchQuery| async move {
                 let result = client
                     .viewgateway_view_batch(&query)
@@ -89,14 +99,20 @@ impl NativeSimulationPlane for HogdDevViewBackend {
                 Ok::<_, RpcServerError>((query, result))
             };
             let (query, result) = view(batch(&stated)?).await?;
-            if matches!(
-                result,
-                ViewGatewayBatchResult::Default { outcome }
-                    if outcome == ViewGatewayBatchOutcome::ViewGatewayBatchInvalidRequest
-            ) && let Some(retry) =
-                Self::retry_timepoint(clock, scheduler.as_ref(), &stated).await
+            let stale = match &result {
+                ViewGatewayBatchResult::Default { outcome } => {
+                    *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchInvalidRequest
+                }
+                ViewGatewayBatchResult::ViewGatewayBatchOk { payload } => {
+                    parent_height.is_some_and(|height| *payload.height != height)
+                }
+                _ => false,
+            };
+            if stale
+                && let Some(fresh) = Self::fresh_view_time(clock, scheduler.as_ref()).await
+                && fresh.timepoint != stated
             {
-                return view(batch(&retry)?).await;
+                return view(batch(&fresh.timepoint)?).await;
             }
             Ok((query, result))
         })
