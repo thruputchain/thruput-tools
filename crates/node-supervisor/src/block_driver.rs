@@ -482,7 +482,7 @@ impl BlockClock {
 /// The block a new block builds on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Parent {
-    height: i64,
+    pub(crate) height: i64,
     pub(crate) timepoint: u64,
 }
 
@@ -497,7 +497,7 @@ impl Parent {
     /// `tests/real_block_time.rs` catches that when the runtime pin changes.
     const LAST_INITIAL_HEIGHT: i64 = 1;
 
-    fn of(header: &ProposalHeader) -> Self {
+    pub(crate) fn of(header: &ProposalHeader) -> Self {
         Self {
             height: *header.block_height,
             timepoint: *header.block_timepoint,
@@ -515,9 +515,9 @@ impl Parent {
 ///
 /// Contract views run at the timepoint the next block would get. The view
 /// path reads it here rather than asking the driver, so a view never waits
-/// behind block production. The driver publishes its clock when it starts and
-/// the tip after each commit. Until then, as on a restarted chain, a view reads
-/// the tip itself once and seeds it here.
+/// behind block production. The supervisor seeds it with the tip it validates
+/// at startup, the driver publishes its clock when it starts, and the driver
+/// publishes the tip after each commit.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SharedBlockClock(Arc<std::sync::Mutex<SharedClockState>>);
 
@@ -567,6 +567,12 @@ impl SharedBlockClock {
         self.lock().clock = clock.clone();
     }
 
+    /// Record the tip the supervisor read at startup, unless the driver has
+    /// already published one.
+    pub(crate) fn seed_tip(&self, tip: Parent) {
+        self.lock().tip.get_or_insert(tip);
+    }
+
     fn publish(&self, clock: &BlockClock, tip: Parent) {
         *self.lock() = SharedClockState {
             clock: clock.clone(),
@@ -588,9 +594,16 @@ impl SharedBlockClock {
     /// scheduler. Seeds the tip when none is known yet.
     pub(crate) fn next_block_time_after(&self, tip: Parent, now: SystemTime) -> NextBlockTime {
         let mut state = self.lock();
-        state.tip.get_or_insert(tip);
+        let known = *state.tip.get_or_insert(tip);
+        let mut clock = state.clock.clone();
+        if tip.height > known.height {
+            // The driver has committed this block but not published it yet.
+            // Apply the commit as the driver will, so a pin it used up no
+            // longer dates the next block.
+            clock.committed(tip.timepoint, now);
+        }
         NextBlockTime {
-            timepoint: TimePoint::new(state.clock.timepoint_after(tip, now)),
+            timepoint: TimePoint::new(clock.timepoint_after(tip, now)),
             parent_height: tip.height,
         }
     }
@@ -1731,6 +1744,37 @@ mod clock_tests {
         let seeded = shared.next_block_time_after(block(NOW), at(NOW + DAY));
         assert_eq!(seeded, next(NOW, 2));
         assert_eq!(shared.next_block_time(at(NOW + DAY)), Some(next(NOW, 2)));
+    }
+
+    #[test]
+    fn a_startup_tip_seeds_the_clock_but_never_replaces_a_published_one() {
+        let shared = SharedBlockClock::default();
+        shared.set_clock(&stepped(0));
+        shared.seed_tip(block(NOW));
+        assert_eq!(shared.next_block_time(at(NOW + DAY)), Some(next(NOW, 2)));
+
+        let published = SharedBlockClock::frozen_at(NOW + DAY);
+        published.seed_tip(block(NOW));
+        assert_eq!(published.next_block_time(at(NOW)), Some(next(NOW + DAY, 2)));
+    }
+
+    #[test]
+    fn a_newer_tip_than_the_published_one_does_not_reuse_a_spent_pin() {
+        // Block 3 used the pin, but the driver has not published it yet.
+        let shared = SharedBlockClock::default();
+        let mut clock = stepped(1_000);
+        clock.pin(NOW + DAY, at(NOW));
+        shared.publish(&clock, block(NOW));
+        assert_eq!(shared.next_block_time(at(NOW)), Some(next(NOW + DAY, 2)));
+
+        let committed = Parent {
+            height: 3,
+            timepoint: NOW + DAY,
+        };
+        assert_eq!(
+            shared.next_block_time_after(committed, at(NOW)),
+            next(NOW + DAY + 1_000, 3)
+        );
     }
 
     #[test]

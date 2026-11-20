@@ -33,7 +33,7 @@ use crate::{
     RpcCors,
     airdrop::{LocalAirdropContext, LocalAirdropRpc},
     block_control::LocalBlockControl,
-    block_driver::{BlockDriverTask, BlockProducer, SharedBlockClock},
+    block_driver::{BlockDriverTask, BlockProducer, Parent, SharedBlockClock},
     hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_runtime_identity},
     normalize_cors_origin,
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
@@ -382,15 +382,26 @@ impl NodeSupervisorHandle {
     }
 }
 
-/// Connect the view backend to the clock the block driver will publish:
-/// views run at the timepoint of the next block.
-async fn connect_view_backend(
+/// Connect the scheduler and the view backend. Views run at the timepoint of
+/// the next block, from a clock the block driver will publish. The clock
+/// starts from the tip validated at startup, so a restarted chain keeps its
+/// time in views.
+async fn connect_scheduler_and_view(
     config: &NodeSupervisorConfig,
     readiness: &HogdDevReadiness,
     protocol_version: &str,
-    scheduler_backend: &HogdDevSchedulerBackend,
-) -> Result<(HogdDevViewBackend, SharedBlockClock), NodeSupervisorError> {
+) -> Result<
+    (
+        HogdDevSchedulerBackend,
+        HogdDevViewBackend,
+        SharedBlockClock,
+    ),
+    NodeSupervisorError,
+> {
+    let (scheduler_backend, startup_tip) =
+        connect_scheduler_backend(readiness, protocol_version).await?;
     let shared_clock = SharedBlockClock::default();
+    shared_clock.seed_tip(startup_tip);
     let view = HogdDevViewBackend::connect_optional(
         readiness.endpoints.view_gateway,
         protocol_version,
@@ -400,7 +411,7 @@ async fn connect_view_backend(
         Some(scheduler_backend.scheduler_client().clone()),
     )
     .await?;
-    Ok((view, shared_clock))
+    Ok((scheduler_backend, view, shared_clock))
 }
 
 async fn start_rpc_server(
@@ -420,10 +431,8 @@ async fn start_rpc_server(
     })?;
     let network_hash = manifest.network_hash.to_network_hash().into_inner();
     let network_info = NetworkInfo::new(NetworkHash::from(network_hash));
-    let scheduler_backend = connect_scheduler_backend(readiness, protocol_version).await?;
-
-    let (view, shared_clock) =
-        connect_view_backend(config, readiness, protocol_version, &scheduler_backend).await?;
+    let (scheduler_backend, view, shared_clock) =
+        connect_scheduler_and_view(config, readiness, protocol_version).await?;
     let view_status = view.plane_status();
     let db_gateway = readiness.endpoints.db_gateway;
 
@@ -509,10 +518,11 @@ async fn start_rpc_server(
     }
 }
 
+/// Connect to the scheduler and return it with the tip it validated.
 async fn connect_scheduler_backend(
     readiness: &HogdDevReadiness,
     protocol_version: &str,
-) -> Result<HogdDevSchedulerBackend, NodeSupervisorError> {
+) -> Result<(HogdDevSchedulerBackend, Parent), NodeSupervisorError> {
     let scheduler_gateway = readiness.endpoints.scheduler_gateway.ok_or_else(|| {
         NodeSupervisorError::InvalidRuntimeManifest {
             program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
@@ -526,10 +536,10 @@ async fn connect_scheduler_backend(
         readiness.protocol.as_deref(),
     )
     .await?;
-    scheduler_backend
+    let tip = scheduler_backend
         .require_dev_genesis(&readiness.network_hash)
         .await?;
-    Ok(scheduler_backend)
+    Ok((scheduler_backend, Parent::of(&tip.value.proposal_header)))
 }
 
 fn rpc_server_options(

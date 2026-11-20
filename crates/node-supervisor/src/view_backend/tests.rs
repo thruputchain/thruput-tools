@@ -30,10 +30,14 @@ enum FakeViewGatewayMode {
     Batch,
     /// Return the timepoint a view ran at, from a snapshot at this height.
     EchoTimepoint(i64),
+    /// Refuse a view stated before this timepoint, as hogd refuses one
+    /// earlier than its snapshot's tip; otherwise echo it from height 42.
+    RefuseBefore(u64),
 }
 
 struct FakeViewGateway {
     mode: FakeViewGatewayMode,
+    views: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[allow(refining_impl_trait)]
@@ -101,13 +105,19 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
         &self,
         query: TransactionViewQuery,
     ) -> Result<ViewGatewayResult, ProgramError> {
+        self.views.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.mode == FakeViewGatewayMode::ViewSlow {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
+        let echo = query.block_timepoint.to_be_bytes().to_vec();
         let (height, return_buffer) = match self.mode {
-            FakeViewGatewayMode::EchoTimepoint(height) => {
-                (height, query.block_timepoint.to_be_bytes().to_vec())
+            FakeViewGatewayMode::EchoTimepoint(height) => (height, echo),
+            FakeViewGatewayMode::RefuseBefore(tip) if *query.block_timepoint < tip => {
+                return Ok(ViewGatewayResult::ViewGatewayInvalidInput {
+                    error_code: thruput_xdr::syscall_error::SyscallErrorCode(7),
+                });
             }
+            FakeViewGatewayMode::RefuseBefore(_) => (42, echo),
             _ => (42, vec![1, 2, 3]),
         };
 
@@ -130,19 +140,35 @@ async fn start_fake_view_gateway(
     SocketAddr,
     tokio::task::JoinHandle<Result<(), std::io::Error>>,
 ) {
+    let (addr, handle, _) = start_counting_fake_view_gateway(mode).await;
+    (addr, handle)
+}
+
+/// Start a fake view gateway that counts the single views it runs.
+async fn start_counting_fake_view_gateway(
+    mode: FakeViewGatewayMode,
+) -> (
+    SocketAddr,
+    tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bug: test ViewGateway should bind");
     let addr = listener
         .local_addr()
         .expect("bug: test ViewGateway should have local addr");
+    let views = std::sync::Arc::default();
     let mut services = ServiceMap::new();
     services.add_service(Box::new(ViewGateway_ViewGateway1_Dispatcher::new(
-        Box::new(FakeViewGateway { mode }),
+        Box::new(FakeViewGateway {
+            mode,
+            views: std::sync::Arc::clone(&views),
+        }),
     )));
     let server = RpcServer::new(listener, services);
     let handle = server.start().await;
-    (addr, handle)
+    (addr, handle, views)
 }
 
 fn invocation() -> thruput_json_rpc_types::requests::Invocation {
@@ -578,15 +604,18 @@ async fn start_fake_tip_scheduler(
     )
 }
 
-/// The timepoint a local view runs at, read back from the echoing fake.
-async fn local_view_timepoint(
-    snapshot_height: i64,
+/// Run one local view against a fake view gateway in `mode`. Returns the
+/// result and how many views the gateway ran.
+async fn local_view(
+    mode: FakeViewGatewayMode,
     clock: crate::block_driver::SharedBlockClock,
     scheduler: Option<SchedulerCoord_SchedulerCoord1_Client>,
-) -> u64 {
-    use thruput_json_rpc_types::{requests, responses};
-    let (addr, task) =
-        start_fake_view_gateway(FakeViewGatewayMode::EchoTimepoint(snapshot_height)).await;
+) -> (
+    Result<thruput_json_rpc_types::responses::SimulationResult, RpcServerError>,
+    usize,
+) {
+    use thruput_json_rpc_types::requests;
+    let (addr, task, views) = start_counting_fake_view_gateway(mode).await;
     let backend = HogdDevViewBackend::connect_optional(
         Some(addr),
         &protocol_text(&PROTOCOL_VERSION),
@@ -610,13 +639,28 @@ async fn local_view_timepoint(
     };
     let result = backend
         .simulate(RpcRequestContext::unbounded(), request, 100)
-        .await
-        .unwrap();
+        .await;
     task.abort();
-    let responses::InvocationOutput::Return { return_data } = result.output else {
+    (result, views.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+/// The timepoint an echoing fake returns for a local view.
+fn echoed_timepoint(result: thruput_json_rpc_types::responses::SimulationResult) -> u64 {
+    let thruput_json_rpc_types::responses::InvocationOutput::Return { return_data } = result.output
+    else {
         panic!("bug: the fake returns the view's timepoint");
     };
     u64::from_be_bytes(return_data.0.as_slice().try_into().unwrap())
+}
+
+/// The timepoint a local view runs at, read back from the echoing fake.
+async fn local_view_timepoint(
+    snapshot_height: i64,
+    clock: crate::block_driver::SharedBlockClock,
+    scheduler: Option<SchedulerCoord_SchedulerCoord1_Client>,
+) -> u64 {
+    let mode = FakeViewGatewayMode::EchoTimepoint(snapshot_height);
+    echoed_timepoint(local_view(mode, clock, scheduler).await.0.unwrap())
 }
 
 /// 2000-01-01, far behind the wall clock.
@@ -632,10 +676,51 @@ async fn a_local_view_runs_at_the_next_block_time() {
 #[tokio::test]
 async fn the_first_view_on_a_restarted_chain_runs_at_the_saved_tip() {
     // Restarted frozen, with the saved tip at height 5 in 2000 and no block
-    // produced since: the view reads the tip rather than the wall clock.
+    // produced since. The tip validated at startup dates the view, with no
+    // scheduler read that could fail.
+    let clock = crate::block_driver::SharedBlockClock::unseeded(0);
+    clock.seed_tip(crate::block_driver::Parent {
+        height: 5,
+        timepoint: Y2K,
+    });
+    assert_eq!(local_view_timepoint(5, clock, None).await, Y2K);
+}
+
+#[tokio::test]
+async fn without_a_known_tip_a_view_reads_it_from_the_scheduler() {
     let (scheduler, task) = start_fake_tip_scheduler(5, Y2K).await;
     let clock = crate::block_driver::SharedBlockClock::unseeded(0);
     assert_eq!(local_view_timepoint(5, clock, Some(scheduler)).await, Y2K);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_refusal_the_tip_does_not_explain_is_sent_once() {
+    // A running clock gives a new time on every read, but the tip has not
+    // moved past the stated time, so the refusal is returned as is.
+    let (scheduler, task) = start_fake_tip_scheduler(2, Y2K).await;
+    let clock = crate::block_driver::SharedBlockClock::default();
+    clock.seed_tip(crate::block_driver::Parent {
+        height: 2,
+        timepoint: Y2K,
+    });
+    let mode = FakeViewGatewayMode::RefuseBefore(u64::MAX);
+    let (result, views) = local_view(mode, clock, Some(scheduler)).await;
+    assert!(matches!(result, Err(RpcServerError::InvalidParam(_))));
+    assert_eq!(views, 1);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_refusal_behind_a_later_tip_reruns_once_at_its_next_block_time() {
+    // The time was chosen from block 4 in 2000. Block 5, a second later,
+    // committed first, and hogd refuses a time before it.
+    let (scheduler, task) = start_fake_tip_scheduler(5, Y2K + SECOND).await;
+    let clock = crate::block_driver::SharedBlockClock::stepped_from(0, 4, Y2K);
+    let mode = FakeViewGatewayMode::RefuseBefore(Y2K + SECOND);
+    let (result, views) = local_view(mode, clock, Some(scheduler)).await;
+    assert_eq!(echoed_timepoint(result.unwrap()), Y2K + SECOND);
+    assert_eq!(views, 2);
     task.abort();
 }
 

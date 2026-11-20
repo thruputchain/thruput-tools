@@ -1,6 +1,6 @@
 use super::{
-    HogdDevViewBackend, RpcRequestContext, RpcServerError, VIEW_GATEWAY, async_trait, shared_view,
-    within_request_deadline,
+    HogdDevViewBackend, RpcRequestContext, RpcServerError, StaleView, VIEW_GATEWAY, async_trait,
+    shared_view, within_request_deadline,
 };
 use thruput_hogd_backend::native as decode;
 use thruput_json_rpc_server::{ViewBatchConfig, native::read::NativeSimulationPlane};
@@ -42,17 +42,19 @@ impl NativeSimulationPlane for HogdDevViewBackend {
             };
             let result = view(stated.clone()).await?;
             let stale = match &result {
-                ViewGatewayResult::ViewGatewayInvalidInput { .. } => true,
-                ViewGatewayResult::ViewGatewayOk { payload } => {
-                    parent_height.is_some_and(|height| *payload.height > height)
+                ViewGatewayResult::ViewGatewayInvalidInput { .. } => Some(StaleView::Refused),
+                ViewGatewayResult::ViewGatewayOk { payload }
+                    if parent_height.is_some_and(|height| *payload.height > height) =>
+                {
+                    Some(StaleView::NewerSnapshot)
                 }
-                _ => false,
+                _ => None,
             };
-            if stale
-                && let Some(fresh) = Self::fresh_view_time(clock, scheduler.as_ref()).await
-                && fresh.timepoint != stated
+            if let Some(stale) = stale
+                && let Some(rerun) =
+                    Self::rerun_time(clock, scheduler.as_ref(), &stated, stale).await
             {
-                return view(fresh.timepoint).await;
+                return view(rerun).await;
             }
             Ok(result)
         })
@@ -100,19 +102,23 @@ impl NativeSimulationPlane for HogdDevViewBackend {
             };
             let (query, result) = view(batch(&stated)?).await?;
             let stale = match &result {
-                ViewGatewayBatchResult::Default { outcome } => {
-                    *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchInvalidRequest
+                ViewGatewayBatchResult::Default { outcome }
+                    if *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchInvalidRequest =>
+                {
+                    Some(StaleView::Refused)
                 }
-                ViewGatewayBatchResult::ViewGatewayBatchOk { payload } => {
-                    parent_height.is_some_and(|height| *payload.height > height)
+                ViewGatewayBatchResult::ViewGatewayBatchOk { payload }
+                    if parent_height.is_some_and(|height| *payload.height > height) =>
+                {
+                    Some(StaleView::NewerSnapshot)
                 }
-                _ => false,
+                _ => None,
             };
-            if stale
-                && let Some(fresh) = Self::fresh_view_time(clock, scheduler.as_ref()).await
-                && fresh.timepoint != stated
+            if let Some(stale) = stale
+                && let Some(rerun) =
+                    Self::rerun_time(clock, scheduler.as_ref(), &stated, stale).await
             {
-                return view(batch(&fresh.timepoint)?).await;
+                return view(batch(&rerun)?).await;
             }
             Ok((query, result))
         })

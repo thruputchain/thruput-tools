@@ -21,6 +21,16 @@ use crate::{
 
 const HOGD_DEV_POOL_SIZE: usize = 2;
 
+/// How a block committed after a view's time was chosen can show in the
+/// result: hogd opens the snapshot after the time is chosen.
+#[derive(Debug, Clone, Copy)]
+enum StaleView {
+    /// hogd refused the time, which may be earlier than the newer tip's.
+    Refused,
+    /// The view ran on a block newer than the one its time was chosen from.
+    NewerSnapshot,
+}
+
 /// Local-node simulation backend, using hogd-dev's optional `ViewGateway`.
 #[derive(Clone)]
 pub(crate) enum HogdDevViewBackend {
@@ -29,9 +39,8 @@ pub(crate) enum HogdDevViewBackend {
         request_timeout: Duration,
         /// The block driver's clock: a view runs at the next block's time.
         clock: SharedBlockClock,
-        /// Read for a view's tip before the block driver publishes one, and
-        /// to rerun a stale view; see [`HogdDevViewBackend::fresh_view_time`].
-        /// Without it, views use the wall clock until a tip is published.
+        /// Read to rerun a stale view (see [`HogdDevViewBackend::rerun_time`]),
+        /// and for a view's tip if none is known.
         scheduler: Option<SchedulerCoord_SchedulerCoord1_Client>,
     },
     Stub(StubBackend),
@@ -105,7 +114,9 @@ impl HogdDevViewBackend {
     ) -> (TimePoint, Option<i64>) {
         let next = match clock.next_block_time(SystemTime::now()) {
             Some(next) => Some(next),
-            None => Self::fresh_view_time(clock, scheduler).await,
+            None => Self::fresh_view_time(clock, scheduler)
+                .await
+                .map(|(_, next)| next),
         };
         match next {
             Some(next) => (next.timepoint, Some(next.parent_height)),
@@ -113,20 +124,34 @@ impl HogdDevViewBackend {
         }
     }
 
-    /// The next block's time after the scheduler's current tip.
-    ///
-    /// hogd opens a view's snapshot after the view's time is chosen, so a
-    /// block committed in between can make that time stale: hogd refuses it
-    /// when the new tip is later, or runs the view on the new block with the
-    /// old time. Either way the view reruns once at this time. A snapshot
-    /// older than the tip, which the view gateway serves briefly after a
-    /// commit, needs no rerun: the next block's time is still right.
+    /// The scheduler's current tip time, and the next block's time after it.
     async fn fresh_view_time(
         clock: &SharedBlockClock,
         scheduler: Option<&SchedulerCoord_SchedulerCoord1_Client>,
-    ) -> Option<NextBlockTime> {
+    ) -> Option<(TimePoint, NextBlockTime)> {
         let tip = tip_parent(scheduler?).await.ok()?;
-        Some(clock.next_block_time_after(tip, SystemTime::now()))
+        let next = clock.next_block_time_after(tip, SystemTime::now());
+        Some((TimePoint::new(tip.timepoint), next))
+    }
+
+    /// The time to rerun a view stated at `stated`, when a block committed
+    /// after that time was chosen explains the result.
+    ///
+    /// A refusal reruns only if the tip is later than `stated`, so an
+    /// unrelated invalid request is not resent. A view on a newer snapshot
+    /// reruns if the next block's time changed.
+    async fn rerun_time(
+        clock: &SharedBlockClock,
+        scheduler: Option<&SchedulerCoord_SchedulerCoord1_Client>,
+        stated: &TimePoint,
+        stale: StaleView,
+    ) -> Option<TimePoint> {
+        let (tip, next) = Self::fresh_view_time(clock, scheduler).await?;
+        let explained = match stale {
+            StaleView::Refused => shared_view::view_timepoint_refused(stated, &tip),
+            StaleView::NewerSnapshot => next.timepoint != *stated,
+        };
+        explained.then_some(next.timepoint)
     }
 
     pub(crate) const fn plane_status(&self) -> crate::server::PlaneStatus {
