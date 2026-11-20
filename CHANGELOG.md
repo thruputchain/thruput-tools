@@ -79,6 +79,10 @@ block, so it saw the old block time and the old state.
 - testkit sends that height as `minStateBlockHeight`. Servers from wire
   format 14.6.1 wait up to 2 s for it; against an older server, testkit
   retries `stateHeightUnavailable` for up to 2 s itself.
+- `Network::get_storage_at` uses the same floor. `getStorage` takes no
+  floor parameter, so testkit reads again while the answer's
+  `stateBlockHeight` is below it, for up to 2 s, then fails with
+  `TestkitError::Rpc`.
 
 ## 0.46.1
 
