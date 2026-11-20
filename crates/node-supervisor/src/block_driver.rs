@@ -1134,11 +1134,37 @@ fn consensus_value(
     })
 }
 
-// cxs(DomainSeparator(name)) as hogd spells it in
-// hogd/crypto/domain_separators.h: a zero extension point, the name length,
-// then the name.
-const PROPOSAL_TXS_DOMAIN_SEPARATOR_CXS: &[u8] = b"\x00\x0bProposalTxs";
-const PARALLEL_BATCH_DOMAIN_SEPARATOR_CXS: &[u8] = b"\x00\x0dParallelBatch";
+const PROPOSAL_TXS: &[u8] = b"ProposalTxs";
+const PARALLEL_BATCH: &[u8] = b"ParallelBatch";
+const PROPOSAL_TXS_DOMAIN_SEPARATOR_CXS: [u8; domain_separator_cxs_size(PROPOSAL_TXS)] =
+    domain_separator_cxs(PROPOSAL_TXS);
+const PARALLEL_BATCH_DOMAIN_SEPARATOR_CXS: [u8; domain_separator_cxs_size(PARALLEL_BATCH)] =
+    domain_separator_cxs(PARALLEL_BATCH);
+
+/// The size of [`domain_separator_cxs`] for `name`.
+const fn domain_separator_cxs_size(name: &[u8]) -> usize {
+    assert!(
+        name.len() <= 256,
+        "a domain separator name is at most 256 bytes"
+    );
+    #[allow(clippy::cast_possible_truncation)] // checked above
+    let length = xdrs::cxs::const_writer::size_u32(name.len() as u32);
+    ExtensionPoint::_0.const_cxs_size() + length + name.len()
+}
+
+/// `cxs(DomainSeparator(name))`, as hogd builds it in
+/// `hogd/crypto/domain_separators.h`.
+///
+/// `thruput_xdr::preimage::DomainSeparator` holds its name in a `BytesM`,
+/// which a `const` cannot build, so this writes the struct's two fields
+/// with the const writer. `domain_separators_encode_as_the_xdr_type` checks
+/// the result against the type.
+const fn domain_separator_cxs<const N: usize>(name: &[u8]) -> [u8; N] {
+    let mut writer = xdrs::cxs::ConstWriter::<N>::new();
+    ExtensionPoint::_0.const_write_cxs(&mut writer);
+    writer.write_opaque_variable(name);
+    writer.into_bytes()
+}
 
 // Matches hogd's proposal_txs_compatibility_hash (hogd/xdr/proposal_hash.h):
 //   SHA-256(cxs(DomainSeparator("ProposalTxs")) || SHA-256(base) ||
@@ -1557,6 +1583,27 @@ mod hash_tests {
     use xdrs::{BytesM, VecM};
 
     use super::{BlockProductionError, hash_xdr, proposal_txs_compatibility_hash};
+
+    #[test]
+    fn domain_separators_encode_as_the_xdr_type() {
+        use thruput_xdr::preimage::DomainSeparator;
+        for (name, encoded) in [
+            (
+                super::PROPOSAL_TXS,
+                &super::PROPOSAL_TXS_DOMAIN_SEPARATOR_CXS[..],
+            ),
+            (
+                super::PARALLEL_BATCH,
+                &super::PARALLEL_BATCH_DOMAIN_SEPARATOR_CXS[..],
+            ),
+        ] {
+            let separator = DomainSeparator {
+                ext: ExtensionPoint::_0,
+                domain_separator: BytesM(name.to_vec()),
+            };
+            assert_eq!(xdrs::cxs::encode(&separator).unwrap(), encoded);
+        }
+    }
 
     #[test]
     fn proposal_txs_compatibility_hash_matches_hogd_golden_vector() {

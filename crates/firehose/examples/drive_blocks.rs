@@ -9,6 +9,7 @@ use thruput_node_rpc::{
 };
 use thruput_xdr::{
     header::ProposalContext,
+    preimage::DomainSeparator,
     types::{ConsensusValueHash, ExtensionPoint, Protocol, SHA256Hash, TimePoint},
     validator::ValidatorID,
 };
@@ -19,6 +20,14 @@ fn hash<T: xdrs::WriteXDR>(value: &T) -> Result<[u8; 32]> {
     Ok(Sha256::digest(xdrs::txs::encode(value)?).into())
 }
 
+/// `cxs(DomainSeparator(name))`, as hogd builds it.
+fn domain_separator(name: &[u8]) -> Result<Vec<u8>> {
+    Ok(xdrs::cxs::encode(&DomainSeparator {
+        ext: ExtensionPoint::_0,
+        domain_separator: xdrs::BytesM(name.to_vec()),
+    })?)
+}
+
 // Mirrors node-supervisor's proposal_txs_compatibility_hash, which matches
 // hogd/xdr/proposal_hash.h.
 fn batch_hash(batch: &ParallelBatch) -> Result<[u8; 32]> {
@@ -26,7 +35,7 @@ fn batch_hash(batch: &ParallelBatch) -> Result<[u8; 32]> {
     let mut index = batch.clone();
     index.xdr.0.clear();
     let mut hasher = Sha256::new();
-    hasher.update(b"\x00\x0dParallelBatch");
+    hasher.update(domain_separator(b"ParallelBatch")?);
     hasher.update(hash(&index)?);
     let mut offset = 0;
     for &size in &batch.segment_bytes.0 {
@@ -50,7 +59,7 @@ fn proposal_hash(txs: &ProposalTxs) -> Result<ProposalTxsHash> {
         batch.xdr.0.clear();
     }
     let mut hasher = Sha256::new();
-    hasher.update(b"\x00\x0bProposalTxs");
+    hasher.update(domain_separator(b"ProposalTxs")?);
     hasher.update(hash(&base)?);
     hasher.update(batch_hash(&txs.signed_hash)?);
     hasher.update(batch_hash(&txs.nondeterministic_data)?);
