@@ -1237,6 +1237,10 @@ fn a_high_data_section_stages_only_its_own_span() {
     // nonzero span at its own address.
     let addr = (3u32 << 30) - 0x1000;
     let mut spec = happy_spec();
+    // This file-backed section contributes no bytes to the image. Its low
+    // address must not make the lowerer stage the gap up to .rodata.
+    spec.extras
+        .push(ExtraSection::progbits(".data", SHF_ALLOC, 8, vec![0; 4]));
     spec.extras.push(ExtraSection::progbits(
         ".rodata",
         SHF_ALLOC,
