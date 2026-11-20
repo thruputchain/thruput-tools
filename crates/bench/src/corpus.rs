@@ -207,9 +207,16 @@ async fn prepare_inner(
         };
         nonce_start = Some(first_nonce);
         let network_hash = manifest.network_hash.to_network_hash();
+        let block_expiry_height = cli.block_expiry_height;
         *progress = format!("generating {count} seed transactions");
         let batch = tokio::task::spawn_blocking(move || {
-            generate_tx_batch(count, &accounts, &network_hash, first_nonce)
+            generate_tx_batch(
+                count,
+                &accounts,
+                &network_hash,
+                first_nonce,
+                block_expiry_height,
+            )
         })
         .await
         .map_err(|source| BenchError::WorkerJoin { source })??;
