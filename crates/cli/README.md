@@ -1038,11 +1038,10 @@ driver still decides when blocks are produced. While the tip is one of a fresh
 chain's initial blocks, the next block still takes the wall clock. Clearing the step
 continues from the tip's time, not from today.
 
-A contract view sees a time change only after a block exists at the new time,
-so produce one. The view time also depends on the runtime. hog-devnode 0.1.34
-and earlier run views at the wall clock, so a view does not see a block time
-ahead of it. hog-devnode 0.1.35, the managed default, and later run views at
-the later of the wall clock and the tip's time. For example, move 30 days ahead with an empty block:
+A contract view runs at the time the next block would get, so it sees a time
+change at once. This needs hog-devnode 0.1.36, the managed default. hog-devnode
+0.1.35 runs views at the later of the wall clock and the tip's time, and earlier
+runtimes at the wall clock. For example, move 30 days ahead with an empty block:
 
 ```bash
 curl -s http://127.0.0.1:9545 -H 'content-type: application/json' \
