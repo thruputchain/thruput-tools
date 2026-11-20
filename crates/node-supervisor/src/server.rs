@@ -703,7 +703,7 @@ where
             block_driver_trigger,
         )
     });
-    let core_rpc = NativeService::new(
+    let mut core_rpc = NativeService::new(
         scheduler_backend.clone(),
         scheduler_backend,
         read,
@@ -723,10 +723,9 @@ where
     )
     .with_local_pending_count()
     .with_block_control(LocalBlockControl::new(block_driver.producer()));
-    let core_rpc = match bundle_identity.as_ref() {
-        Some(identity) => core_rpc.with_bundle_identity(identity),
-        None => core_rpc,
-    };
+    if let Some(identity) = &bundle_identity {
+        core_rpc = core_rpc.with_bundle_identity(identity);
+    }
     let module = match local_airdrop {
         Some(funding) => core_rpc
             .with_funding(funding)
