@@ -578,39 +578,37 @@ async fn stated_contract_size_cap_from_the_tip_bounds_submissions() {
     assert_eq!(submitter.submitted.lock().await.len(), 1);
 }
 
-#[tokio::test]
-async fn bound_violation_is_rechecked_against_a_fresh_tip_before_rejecting() {
-    // The cached config caps attachments at one; an upgrade then raises it to
-    // two. A submit inside the window must not reject on the stale cap: it
-    // reads the tip again and applies the raised one.
+#[tokio::test(start_paused = true)]
+async fn bound_violation_uses_cached_limit_until_scheduled_refresh() {
     let chain = ConfigChain::new(1);
     let submitter = SubmitOnly::new();
-    let server = server(submitter.clone(), chain.clone(), RpcServerConfig::default());
+    let interval_ms = 5_000;
+    let server = server(
+        submitter.clone(),
+        chain.clone(),
+        RpcServerConfig::default().with_tip_refresh_interval_ms(interval_ms),
+    );
+    tokio::task::yield_now().await;
     submit(
         &server,
         signed_tx_bytes_with_contracts(vec![rv32_contract(8, 1)]),
     )
     .await
-    .expect("bug: one contract is within a cap of one");
+    .unwrap();
     chain.set_params(max_contracts_params(2)).await;
 
     let two_contracts =
         signed_tx_bytes_with_contracts(vec![rv32_contract(8, 1), rv32_contract(8, 2)]);
-    submit(&server, two_contracts.clone())
-        .await
-        .expect("bug: the raised cap should admit two contracts");
+    let error = submit(&server, two_contracts.clone()).await.unwrap_err();
+    assert_eq!(data(&error)["detail"]["reason"], "tooManyContracts");
+    assert_eq!(*chain.tip_calls.lock().await, 1);
+    assert_eq!(submitter.submitted.lock().await.len(), 1);
 
-    assert_eq!(
-        *chain.tip_calls.lock().await,
-        2,
-        "the violation should trigger exactly one fresh probe"
-    );
-    let sent = submitter.submitted.lock().await;
-    assert_eq!(sent.len(), 2);
-    assert_eq!(
-        sent[1].bytes, two_contracts,
-        "the recheck must validate and submit the same bytes"
-    );
+    tokio::time::advance(Duration::from_millis(interval_ms)).await;
+    tokio::task::yield_now().await;
+    submit(&server, two_contracts).await.unwrap();
+    assert_eq!(*chain.tip_calls.lock().await, 2);
+    assert_eq!(submitter.submitted.lock().await.len(), 2);
 }
 
 #[tokio::test]
