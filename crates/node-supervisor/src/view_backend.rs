@@ -118,7 +118,9 @@ impl HogdDevViewBackend {
     /// hogd opens a view's snapshot after the view's time is chosen, so a
     /// block committed in between can make that time stale: hogd refuses it
     /// when the new tip is later, or runs the view on the new block with the
-    /// old time. Either way the view reruns once at this time.
+    /// old time. Either way the view reruns once at this time. A snapshot
+    /// older than the tip, which the view gateway serves briefly after a
+    /// commit, needs no rerun: the next block's time is still right.
     async fn fresh_view_time(
         clock: &SharedBlockClock,
         scheduler: Option<&SchedulerCoord_SchedulerCoord1_Client>,

@@ -44,7 +44,7 @@ impl NativeSimulationPlane for HogdDevViewBackend {
             let stale = match &result {
                 ViewGatewayResult::ViewGatewayInvalidInput { .. } => true,
                 ViewGatewayResult::ViewGatewayOk { payload } => {
-                    parent_height.is_some_and(|height| *payload.height != height)
+                    parent_height.is_some_and(|height| *payload.height > height)
                 }
                 _ => false,
             };
@@ -104,7 +104,7 @@ impl NativeSimulationPlane for HogdDevViewBackend {
                     *outcome == ViewGatewayBatchOutcome::ViewGatewayBatchInvalidRequest
                 }
                 ViewGatewayBatchResult::ViewGatewayBatchOk { payload } => {
-                    parent_height.is_some_and(|height| *payload.height != height)
+                    parent_height.is_some_and(|height| *payload.height > height)
                 }
                 _ => false,
             };

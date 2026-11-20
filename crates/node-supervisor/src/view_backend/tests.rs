@@ -651,3 +651,17 @@ async fn a_view_on_a_newer_snapshot_reruns_at_its_next_block_time() {
     );
     task.abort();
 }
+
+#[tokio::test]
+async fn a_view_on_an_older_snapshot_keeps_its_time() {
+    // The view gateway still serves block 4 after block 5 committed. The time
+    // from block 5 is right, so the view does not rerun, even though the
+    // scheduler would now give a different time.
+    let (scheduler, task) = start_fake_tip_scheduler(6, Y2K + 2 * SECOND).await;
+    let clock = crate::block_driver::SharedBlockClock::stepped_from(SECOND, 5, Y2K + SECOND);
+    assert_eq!(
+        local_view_timepoint(4, clock, Some(scheduler)).await,
+        Y2K + 2 * SECOND
+    );
+    task.abort();
+}
