@@ -23,12 +23,12 @@ fn request(caller: Option<ContractAddress>) -> ViewRequest {
 fn explicit_claim_replaces_only_the_default_auth_context() {
     use thruput_json_rpc_types::view::ViewAuthClaim;
     let mut input = request(None);
-    let default = view_query(input.clone(), 123).unwrap();
+    let default = view_query(input.clone(), 123, thruput_xdr::types::TimePoint::new(7)).unwrap();
     input.auth_claim = Some(ViewAuthClaim::SourceAddress {
         allowed_keys: 5,
         required_weight: 3,
     });
-    let explicit = view_query(input, 123).unwrap();
+    let explicit = view_query(input, 123, thruput_xdr::types::TimePoint::new(7)).unwrap();
     assert_eq!(explicit.invocation, default.invocation);
     assert_eq!(explicit.parent_address, default.parent_address);
     assert_eq!(explicit.invoke_flags, default.invoke_flags);
@@ -38,7 +38,12 @@ fn explicit_claim_replaces_only_the_default_auth_context() {
 #[test]
 fn view_query_maps_the_public_request_shape() {
     let caller = ContractAddress::from(XdrContractAddress::from([9; 32]));
-    let query = view_query(request(Some(caller)), 123).expect("query maps");
+    let query = view_query(
+        request(Some(caller)),
+        123,
+        thruput_xdr::types::TimePoint::new(7),
+    )
+    .expect("query maps");
 
     assert_eq!(query.invocation.invoked_address.as_ref(), &[7; 32]);
     assert_eq!(query.invocation.entrypoint.as_ref(), &[8; 8]);
@@ -52,7 +57,8 @@ fn view_query_maps_the_public_request_shape() {
 
 #[test]
 fn view_query_preserves_a_missing_caller() {
-    let query = view_query(request(None), 456).expect("query maps");
+    let query =
+        view_query(request(None), 456, thruput_xdr::types::TimePoint::new(7)).expect("query maps");
 
     assert_eq!(query.parent_address, None);
     assert_eq!(query.invocation.gas_limit, 456);
@@ -64,7 +70,7 @@ fn a_wrong_width_entrypoint_is_a_caller_error() {
     request.entrypoint = HexBytes(vec![1, 2, 3]);
 
     assert!(matches!(
-        view_query(request, 1),
+        view_query(request, 1, thruput_xdr::types::TimePoint::new(7)),
         Err(RpcServerError::InvalidParam(_))
     ));
 }

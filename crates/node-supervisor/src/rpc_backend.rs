@@ -108,11 +108,13 @@ impl HogdDevSchedulerBackend {
         })
     }
 
+    /// Check that both scheduler planes report the same post-genesis tip on
+    /// the expected network, and return that tip.
     #[tracing::instrument(skip_all)]
     pub(crate) async fn require_dev_genesis(
         &self,
         expected_network_hash: &NetworkHashText,
-    ) -> Result<(), NodeSupervisorError> {
+    ) -> Result<DbTip, NodeSupervisorError> {
         let coordinator_tip = require_dev_genesis(&self.coordinator).await?;
         validate_scheduler_network_hash(expected_network_hash, &coordinator_tip)?;
 
@@ -140,7 +142,7 @@ impl HogdDevSchedulerBackend {
                 gateway: format!("{gateway_tip:?}"),
             });
         }
-        Ok(())
+        Ok(coordinator_tip)
     }
 
     /// Borrow the internal coordinator client for genesis and block driving.
