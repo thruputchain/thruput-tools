@@ -26,11 +26,7 @@ pub fn view_batch_query(
     limits: thruput_json_rpc_server::ViewBatchConfig,
     block_timepoint: &TimePoint,
 ) -> Result<thruput_view::ViewGatewayBatchQuery, RpcServerError> {
-    let millis = remaining.as_millis().min(u128::from(u32::MAX));
-    let budget_millis = u32::try_from(millis).map_err(|_| RpcServerError::BackendTimeout)?;
-    if budget_millis == 0 {
-        return Err(RpcServerError::BackendTimeout);
-    }
+    let budget_millis = budget_millis(remaining)?;
     Ok(thruput_view::ViewGatewayBatchQuery {
         calls: VecM(
             request
@@ -46,6 +42,30 @@ pub fn view_batch_query(
         budget_millis,
         max_response_bytes: limits.max_response_bytes,
     })
+}
+
+/// Restate a built batch at `block_timepoint` for a retry, with the caller's
+/// remaining budget, so a retry does not rebuild the calls.
+pub fn restate_view_batch(
+    query: &mut thruput_view::ViewGatewayBatchQuery,
+    block_timepoint: &TimePoint,
+    remaining: std::time::Duration,
+) -> Result<(), RpcServerError> {
+    query.budget_millis = budget_millis(remaining)?;
+    for call in &mut query.calls.0 {
+        call.block_timepoint = block_timepoint.clone();
+    }
+    Ok(())
+}
+
+/// The caller's remaining budget, rounded down to milliseconds. None left is
+/// a timeout.
+fn budget_millis(remaining: std::time::Duration) -> Result<u32, RpcServerError> {
+    let millis = remaining.as_millis().min(u128::from(u32::MAX));
+    match u32::try_from(millis) {
+        Ok(0) | Err(_) => Err(RpcServerError::BackendTimeout),
+        Ok(millis) => Ok(millis),
+    }
 }
 
 /// Translate a public view request into hogd's query shape.
@@ -152,6 +172,29 @@ mod batch_tests {
             &[8; 32]
         );
         assert_eq!(*query.calls.0[0].block_timepoint, 1_700_000_000_000_000_000);
+    }
+
+    #[test]
+    fn a_restated_batch_keeps_its_calls_at_a_new_time_and_budget() {
+        use thruput_xdr::types::TimePoint;
+        let mut restated = query();
+        restate_view_batch(
+            &mut restated,
+            &TimePoint::new(5),
+            Duration::from_millis(250),
+        )
+        .unwrap();
+        let original = query();
+        assert_eq!(restated.budget_millis, 250);
+        assert_eq!(*restated.calls.0[0].block_timepoint, 5);
+        assert_eq!(
+            restated.calls.0[0].invocation,
+            original.calls.0[0].invocation
+        );
+        assert!(matches!(
+            restate_view_batch(&mut restated, &TimePoint::new(6), Duration::ZERO),
+            Err(RpcServerError::BackendTimeout)
+        ));
     }
 
     #[test]

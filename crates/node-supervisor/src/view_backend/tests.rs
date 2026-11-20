@@ -31,8 +31,11 @@ enum FakeViewGatewayMode {
     /// Return the timepoint a view ran at, from a snapshot at this height.
     EchoTimepoint(i64),
     /// Refuse a view stated before this timepoint, as hogd refuses one
-    /// earlier than its snapshot's tip; otherwise echo it from height 42.
-    RefuseBefore(u64),
+    /// earlier than its snapshot's tip; otherwise echo it from this height.
+    RefuseBefore(u64, i64),
+    /// Echo each view's timepoint from a snapshot one block newer than the
+    /// last, starting at this height, as if a block commits before each view.
+    EchoRising(i64),
 }
 
 struct FakeViewGateway {
@@ -105,19 +108,22 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
         &self,
         query: TransactionViewQuery,
     ) -> Result<ViewGatewayResult, ProgramError> {
-        self.views.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let earlier_views = self.views.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.mode == FakeViewGatewayMode::ViewSlow {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         let echo = query.block_timepoint.to_be_bytes().to_vec();
         let (height, return_buffer) = match self.mode {
-            FakeViewGatewayMode::EchoTimepoint(height) => (height, echo),
-            FakeViewGatewayMode::RefuseBefore(tip) if *query.block_timepoint < tip => {
+            FakeViewGatewayMode::RefuseBefore(tip, _) if *query.block_timepoint < tip => {
                 return Ok(ViewGatewayResult::ViewGatewayInvalidInput {
                     error_code: thruput_xdr::syscall_error::SyscallErrorCode(7),
                 });
             }
-            FakeViewGatewayMode::RefuseBefore(_) => (42, echo),
+            FakeViewGatewayMode::EchoTimepoint(height)
+            | FakeViewGatewayMode::RefuseBefore(_, height) => (height, echo),
+            FakeViewGatewayMode::EchoRising(start) => {
+                (start + i64::try_from(earlier_views).unwrap(), echo)
+            }
             _ => (42, vec![1, 2, 3]),
         };
 
@@ -704,7 +710,7 @@ async fn a_refusal_the_tip_does_not_explain_is_sent_once() {
         height: 2,
         timepoint: Y2K,
     });
-    let mode = FakeViewGatewayMode::RefuseBefore(u64::MAX);
+    let mode = FakeViewGatewayMode::RefuseBefore(u64::MAX, 2);
     let (result, views) = local_view(mode, clock, Some(scheduler)).await;
     assert!(matches!(result, Err(RpcServerError::InvalidParam(_))));
     assert_eq!(views, 1);
@@ -717,7 +723,7 @@ async fn a_refusal_behind_a_later_tip_reruns_once_at_its_next_block_time() {
     // committed first, and hogd refuses a time before it.
     let (scheduler, task) = start_fake_tip_scheduler(5, Y2K + SECOND).await;
     let clock = crate::block_driver::SharedBlockClock::stepped_from(0, 4, Y2K);
-    let mode = FakeViewGatewayMode::RefuseBefore(Y2K + SECOND);
+    let mode = FakeViewGatewayMode::RefuseBefore(Y2K + SECOND, 5);
     let (result, views) = local_view(mode, clock, Some(scheduler)).await;
     assert_eq!(echoed_timepoint(result.unwrap()), Y2K + SECOND);
     assert_eq!(views, 2);
@@ -748,5 +754,22 @@ async fn a_view_on_an_older_snapshot_keeps_its_time() {
         local_view_timepoint(4, clock, Some(scheduler)).await,
         Y2K + 2 * SECOND
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_rerun_overtaken_by_another_block_fails_instead_of_using_a_stale_time() {
+    // The time was chosen from block 4, stepping 1 s. Block 5 committed before
+    // the view's snapshot, so it reruns at block 6's time. Block 6 then
+    // committed before the rerun's snapshot, so that time is stale too.
+    let (scheduler, task) = start_fake_tip_scheduler(5, Y2K + SECOND).await;
+    let clock = crate::block_driver::SharedBlockClock::stepped_from(SECOND, 4, Y2K);
+    let (result, views) =
+        local_view(FakeViewGatewayMode::EchoRising(5), clock, Some(scheduler)).await;
+    assert!(
+        matches!(&result, Err(RpcServerError::BackendUnavailable(message)) if message.contains("retry")),
+        "{result:?}"
+    );
+    assert_eq!(views, 2);
     task.abort();
 }

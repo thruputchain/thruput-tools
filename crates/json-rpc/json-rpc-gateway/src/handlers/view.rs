@@ -11,38 +11,43 @@ use crate::{config::HealthBackend, context::GatewayContext, metrics::GatewayMetr
 
 use super::{VIEW_GATEWAY, backend_deadline, timed_backend_call};
 
-async fn batch_result(
+/// The connected view gateway client, or why there is none.
+async fn view_client(
     ctx: &GatewayContext,
-    context: RpcRequestContext,
-    request: thruput_json_rpc_types::view::ViewBatchRequest,
-    gas_limit: u64,
-    limits: thruput_json_rpc_server::ViewBatchConfig,
-    block_timepoint: &TimePoint,
-) -> Result<(thruput_view::ViewGatewayBatchQuery, ViewGatewayBatchResult), RpcServerError> {
-    let timeout =
-        Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
-    let deadline = backend_deadline(context, timeout)?;
-    let client = ctx.view_gateway.read().await.clone().ok_or_else(|| {
+    method: &str,
+) -> Result<crate::context::ViewGatewayClient, RpcServerError> {
+    ctx.view_gateway.read().await.clone().ok_or_else(|| {
         if ctx.config.view_gateway_address.is_some() {
             RpcServerError::BackendUnavailable("view_gateway not connected".into())
         } else {
-            RpcServerError::NotImplemented("viewBatch".into())
+            RpcServerError::NotImplemented(method.into())
         }
-    })?;
-    let query = shared_view::view_batch_query(
-        request,
-        gas_limit,
-        deadline.saturating_duration_since(Instant::now()),
-        limits,
-        block_timepoint,
-    )?;
+    })
+}
+
+/// The deadline for one view request, retries included.
+fn view_deadline(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+) -> Result<Instant, RpcServerError> {
+    let timeout =
+        Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
+    backend_deadline(context, timeout)
+}
+
+async fn batch_result(
+    client: &thruput_view::ViewGateway_ViewGateway1_Client,
+    metrics: &GatewayMetrics,
+    query: &thruput_view::ViewGatewayBatchQuery,
+    deadline: Instant,
+) -> Result<ViewGatewayBatchResult, RpcServerError> {
     let result = timed_backend_call(
-        &ctx.metrics,
+        metrics,
         HealthBackend::ViewGateway,
         "viewgateway_view_batch",
         VIEW_GATEWAY,
         deadline,
-        client.viewgateway_view_batch(&query),
+        client.viewgateway_view_batch(query),
         // Expected refusals are healthy backend round trips, even though the
         // public response remains an error for the caller.
         |result| match result {
@@ -57,9 +62,9 @@ async fn batch_result(
     )
     .await;
     if matches!(result, Err(RpcServerError::BackendTimeout)) {
-        ctx.metrics.observe_view_timeout();
+        metrics.observe_view_timeout();
     }
-    Ok((query, result?))
+    result
 }
 
 /// A hosted view runs at the gateway's wall clock: validators stamp blocks
@@ -118,26 +123,18 @@ pub async fn native_simulate(
     request: thruput_json_rpc_types::requests::SimulateInvocationRequest,
     gas_limit: u64,
 ) -> Result<thruput_json_rpc_types::responses::SimulationResult, RpcServerError> {
-    let client = ctx.view_gateway.read().await.clone().ok_or_else(|| {
-        if ctx.config.view_gateway_address.is_some() {
-            RpcServerError::BackendUnavailable("view_gateway not connected".into())
-        } else {
-            RpcServerError::NotImplemented("simulateInvocation".into())
-        }
-    })?;
+    let client = view_client(ctx, "simulateInvocation").await?;
     let min = request.min_state_block_height.clone();
     let request = thruput_hogd_backend::native::simulation_request(request)?;
     let stated = shared_view::wall_clock_timepoint();
-    let query = shared_view::view_query(request.clone(), gas_limit, stated.clone())?;
-    let timeout =
-        Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
-    let deadline = backend_deadline(context, timeout)?;
+    let mut query = shared_view::view_query(request, gas_limit, stated.clone())?;
+    let deadline = view_deadline(ctx, context)?;
     let mut result = view_result_from_client(&client, &ctx.metrics, &query, deadline).await?;
     if matches!(result, ViewGatewayResult::ViewGatewayInvalidInput { .. })
         && let Some(tip) = tip_after(ctx, context, &stated).await
     {
-        let retry = shared_view::view_query(request, gas_limit, tip)?;
-        result = view_result_from_client(&client, &ctx.metrics, &retry, deadline).await?;
+        query.block_timepoint = tip;
+        result = view_result_from_client(&client, &ctx.metrics, &query, deadline).await?;
     }
     thruput_hogd_backend::native::simulation(result, min)
 }
@@ -151,17 +148,22 @@ pub async fn native_simulate_batch(
     gas_limit: u64,
     limits: thruput_json_rpc_server::ViewBatchConfig,
 ) -> Result<thruput_json_rpc_types::responses::SimulationResults, RpcServerError> {
+    let client = view_client(ctx, "viewBatch").await?;
     let request = thruput_hogd_backend::native::simulations_request(request)?;
     let stated = shared_view::wall_clock_timepoint();
-    let (mut query, mut result) =
-        batch_result(ctx, context, request.clone(), gas_limit, limits, &stated).await?;
+    let deadline = view_deadline(ctx, context)?;
+    let remaining = || deadline.saturating_duration_since(Instant::now());
+    let mut query =
+        shared_view::view_batch_query(request, gas_limit, remaining(), limits, &stated)?;
+    let mut result = batch_result(&client, &ctx.metrics, &query, deadline).await?;
     if matches!(
         result,
         ViewGatewayBatchResult::Default { outcome }
             if outcome == ViewGatewayBatchOutcome::ViewGatewayBatchInvalidRequest
     ) && let Some(tip) = tip_after(ctx, context, &stated).await
     {
-        (query, result) = batch_result(ctx, context, request, gas_limit, limits, &tip).await?;
+        shared_view::restate_view_batch(&mut query, &tip, remaining())?;
+        result = batch_result(&client, &ctx.metrics, &query, deadline).await?;
     }
     thruput_hogd_backend::native::simulations(&query, result)
 }

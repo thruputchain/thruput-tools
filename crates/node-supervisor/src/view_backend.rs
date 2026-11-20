@@ -134,8 +134,9 @@ impl HogdDevViewBackend {
         Some((TimePoint::new(tip.timepoint), next))
     }
 
-    /// The time to rerun a view stated at `stated`, when a block committed
-    /// after that time was chosen explains the result.
+    /// The time to rerun a view stated at `stated`, and the tip it builds
+    /// on, when a block committed after that time was chosen explains the
+    /// result.
     ///
     /// A refusal reruns only if the tip is later than `stated`, so an
     /// unrelated invalid request is not resent. A view on a newer snapshot
@@ -145,13 +146,13 @@ impl HogdDevViewBackend {
         scheduler: Option<&SchedulerCoord_SchedulerCoord1_Client>,
         stated: &TimePoint,
         stale: StaleView,
-    ) -> Option<TimePoint> {
+    ) -> Option<NextBlockTime> {
         let (tip, next) = Self::fresh_view_time(clock, scheduler).await?;
         let explained = match stale {
             StaleView::Refused => shared_view::view_timepoint_refused(stated, &tip),
             StaleView::NewerSnapshot => next.timepoint != *stated,
         };
-        explained.then_some(next.timepoint)
+        explained.then_some(next)
     }
 
     pub(crate) const fn plane_status(&self) -> crate::server::PlaneStatus {

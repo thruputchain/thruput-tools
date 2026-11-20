@@ -11,7 +11,7 @@
 # REQUIRES:
 # - thruput CLI and installed toolchain
 # - the thruput-examples repo, adjacent to this one, or THRUPUT_EXAMPLES_ROOT
-# - hog-devnode 0.1.35 or later, for the contract view block time check
+# - hog-devnode 0.1.36 or later, for the contract view block time check
 
 set -euo pipefail
 
