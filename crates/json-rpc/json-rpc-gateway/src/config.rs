@@ -172,11 +172,10 @@ impl FromStr for HealthBackend {
 /// Adaptive-batching policy.
 ///
 /// Incoming client requests are accumulated and packed into one
-/// backend RPC per fired batch. There is **no time-based flush**: the
-/// only trigger is "a slot opened up under `max_inflight_batches`".
-/// At low load a single arrival fires immediately as a batch of one
-/// (zero added latency); at high load new arrivals pile up while a
-/// batch is in flight and drain together when it completes.
+/// backend RPC per fired batch. When a worker slot is available, the
+/// shard drains queued requests up to `max_size`. By default it sends
+/// the batch immediately. An optional linger lets a small batch wait
+/// for more arrivals until its target size or deadline.
 ///
 /// Used for both `sendTransaction` (packing tx blobs into
 /// `schedgateway_submit_tx_batch`) and state reads
@@ -204,6 +203,16 @@ pub struct AdaptiveBatchConfig {
     /// Bounded depth of the per-shard ingress channel. When full,
     /// new requests fail immediately with `Overloaded`.
     pub ingress_queue_depth: usize,
+
+    /// Maximum time in microseconds to wait for more items after taking
+    /// the first item. Defaults to zero (immediate dispatch). Tokio timers
+    /// have roughly 1 ms resolution, so values below 1000 can wait about 1 ms.
+    /// The gateway caps this at a tenth of the backend request timeout.
+    pub linger_us: u64,
+
+    /// Size at which a lingering batch fires early, capped by `max_size`.
+    /// Defaults to 64. A value of 0 or 1 disables lingering.
+    pub linger_target_size: usize,
 }
 
 impl Default for AdaptiveBatchConfig {
@@ -213,6 +222,8 @@ impl Default for AdaptiveBatchConfig {
             max_inflight_batches: 4,
             max_size: 1000,
             ingress_queue_depth: 10_000,
+            linger_us: 0,
+            linger_target_size: 64,
         }
     }
 }
@@ -463,6 +474,18 @@ impl GatewayConfig {
     pub(crate) fn http_request_timeout(&self) -> Duration {
         self.request_timeout()
             .saturating_add(self.request_timeout_margin())
+    }
+
+    /// `slot` with its linger capped at a tenth of the backend request
+    /// timeout, so a lingering batch leaves its requests time for the
+    /// backend call instead of expiring before dispatch.
+    pub(crate) fn with_capped_linger(&self, slot: &AdaptiveBatchConfig) -> AdaptiveBatchConfig {
+        let cap =
+            u64::try_from((self.backend_request_timeout() / 10).as_micros()).unwrap_or(u64::MAX);
+        AdaptiveBatchConfig {
+            linger_us: slot.linger_us.min(cap),
+            ..slot.clone()
+        }
     }
 
     pub(crate) fn request_timeout_margin(&self) -> Duration {
@@ -724,6 +747,44 @@ mod tests {
         assert_eq!(config.listen_address, "127.0.0.1:9999");
         assert_eq!(config.batch.max_size, 10);
         assert_eq!(config.tip.max_inflight_tips, 2);
+    }
+
+    #[test]
+    fn adaptive_batch_linger_toml_defaults_and_overrides() {
+        let defaults =
+            toml::from_str::<GatewayConfig>("[batch]\nmax_size = 10\n[storage]\nmax_size = 20")
+                .unwrap();
+        for slot in [defaults.batch, defaults.storage] {
+            assert_eq!(slot.linger_us, 0);
+            assert_eq!(slot.linger_target_size, 64);
+        }
+
+        let config =
+            toml::from_str::<GatewayConfig>("[batch]\nlinger_us = 1500\nlinger_target_size = 8")
+                .unwrap();
+        assert_eq!(config.batch.linger_us, 1500);
+        assert_eq!(config.batch.linger_target_size, 8);
+        assert_eq!(config.storage.linger_us, 0);
+        assert_eq!(config.storage.linger_target_size, 64);
+    }
+
+    #[test]
+    fn linger_is_capped_at_a_tenth_of_the_backend_timeout() {
+        let config = GatewayConfig {
+            request_timeout_ms: 10_000,
+            ..GatewayConfig::default()
+        };
+        let slot = |linger_us| super::AdaptiveBatchConfig {
+            linger_us,
+            ..super::AdaptiveBatchConfig::default()
+        };
+        // Backend timeout is 9 s, so the cap is 900 ms.
+        assert_eq!(config.with_capped_linger(&slot(2_000)).linger_us, 2_000);
+        assert_eq!(
+            config.with_capped_linger(&slot(5_000_000)).linger_us,
+            900_000
+        );
+        assert_eq!(config.with_capped_linger(&slot(0)).linger_us, 0);
     }
 
     #[test]

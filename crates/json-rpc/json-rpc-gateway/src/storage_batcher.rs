@@ -485,6 +485,7 @@ mod tests {
             max_inflight_batches: max_inflight,
             max_size,
             ingress_queue_depth: ingress,
+            ..AdaptiveBatchConfig::default()
         }
     }
 

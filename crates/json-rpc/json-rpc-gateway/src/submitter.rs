@@ -6,7 +6,7 @@
 //! `schedgateway_submit_tx_batch`, and fan out each
 //! request-scoped result to its matching waiter.
 //!
-//! See `AdaptiveBatchConfig` for the dispatch policy (no timer,
+//! See `AdaptiveBatchConfig` for the dispatch policy (optional linger,
 //! BDP-style in-flight bounding, sharded for low contention) and
 //! `adaptive_batch.rs` for the shared shard runner.
 
@@ -612,6 +612,7 @@ mod tests {
             max_inflight_batches: max_inflight,
             max_size,
             ingress_queue_depth: ingress,
+            ..AdaptiveBatchConfig::default()
         }
     }
 

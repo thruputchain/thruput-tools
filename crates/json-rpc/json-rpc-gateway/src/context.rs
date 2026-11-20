@@ -351,7 +351,7 @@ impl GatewayContext {
             backend_request_timeout,
         ));
         let batch_submitter = BatchSubmitter::spawn_with_deadlines(
-            &config.batch,
+            &config.with_capped_linger(&config.batch),
             &submit_sink,
             metrics.clone(),
             request_timeout,
@@ -365,7 +365,7 @@ impl GatewayContext {
             backend_request_timeout,
         ));
         let storage_batcher = StorageReadBatcher::spawn_with_deadlines(
-            &config.storage,
+            &config.with_capped_linger(&config.storage),
             &storage_sink,
             metrics.clone(),
             request_timeout,
