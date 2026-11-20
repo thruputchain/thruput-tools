@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Browser apps can call a local node
+
+`thruput node` now answers CORS preflight requests and allows every origin by
+default, like Anvil and the hosted gateway. A browser app uses the same RPC URL
+pattern locally and on Futurenet, without a development proxy.
+
+- Only `thruput node` enables HTTP CORS by default. Nodes that `thruput test
+  --integration` and the Rust testkit start, and other embedders of
+  `thruput-node-supervisor`, send no CORS headers.
+- `--allow-origin ORIGIN` (repeatable) allows only the listed origins; `--no-cors`
+  sends no CORS headers. Both control HTTP CORS only.
+- No node checks the `Origin` of WebSocket connections, including integration
+  nodes and embedders that send no CORS headers.
+- The node logs a warning when its listener binds beyond loopback and allows
+  every origin, because any web page can then call it.
+- `thruput-node-supervisor` adds `NodeSupervisorConfig::rpc_cors` (`RpcCors`).
+  It defaults to `RpcCors::Disabled`, so embedders opt in to browser access.
+  `validate_cors_origin` and `normalize_cors_origin` check an origin and spell it
+  the way browsers send it, returning `CorsOriginError` when it is invalid.
+
 ### A fixed block time step on a local node
 
 A local node can give blocks without a pinned time their parent's time plus a

@@ -233,6 +233,9 @@ pub struct LocalNodeOptions {
     pub block_time_step: Option<Duration>,
     /// Override the public JSON-RPC simultaneous connection cap.
     pub rpc_max_connections: Option<u32>,
+    /// Browser (CORS) access to the public JSON-RPC listener. Defaults to no
+    /// CORS headers; `thruput node` allows any origin unless told otherwise.
+    pub rpc_cors: thruput_node_supervisor::RpcCors,
     /// Override active plus buffered entries per JSON-RPC array (1..=1024).
     pub rpc_batch_concurrency: Option<thruput_node_supervisor::RpcBatchConcurrency>,
     /// Override the RAM database capacity in bytes hog-devnode reserves at startup.
@@ -1248,6 +1251,7 @@ fn local_node_config(
         Some(concurrency) => config.with_rpc_batch_concurrency(concurrency),
         None => config,
     };
+    let config = config.with_rpc_cors(options.rpc_cors);
     let config = match (
         options.block_driver,
         options.block_interval,
@@ -1608,6 +1612,7 @@ mod tests {
             block_interval: Some(Duration::from_millis(250)),
             block_time_step: Some(Duration::ZERO),
             rpc_max_connections: Some(512),
+            rpc_cors: thruput_node_supervisor::RpcCors::AllowAny,
             rpc_batch_concurrency: Some(17.try_into().unwrap()),
             ramdb_bytes: Some(2_147_483_648),
             network_config_overrides: vec![(ConfigParamName::MaxRv32MemoryBytes, 16_777_216)],
@@ -1617,6 +1622,7 @@ mod tests {
         .expect("bug: local node config should build");
 
         assert_eq!(config.rpc_listen_address, "127.0.0.1:0");
+        assert_eq!(config.rpc_cors, thruput_node_supervisor::RpcCors::AllowAny);
         assert_eq!(config.hogd_dev.init_network_hash, Some([0xab; 32].into()));
         assert_eq!(config.hogd_dev.binary_path, Some(binary));
         assert_eq!(
@@ -1949,6 +1955,16 @@ mod tests {
             config.block_driver.mode,
             thruput_node_supervisor::BlockDriverMode::Manual
         );
+    }
+
+    #[test]
+    fn local_node_config_sends_no_cors_headers_by_default() {
+        // `thruput test --integration` uses default options; only `thruput
+        // node` allows browser access.
+        let config = local_node_config(LocalNodeOptions::default())
+            .expect("bug: default options should build");
+
+        assert_eq!(config.rpc_cors, thruput_node_supervisor::RpcCors::Disabled);
     }
 
     #[test]

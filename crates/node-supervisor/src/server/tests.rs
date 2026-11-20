@@ -20,7 +20,7 @@ use thruput_xdr::types::TimePoint;
 
 use crate::{
     BlockDriverConfig, BlockDriverMode, BlockProductionError, HogdDevConfig, LocalAirdropConfig,
-    MAX_BLOCKS_PER_REQUEST,
+    MAX_BLOCKS_PER_REQUEST, RpcCors,
     canned_x23::{
         CANNED_GAS_USED_A, CANNED_HEIGHT_A, CANNED_STORAGE_HEIGHT, CANNED_STORAGE_KEY,
         CANNED_STORAGE_VALUE, CANNED_TX_HASH_A, CANNED_TX_HASH_UNKNOWN,
@@ -388,6 +388,134 @@ async fn scheduler_gateway_rejection_surfaces_tx_rejected_without_coordinator_fa
         "expected TRANSACTION_REJECTED from SchedGateway without coordinator fallback, got {error:?}",
     );
     handle.stop().await.expect("bug: clean shutdown");
+}
+
+const BROWSER_ORIGIN: &str = "http://127.0.0.1:5190";
+const ALLOW_ORIGIN: &str = "access-control-allow-origin";
+
+/// A browser's CORS preflight for a JSON-RPC POST from `origin`.
+async fn preflight(handle: &NodeSupervisorHandle, origin: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("http://{}", handle.rpc_addr()),
+        )
+        .header("origin", origin)
+        .header("access-control-request-method", "POST")
+        .header("access-control-request-headers", "content-type")
+        .send()
+        .await
+        .expect("bug: the listener answers a preflight")
+}
+
+/// A JSON-RPC call sent the way a browser sends it from `origin`.
+async fn browser_call(handle: &NodeSupervisorHandle, origin: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("http://{}", handle.rpc_addr()))
+        .header("origin", origin)
+        .header("content-type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"getVersionInfo","params":{}}"#)
+        .send()
+        .await
+        .expect("bug: the listener answers a call")
+}
+
+fn allowed_origin(response: &reqwest::Response) -> Option<&str> {
+    response
+        .headers()
+        .get(ALLOW_ORIGIN)
+        .map(|value| value.to_str().expect("bug: header is ASCII"))
+}
+
+#[tokio::test]
+async fn allowing_any_origin_lets_browsers_call_the_node() {
+    let config = supervisor_config(fake_hogd("ready")).with_rpc_cors(RpcCors::AllowAny);
+    let (handle, _client) = start_fake_supervisor(config).await;
+
+    let response = preflight(&handle, BROWSER_ORIGIN).await;
+    assert!(response.status().is_success(), "{}", response.status());
+    assert_eq!(allowed_origin(&response), Some("*"));
+    let allowed_headers = response
+        .headers()
+        .get("access-control-allow-headers")
+        .expect("bug: the preflight allows request headers");
+    assert!(!allowed_headers.is_empty());
+
+    let response = browser_call(&handle, BROWSER_ORIGIN).await;
+    assert!(response.status().is_success(), "{}", response.status());
+    assert_eq!(allowed_origin(&response), Some("*"));
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn only_listed_origins_can_call_the_node() {
+    let config = supervisor_config(fake_hogd("ready"))
+        .with_rpc_cors(RpcCors::Origins(vec![BROWSER_ORIGIN.to_owned()]));
+    let (handle, _client) = start_fake_supervisor(config).await;
+
+    let response = preflight(&handle, BROWSER_ORIGIN).await;
+    assert!(response.status().is_success(), "{}", response.status());
+    assert_eq!(allowed_origin(&response), Some(BROWSER_ORIGIN));
+    assert_eq!(
+        allowed_origin(&browser_call(&handle, BROWSER_ORIGIN).await),
+        Some(BROWSER_ORIGIN)
+    );
+
+    let other = "http://evil.example";
+    assert_eq!(allowed_origin(&preflight(&handle, other).await), None);
+    assert_eq!(allowed_origin(&browser_call(&handle, other).await), None);
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn a_listed_origin_matches_however_it_was_spelled() {
+    // Browsers send `http://127.0.0.1`: lowercase, without the default port.
+    let config = supervisor_config(fake_hogd("ready"))
+        .with_rpc_cors(RpcCors::Origins(vec!["HTTP://127.0.0.1:80".to_owned()]));
+    let (handle, _client) = start_fake_supervisor(config).await;
+
+    let browser_origin = "http://127.0.0.1";
+    assert_eq!(
+        allowed_origin(&preflight(&handle, browser_origin).await),
+        Some(browser_origin)
+    );
+    assert_eq!(
+        allowed_origin(&browser_call(&handle, browser_origin).await),
+        Some(browser_origin)
+    );
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn the_default_sends_no_cors_headers() {
+    // Embedders such as test harnesses must opt in to browser access.
+    let (handle, _client) = start_fake_supervisor(supervisor_config(fake_hogd("ready"))).await;
+
+    assert_eq!(
+        allowed_origin(&preflight(&handle, BROWSER_ORIGIN).await),
+        None
+    );
+    let response = browser_call(&handle, BROWSER_ORIGIN).await;
+    assert!(response.status().is_success(), "{}", response.status());
+    assert_eq!(allowed_origin(&response), None);
+
+    handle.stop().await.expect("bug: clean shutdown");
+}
+
+#[tokio::test]
+async fn an_invalid_cors_origin_fails_before_the_runtime_starts() {
+    let config = supervisor_config(fake_hogd("ready"))
+        .with_rpc_cors(RpcCors::Origins(vec!["127.0.0.1:5190".to_owned()]));
+    let error = NodeSupervisorHandle::start(config)
+        .await
+        .expect_err("bug: an origin without a scheme is invalid");
+    assert!(
+        matches!(error, NodeSupervisorError::InvalidRpcCorsOrigin { .. }),
+        "{error}"
+    );
 }
 
 #[tokio::test]
