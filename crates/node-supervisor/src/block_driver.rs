@@ -418,7 +418,7 @@ impl Command {
 /// the parent is one of a fresh chain's initial blocks (see
 /// [`Parent::is_initial`]), the next block takes the wall clock, so a step
 /// does not date the first block in 1970.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct BlockClock {
     offset_nanos: i128,
     next: Option<u64>,
@@ -481,9 +481,9 @@ impl BlockClock {
 
 /// The block a new block builds on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Parent {
-    height: i64,
-    timepoint: u64,
+pub(crate) struct Parent {
+    pub(crate) height: i64,
+    pub(crate) timepoint: u64,
 }
 
 impl Parent {
@@ -491,13 +491,13 @@ impl Parent {
     /// genesis ceremony (the bootstrap accounts) at height 1, both at
     /// timepoint 0. Blocks a user produces start at height 2.
     ///
-    /// Checked against hog-devnode 0.1.34 and 0.1.35. A runtime that commits
+    /// Checked against hog-devnode 0.1.34 to 0.1.36. A runtime that commits
     /// more initial blocks would date the first stepped block near 1970;
     /// `a_step_from_startup_still_dates_the_first_block_now` in
     /// `tests/real_block_time.rs` catches that when the runtime pin changes.
     const LAST_INITIAL_HEIGHT: i64 = 1;
 
-    fn of(header: &ProposalHeader) -> Self {
+    pub(crate) fn of(header: &ProposalHeader) -> Self {
         Self {
             height: *header.block_height,
             timepoint: *header.block_timepoint,
@@ -508,6 +508,112 @@ impl Parent {
     /// creates a chain. A block a user pins to timepoint 0 is not.
     fn is_initial(self) -> bool {
         self.height <= Self::LAST_INITIAL_HEIGHT && self.timepoint == 0
+    }
+}
+
+/// The block driver's clock, and the tip as of its last commit or clock change.
+///
+/// Contract views run at the timepoint the next block would get. The view
+/// path reads it here rather than asking the driver, so a view never waits
+/// behind block production. The supervisor seeds it with the tip it validates
+/// at startup, the driver publishes its clock when it starts, and the driver
+/// publishes the tip after each commit.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SharedBlockClock(Arc<std::sync::Mutex<SharedClockState>>);
+
+#[derive(Debug, Default)]
+struct SharedClockState {
+    clock: BlockClock,
+    tip: Option<Parent>,
+}
+
+/// The timepoint the next block would get, and the height of the tip it
+/// builds on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NextBlockTime {
+    pub(crate) timepoint: TimePoint,
+    pub(crate) parent_height: i64,
+}
+
+impl SharedBlockClock {
+    /// A clock frozen at `timepoint`, past the initial blocks.
+    #[cfg(test)]
+    pub(crate) fn frozen_at(timepoint: u64) -> Self {
+        Self::stepped_from(0, Parent::LAST_INITIAL_HEIGHT + 1, timepoint)
+    }
+
+    /// A clock with a fixed `step`, published with the tip at `height` and
+    /// `timepoint`.
+    #[cfg(test)]
+    pub(crate) fn stepped_from(step: u64, height: i64, timepoint: u64) -> Self {
+        let shared = Self::unseeded(step);
+        let clock = shared.lock().clock.clone();
+        shared.publish(&clock, Parent { height, timepoint });
+        shared
+    }
+
+    /// A clock with a fixed `step` and no known tip, as on a restarted chain
+    /// before its first commit.
+    #[cfg(test)]
+    pub(crate) fn unseeded(step: u64) -> Self {
+        let mut clock = BlockClock::default();
+        clock.set_step(Some(step));
+        let shared = Self::default();
+        shared.set_clock(&clock);
+        shared
+    }
+
+    fn set_clock(&self, clock: &BlockClock) {
+        self.lock().clock = clock.clone();
+    }
+
+    /// Record the tip the supervisor read at startup, unless the driver has
+    /// already published one.
+    pub(crate) fn seed_tip(&self, tip: Parent) {
+        self.lock().tip.get_or_insert(tip);
+    }
+
+    fn publish(&self, clock: &BlockClock, tip: Parent) {
+        *self.lock() = SharedClockState {
+            clock: clock.clone(),
+            tip: Some(tip),
+        };
+    }
+
+    /// The next block's time at `now`, once a tip is known.
+    pub(crate) fn next_block_time(&self, now: SystemTime) -> Option<NextBlockTime> {
+        let state = self.lock();
+        let tip = state.tip?;
+        Some(NextBlockTime {
+            timepoint: TimePoint::new(state.clock.timepoint_after(tip, now)),
+            parent_height: tip.height,
+        })
+    }
+
+    /// The next block's time after `tip`, which the caller read from the
+    /// scheduler. Seeds the tip when none is known yet.
+    pub(crate) fn next_block_time_after(&self, tip: Parent, now: SystemTime) -> NextBlockTime {
+        let mut state = self.lock();
+        let known = *state.tip.get_or_insert(tip);
+        let mut clock = state.clock.clone();
+        if tip.height > known.height {
+            // The driver has committed this block but not published it yet.
+            // Apply the commit as the driver will, so a pin it used up no
+            // longer dates the next block.
+            clock.committed(tip.timepoint, now);
+        }
+        NextBlockTime {
+            timepoint: TimePoint::new(clock.timepoint_after(tip, now)),
+            parent_height: tip.height,
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, SharedClockState> {
+        // Each update writes whole fields, so a poisoned lock still holds a
+        // consistent snapshot.
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -572,6 +678,7 @@ impl BlockDriverTask {
         scheduler: SchedulerCoord_SchedulerCoord1_Client,
         gateway: SchedGateway_SchedGateway1_Client,
         config: BlockDriverConfig,
+        shared_clock: SharedBlockClock,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (commands, receiver) = mpsc::channel(BLOCK_REQUEST_CAPACITY);
@@ -593,10 +700,12 @@ impl BlockDriverTask {
                     .map(|step| u64::try_from(step.as_nanos()).unwrap_or(u64::MAX)),
                 ..BlockClock::default()
             },
+            shared_clock,
             notify,
             instant,
             ticker: None,
         };
+        driver.shared_clock.set_clock(&driver.clock);
         driver.apply_mode();
         let join = tokio::spawn(driver.run(receiver, shutdown_rx));
         Self {
@@ -647,6 +756,7 @@ struct Driver {
     gateway: SchedGateway_SchedGateway1_Client,
     config: BlockDriverConfig,
     clock: BlockClock,
+    shared_clock: SharedBlockClock,
     notify: Arc<Notify>,
     instant: Arc<AtomicBool>,
     ticker: Option<Interval>,
@@ -706,8 +816,18 @@ impl Driver {
                 Ok(self.clock.timepoint_after(parent, SystemTime::now()))
             }) => result,
         };
-        if let Ok(DriveOutcome::Committed { timepoint, .. }) = &result {
+        if let Ok(DriveOutcome::Committed {
+            timepoint, height, ..
+        }) = &result
+        {
             self.clock.committed(*timepoint, SystemTime::now());
+            self.shared_clock.publish(
+                &self.clock,
+                Parent {
+                    height: *height,
+                    timepoint: *timepoint,
+                },
+            );
         }
         log_drive_result(result);
         Step::Continue
@@ -858,7 +978,13 @@ impl Driver {
             );
         }
         let result = match tip {
-            Ok(Ok(tip)) => update(&mut self.clock, tip),
+            Ok(Ok(tip)) => {
+                let result = update(&mut self.clock, tip);
+                if result.is_ok() {
+                    self.shared_clock.publish(&self.clock, tip);
+                }
+                result
+            }
             Ok(Err(error)) => Err(error),
             Err(_) => Err(BlockProductionError::TimedOut { timeout }),
         };
@@ -918,6 +1044,13 @@ impl Driver {
                 self.clock.pin(*block.timepoint, SystemTime::now());
             }
             self.clock.committed(*block.timepoint, SystemTime::now());
+            self.shared_clock.publish(
+                &self.clock,
+                Parent {
+                    height: block.height,
+                    timepoint: *block.timepoint,
+                },
+            );
             let another_follows = index + 1 < count;
             requested = match interval {
                 Some(interval) if another_follows => {
@@ -965,7 +1098,7 @@ fn produced_block(
     }
 }
 
-async fn tip_parent(
+pub(crate) async fn tip_parent(
     scheduler: &SchedulerCoord_SchedulerCoord1_Client,
 ) -> Result<Parent, BlockProductionError> {
     match scheduler.schedcoord_get_tip().await.map_err(|source| {
@@ -1134,8 +1267,43 @@ fn consensus_value(
     })
 }
 
-// Matches hogd's temporary compatibility hash until the protocol moves to
-// canonical XDR hashing for ProposalTxs.
+const PROPOSAL_TXS: &[u8] = b"ProposalTxs";
+const PARALLEL_BATCH: &[u8] = b"ParallelBatch";
+const PROPOSAL_TXS_DOMAIN_SEPARATOR_CXS: [u8; domain_separator_cxs_size(PROPOSAL_TXS)] =
+    domain_separator_cxs(PROPOSAL_TXS);
+const PARALLEL_BATCH_DOMAIN_SEPARATOR_CXS: [u8; domain_separator_cxs_size(PARALLEL_BATCH)] =
+    domain_separator_cxs(PARALLEL_BATCH);
+
+/// The size of [`domain_separator_cxs`] for `name`.
+const fn domain_separator_cxs_size(name: &[u8]) -> usize {
+    assert!(
+        name.len() <= 256,
+        "a domain separator name is at most 256 bytes"
+    );
+    #[allow(clippy::cast_possible_truncation)] // checked above
+    let length = xdrs::cxs::const_writer::size_u32(name.len() as u32);
+    ExtensionPoint::_0.const_cxs_size() + length + name.len()
+}
+
+/// `cxs(DomainSeparator(name))`, as hogd builds it in
+/// `hogd/crypto/domain_separators.h`.
+///
+/// `thruput_xdr::preimage::DomainSeparator` holds its name in a `BytesM`,
+/// which a `const` cannot build, so this writes the struct's two fields
+/// with the const writer. `domain_separators_encode_as_the_xdr_type` checks
+/// the result against the type.
+const fn domain_separator_cxs<const N: usize>(name: &[u8]) -> [u8; N] {
+    let mut writer = xdrs::cxs::ConstWriter::<N>::new();
+    ExtensionPoint::_0.const_write_cxs(&mut writer);
+    writer.write_opaque_variable(name);
+    writer.into_bytes()
+}
+
+// Matches hogd's proposal_txs_compatibility_hash (hogd/xdr/proposal_hash.h):
+//   SHA-256(cxs(DomainSeparator("ProposalTxs")) || SHA-256(base) ||
+//           batch_hash(signed_hash) || batch_hash(nondeterministic_data))
+// where base is the ProposalTxs with both batches emptied. hogd rejects a
+// commit whose hash differs, so this changes only in lockstep with hogd.
 fn proposal_txs_compatibility_hash(
     proposal_txs: &thruput_node_rpc::ProposalTxs,
 ) -> Result<ProposalTxsHash, BlockProductionError> {
@@ -1147,26 +1315,31 @@ fn proposal_txs_compatibility_hash(
     base.nondeterministic_data.segment_bytes.0.clear();
     base.nondeterministic_data.xdr.0.clear();
 
-    let mut result = hash_xdr(&base)
-        .map_err(|source| BlockProductionError::ConsensusHashEncoding {
+    let base_hash =
+        hash_xdr(&base).map_err(|source| BlockProductionError::ConsensusHashEncoding {
             value: "proposal transactions base",
             source,
-        })?
-        .into_inner();
-    xor_hash(
-        &mut result,
-        hash_parallel_batch_compatibility("signed_hash", &proposal_txs.signed_hash)?,
-    );
-    xor_hash(
-        &mut result,
-        hash_parallel_batch_compatibility(
-            "nondeterministic_data",
-            &proposal_txs.nondeterministic_data,
-        )?,
-    );
-    Ok(ProposalTxsHash::new(SHA256Hash::from(result)))
+        })?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(PROPOSAL_TXS_DOMAIN_SEPARATOR_CXS);
+    hasher.update(base_hash.into_inner());
+    hasher.update(hash_parallel_batch_compatibility(
+        "signed_hash",
+        &proposal_txs.signed_hash,
+    )?);
+    hasher.update(hash_parallel_batch_compatibility(
+        "nondeterministic_data",
+        &proposal_txs.nondeterministic_data,
+    )?);
+    Ok(ProposalTxsHash::new(SHA256Hash::from(<[u8; 32]>::from(
+        hasher.finalize(),
+    ))))
 }
 
+// SHA-256(cxs(DomainSeparator("ParallelBatch")) || SHA-256(index) ||
+//         SHA-256(segment_0) || ... || SHA-256(segment_{n-1}))
+// where index is the batch with its payload emptied.
 fn hash_parallel_batch_compatibility(
     batch_name: &'static str,
     batch: &thruput_node_rpc::ParallelBatch,
@@ -1178,7 +1351,18 @@ fn hash_parallel_batch_compatibility(
             detail: error.to_string(),
         })?;
 
-    let mut result = [0u8; 32];
+    let mut index = batch.clone();
+    index.xdr.0.clear();
+    let index_hash =
+        hash_xdr(&index).map_err(|source| BlockProductionError::ConsensusHashEncoding {
+            value: batch_name,
+            source,
+        })?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(PARALLEL_BATCH_DOMAIN_SEPARATOR_CXS);
+    hasher.update(index_hash.into_inner());
+
     let mut offset = 0usize;
     for &segment_size in &batch.segment_bytes.0 {
         let end = offset.checked_add(segment_size as usize).ok_or_else(|| {
@@ -1196,7 +1380,7 @@ fn hash_parallel_batch_compatibility(
                 ),
             }
         })?;
-        xor_hash(&mut result, Sha256::digest(segment).into());
+        hasher.update(Sha256::digest(segment));
         offset = end;
     }
     if offset != batch.xdr.len() {
@@ -1208,22 +1392,7 @@ fn hash_parallel_batch_compatibility(
             ),
         });
     }
-
-    let mut index = batch.clone();
-    index.xdr.0.clear();
-    let index_hash =
-        hash_xdr(&index).map_err(|source| BlockProductionError::ConsensusHashEncoding {
-            value: batch_name,
-            source,
-        })?;
-    xor_hash(&mut result, index_hash.into_inner());
-    Ok(result)
-}
-
-fn xor_hash(result: &mut [u8; 32], hash: [u8; 32]) {
-    for (result_byte, hash_byte) in result.iter_mut().zip(hash) {
-        *result_byte ^= hash_byte;
-    }
+    Ok(hasher.finalize().into())
 }
 
 fn hash_consensus_value(
@@ -1282,7 +1451,8 @@ async fn reconcile_commit(
 mod clock_tests {
     use std::time::{Duration, UNIX_EPOCH};
 
-    use super::{BlockClock, Parent};
+    use super::{BlockClock, NextBlockTime, Parent, SharedBlockClock};
+    use thruput_xdr::types::TimePoint;
 
     const DAY: u64 = 24 * 60 * 60 * 1_000_000_000;
     const NOW: u64 = 1_760_000_000_123_456_789;
@@ -1535,6 +1705,91 @@ mod clock_tests {
 
         assert_eq!(clock.timepoint_after(block(0), at(NOW)), u64::MAX);
     }
+
+    fn next(timepoint: u64, parent_height: i64) -> NextBlockTime {
+        NextBlockTime {
+            timepoint: TimePoint::new(timepoint),
+            parent_height,
+        }
+    }
+
+    #[test]
+    fn views_have_no_clock_until_a_tip_is_known() {
+        assert_eq!(SharedBlockClock::default().next_block_time(at(NOW)), None);
+    }
+
+    #[test]
+    fn views_see_the_next_block_time_of_the_published_clock() {
+        let shared = SharedBlockClock::default();
+        let mut clock = stepped(0);
+        shared.publish(&clock, block(NOW));
+        assert_eq!(shared.next_block_time(at(NOW + DAY)), Some(next(NOW, 2)));
+
+        clock.pin(NOW + 5, at(NOW));
+        shared.publish(&clock, block(NOW));
+        assert_eq!(
+            shared.next_block_time(at(NOW + DAY)),
+            Some(next(NOW + 5, 2))
+        );
+    }
+
+    #[test]
+    fn a_restarted_chain_seeds_its_tip_from_the_first_view() {
+        // A frozen clock restarted on a chain dated NOW, a day behind the wall
+        // clock: the driver has published its step but no tip yet.
+        let shared = SharedBlockClock::default();
+        shared.set_clock(&stepped(0));
+        assert_eq!(shared.next_block_time(at(NOW + DAY)), None);
+
+        let seeded = shared.next_block_time_after(block(NOW), at(NOW + DAY));
+        assert_eq!(seeded, next(NOW, 2));
+        assert_eq!(shared.next_block_time(at(NOW + DAY)), Some(next(NOW, 2)));
+    }
+
+    #[test]
+    fn a_startup_tip_seeds_the_clock_but_never_replaces_a_published_one() {
+        let shared = SharedBlockClock::default();
+        shared.set_clock(&stepped(0));
+        shared.seed_tip(block(NOW));
+        assert_eq!(shared.next_block_time(at(NOW + DAY)), Some(next(NOW, 2)));
+
+        let published = SharedBlockClock::frozen_at(NOW + DAY);
+        published.seed_tip(block(NOW));
+        assert_eq!(published.next_block_time(at(NOW)), Some(next(NOW + DAY, 2)));
+    }
+
+    #[test]
+    fn a_newer_tip_than_the_published_one_does_not_reuse_a_spent_pin() {
+        // Block 3 used the pin, but the driver has not published it yet.
+        let shared = SharedBlockClock::default();
+        let mut clock = stepped(1_000);
+        clock.pin(NOW + DAY, at(NOW));
+        shared.publish(&clock, block(NOW));
+        assert_eq!(shared.next_block_time(at(NOW)), Some(next(NOW + DAY, 2)));
+
+        let committed = Parent {
+            height: 3,
+            timepoint: NOW + DAY,
+        };
+        assert_eq!(
+            shared.next_block_time_after(committed, at(NOW)),
+            next(NOW + DAY + 1_000, 3)
+        );
+    }
+
+    #[test]
+    fn a_tip_read_by_a_view_does_not_replace_the_published_one() {
+        let shared = SharedBlockClock::frozen_at(NOW);
+        let later = Parent {
+            height: 9,
+            timepoint: NOW + DAY,
+        };
+        assert_eq!(
+            shared.next_block_time_after(later, at(NOW)),
+            next(NOW + DAY, 9)
+        );
+        assert_eq!(shared.next_block_time(at(NOW)), Some(next(NOW, 2)));
+    }
 }
 
 #[cfg(test)]
@@ -1547,6 +1802,27 @@ mod hash_tests {
     use xdrs::{BytesM, VecM};
 
     use super::{BlockProductionError, hash_xdr, proposal_txs_compatibility_hash};
+
+    #[test]
+    fn domain_separators_encode_as_the_xdr_type() {
+        use thruput_xdr::preimage::DomainSeparator;
+        for (name, encoded) in [
+            (
+                super::PROPOSAL_TXS,
+                &super::PROPOSAL_TXS_DOMAIN_SEPARATOR_CXS[..],
+            ),
+            (
+                super::PARALLEL_BATCH,
+                &super::PARALLEL_BATCH_DOMAIN_SEPARATOR_CXS[..],
+            ),
+        ] {
+            let separator = DomainSeparator {
+                ext: ExtensionPoint::_0,
+                domain_separator: BytesM(name.to_vec()),
+            };
+            assert_eq!(xdrs::cxs::encode(&separator).unwrap(), encoded);
+        }
+    }
 
     #[test]
     fn proposal_txs_compatibility_hash_matches_hogd_golden_vector() {
@@ -1568,11 +1844,63 @@ mod hash_tests {
             proposal_txs_compatibility_hash(&proposal_txs)
                 .expect("bug: valid proposal transactions should hash")
                 .into_inner(),
+            // hogd's Mempool.ProposalTxsCompatibilityHashGoldenVector.
             SHA256Hash::from([
-                0x3a, 0x3c, 0xe7, 0x82, 0x83, 0x94, 0x38, 0x26, 0xac, 0x43, 0x29, 0x1f, 0xab, 0x79,
-                0xbd, 0x17, 0xc4, 0xad, 0x1d, 0x1e, 0xf9, 0xe2, 0x2d, 0x8c, 0x72, 0x31, 0xa9, 0x7c,
-                0xb6, 0x68, 0xdc, 0xd9,
+                0xac, 0x7e, 0x6e, 0x65, 0xe3, 0xf3, 0x6e, 0xc7, 0x88, 0x45, 0xdd, 0xf3, 0xf3, 0xd9,
+                0x5a, 0xcf, 0x99, 0xea, 0xdb, 0xbd, 0xbc, 0xfd, 0x39, 0x1e, 0x44, 0x23, 0x9a, 0x7d,
+                0xc4, 0xb5, 0x2c, 0x03,
             ])
+        );
+    }
+
+    fn one_segment(xdr: [u8; 4]) -> ParallelBatch {
+        ParallelBatch {
+            segment_tokens: VecM(vec![1]),
+            segment_bytes: VecM(vec![4]),
+            xdr: BytesM(xdr.to_vec()),
+        }
+    }
+
+    fn hash_of(signed_hash: ParallelBatch, nondeterministic_data: ParallelBatch) -> SHA256Hash {
+        proposal_txs_compatibility_hash(&ProposalTxs {
+            ext: ExtensionPoint::_0,
+            signed_hash: ParallelSignedTransactionHashBatch::new(signed_hash),
+            nondeterministic_data: ParallelNondeterministicProposalDataBatch::new(
+                nondeterministic_data,
+            ),
+        })
+        .expect("bug: valid proposal transactions should hash")
+        .into_inner()
+    }
+
+    #[test]
+    fn proposal_txs_hash_binds_segment_order() {
+        let two_segments = |xdr: [u8; 8]| ParallelBatch {
+            segment_tokens: VecM(vec![1, 1]),
+            segment_bytes: VecM(vec![4, 4]),
+            xdr: BytesM(xdr.to_vec()),
+        };
+
+        assert_ne!(
+            hash_of(
+                two_segments([0, 0, 0, 1, 0, 0, 0, 2]),
+                ParallelBatch::empty()
+            ),
+            hash_of(
+                two_segments([0, 0, 0, 2, 0, 0, 0, 1]),
+                ParallelBatch::empty()
+            ),
+        );
+    }
+
+    #[test]
+    fn proposal_txs_hash_binds_batch_positions() {
+        let first = one_segment([0, 0, 0, 1]);
+        let second = one_segment([0, 0, 0, 2]);
+
+        assert_ne!(
+            hash_of(first.clone(), second.clone()),
+            hash_of(second, first),
         );
     }
 

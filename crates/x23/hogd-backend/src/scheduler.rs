@@ -123,7 +123,9 @@ pub fn tip_reading(service: &str, db_tip: DbTip) -> Result<TipReading, RpcServer
         network_config,
         ..
     } = db_tip;
-    Ok(TipReading::new(chain_tip(service, &value)?, network_config))
+    let block_timepoint = value.proposal_header.block_timepoint.clone();
+    Ok(TipReading::new(chain_tip(service, &value)?, network_config)
+        .with_block_timepoint(block_timepoint))
 }
 
 /// Decode a `schedgateway_get_tip` result.

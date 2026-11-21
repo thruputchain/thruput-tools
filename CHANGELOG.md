@@ -1,6 +1,46 @@
 # Changelog
 
-## Unreleased
+## 0.47.0
+
+### Contract views run at the chain's time
+
+A contract view (`simulateInvocation`, `simulateInvocations`) now runs at the
+time the next block would get, so `get_block_timepoint()` agrees in views and
+transactions. Before, hog-devnode 0.1.35 ran a view at the later of the wall
+clock and the tip's time, so a chain dated in the past showed today's date in
+views.
+
+- On a local node, a pinned, increased, stepped or frozen block clock applies
+  to views too. A chain pinned to 2000 and frozen shows exactly that time,
+  also after a restart with `--data-dir`.
+- On a local node, a block can land between choosing the time and running
+  the view. The view then reruns once at the next block's time.
+- On the hosted gateway, a view runs at the gateway's wall clock. If hogd
+  refuses that time because a newer block landed, the gateway retries once
+  when it can read the newer tip. During a DbGateway reconnect it cannot, and
+  returns the refusal.
+- Needs hog-devnode 0.1.36 and protocol crates 0.67.0: the view query now
+  states its block time (`TransactionViewQuery.block_timepoint`). Upgrade the
+  hosted gateway and hogd together.
+- `thruput-json-rpc-server`: `TipReading` gains `block_timepoint` and
+  `with_block_timepoint`.
+- `thruput-hogd-backend`: `view_query` and `view_batch_query` take the block
+  timepoint; `view_timepoint_refused` and `wall_clock_timepoint` are new.
+
+### hog-devnode 0.1.36, protocol 0.67.0 and SDK 0.62.0
+
+The managed runtime is now hog-devnode 0.1.36, the first release from hogd
+`main` since 0.1.34. Tools move to protocol crates 0.67.0 and SDK 0.62.0 to
+match it, and the local block driver combines `ProposalTxsHash` parts in
+order, as hogd now does.
+
+- `thruput node` installs 0.1.36 on first start unless it runs offline. A
+  runtime pinned to 0.1.35 or earlier no longer starts, because it uses the
+  earlier protocol. Select 0.1.36 with `thruput toolchain use`.
+- New projects pin SDK 0.62.0, which adds `env.set_block_time_step` for
+  contract unit tests.
+- The Linux binaries link their dependencies statically. The macOS bundle is
+  signed with a Developer ID and notarized.
 
 ### Browser apps can call a local node
 
@@ -54,6 +94,10 @@ block, so it saw the old block time and the old state.
 - testkit sends that height as `minStateBlockHeight`. Servers from wire
   format 14.6.1 wait up to 2 s for it; against an older server, testkit
   retries `stateHeightUnavailable` for up to 2 s itself.
+- `Network::get_storage_at` uses the same floor. `getStorage` takes no
+  floor parameter, so testkit reads again while the answer's
+  `stateBlockHeight` is below it, for up to 2 s, then fails with
+  `TestkitError::Rpc`.
 
 ## 0.46.1
 

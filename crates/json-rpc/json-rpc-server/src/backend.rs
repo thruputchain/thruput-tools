@@ -118,6 +118,9 @@ pub struct TipReading {
     ///
     /// `getChainConfig` projects its execution limits and prices from this.
     pub execution: Option<Arc<thruput_json_rpc_types::network_config::ExecutionConfig>>,
+    /// The tip's block timepoint (Unix nanoseconds), when the backend read it.
+    /// A view must not run earlier than this.
+    pub block_timepoint: Option<thruput_xdr::types::TimePoint>,
 }
 
 impl TipReading {
@@ -128,7 +131,15 @@ impl TipReading {
             tip,
             network_config,
             execution: None,
+            block_timepoint: None,
         }
+    }
+
+    /// Attach the tip's block timepoint.
+    #[must_use]
+    pub fn with_block_timepoint(mut self, timepoint: thruput_xdr::types::TimePoint) -> Self {
+        self.block_timepoint = Some(timepoint);
+        self
     }
 
     /// Attach the configured root fallback returned with this tip.
