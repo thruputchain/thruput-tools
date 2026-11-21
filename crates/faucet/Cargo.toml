@@ -34,7 +34,7 @@ thruput-signing = { workspace = true }
 thruput-xdr = { workspace = true }
 hex = { workspace = true }
 opentelemetry = { workspace = true }
-opentelemetry-otlp = { workspace = true }
+thruput-telemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

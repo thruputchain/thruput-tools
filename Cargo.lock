@@ -4230,7 +4230,6 @@ dependencies = [
  "http",
  "jsonrpsee",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry_sdk",
  "serde",
  "serde_json",
@@ -4242,6 +4241,7 @@ dependencies = [
  "thruput-json-rpc-client",
  "thruput-json-rpc-types",
  "thruput-signing",
+ "thruput-telemetry",
  "thruput-xdr",
  "thruput-xdrs",
  "tikv-jemallocator",
@@ -4378,7 +4378,6 @@ dependencies = [
  "hex",
  "jsonrpsee",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry_sdk",
  "prometheus",
  "reqwest",
@@ -4399,6 +4398,7 @@ dependencies = [
  "thruput-node-rpc",
  "thruput-rpc-driver",
  "thruput-scp",
+ "thruput-telemetry",
  "thruput-trace",
  "thruput-view",
  "thruput-x23-transport",
@@ -4736,6 +4736,21 @@ name = "thruput-syscall"
 version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e2ca9ee4f01132b152a33319bd21b172593999005b4d55bbc34b8acc6a5c4b"
+
+[[package]]
+name = "thruput-telemetry"
+version = "0.47.0"
+dependencies = [
+ "http",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "thruput-testkit"
