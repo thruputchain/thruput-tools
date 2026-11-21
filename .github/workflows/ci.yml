@@ -538,7 +538,7 @@ jobs:
           if ! git diff --exit-code -- "$FIXTURES"; then
             echo
             echo "Generated bindings differ from the checked-in snapshots."
-            echo "Run: UPDATE_SNAPSHOTS=1 cargo test -p thruput --lib codegen"
+            echo "Run: UPDATE_SNAPSHOTS=1 cargo test -p thruput --test codegen generated_bindings_match_snapshots"
             exit 1
           fi
           # git diff only covers tracked files, so check for untracked bindings too.
