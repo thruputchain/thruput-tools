@@ -1,9 +1,9 @@
-//! A contract view sees the block time a local node moves forward.
+//! A contract view runs at the time the next block would get.
 //!
 //! Deploys the `block-clock` fixture from thruput-examples, which returns the
-//! timepoint of the block it runs in. Requires a `hog-devnode` binary whose
-//! views use the tip's timepoint when it is ahead of the wall clock, and a
-//! built `block-clock` artifact, so it is `#[ignore]`d and driven by
+//! timepoint of the block it runs in. Requires hog-devnode 0.1.36 or later,
+//! which runs views at the time tools states, and a built `block-clock`
+//! artifact, so it is `#[ignore]`d and driven by
 //! `scripts/smoke-testkit-local.sh`.
 
 use std::{
@@ -88,6 +88,11 @@ async fn a_view_reads_the_block_time_after_a_jump() {
             let before = view_now(&ctx, contract, 0).await?;
             assert!(before.abs_diff(wall_clock_nanos()) < DAY);
 
+            // Freeze the clock, so the next block's time stays exact.
+            ctx.network()
+                .set_block_time_step(Some(Duration::ZERO))
+                .await?;
+
             // An empty block three days ahead: a view reads exactly its time.
             let target = wall_clock_nanos() + 3 * DAY;
             let pinned = ctx
@@ -97,15 +102,23 @@ async fn a_view_reads_the_block_time_after_a_jump() {
             assert_eq!(*pinned.timepoint, target);
             assert_eq!(view_now(&ctx, contract, pinned.height).await?, target);
 
-            // Thirty more days, made visible to views by an empty block.
-            ctx.network()
+            // Thirty more days: a view sees them at once, before any block,
+            // and the next block carries the same time.
+            let thirty_days_later = target + 30 * DAY;
+            let next = ctx
+                .network()
                 .increase_time(Duration::from_hours(30 * 24))
                 .await?;
+            assert_eq!(*next, thirty_days_later);
+            assert_eq!(
+                view_now(&ctx, contract, pinned.height).await?,
+                thirty_days_later
+            );
             let later = ctx.network().produce_block().await?;
-            assert!(*later.timepoint >= target + 30 * DAY);
+            assert_eq!(*later.timepoint, thirty_days_later);
             assert_eq!(
                 view_now(&ctx, contract, later.height).await?,
-                *later.timepoint
+                thirty_days_later
             );
             Ok(())
         })])

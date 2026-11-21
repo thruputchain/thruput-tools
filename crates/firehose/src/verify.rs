@@ -5,10 +5,19 @@
 use sha2::{Digest, Sha256};
 use thruput_indexer::EventIndexerPulledBlock;
 
-use crate::{Error, encode, invalid};
+use thruput_xdr::types::SHA256Hash;
+use xdrs::{WriteXDR, txs::buf_writer::BufWriter};
 
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
+use crate::{Error, invalid};
+
+fn digest<T: WriteXDR>(buffer: &mut BufWriter, value: &T) -> Result<SHA256Hash, Error> {
+    buffer.clear();
+    value
+        .write_xdr(buffer)
+        .map_err(|e| Error::Xdr(e.to_string()))?;
+    Ok(SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(
+        buffer.as_ref(),
+    ))))
 }
 
 pub(crate) fn verify(pulled: &EventIndexerPulledBlock) -> Result<(), Error> {
@@ -17,7 +26,8 @@ pub(crate) fn verify(pulled: &EventIndexerPulledBlock) -> Result<(), Error> {
     if payload.format_version != 2 || *value.proposal_header.block_height < 0 {
         return Err(invalid("unsupported payload format or negative height"));
     }
-    if encode(&pulled.block.identity.consensus_hash)? != digest(&encode(value)?) {
+    let mut buffer = BufWriter::new();
+    if *pulled.block.identity.consensus_hash != digest(&mut buffer, value)? {
         return Err(invalid("consensus hash mismatch"));
     }
     if payload.event_logs.len() != payload.tx_bodies.len() {
@@ -25,8 +35,8 @@ pub(crate) fn verify(pulled: &EventIndexerPulledBlock) -> Result<(), Error> {
     }
     let mut txs = Vec::with_capacity(payload.tx_bodies.len());
     for (event, body) in payload.event_logs.iter().zip(payload.tx_bodies.iter()) {
-        let hash = digest(&encode(&body.signed_tx.tx)?);
-        if encode(&event.tx_hash)? != hash {
+        let hash = digest(&mut buffer, &body.signed_tx.tx)?;
+        if event.tx_hash != hash {
             return Err(invalid("transaction body hash mismatch"));
         }
         txs.push(hash);

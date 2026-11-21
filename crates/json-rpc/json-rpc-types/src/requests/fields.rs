@@ -14,19 +14,41 @@ where
 }
 
 pub(crate) fn read_hex<'de, D: Deserializer<'de>>(deserializer: D) -> Result<HexBytes, D::Error> {
-    let text = String::deserialize(deserializer)?;
-    let digits = text
-        .strip_prefix("0x")
-        .filter(|digits| digits.len().is_multiple_of(2))
-        .filter(|digits| {
-            digits
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        })
-        .ok_or_else(|| serde::de::Error::custom("expected lowercase 0x-prefixed complete bytes"))?;
-    hex::decode(digits)
-        .map(HexBytes)
-        .map_err(serde::de::Error::custom)
+    struct CanonicalHex;
+
+    impl serde::de::Visitor<'_> for CanonicalHex {
+        type Value = HexBytes;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a string")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<HexBytes, E> {
+            let invalid = || E::custom("expected lowercase 0x-prefixed complete bytes");
+            let digits = text.strip_prefix("0x").ok_or_else(invalid)?;
+            let (pairs, remainder) = digits.as_bytes().as_chunks::<2>();
+            if !remainder.is_empty() {
+                return Err(invalid());
+            }
+            let mut bytes = Vec::with_capacity(pairs.len());
+            for &[hi, lo] in pairs {
+                let hi = hex_digit(hi).ok_or_else(invalid)?;
+                let lo = hex_digit(lo).ok_or_else(invalid)?;
+                bytes.push((hi << 4) | lo);
+            }
+            Ok(HexBytes(bytes))
+        }
+    }
+
+    deserializer.deserialize_str(CanonicalHex)
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
 }
 
 pub(super) fn read_entrypoint<'de, D: Deserializer<'de>>(d: D) -> Result<HexBytes, D::Error> {

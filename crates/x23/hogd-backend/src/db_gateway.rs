@@ -74,8 +74,10 @@ pub fn tip_reading(
         (&config.storage_cost_model).into(),
     );
     let wallet = config.tip.default_wallet;
+    let block_timepoint = config.tip.value.proposal_header.block_timepoint.clone();
     Ok(TipReading::new(tip, config.tip.network_config)
         .with_execution(execution)
+        .with_block_timepoint(block_timepoint)
         .with_default_wallet(thruput_json_rpc_types::responses::ContractDeployment {
             hash: thruput_json_rpc_types::base58::Base58(wallet.hash),
             size: wallet.contract_size,

@@ -38,6 +38,7 @@ fn query() -> ViewGatewayBatchQuery {
         1000,
         std::time::Duration::from_secs(1),
         thruput_json_rpc_server::ViewBatchConfig::default(),
+        &thruput_xdr::types::TimePoint::new(7),
     )
     .unwrap()
 }
@@ -88,7 +89,8 @@ fn native_query_preserves_address_caller_auth_and_budget() {
     let legacy = simulation_request(request()).unwrap();
     assert_eq!(legacy.min_height, Some(42.into()));
     assert_eq!(legacy.gas_limit, Some(123));
-    let query = crate::view::view_query(legacy, 123).unwrap();
+    let query =
+        crate::view::view_query(legacy, 123, thruput_xdr::types::TimePoint::new(7)).unwrap();
     assert_eq!(query.invocation.invoked_address.as_ref(), &[3; 32]);
     assert_eq!(query.parent_address.unwrap().as_ref(), &[4; 32]);
     assert_eq!(query.invocation.entrypoint.as_ref(), &[2; 8]);

@@ -63,6 +63,17 @@ fn height_and_decimal_boundaries() {
 }
 
 #[test]
+fn signed_transaction_hex_accepts_escaped_and_reader_backed_strings() {
+    let json = br#"{"signedTransaction":"0x\u0061b09"}"#;
+    for request in [
+        serde_json::from_slice::<SendTransactionRequest>(json).unwrap(),
+        serde_json::from_reader::<_, SendTransactionRequest>(&json[..]).unwrap(),
+    ] {
+        assert_eq!(request.signed_transaction.0, [0xab, 0x09]);
+    }
+}
+
+#[test]
 fn simulation_rejects_aliases_nulls_and_nested_unknowns() {
     accepts::<SimulateInvocationRequest>(invocation());
     for field in ["caller", "assumedAuth", "gasLimit", "minStateBlockHeight"] {
