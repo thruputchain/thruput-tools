@@ -64,6 +64,15 @@ pub fn deadline_cohorts<I>(
     deadline: impl Fn(&I) -> Instant,
 ) -> Vec<Vec<I>> {
     items.sort_unstable_by_key(&deadline);
+    let Some(first) = items.first() else {
+        return Vec::new();
+    };
+    if items
+        .last()
+        .is_some_and(|last| deadline(last).saturating_duration_since(deadline(first)) <= max_skew)
+    {
+        return vec![items];
+    }
     let mut cohorts: Vec<Vec<I>> = Vec::new();
     for item in items {
         let item_deadline = deadline(&item);
