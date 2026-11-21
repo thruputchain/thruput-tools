@@ -35,7 +35,7 @@ impl<'de, T: DeserializeOwned + ResponseData> Deserialize<'de> for DecodedRespon
         let raw = Value::deserialize(d)?;
         // Finish typed validation before classifying support. An unfamiliar
         // nested variant must not hide a malformed known sibling.
-        let value: T = serde_json::from_value(raw.clone()).map_err(serde::de::Error::custom)?;
+        let value = T::deserialize(&raw).map_err(serde::de::Error::custom)?;
         Ok(if value.is_supported() {
             Self::Known(value)
         } else {
