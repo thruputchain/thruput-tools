@@ -1,6 +1,6 @@
 use std::{fs, process::Command};
 
-use serde_json::{Value, json};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
@@ -32,45 +32,13 @@ fn write_manifest(source_commit: &str) -> (tempfile::TempDir, std::path::PathBuf
             }
         }
     });
-    let mut canonical = Vec::new();
-    write_canonical_json(&manifest, &mut canonical);
+    manifest.sort_all_objects();
+    let mut canonical = serde_json::to_vec(&manifest).unwrap();
     canonical.push(b'\n');
     let digest = format!("sha256:{}", hex::encode(Sha256::digest(&canonical)));
     manifest["bundle"]["manifestDigest"] = json!(digest);
     fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     (directory, path, digest)
-}
-
-fn write_canonical_json(value: &Value, output: &mut Vec<u8>) {
-    match value {
-        Value::Object(object) => {
-            output.push(b'{');
-            let mut entries = object.iter().collect::<Vec<_>>();
-            entries.sort_unstable_by_key(|(key, _)| *key);
-            for (index, (key, value)) in entries.into_iter().enumerate() {
-                if index != 0 {
-                    output.push(b',');
-                }
-                serde_json::to_writer(&mut *output, key).unwrap();
-                output.push(b':');
-                write_canonical_json(value, output);
-            }
-            output.push(b'}');
-        }
-        Value::Array(values) => {
-            output.push(b'[');
-            for (index, value) in values.iter().enumerate() {
-                if index != 0 {
-                    output.push(b',');
-                }
-                write_canonical_json(value, output);
-            }
-            output.push(b']');
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
-            serde_json::to_writer(output, value).unwrap();
-        }
-    }
 }
 
 #[test]
