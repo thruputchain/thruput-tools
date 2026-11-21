@@ -21,33 +21,13 @@ impl<S, C: ChainPlane, R> NativeTransactionService<S, C, R> {
         // The pre-checks are advisory mirrors of what the scheduler and
         // executor enforce authoritatively: an unavailable tip reading
         // skips the chain-dependent checks rather than blocking submission.
-        let mut tip = self.cached_tip_state(context).await;
-        let params = tip
-            .state
-            .as_ref()
-            .and_then(|tip| tip.params)
-            .unwrap_or_default();
-        // Keep the bytes for the fresh-tip retry below.
-        let tx = match validate_raw_transaction_bytes(tx_bytes.clone(), &params) {
-            Ok(tx) => tx,
-            // A cached config can lag an upgrade that raised this
-            // bound, so re-read the tip before rejecting. One this
-            // request fetched itself is already current.
-            Err(RpcServerError::TxInvalidDetailed(_)) if !tip.probed => {
-                tip = self.fresh_tip_state(context).await;
-                let params = tip
-                    .state
-                    .as_ref()
-                    .and_then(|tip| tip.params)
-                    .unwrap_or(params);
-                validate_raw_transaction_bytes(tx_bytes, &params)?
-            }
-            Err(error) => return Err(error),
-        };
+        let tip = self.cached_tip_state(context).await;
+        let params = tip.as_ref().and_then(|tip| tip.params).unwrap_or_default();
+        let tx = validate_raw_transaction_bytes(tx_bytes, &params)?;
         *hash = Some(tx.hash);
         // A transaction can only be included at heights strictly above the
         // current tip, so `expiry <= tip` can never commit.
-        if let Some(tip_height) = tip.state.as_ref().map(|tip| tip.height)
+        if let Some(tip_height) = tip.as_ref().map(|tip| tip.height)
             && *tx.block_expiry_height <= tip_height
         {
             return Err(RpcServerError::TxRejected(format!(

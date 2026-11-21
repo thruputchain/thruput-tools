@@ -99,17 +99,6 @@ impl TipCacheState {
     }
 }
 
-/// What a cache read returned, and whether this call went to the backend
-/// for it (successfully or not) rather than serving the cache, so a caller
-/// wanting a fresher reading knows a second probe would only repeat the
-/// first.
-#[derive(Debug, Clone)]
-pub(crate) struct TipRead {
-    /// `None` only when no reading has ever succeeded.
-    pub(crate) state: Option<TipState>,
-    pub(crate) probed: bool,
-}
-
 impl TipCache {
     fn lock_state(&self) -> MutexGuard<'_, TipCacheState> {
         // This is advisory state: retaining the last snapshot after a panic
@@ -128,7 +117,7 @@ impl TipCache {
         probe_timeout: Duration,
         context: RpcRequestContext,
         fetch: impl FnOnce(RpcRequestContext) -> Fut,
-    ) -> TipRead
+    ) -> Option<TipState>
     where
         Fut: Future<Output = Result<TipReading, RpcServerError>>,
     {
@@ -141,10 +130,7 @@ impl TipCache {
             match state.last_attempt {
                 Some(at) if now.duration_since(at) < window => {
                     if state.reading.is_some() || !state.in_flight {
-                        return TipRead {
-                            state: state.reading.clone(),
-                            probed: false,
-                        };
+                        return state.reading.clone();
                     }
                     // Subscribed under the lock, so the probe cannot finish
                     // before the wait begins.
@@ -161,13 +147,8 @@ impl TipCache {
             return self.probe(probe_timeout, context, fetch).await;
         };
 
-        // A reading obtained this way is as fresh as one this caller probed
-        // for itself, so it counts as probed.
         let _ = tokio::time::timeout(probe_timeout, probe_done.changed()).await;
-        TipRead {
-            state: self.lock_state().reading.clone(),
-            probed: true,
-        }
+        self.lock_state().reading.clone()
     }
 
     /// Run the probe this caller claimed the window for, then release any
@@ -177,7 +158,7 @@ impl TipCache {
         probe_timeout: Duration,
         context: RpcRequestContext,
         fetch: impl FnOnce(RpcRequestContext) -> Fut,
-    ) -> TipRead
+    ) -> Option<TipState>
     where
         Fut: Future<Output = Result<TipReading, RpcServerError>>,
     {
@@ -208,10 +189,7 @@ impl TipCache {
             state.reading.clone()
         };
         self.inner.probe_done.send_replace(());
-        TipRead {
-            state,
-            probed: outcome.is_some(),
-        }
+        state
     }
 }
 
@@ -294,7 +272,7 @@ mod tests {
         cache: &TipCache,
         window: Duration,
         result: Result<TipReading, RpcServerError>,
-    ) -> TipRead {
+    ) -> Option<TipState> {
         cache
             .reading(
                 window,
@@ -312,8 +290,7 @@ mod tests {
 
         let read = probe(&cache, Duration::ZERO, Ok(tip_reading(9))).await;
 
-        assert!(read.probed);
-        assert_eq!(read.state.map(|tip| tip.height), Some(10));
+        assert_eq!(read.map(|tip| tip.height), Some(10));
     }
 
     /// A backend that has been failing for a while keeps having probes
@@ -332,16 +309,11 @@ mod tests {
                 Err(RpcServerError::BackendUnavailable("down".into())),
             )
             .await;
-            assert!(read.probed);
-            assert_eq!(read.state.map(|tip| tip.height), Some(7));
+            assert_eq!(read.map(|tip| tip.height), Some(7));
         }
 
         let read = probe(&cache, Duration::from_mins(1), Ok(tip_reading(8))).await;
-        assert!(
-            !read.probed,
-            "a recent failed attempt still owns the window"
-        );
-        assert_eq!(read.state.map(|tip| tip.height), Some(7));
+        assert_eq!(read.map(|tip| tip.height), Some(7));
     }
 
     /// The refresh task passes a zero window so every tick probes, even when
@@ -353,8 +325,7 @@ mod tests {
 
         let read = probe(&cache, Duration::ZERO, Ok(tip_reading(8))).await;
 
-        assert!(read.probed);
-        assert_eq!(read.state.map(|tip| tip.height), Some(8));
+        assert_eq!(read.map(|tip| tip.height), Some(8));
     }
 
     #[tokio::test(start_paused = true)]
@@ -381,8 +352,7 @@ mod tests {
         let before = Instant::now();
         let read = probe(&cache, Duration::from_mins(1), Ok(tip_reading(8))).await;
 
-        assert!(!read.probed);
-        assert_eq!(read.state.map(|tip| tip.height), Some(7));
+        assert_eq!(read.map(|tip| tip.height), Some(7));
         assert_eq!(Instant::now(), before);
     }
 
@@ -421,7 +391,7 @@ mod tests {
             }
             release.notify_one();
             while let Some(read) = readers.join_next().await {
-                assert_eq!(read.unwrap().state.unwrap().height, 42);
+                assert_eq!(read.unwrap().unwrap().height, 42);
             }
         })
         .await
@@ -458,7 +428,7 @@ mod tests {
                 |_| async { panic!("cancelled probe should still own the reuse window") },
             )
             .await;
-        assert!(read.state.is_none());
+        assert!(read.is_none());
         tokio::time::advance(Duration::from_secs(10)).await;
         let read = cache
             .reading(
@@ -468,7 +438,6 @@ mod tests {
                 |_| async { Ok(tip_reading(43)) },
             )
             .await;
-        assert!(read.probed);
-        assert_eq!(read.state.unwrap().height, 43);
+        assert_eq!(read.unwrap().height, 43);
     }
 }
