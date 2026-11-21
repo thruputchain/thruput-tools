@@ -24,7 +24,10 @@ fn runtime_manifest_roundtrips_the_wire_fields() {
     let manifest = parse_runtime_manifest(&serde_json::to_vec(&wire).unwrap()).unwrap();
     assert_eq!(manifest.chain_state, Some(RuntimeManifestChainState::Fresh));
     assert_eq!(manifest.network_hash, [0x42; 32].into());
+    assert_eq!(manifest.protocol, "hogp/test00000000000");
     assert_eq!(manifest.producer.binary, "hogd-dev");
+    assert_eq!(manifest.producer.version, "0.1.0");
+    assert_eq!(manifest.producer.commit_hash.as_deref(), Some("abcdef0"));
     let endpoints = &manifest.endpoints;
     assert_eq!(endpoints.scheduler.port(), 1000);
     assert_eq!(endpoints.scheduler_gateway.unwrap().port(), 1010);
@@ -34,6 +37,18 @@ fn runtime_manifest_roundtrips_the_wire_fields() {
     let account = &manifest.bootstrap_accounts[0];
     assert_eq!(account.public_key.to_string(), base58_text(0x61));
     assert_eq!(account.wallet_address.to_string(), base58_text(0x71));
+    assert_eq!(account.role, BOOTSTRAP_ACCOUNT_ROLE_FAUCET);
+    assert_eq!(account.initial_storage_tokens, "10000000000000");
+    let costs = &manifest.bootstrap.storage_cost_model;
+    assert_eq!(costs.hash.to_string(), base58_text(0x53));
+    assert_eq!(costs.base_data_item_cost, "12000");
+    assert_eq!(costs.bytestring_cost_per_byte, "10");
+    assert_eq!(costs.base_contract_deployment_cost, "13000");
+    assert_eq!(costs.contract_deployment_cost_per_byte, "11");
+    assert_eq!(costs.auth_per_key_cost, "1111");
+    assert_eq!(costs.rcq_cost_per_entry, "8");
+    assert_eq!(costs.replay_cache_cost_per_entry, "7");
+    assert_eq!(costs.balance_cost, "1234");
     assert_eq!(serde_json::to_value(manifest).unwrap(), wire);
 }
 
@@ -191,8 +206,8 @@ fn full_manifest() -> serde_json::Value {
                 "hash": base58_text(0x53),
                 "baseDataItemCost": "12000",
                 "bytestringCostPerByte": "10",
-                "baseContractDeploymentCost": "12000",
-                "contractDeploymentCostPerByte": "10",
+                "baseContractDeploymentCost": "13000",
+                "contractDeploymentCostPerByte": "11",
                 "authPerKeyCost": "1111",
                 "rcqCostPerEntry": "8",
                 "replayCacheCostPerEntry": "7",
