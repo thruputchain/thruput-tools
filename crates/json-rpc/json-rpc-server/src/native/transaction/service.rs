@@ -6,7 +6,7 @@ mod lifecycle;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::tip_cache::{AbortOnDrop, TipCache, TipRead, spawn_tip_refresh};
+use crate::tip_cache::{AbortOnDrop, TipCache, TipState, spawn_tip_refresh};
 
 use crate::{ChainPlane, RpcRequestContext, RpcServerConfig};
 
@@ -17,7 +17,7 @@ use crate::{ChainPlane, RpcRequestContext, RpcServerConfig};
 /// Holds a cached reading of the db tip (height plus the resolved network
 /// config) that every submission pre-check consults. The background task
 /// started by [`Self::new`] keeps it current, so a submit reads what that
-/// task published; a bound re-check still fetches for itself.
+/// task published.
 #[derive(Debug)]
 pub struct NativeTransactionService<S, C, R> {
     submit: S,
@@ -62,12 +62,15 @@ where
     }
 
     /// Db-tip reading served from the shared rate-limited cache, for the
-    /// submit pre-checks. Its state is `None` when no
-    /// reading is available (probe failed or timed out with no prior
-    /// success); a submit then runs only the checks that need no chain
-    /// reading.
-    async fn cached_tip_state(&self, context: RpcRequestContext) -> TipRead {
-        self.tip_state_within(self.tip_reuse_window(), context)
+    /// submit pre-checks. Returns the last successful reading, if any.
+    async fn cached_tip_state(&self, context: RpcRequestContext) -> Option<TipState> {
+        self.tip_cache
+            .reading(
+                self.tip_reuse_window(),
+                Duration::from_millis(self.config.tip_probe_timeout_ms),
+                context,
+                |probe_context| self.chain.chain_tip(probe_context),
+            )
             .await
     }
 
@@ -83,23 +86,6 @@ where
                 .tip_refresh_interval_ms
                 .saturating_add(self.config.tip_probe_timeout_ms),
         )
-    }
-
-    /// Db-tip reading fetched now regardless of the cache window, for a
-    /// decision that must not rest on a reading that may lag the chain.
-    async fn fresh_tip_state(&self, context: RpcRequestContext) -> TipRead {
-        self.tip_state_within(Duration::ZERO, context).await
-    }
-
-    async fn tip_state_within(&self, window: Duration, context: RpcRequestContext) -> TipRead {
-        self.tip_cache
-            .reading(
-                window,
-                Duration::from_millis(self.config.tip_probe_timeout_ms),
-                context,
-                |probe_context| self.chain.chain_tip(probe_context),
-            )
-            .await
     }
 }
 

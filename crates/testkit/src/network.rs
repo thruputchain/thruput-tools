@@ -33,7 +33,8 @@ use crate::error::{Result, TestkitError};
 
 const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Retry budget for `stateHeightUnavailable` against pre-14.6.1 servers.
+/// Retry budget for a read below the floor: `stateHeightUnavailable` from a
+/// pre-14.6.1 server, or a `getStorage` answer from an older state.
 const READ_FLOOR_WAIT: Duration = Duration::from_secs(2);
 const READ_FLOOR_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const PENDING_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -188,8 +189,9 @@ struct NetworkInner {
     local_funding:
         tokio::sync::Mutex<std::collections::HashMap<ContractAddress, LocalFundingAttempt>>,
     /// Highest committed block height this handle has seen in a receipt or a
-    /// produced block; 0 before any. Contract reads use it as their freshness
-    /// floor, so a read after a block or receipt never runs on an older state.
+    /// produced block; 0 before any. Contract and storage reads use it as
+    /// their freshness floor, so a read after a block or receipt never runs on
+    /// an older state.
     observed_height: AtomicI64,
 }
 
@@ -556,28 +558,52 @@ impl Network {
             .fetch_max(height, Ordering::AcqRel);
     }
 
-    /// The freshness floor for contract reads: the highest committed height
-    /// this handle has seen, if any.
+    /// The freshness floor for contract and storage reads: the highest
+    /// committed height this handle has seen, if any.
     fn read_floor(&self) -> Option<BlockHeight> {
         let height = self.inner.observed_height.load(Ordering::Acquire);
         (height > 0).then_some(BlockHeight::from(height))
     }
 
     /// Read one latest-committed storage item at `address`/`key`.
+    ///
+    /// Reads a state at least as new as the highest block this handle has
+    /// seen. `getStorage` takes no floor, so an answer from an older state is
+    /// read again briefly, and fails if the state does not catch up.
     pub async fn get_storage_at(
         &self,
         address: ContractAddress,
         key: &[u8],
     ) -> Result<StorageResult> {
-        known(
-            self.require_client("getStorage")?
-                .get_storage(requests::StorageQuery {
-                    address: Base58(address),
-                    key: HexBytes(key.to_vec()),
-                })
-                .await,
-            "getStorage",
+        const METHOD: &str = "getStorage";
+        let client = self.require_client(METHOD)?;
+        let floor = self.read_floor();
+        let request = requests::StorageQuery {
+            address: Base58(address),
+            key: HexBytes(key.to_vec()),
+        };
+        let result = read_until_floor(
+            || client.get_storage(request.clone()),
+            |result| {
+                floor
+                    .as_ref()
+                    .is_some_and(|floor| storage_below_floor(result, floor))
+            },
         )
+        .await;
+        let storage = known(result, METHOD)?;
+        if let Some(floor) = floor
+            && *storage.state_block_height < *floor
+        {
+            return Err(TestkitError::rpc(
+                METHOD,
+                format!(
+                    "state at block {} is below block {} this handle has seen",
+                    *storage.state_block_height, *floor
+                ),
+            ));
+        }
+        Ok(storage)
     }
 
     /// Simulate a contract call through `simulateInvocation`.
@@ -606,24 +632,12 @@ impl Network {
             caller: caller.map(Base58),
             gas_limit: None,
         };
-        // The budget covers the first request too; retries get only what is
-        // left, and a retry cut short keeps the last refusal.
-        let deadline = tokio::time::Instant::now() + READ_FLOOR_WAIT;
-        let mut result = client.simulate_invocation(request.clone()).await;
-        while min_state_block_height.is_some() && below_floor(&result) {
-            if deadline.saturating_duration_since(tokio::time::Instant::now())
-                <= READ_FLOOR_RETRY_INTERVAL
-            {
-                break;
-            }
-            tokio::time::sleep(READ_FLOOR_RETRY_INTERVAL).await;
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            match tokio::time::timeout(remaining, client.simulate_invocation(request.clone())).await
-            {
-                Ok(next) => result = next,
-                Err(_) => break,
-            }
-        }
+        let has_floor = min_state_block_height.is_some();
+        let result = read_until_floor(
+            || client.simulate_invocation(request.clone()),
+            |result| has_floor && below_floor(result),
+        )
+        .await;
         known(result, METHOD)
     }
 
@@ -811,12 +825,48 @@ fn invalid_argument(operation: &'static str, detail: &str) -> TestkitError {
     }
 }
 
+/// Send a read, and send it again while `behind` holds, within
+/// [`READ_FLOOR_WAIT`]. The budget covers the first request too; retries get
+/// only what is left, and a retry cut short keeps the last answer.
+async fn read_until_floor<T, Fut>(mut send: impl FnMut() -> Fut, behind: impl Fn(&T) -> bool) -> T
+where
+    Fut: std::future::Future<Output = T>,
+{
+    let deadline = tokio::time::Instant::now() + READ_FLOOR_WAIT;
+    let mut result = send().await;
+    while behind(&result) {
+        if deadline.saturating_duration_since(tokio::time::Instant::now())
+            <= READ_FLOOR_RETRY_INTERVAL
+        {
+            break;
+        }
+        tokio::time::sleep(READ_FLOOR_RETRY_INTERVAL).await;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, send()).await {
+            Ok(next) => result = next,
+            Err(_) => break,
+        }
+    }
+    result
+}
+
 /// Whether a read failed because the server's state is below its floor.
 fn below_floor<T>(result: &std::result::Result<T, NativeClientError>) -> bool {
     matches!(
         result,
         Err(NativeClientError::Application { source, .. })
             if source.code() == codes::STATE_HEIGHT_UNAVAILABLE
+    )
+}
+
+/// Whether a storage read answered from a state below `floor`.
+fn storage_below_floor<E>(
+    result: &std::result::Result<DecodedResponse<StorageResult>, E>,
+    floor: &BlockHeight,
+) -> bool {
+    matches!(
+        result,
+        Ok(DecodedResponse::Known(storage)) if *storage.state_block_height < **floor
     )
 }
 
