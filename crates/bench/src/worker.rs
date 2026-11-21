@@ -152,13 +152,13 @@ pub(super) async fn run_worker(
         let tick = worker_id as u64 + dispatched * cfg.num_workers as u64;
         let (input, expected) = if cfg.records.is_empty() {
             let input = if cfg.tx_batch.is_empty() {
-                String::new()
+                ""
             } else {
-                cfg.tx_batch[tick as usize % cfg.tx_batch.len()].clone()
+                cfg.tx_batch[tick as usize % cfg.tx_batch.len()].as_str()
             };
             (input, ExpectedResult::Any)
         } else {
-            let record = cfg.records[tick as usize % cfg.records.len()];
+            let record = &cfg.records[tick as usize % cfg.records.len()];
             let expected = if cfg.method == "getTransactionStatus" {
                 ExpectedResult::Committed {
                     height: record.height,
@@ -169,16 +169,9 @@ pub(super) async fn run_worker(
                     height: record.height,
                 }
             };
-            (
-                serde_json::to_value(record.hash)
-                    .expect("bug: hash serializes")
-                    .as_str()
-                    .expect("bug: hash is a string")
-                    .to_owned(),
-                expected,
-            )
+            (record.hash_text.as_str(), expected)
         };
-        let body = make_request(&cfg.method, &input, tick);
+        let body = make_request(&cfg.method, input, tick);
         let cfg = cfg.clone();
         let client = client.clone();
         tasks.spawn(async move {

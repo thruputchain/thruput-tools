@@ -34,8 +34,9 @@ struct HashCorpus {
     hashes: Vec<TxHash>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub(super) struct ConfirmedRecord {
+    pub(super) hash_text: String,
     pub(super) hash: TxHash,
     pub(super) height: i64,
 }
@@ -292,6 +293,7 @@ async fn prepare_inner(
                     "events": receipt.events.iter().map(|event| (event.topics.len(), event.data.0.len())).collect::<Vec<_>>()
                 })).expect("bug: receipt shape serializes"));
                 records.push(ConfirmedRecord {
+                    hash_text: hash.0.to_string(),
                     hash: *hash,
                     height: height.into_inner(),
                 });
