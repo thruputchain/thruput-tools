@@ -86,7 +86,7 @@ impl TipSink for DbTipSink {
         let rpc_result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
             Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
         } else {
-            clear_db_gateway_if_current(&self.db_gateway, generation).await;
+            // A spent request budget is not evidence that the db_gateway is unhealthy.
             call.abort();
             let _ = call.await;
             Err(())
@@ -454,9 +454,8 @@ mod tests {
         }
     }
 
-    struct TimeoutInvalidatesTipSink {
+    struct DeadlineTipSink {
         cutoff: Instant,
-        valid: AtomicBool,
         deadlines: Mutex<Vec<Instant>>,
     }
 
@@ -499,18 +498,13 @@ mod tests {
     }
 
     #[async_trait]
-    impl TipSink for TimeoutInvalidatesTipSink {
+    impl TipSink for DeadlineTipSink {
         async fn get_tip(&self, deadline: Instant) -> Result<TipReading, RpcServerError> {
             self.deadlines.lock().unwrap().push(deadline);
             if deadline < self.cutoff {
-                self.valid.store(false, Ordering::SeqCst);
                 Err(RpcServerError::BackendTimeout)
-            } else if self.valid.load(Ordering::SeqCst) {
-                Ok(default_tip(20))
             } else {
-                Err(RpcServerError::BackendUnavailable(
-                    "scheduler invalidated by older timeout".into(),
-                ))
+                Ok(default_tip(20))
             }
         }
     }
@@ -795,11 +789,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn newer_tip_finishes_before_old_timeout_invalidates_scheduler() {
+    async fn newer_tip_finishes_before_old_timeout() {
         let now = Instant::now();
-        let sink = Arc::new(TimeoutInvalidatesTipSink {
+        let sink = Arc::new(DeadlineTipSink {
             cutoff: now + Duration::from_secs(3),
-            valid: AtomicBool::new(true),
             deadlines: Mutex::new(Vec::new()),
         });
         let (old_reply, old_waiter) = oneshot::channel();
@@ -823,7 +816,7 @@ mod tests {
             newer_waiter
                 .await
                 .expect("newer reply should be sent")
-                .expect("newer cohort should finish before invalidation")
+                .expect("newer cohort should succeed")
                 .tip
                 .height,
             BlockHeight::new(20)
