@@ -2421,6 +2421,7 @@ mod tests {
             },
             forwarded_tokens: VecM(vec![]),
             invoke_flags: InvokeFlag::None.0.cast_unsigned(),
+            block_timepoint: thruput_xdr::types::TimePoint::new(1),
         }
     }
 
