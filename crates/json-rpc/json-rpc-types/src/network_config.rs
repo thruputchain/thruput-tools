@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use thruput_xdr::network_config::{ConfigParam, NetworkConfig};
+use thruput_xdr::{
+    contract::kDefaultMaxContractSizeBytes,
+    network_config::{ConfigParam, NetworkConfig},
+};
 
 /// Chain configuration with an optional authoritative execution reading.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -189,6 +192,27 @@ pub struct NetworkConfigParams {
 }
 
 impl NetworkConfigParams {
+    /// Root invocation gas limit, using the protocol default when unstated.
+    pub fn max_tx_gas_or_default(&self) -> u64 {
+        self.max_tx_gas.unwrap_or(1_000_000_000)
+    }
+
+    /// Attached contract size limit in bytes, using the protocol default when unstated.
+    pub fn max_contract_size_bytes_or_default(&self) -> u32 {
+        self.max_contract_size_bytes
+            .unwrap_or(kDefaultMaxContractSizeBytes)
+    }
+
+    /// RV32 code size limit in bytes, using the protocol default when unstated.
+    pub fn max_rv32_code_bytes_or_default(&self) -> u32 {
+        self.max_rv32_code_bytes.unwrap_or(262_144)
+    }
+
+    /// RV32 guest memory limit in bytes, using the protocol default when unstated.
+    pub fn max_rv32_memory_bytes_or_default(&self) -> u32 {
+        self.max_rv32_memory_bytes.unwrap_or(65_536)
+    }
+
     /// Flatten the parameters a network config states.
     ///
     /// A config version this build cannot interpret is an error rather

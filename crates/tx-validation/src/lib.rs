@@ -13,41 +13,14 @@
 //! immediate, structured [`TxInvalidDetail`].
 //!
 //! The chain-configured bounds are read from the network config a db tip
-//! carries, flattened once into [`NetworkConfigParams`] so every later
-//! access is a field read. A bound is enforced only with a value the
-//! protocol defines: the one the config states, or, for the parameters
-//! whose unstated value the protocol itself fixes
-//! (`kDefaultMaxContractSizeBytes`, `kDefaultMaxRv32CodeBytes`,
-//! `kDefaultMaxRv32MemoryBytes`, and `max_tx_gas`'s 1,000,000,000), that
-//! constant. Nothing is copied from
-//! hogd's own fallbacks. None of this is a trust boundary: the executor
+//! carries, flattened once into [`NetworkConfigParams`]. Its accessors
+//! supply the protocol defaults for unstated gas and size limits. The executor
 //! re-checks everything, and a reading that lags a block is harmless
 //! because these parameters change only through explicit config upgrades.
 
 use thruput_json_rpc_types::error::TxInvalidDetail;
-use thruput_rv32_artifact::{
-    DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, DeclaredSizes, declared_sizes,
-};
-use thruput_xdr::{
-    contract::{Contract, kDefaultMaxContractSizeBytes},
-    transaction::Transaction,
-};
-
-/// `kDefaultMaxRv32CodeBytes` from the protocol's `hog_exec_constants.x`: the
-/// code bound in force for a configuration that does not state one.
-///
-/// The Rust protocol bindings do not bind that file yet, so the value is
-/// pinned here and held to the artifact crate's restatement of it.
-const DEFAULT_MAX_RV32_CODE_BYTES: u32 = 262_144;
-/// `kDefaultMaxRv32MemoryBytes` from `hog_exec_constants.x`: the guest memory
-/// bound in force for a configuration that does not state one.
-const DEFAULT_MAX_RV32_MEMORY_BYTES: u32 = 65_536;
-/// The `max_tx_gas` in force for a configuration that does not state one, as
-/// the protocol documents it on `kConfigParamMaxTxGas`. The bindings carry no
-/// constant for it, so it is pinned here.
-const DEFAULT_MAX_TX_GAS: u64 = 1_000_000_000;
-const _: () = assert!(DEFAULT_MAX_RV32_CODE_BYTES as usize == DEFAULT_MAX_CODE_BYTES);
-const _: () = assert!(DEFAULT_MAX_RV32_MEMORY_BYTES as usize == DEFAULT_MEMORY_BYTES);
+use thruput_rv32_artifact::{DeclaredSizes, declared_sizes};
+use thruput_xdr::{contract::Contract, transaction::Transaction};
 
 pub use thruput_json_rpc_types::network_config::{NetworkConfigParams, UnsupportedNetworkConfig};
 
@@ -182,21 +155,15 @@ pub struct UnknownConfigParamName {
 
 /// Check a decoded transaction against the executor's pre-execution bounds.
 ///
-/// The root invocation's `gas_limit` is checked first, against the
-/// `max_tx_gas` in force (1,000,000,000 when unstated), as hogd checks it
-/// before any attachment. The duplicate-attachment rule always applies. The attached-contract
-/// count is checked only when `params` states a bound for it. Each
-/// attached contract's code is checked against the size in force
-/// (`kDefaultMaxContractSizeBytes` when unstated), and each attached RV32
-/// artifact's declared guest memory and code size against
-/// `kDefaultMaxRv32MemoryBytes` and `kDefaultMaxRv32CodeBytes` when
-/// unstated, so pass `NetworkConfigParams::default()` when no chain
-/// reading is available and the protocol's own values apply.
+/// Check the root gas budget before attachments, as hogd does. The
+/// attached-contract count is bounded only when the config states a limit.
+/// Pass `NetworkConfigParams::default()` to apply the protocol defaults
+/// when no chain reading is available.
 pub fn check_transaction(
     tx: &Transaction,
     params: &NetworkConfigParams,
 ) -> Result<(), TxInvalidDetail> {
-    let max_gas = params.max_tx_gas.unwrap_or(DEFAULT_MAX_TX_GAS);
+    let max_gas = params.max_tx_gas_or_default();
     if tx.invocation.gas_limit > max_gas {
         return Err(TxInvalidDetail::GasLimitTooHigh {
             gas_limit: tx.invocation.gas_limit,
@@ -213,9 +180,7 @@ pub fn check_transaction(
         return Err(TxInvalidDetail::TooManyContracts { attached, max });
     }
 
-    let max_bytes = params
-        .max_contract_size_bytes
-        .unwrap_or(kDefaultMaxContractSizeBytes);
+    let max_bytes = params.max_contract_size_bytes_or_default();
     for (index, contract) in contracts.iter().enumerate() {
         let index = u32::try_from(index).unwrap_or(u32::MAX);
         let size_bytes = u32::try_from(contract_code_size(contract)).unwrap_or(u32::MAX);
@@ -244,12 +209,8 @@ pub fn check_transaction(
     // hogd verifies each attachment after the gates above, and its artifact
     // parser checks the declared memory before the code size; the same order
     // here, so both name the same first violation.
-    let max_memory_bytes = params
-        .max_rv32_memory_bytes
-        .unwrap_or(DEFAULT_MAX_RV32_MEMORY_BYTES);
-    let max_code_bytes = params
-        .max_rv32_code_bytes
-        .unwrap_or(DEFAULT_MAX_RV32_CODE_BYTES);
+    let max_memory_bytes = params.max_rv32_memory_bytes_or_default();
+    let max_code_bytes = params.max_rv32_code_bytes_or_default();
     for (index, contract) in contracts.iter().enumerate() {
         let Some(sizes) = rv32_declared_sizes(contract) else {
             continue;
