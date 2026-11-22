@@ -59,7 +59,6 @@ env:
     thruput-build-info
     thruput-bundle-identity
     thruput-encoding
-    thruput-telemetry
     thruput-json-rpc-types
     thruput-open-rpc
     thruput-open-rpc-macros

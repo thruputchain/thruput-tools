@@ -75,7 +75,7 @@ thruput-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.47.0" }
 thruput-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.47.0" }
 thruput-x23-transport = { path = "crates/x23/x23-transport", version = "=0.47.0" }
 thruput-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.47.0" }
-thruput-telemetry = { path = "crates/telemetry", version = "=0.47.0" }
+thruput-telemetry = { path = "crates/telemetry" }
 thruput-heap-profiling = { path = "crates/heap-profiling", version = "=0.47.0" }
 thruput-signing = { path = "crates/signing", version = "=0.47.0" }
 thruput-tx-validation = { path = "crates/tx-validation", version = "=0.47.0" }
