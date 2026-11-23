@@ -9,7 +9,10 @@ examples.
 | `block-clock` | `tests/contract_block_time.rs`: reports the block timepoint, to check that a contract view sees moved block time |
 
 This is a separate Cargo workspace, with its own toolchain and SDK pin, so it
-can build for the RV32 target. `scripts/smoke-testkit-local.sh` builds both
+can build for the RV32 target. `.cargo/config.toml` and `.cargo/contract.toml`
+are unchanged copies of the CLI's scaffold templates in `crates/cli/templates/`,
+and `rust-toolchain.toml` uses the scaffold's toolchain channel. When the
+templates change, copy them again rather than editing these. `scripts/smoke-testkit-local.sh` builds both
 artifacts and runs the tests:
 
 ```sh

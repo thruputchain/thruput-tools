@@ -1,9 +1,9 @@
 //! A contract view runs at the time the next block would get.
 //!
 //! Deploys the `block-clock` fixture (`tests/fixtures/contracts`), which
-//! returns the timepoint of the block it runs in. Requires hog-devnode 0.1.36 or later,
-//! which runs views at the time tools states, and a built `block-clock`
-//! artifact, so it is `#[ignore]`d and driven by
+//! returns the timepoint of the block it runs in. Requires hog-devnode 0.1.36
+//! or later, which runs views at the time tools states, and a built
+//! `block-clock` artifact, so it is `#[ignore]`d and driven by
 //! `scripts/smoke-testkit-local.sh`.
 
 use std::{

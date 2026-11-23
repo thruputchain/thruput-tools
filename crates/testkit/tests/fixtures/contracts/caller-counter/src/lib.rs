@@ -5,13 +5,8 @@ use thruput_sdk::*;
 
 thruput_sdk::declare_mock_contract!();
 
-/// Per-caller counter.
-///
-/// Each distinct `get_caller()` (`msg.sender`) owns an independent count, so
-/// concurrent callers never share a slot. This makes it a clean read-after-write
-/// fixture: `bump()` is the write and `get()` is the write-dependent read-back,
-/// and a caller's value advances by exactly one per `bump()` regardless of other
-/// callers.
+/// Each caller owns an independent count, so `bump()` then `get()` is a
+/// per-caller read-after-write that concurrent callers never interfere with.
 #[thruput_sdk::storage]
 pub struct CallerCounter {
     counts: Map<ContractAddress, NNInt>,
