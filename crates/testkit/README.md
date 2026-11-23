@@ -18,4 +18,5 @@ registration and hash-only deployment, calls, manual blocks, and recovery
 across scenario runs. `tests/block_time_live.rs` covers block production and
 block time, and `tests/contract_block_time.rs` checks that a contract view reads
 the moved time. Run them with `scripts/smoke-testkit-local.sh`; the contract
-view check needs hog-devnode 0.1.36 or later.
+view check needs hog-devnode 0.1.36 or later. The contracts these tests deploy
+are in [`tests/fixtures/contracts`](tests/fixtures/contracts/README.md).

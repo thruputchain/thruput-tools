@@ -1,8 +1,8 @@
 //! Live contract smoke.
 //!
-//! Launches a real local node, deploys the `caller-counter` fixture, and
-//! exercises the register-once / deploy-by-hash path plus a `bump()`/`get()`
-//! read-after-write round-trip.
+//! Launches a real local node, deploys the `caller-counter` fixture
+//! (`tests/fixtures/contracts`), and exercises the register-once /
+//! deploy-by-hash path plus a `bump()`/`get()` read-after-write round-trip.
 //!
 //! Requires a `hog-devnode` binary and a built `caller-counter` artifact, so
 //! it is `#[ignore]`d and driven by `scripts/smoke-testkit-local.sh`.
