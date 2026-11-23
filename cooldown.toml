@@ -18,6 +18,17 @@ global-min-publish-age = "8 days"
 crate = "heapless"
 version = "0.9.4"
 
+# Security fix for RUSTSEC-2026-0592 (url stack overflow in Url::origin(),
+# fixed in 2.5.9, which needs form_urlencoded 1.2.3). Remove once both are past
+# the cooldown (2026-11-28).
+[[allow.exact]]
+crate = "url"
+version = "2.5.9"
+
+[[allow.exact]]
+crate = "form_urlencoded"
+version = "1.2.3"
+
 # Exemptions for first-party (thruput-*) crates.
 [[allow.package]]
 crates = [

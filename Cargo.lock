@@ -1321,9 +1321,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -4230,7 +4230,6 @@ dependencies = [
  "http",
  "jsonrpsee",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry_sdk",
  "serde",
  "serde_json",
@@ -4242,6 +4241,7 @@ dependencies = [
  "thruput-json-rpc-client",
  "thruput-json-rpc-types",
  "thruput-signing",
+ "thruput-telemetry",
  "thruput-xdr",
  "thruput-xdrs",
  "tikv-jemallocator",
@@ -4378,7 +4378,6 @@ dependencies = [
  "hex",
  "jsonrpsee",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry_sdk",
  "prometheus",
  "reqwest",
@@ -4399,6 +4398,7 @@ dependencies = [
  "thruput-node-rpc",
  "thruput-rpc-driver",
  "thruput-scp",
+ "thruput-telemetry",
  "thruput-trace",
  "thruput-view",
  "thruput-x23-transport",
@@ -4736,6 +4736,21 @@ name = "thruput-syscall"
 version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e2ca9ee4f01132b152a33319bd21b172593999005b4d55bbc34b8acc6a5c4b"
+
+[[package]]
+name = "thruput-telemetry"
+version = "0.47.0"
+dependencies = [
+ "http",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "thruput-testkit"
@@ -5366,9 +5381,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",
