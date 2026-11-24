@@ -28,41 +28,42 @@ fn domain_separator(name: &[u8]) -> Result<Vec<u8>> {
     })?)
 }
 
-// Mirrors node-supervisor's proposal_txs_compatibility_hash, which matches
-// hogd/xdr/proposal_hash.h.
+// The batch and proposal hashes mirror node-supervisor's block driver, which
+// matches hogd/xdr/proposal_hash.h.
 fn batch_hash(batch: &ParallelBatch) -> Result<[u8; 32]> {
     batch.validate().map_err(|e| e.to_string())?;
-    let mut index = batch.clone();
-    index.xdr.0.clear();
-    let mut hasher = Sha256::new();
-    hasher.update(domain_separator(b"ParallelBatch")?);
-    hasher.update(hash(&index)?);
+    let mut segment_hashes: Vec<[u8; 32]> = Vec::new();
     let mut offset = 0;
     for &size in &batch.segment_bytes.0 {
         let end = offset + size as usize;
         let part = batch.xdr.0.get(offset..end).ok_or("bad segment range")?;
-        hasher.update(Sha256::digest(part));
+        segment_hashes.push(Sha256::digest(part).into());
         offset = end;
     }
     if offset != batch.xdr.len() {
         return Err("bad segment length".into());
     }
+    let mut hasher = Sha256::new();
+    hasher.update(domain_separator(b"ParallelBatch")?);
+    // cxs(BatchCommit): its ext, whose only version is 0, then its arrays.
+    hasher.update(xdrs::cxs::encode(&(
+        ExtensionPoint::_0,
+        &batch.segment_tokens,
+        &batch.segment_bytes,
+        &xdrs::VecM::<[u8; 32]>(segment_hashes),
+    ))?);
     Ok(hasher.finalize().into())
 }
 
 fn proposal_hash(txs: &ProposalTxs) -> Result<ProposalTxsHash> {
-    let mut base = txs.clone();
-    let batches: [&mut ParallelBatch; 2] = [&mut base.signed_hash, &mut base.nondeterministic_data];
-    for batch in batches {
-        batch.segment_tokens.0.clear();
-        batch.segment_bytes.0.clear();
-        batch.xdr.0.clear();
-    }
     let mut hasher = Sha256::new();
     hasher.update(domain_separator(b"ProposalTxs")?);
-    hasher.update(hash(&base)?);
-    hasher.update(batch_hash(&txs.signed_hash)?);
-    hasher.update(batch_hash(&txs.nondeterministic_data)?);
+    // cxs(ProposalTxsCommit): the ext of the ProposalTxs, then the two hashes.
+    hasher.update(xdrs::cxs::encode(&(
+        &txs.ext,
+        &batch_hash(&txs.signed_hash)?,
+        &batch_hash(&txs.nondeterministic_data)?,
+    ))?);
     Ok(ProposalTxsHash::new(SHA256Hash::from(<[u8; 32]>::from(
         hasher.finalize(),
     ))))

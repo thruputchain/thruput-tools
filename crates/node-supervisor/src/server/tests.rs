@@ -282,7 +282,7 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
     );
     assert_eq!(
         serde_json::to_value(tip.block_hash).expect("bug: block hash should serialize"),
-        "GUs6Qbr7Brg8gD5iGhoZzxR4jR2i6RXYGgUNx5UiUAU6"
+        "FvN1DEcHpc6BajohimyAcBfotkjD77YRCCZQgXww1mQu"
     );
     let chain_config = client
         .request::<out::ChainConfig, _>("getChainConfig", NamedParams(serde_json::json!({})))
