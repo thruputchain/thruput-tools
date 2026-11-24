@@ -95,6 +95,43 @@ jobs:
       - name: Clippy (heap-profiling feature)
         run: cargo clippy --locked -p thruput-heap-profiling -p thruput-json-rpc-gateway -p thruput-faucet --all-targets --features thruput-heap-profiling/jemalloc,thruput-json-rpc-gateway/heap-profiling,thruput-faucet/heap-profiling -- -D warnings
 
+  # The testkit contract fixtures are a separate workspace with their own
+  # pinned toolchain, so the workspace jobs do not check them.
+  contract-fixtures:
+    needs: [dependency-policy, cooldown] # Check deps before building anything
+    name: Contract fixtures
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'namespace-profile-hogd-linux-2604' }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: crates/testkit/tests/fixtures/contracts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-rust' || 'namespace-rust' }}
+          workspaces: crates/testkit/tests/fixtures/contracts
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
   test:
     needs: [dependency-policy, cooldown] # Check deps before building anything
     name: Test

@@ -2,7 +2,8 @@
 #
 # thruput-testkit live-contract smoke-test
 #
-# Builds the caller-counter fixture from thruput-examples and runs the
+# Builds the caller-counter and block-clock fixtures in
+# crates/testkit/tests/fixtures/contracts and runs the
 # (usually ignored) testkit contract smoke-test against a real hog-devnode.
 #
 # (The test's `local` provider launches and owns the node itself, so this
@@ -10,13 +11,11 @@
 #
 # REQUIRES:
 # - thruput CLI and installed toolchain
-# - the thruput-examples repo, adjacent to this one, or THRUPUT_EXAMPLES_ROOT
 # - hog-devnode 0.1.36 or later, for the contract view block time check
 
 set -euo pipefail
 
 log() { printf '==> %s\n' "$*" >&2; }
-die() { printf '!! %s\n' "$*" >&2; exit 1; }
 
 THRUPUT_DEVNODE_BINARY="${THRUPUT_DEVNODE_BINARY:-$(thruput toolchain which)}"
 export THRUPUT_DEVNODE_BINARY
@@ -29,8 +28,7 @@ if [ "$THRUPUT_VERSION" != "$REPO_VERSION" ]; then
     log "warning: thruput on PATH is $THRUPUT_VERSION, but this repo is $REPO_VERSION"
 fi
 
-EXAMPLES_ROOT="$(realpath "${THRUPUT_EXAMPLES_ROOT:-$REPO_ROOT/../thruput-examples}")"
-[ -d "$EXAMPLES_ROOT" ] || die "Couldn't find thruput-examples"
+FIXTURES_ROOT="$REPO_ROOT/crates/testkit/tests/fixtures/contracts"
 
 cleanup() {
     if [[ "${KEEP_WORKDIR:-0}" != "1" ]]; then
@@ -49,8 +47,8 @@ TARGET_DIR="$WORKDIR"
 export THRUPUT_TESTKIT_ARTIFACT_ROOT="${TARGET_DIR}/thruput"
 
 log "building caller-counter and block-clock fixtures"
-(cd "$EXAMPLES_ROOT" && thruput build -p caller-counter --target-dir "$TARGET_DIR")
-(cd "$EXAMPLES_ROOT" && thruput build -p block-clock --target-dir "$TARGET_DIR")
+(cd "$FIXTURES_ROOT" && thruput build -p caller-counter --target-dir "$TARGET_DIR" -- --locked)
+(cd "$FIXTURES_ROOT" && thruput build -p block-clock --target-dir "$TARGET_DIR" -- --locked)
 
 run_test() {
     test_crate="$1"

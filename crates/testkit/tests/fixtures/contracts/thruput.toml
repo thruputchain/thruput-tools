@@ -1,0 +1,5 @@
+# `thruput build` needs an active profile.
+default_profile = "local"
+
+[profile.local]
+network = "local"
