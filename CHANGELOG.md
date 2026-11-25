@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### New projects call the SDK's 128-bit division
+
+`thruput new` now writes `-C llvm-args=-expand-div-rem-bits=128` into the
+project's `.cargo/config.toml`. A 128-bit `/` or `%` in a contract, such as
+on an `i128` amount, then calls the division routines in the SDK's rv32
+runtime. Without the flag LLVM expands each one inline: about 2 KiB of code
+per division, and several thousand gas each time it runs. Results are the
+same either way.
+
+- Existing projects keep their own `.cargo/config.toml`. To get the change,
+  add `"-C", "llvm-args=-expand-div-rem-bits=128",` to the
+  `[target.riscv32im-unknown-none-elf]` rustflags.
+- Needs SDK 0.62.0 or later, which new projects already pin.
+
 ## 0.47.0
 
 ### Contract views run at the chain's time

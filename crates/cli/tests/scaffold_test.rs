@@ -57,6 +57,7 @@ fn assert_scaffold_cargo_config(dir: &std::path::Path) {
         &config,
         &[
             "target-feature=+unaligned-scalar-mem,+relax",
+            "llvm-args=-expand-div-rem-bits=128",
             "link-arg=-Tthruput-rv32.ld",
             "link-arg=--icf=all",
             "link-arg=--relax-gp",

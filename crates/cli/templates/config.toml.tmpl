@@ -6,6 +6,12 @@ rustflags = [
     # `jal` (smaller code and one fewer executed instruction per relaxed
     # call). Output stays pure RV32IM.
     "-C", "target-feature=+unaligned-scalar-mem,+relax",
+    # Without this, LLVM expands every 128-bit `/` and `%` inline as a loop
+    # that produces one quotient bit per iteration: about 2 KiB of code per
+    # division, and several thousand gas each time it runs. Raising the
+    # threshold makes LLVM call `__udivti3` and its siblings instead, which
+    # the SDK's rv32 runtime defines (SDK 0.62.0 and later).
+    "-C", "llvm-args=-expand-div-rem-bits=128",
     "-C", "link-arg=-Tthruput-rv32.ld",
     "-C", "link-arg=-static",
     "-C", "link-arg=--no-dynamic-linker",
