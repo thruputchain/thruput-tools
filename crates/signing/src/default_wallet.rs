@@ -22,6 +22,13 @@ pub const DEFAULT_WALLET_EXECUTE_ENTRYPOINT: ContractEntrypointID =
 pub const DEFAULT_WALLET_DEPLOY_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new(0x6be0_cb0f_6de0_917a_u64.to_be_bytes());
 
+/// `execute`'s `mints` when it mints nothing: an empty list of encoded
+/// `AuthTokenNode`s.
+const NO_MINTS: &[&[u8]] = &[];
+/// A wallet call's `tokens` when it forwards none: an empty list of
+/// `WalletTokenRef`s. An empty list encodes the same whatever its elements.
+const NO_TOKENS: &[u32] = &[];
+
 /// Optional initialization of the newly deployed contract, called by the wallet.
 /// A failed invocation rolls back funding and deployment; return bytes are discarded.
 #[derive(Debug, Clone, Copy)]
@@ -53,13 +60,18 @@ pub struct BuildDefaultWalletCallTransaction<'a> {
 pub fn build_default_wallet_call_transaction(
     args: BuildDefaultWalletCallTransaction<'_>,
 ) -> Result<Transaction, SigningError> {
+    // `execute(mints, calls)`, as of hog-devnode 0.1.37: the wallet first
+    // mints `mints` as auth tokens, and each call names the tokens it
+    // forwards. This builder mints and forwards none. Earlier runtimes took
+    // `calls` alone, without the `tokens` field, and fail to decode this.
     let call = (
         args.target_address,
         args.target_entrypoint,
         args.target_gas_limit,
         args.target_calldata,
+        NO_TOKENS,
     );
-    let calldata = xdrs::cxs::encode(&[call].as_slice())
+    let calldata = xdrs::cxs::encode(&(NO_MINTS, [call].as_slice()))
         .map_err(|error| SigningError::XdrEncode(error.to_string()))?;
     Ok(build_call_transaction(BuildCallTransaction {
         invoked_address: args.account.address(),
