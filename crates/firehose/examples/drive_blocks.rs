@@ -29,40 +29,47 @@ fn domain_separator(name: &[u8]) -> Result<Vec<u8>> {
 }
 
 // Mirrors node-supervisor's proposal_txs_compatibility_hash, which matches
-// hogd/xdr/proposal_hash.h.
+// hogd/xdr/proposal_hash.h as of hog-devnode 0.1.37:
+//   SHA-256(cxs(DomainSeparator("ParallelBatch")) || cxs(BatchCommit))
+// A BatchCommit is an ext of 0, the batch's segment_tokens and segment_bytes,
+// and the array of the SHA-256 hashes of its segments.
 fn batch_hash(batch: &ParallelBatch) -> Result<[u8; 32]> {
     batch.validate().map_err(|e| e.to_string())?;
-    let mut index = batch.clone();
-    index.xdr.0.clear();
-    let mut hasher = Sha256::new();
-    hasher.update(domain_separator(b"ParallelBatch")?);
-    hasher.update(hash(&index)?);
+    let mut segment_hashes = Vec::with_capacity(batch.segment_bytes.0.len());
     let mut offset = 0;
     for &size in &batch.segment_bytes.0 {
         let end = offset + size as usize;
         let part = batch.xdr.0.get(offset..end).ok_or("bad segment range")?;
-        hasher.update(Sha256::digest(part));
+        segment_hashes.push(SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(part))));
         offset = end;
     }
     if offset != batch.xdr.len() {
         return Err("bad segment length".into());
     }
+    let mut hasher = Sha256::new();
+    hasher.update(domain_separator(b"ParallelBatch")?);
+    hasher.update(xdrs::cxs::encode(&ExtensionPoint::_0)?);
+    hasher.update(xdrs::cxs::encode(&batch.segment_tokens)?);
+    hasher.update(xdrs::cxs::encode(&batch.segment_bytes)?);
+    hasher.update(xdrs::cxs::encode(&xdrs::VecM::<SHA256Hash>(
+        segment_hashes,
+    ))?);
     Ok(hasher.finalize().into())
 }
 
+//   SHA-256(cxs(DomainSeparator("ProposalTxs")) || cxs(ProposalTxsCommit))
+// A ProposalTxsCommit is the ext of the ProposalTxs, then the hashes of its
+// two batches.
 fn proposal_hash(txs: &ProposalTxs) -> Result<ProposalTxsHash> {
-    let mut base = txs.clone();
-    let batches: [&mut ParallelBatch; 2] = [&mut base.signed_hash, &mut base.nondeterministic_data];
-    for batch in batches {
-        batch.segment_tokens.0.clear();
-        batch.segment_bytes.0.clear();
-        batch.xdr.0.clear();
-    }
     let mut hasher = Sha256::new();
     hasher.update(domain_separator(b"ProposalTxs")?);
-    hasher.update(hash(&base)?);
-    hasher.update(batch_hash(&txs.signed_hash)?);
-    hasher.update(batch_hash(&txs.nondeterministic_data)?);
+    hasher.update(xdrs::cxs::encode(&txs.ext)?);
+    hasher.update(xdrs::cxs::encode(&SHA256Hash::from(batch_hash(
+        &txs.signed_hash,
+    )?))?);
+    hasher.update(xdrs::cxs::encode(&SHA256Hash::from(batch_hash(
+        &txs.nondeterministic_data,
+    )?))?);
     Ok(ProposalTxsHash::new(SHA256Hash::from(<[u8; 32]>::from(
         hasher.finalize(),
     ))))
@@ -131,4 +138,39 @@ async fn main() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(interval)).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thruput_node_rpc::{
+        ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionHashBatch,
+    };
+    use xdrs::{BytesM, VecM};
+
+    #[test]
+    fn proposal_hash_matches_hogd_golden_vector() {
+        let txs = ProposalTxs {
+            ext: ExtensionPoint::_0,
+            signed_hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+                segment_tokens: VecM(vec![1, 2]),
+                segment_bytes: VecM(vec![4, 8]),
+                xdr: BytesM(vec![0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3]),
+            }),
+            nondeterministic_data: ParallelNondeterministicProposalDataBatch::new(ParallelBatch {
+                segment_tokens: VecM(vec![1]),
+                segment_bytes: VecM(vec![4]),
+                xdr: BytesM(vec![0xde, 0xad, 0xbe, 0xef]),
+            }),
+        };
+        assert_eq!(
+            proposal_hash(&txs).unwrap().into_inner(),
+            // hogd's Mempool.ProposalTxsCompatibilityHashGoldenVector.
+            SHA256Hash::from([
+                0x55, 0x6a, 0xf4, 0x47, 0x8a, 0x82, 0xe4, 0x99, 0x1f, 0x0e, 0x59, 0x42, 0xaf, 0xce,
+                0x8b, 0x66, 0xe6, 0x83, 0x4c, 0xb4, 0xec, 0xf8, 0x82, 0x65, 0xd8, 0xac, 0xa7, 0x48,
+                0x5d, 0x2d, 0x3e, 0xa3,
+            ])
+        );
+    }
 }
