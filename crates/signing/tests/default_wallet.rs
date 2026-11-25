@@ -4,6 +4,16 @@ use thruput_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
 use thruput_xdr::types::{ContractAddress, SHA256Hash};
 use xdr_common::BytesM;
 
+/// One `DefaultWallet.execute` child call, ending with the auth tokens it
+/// forwards.
+type Call = (
+    ContractAddress,
+    ContractEntrypointID,
+    u64,
+    Vec<u8>,
+    Vec<u32>,
+);
+
 #[test]
 fn native_call_binds_address_auth_and_canonical_child_layout() {
     let account = PubkeyAccount::from_public_key_bytes([17; 32], 9);
@@ -31,13 +41,6 @@ fn native_call_binds_address_auth_and_canonical_child_layout() {
     assert!(tx.contracts_to_deploy.is_empty());
     // Canonical WalletCall has fixed eight-byte entrypoint data. A small
     // selector catches accidental compact-integer encoding of that field.
-    type Call = (
-        ContractAddress,
-        ContractEntrypointID,
-        u64,
-        Vec<u8>,
-        Vec<u32>,
-    );
     let (mints, calls): (Vec<Vec<u8>>, Vec<Call>) =
         xdrs::cxs::decode(&tx.invocation.calldata).unwrap();
     assert!(mints.is_empty());
