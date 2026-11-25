@@ -584,7 +584,7 @@ Start each new walk with an empty cursor at the last stored row's height from
 that ascending scan, and deduplicate the reread block. Save rows and progress
 together. A descending scan's last row is not a forward checkpoint, and
 `latestBlock` is the indexer's head, not proof of processed data. See the
-[restart walkthrough](https://docs.thruput.network/typescript/events/#resume-without-missing-events).
+[restart walkthrough](https://www.thruput.network/docs/typescript/events/#resume-without-missing-events).
 
 A receipt timeout includes the last successfully observed status and inspection
 guidance to reuse the original profile and RPC endpoint. Endpoint URLs are omitted
