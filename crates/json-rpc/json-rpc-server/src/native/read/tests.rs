@@ -187,7 +187,6 @@ impl NativeSimulationPlane for Backend {
         let height = self.view_height();
         if let Some(requested) = request
             .min_state_block_height
-            .clone()
             .filter(|min| self.view_heights.is_some() && **min > height)
         {
             return Err(RpcServerError::ViewHeightUnavailable(

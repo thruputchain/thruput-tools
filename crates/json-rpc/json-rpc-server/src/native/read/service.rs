@@ -178,7 +178,7 @@ impl<C, R: super::NativeBlockPlane, V> NativeReadService<C, R, V> {
             }
             let result = self
                 .state
-                .native_block(context, request.block_height.clone())
+                .native_block(context, request.block_height)
                 .await?;
             if let Some(block) = &result {
                 if *block.block_height <= 0 || block.block_height != request.block_height {
@@ -209,7 +209,7 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                     .state
                     .native_contract_deployment(context, request.address)
                     .await?;
-                snapshot(&deployed.state_block_height)?;
+                snapshot(deployed.state_block_height)?;
                 if deployed.address != request.address {
                     return Err(invalid("deployment read returned another address"));
                 }
@@ -217,7 +217,7 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                     Some(out::EffectiveContract::ExplicitDeployment { contract })
                 } else if request.context == input::InvocationContext::Root {
                     let tip = self.chain.chain_tip(context).await?;
-                    snapshot(&tip.tip.height)?;
+                    snapshot(tip.tip.height)?;
                     if tip.tip.height != deployed.state_block_height {
                         continue;
                     }
@@ -255,7 +255,7 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                 .state
                 .native_contract_deployment(context, request.address)
                 .await?;
-            snapshot(&result.state_block_height)?;
+            snapshot(result.state_block_height)?;
             if result.address != request.address {
                 return Err(invalid("deployment read returned another address"));
             }
@@ -312,7 +312,7 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                 .state
                 .native_storage(context, request.address, StateKey::ContractData(key))
                 .await?;
-            snapshot(&result.state_block_height)?;
+            snapshot(result.state_block_height)?;
             Ok(result)
         })
         .await
@@ -326,7 +326,7 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                 .state
                 .native_storage(context, request.address, StateKey::FreeNativeTokenBalance)
                 .await?;
-            snapshot(&result.state_block_height)?;
+            snapshot(result.state_block_height)?;
             let raw_balance = match result.item {
                 None => 0,
                 Some(out::StorageItem::NonnegativeInt { value }) if value >= 0 => value,
@@ -352,7 +352,7 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                 .state
                 .native_registered_auth(context, request.address)
                 .await?;
-            snapshot(&result.state_block_height)?;
+            snapshot(result.state_block_height)?;
             if result.address != request.address {
                 return Err(invalid("authorization response has a different address"));
             }
@@ -461,15 +461,14 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                 request.gas_limit,
                 &self.config,
             )?;
-            let min = request.min_state_block_height.clone();
+            let min = request.min_state_block_height;
             self.await_view_height(context, || async {
                 let result = self
                     .simulation
                     .simulate(context, request.clone(), gas)
                     .await?;
-                snapshot(&result.state_block_height)?;
-                if let Some(requested) = min.clone().filter(|min| result.state_block_height < *min)
-                {
+                snapshot(result.state_block_height)?;
+                if let Some(requested) = min.filter(|min| result.state_block_height < *min) {
                     return Err(RpcServerError::ViewHeightUnavailable(
                         thruput_json_rpc_types::view::ViewHeightUnavailable {
                             requested,
@@ -522,7 +521,7 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                         )
                     })?;
             }
-            let min = request.min_state_block_height.clone();
+            let min = request.min_state_block_height;
             let result = self
                 .await_view_height(context, || {
                     self.simulation.simulate_batch(
@@ -533,7 +532,7 @@ impl<C: ChainPlane, R: NativeStatePlane, V: NativeSimulationPlane> NativeReadSer
                     )
                 })
                 .await?;
-            snapshot(&result.state_block_height)?;
+            snapshot(result.state_block_height)?;
             if result.results.len() != count {
                 return Err(RpcServerError::invalid_data(
                     super::BackendDataInvalidReason::InvalidCardinality,
@@ -561,13 +560,13 @@ const VIEW_HEIGHT_RETRY_MAX: Duration = Duration::from_millis(100);
 /// catching up, and the client gets `StateHeightUnavailable` to retry.
 const VIEW_HEIGHT_MAX_WAIT: Duration = Duration::from_secs(2);
 
-pub(super) fn snapshot(height: &BlockHeight) -> Result<(), RpcServerError> {
-    if **height == -1 {
+pub(super) fn snapshot(height: BlockHeight) -> Result<(), RpcServerError> {
+    if *height == -1 {
         return Err(RpcServerError::BackendUnavailable(
             "no committed snapshot".into(),
         ));
     }
-    if **height < 0 {
+    if *height < 0 {
         Err(invalid("negative committed snapshot height"))
     } else {
         Ok(())

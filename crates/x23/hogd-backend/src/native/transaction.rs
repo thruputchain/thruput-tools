@@ -25,20 +25,16 @@ mod status;
 pub use input::input_lookup;
 pub use status::sequence_status;
 
-fn valid_height(height: &BlockHeight) -> Result<(), NativeReadError> {
+fn valid_height(height: BlockHeight) -> Result<(), NativeReadError> {
     // Unlike a tip or state snapshot, a retained transaction must have a real
     // block identity. The pre-genesis -1 sentinel cannot describe commitment.
-    if **height < 0 {
+    if *height < 0 {
         return Err(invalid(Reason::InconsistentResult, "negative transaction height").into());
     }
     Ok(())
 }
 
-fn identity(
-    tx_hash: TxHash,
-    height: &BlockHeight,
-    log: &TxEventLog,
-) -> Result<(), NativeReadError> {
+fn identity(tx_hash: TxHash, height: BlockHeight, log: &TxEventLog) -> Result<(), NativeReadError> {
     if log.tx_hash != tx_hash_to_wire(tx_hash) {
         return Err(invalid(
             Reason::InconsistentResult,
@@ -117,10 +113,10 @@ pub fn receipt(
     height: BlockHeight,
     log: TxEventLog,
 ) -> Result<out::TransactionReceipt, NativeReadError> {
-    identity(tx_hash, &height, &log)?;
+    identity(tx_hash, height, &log)?;
     let observation = ReceiptObservation {
         transaction_hash: tx_hash,
-        block_height: height.clone(),
+        block_height: height,
     };
     let decode = || {
         let execution = execution(log.exec_result, log.root_output)?;
@@ -159,13 +155,13 @@ pub fn indexed_status(
 ) -> Result<Option<out::TransactionStatus>, NativeReadError> {
     match result {
         TxInfoResult::TxInfoFound { info } => {
-            identity(tx_hash, &info.height, &info.events)?;
+            identity(tx_hash, info.height, &info.events)?;
             Ok(Some(out::TransactionStatus::Committed {
                 block_height: info.height,
             }))
         }
         TxInfoResult::TxInfoRecentFailure { recent_failure } => {
-            valid_height(&recent_failure.attempt_height)?;
+            valid_height(recent_failure.attempt_height)?;
             Ok(Some(out::TransactionStatus::RecentFailure {
                 attempt_block_height: recent_failure.attempt_height,
                 cause: diagnostic::cause(recent_failure.cause)?,
@@ -216,9 +212,9 @@ pub fn scheduler_status(
             recent_failure: None,
         },
         Status::SchedulerTransactionSucceeded => {
-            valid_height(&value.height)?;
+            valid_height(value.height)?;
             out::TransactionStatus::Committed {
-                block_height: value.height.clone(),
+                block_height: value.height,
             }
         }
         Status::SchedulerTransactionRetry | Status::SchedulerTransactionDropped => {

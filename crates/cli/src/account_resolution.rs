@@ -516,13 +516,16 @@ mod tests {
         let profile = test_profile("alice", None, BTreeMap::new());
         let address = thruput_signing::strkey::format_contract_address(&[42; 32].into());
         let public = thruput_signing::strkey::format_public_key(&[42; 32]);
+        // Named, not `.into()`: since SDK 0.63.0 a `ContractAddress` compares
+        // with an `Address<C>` too, so the right-hand type no longer infers.
+        let expected = thruput_xdr::types::ContractAddress::from([42; 32]);
         assert_eq!(
             resolve_address_target(&profile, &address).unwrap(),
-            [42; 32].into()
+            expected
         );
         assert_eq!(
             resolve_contract_target(&profile, &address).unwrap(),
-            [42; 32].into()
+            expected
         );
         assert!(resolve_contract_target(&profile, &public).is_err());
         let stellar = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";

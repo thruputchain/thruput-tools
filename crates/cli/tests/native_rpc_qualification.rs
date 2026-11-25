@@ -255,7 +255,7 @@ async fn check_block(
 ) -> TestResult {
     let output::DecodedResponse::Known(Some(block)) = native
         .get_block_by_height(BlockQuery {
-            block_height: height.clone(),
+            block_height: *height,
         })
         .await?
     else {
@@ -280,7 +280,7 @@ async fn check_history(
     check_history_commands(fixture, receipt).await?;
     let start = input::HistoryStart::Ascending {
         anchor: input::AscendingAnchor::AtHeight {
-            block_height: receipt.block_height.clone(),
+            block_height: receipt.block_height,
         },
     };
     let output::DecodedResponse::Known(root) = native
@@ -296,7 +296,7 @@ async fn check_history(
     };
     let output::DecodedResponse::Known(block) = native
         .get_transactions_by_block(input::BlockPageRequest {
-            block_height: receipt.block_height.clone(),
+            block_height: receipt.block_height,
             start: Some(input::BlockStart {
                 order: IterationOrder::Descending,
             }),

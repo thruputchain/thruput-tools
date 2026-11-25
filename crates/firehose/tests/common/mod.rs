@@ -20,7 +20,7 @@ pub fn rehash(block: &mut EventIndexerPulledBlock) {
 /// The next block in the chain: one height on, parented by this one.
 pub fn next(block: &EventIndexerPulledBlock) -> EventIndexerPulledBlock {
     let mut next = block.clone();
-    next.block.payload.consensus_value.prev_hash = block.block.identity.consensus_hash.clone();
+    next.block.payload.consensus_value.prev_hash = block.block.identity.consensus_hash;
     next.block
         .payload
         .consensus_value

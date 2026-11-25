@@ -34,7 +34,7 @@ pub fn view_batch_query(
                 .into_iter()
                 .map(|call| {
                     let call_gas = call.gas_limit.unwrap_or(gas_limit);
-                    view_query(call.into(), call_gas, block_timepoint.clone())
+                    view_query(call.into(), call_gas, *block_timepoint)
                 })
                 .collect::<Result<_, _>>()?,
         ),
@@ -53,7 +53,7 @@ pub fn restate_view_batch(
 ) -> Result<(), RpcServerError> {
     query.budget_millis = budget_millis(remaining)?;
     for call in &mut query.calls.0 {
-        call.block_timepoint = block_timepoint.clone();
+        call.block_timepoint = *block_timepoint;
     }
     Ok(())
 }

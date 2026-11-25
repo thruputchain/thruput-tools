@@ -186,7 +186,7 @@ impl BatchProcessor for StorageReadProcessor {
                         let answer = responses
                             .next()
                             .map(|response| ItemAnswer {
-                                block_height: block_height.clone(),
+                                block_height,
                                 item: response,
                                 complete_batch,
                             })

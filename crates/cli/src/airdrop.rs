@@ -418,7 +418,7 @@ async fn request_local_airdrop(
     .map_err(response_error)?;
     let receipt = poll_receipt(
         &client,
-        prepared.network_hash.clone().into_inner().into(),
+        prepared.network_hash.into_inner().into(),
         response.transaction_hash,
         None,
         ReceiptPollConfig::default(),
@@ -840,7 +840,7 @@ async fn request_remote_airdrop(
             // The funding call is never repeated; only read the supplied transaction.
             let receipt = poll_receipt(
                 &client,
-                prepared.network_hash.clone().into_inner().into(),
+                prepared.network_hash.into_inner().into(),
                 hash,
                 None,
                 ReceiptPollConfig::default(),

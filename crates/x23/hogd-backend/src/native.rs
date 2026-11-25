@@ -23,14 +23,14 @@ fn invalid(reason: BackendDataInvalidReason, message: &str) -> RpcServerError {
     RpcServerError::invalid_data(reason, message)
 }
 
-fn height(value: &BlockHeight) -> Result<(), RpcServerError> {
+fn height(value: BlockHeight) -> Result<(), RpcServerError> {
     // hogd's initial DbTip uses -1 until genesis commits.
-    if **value == -1 {
+    if *value == -1 {
         return Err(RpcServerError::BackendUnavailable(
             "no committed snapshot".into(),
         ));
     }
-    if **value < 0 {
+    if *value < 0 {
         return Err(invalid(
             BackendDataInvalidReason::InconsistentResult,
             "negative committed snapshot height",

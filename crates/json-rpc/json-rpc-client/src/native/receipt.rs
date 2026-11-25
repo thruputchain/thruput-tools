@@ -139,7 +139,7 @@ impl ReceiptEvidence {
         };
         if let Some(known) = known_commitment {
             let checked = if known.network_hash == network_hash {
-                evidence.commit(known.transaction_hash, &known.block_height)
+                evidence.commit(known.transaction_hash, known.block_height)
             } else {
                 Err("commitment belongs to a different network")
             };
@@ -157,27 +157,27 @@ impl ReceiptEvidence {
         }
     }
 
-    fn commit(&mut self, hash: TxHash, height: &BlockHeight) -> Result<(), &'static str> {
+    fn commit(&mut self, hash: TxHash, height: BlockHeight) -> Result<(), &'static str> {
         if hash != self.transaction_hash {
             return Err("transaction hash does not match the requested hash");
         }
-        if **height < 0 {
+        if *height < 0 {
             return Err("commitment height must be nonnegative");
         }
         if self
             .commitment
             .as_ref()
-            .is_some_and(|known| known.block_height != *height)
+            .is_some_and(|known| known.block_height != height)
         {
             return Err("commitment height conflicts with prior evidence");
         }
         self.commitment = Some(KnownCommitment {
             network_hash: self.network_hash,
             transaction_hash: hash,
-            block_height: height.clone(),
+            block_height: height,
         });
         self.last_status = Some(TransactionStatus::Committed {
-            block_height: height.clone(),
+            block_height: height,
         });
         Ok(())
     }
@@ -265,7 +265,7 @@ where
             }
             Err(error) => {
                 if let Some((hash, height)) = receipt_observation(&error)
-                    && let Err(message) = evidence.commit(hash, height)
+                    && let Err(message) = evidence.commit(hash, *height)
                 {
                     evidence.last_lookup_error = Some(error);
                     return Err(evidence.fail(ReceiptPollCause::Invalid { message, raw: None }));
@@ -295,7 +295,7 @@ fn finish_receipt(
     match result {
         DecodedResponse::Known(Some(receipt)) => {
             evidence
-                .commit(receipt.transaction_hash, &receipt.block_height)
+                .commit(receipt.transaction_hash, receipt.block_height)
                 .map_err(|message| ReceiptPollCause::Invalid {
                     message,
                     raw: serde_json::to_value(&receipt).ok(),
@@ -306,7 +306,7 @@ fn finish_receipt(
             // The transport validated known fields before declaring support.
             // Re-read those fields to retain commitment with an unknown outcome.
             let checked = match serde_json::from_value::<TransactionReceipt>(raw.clone()) {
-                Ok(receipt) => evidence.commit(receipt.transaction_hash, &receipt.block_height),
+                Ok(receipt) => evidence.commit(receipt.transaction_hash, receipt.block_height),
                 Err(_) => Err("unsupported receipt has invalid identity or shape"),
             };
             if let Err(message) = checked {
@@ -335,7 +335,7 @@ fn observe_status(
         DecodedResponse::Known(status) => {
             if let TransactionStatus::Committed { block_height } = &status {
                 evidence
-                    .commit(evidence.transaction_hash, block_height)
+                    .commit(evidence.transaction_hash, *block_height)
                     .map_err(|message| ReceiptPollCause::Invalid {
                         message,
                         raw: serde_json::to_value(&status).ok(),

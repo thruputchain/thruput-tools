@@ -1208,11 +1208,11 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
         let client = self.client().await?;
         poll_receipt(
             &client,
-            self.network_hash.clone().into_inner().into(),
+            self.network_hash.into_inner().into(),
             tx_hash,
             committed_height.map(|height| {
                 thruput_json_rpc_client::native::receipt::KnownCommitment {
-                    network_hash: self.network_hash.clone().into_inner().into(),
+                    network_hash: self.network_hash.into_inner().into(),
                     transaction_hash: tx_hash,
                     block_height: height.into(),
                 }

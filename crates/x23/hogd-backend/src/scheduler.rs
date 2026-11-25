@@ -67,7 +67,7 @@ pub fn transaction_outcome(
         Status::SchedulerTransactionNotFound => return Ok(None),
         Status::SchedulerTransactionPending => TransactionStatus::Pending,
         Status::SchedulerTransactionSucceeded => TransactionStatus::Committed {
-            height: outcome.height.clone(),
+            height: outcome.height,
         },
         Status::SchedulerTransactionRetry | Status::SchedulerTransactionDropped => {
             let source = match outcome.error_source {
@@ -110,7 +110,7 @@ pub fn chain_tip(service: &str, value: &ConsensusValue) -> Result<ChainTip, RpcS
         ))
     })?;
     Ok(ChainTip {
-        height: value.proposal_header.block_height.clone(),
+        height: value.proposal_header.block_height,
         block_hash,
     })
 }
@@ -123,7 +123,7 @@ pub fn tip_reading(service: &str, db_tip: DbTip) -> Result<TipReading, RpcServer
         network_config,
         ..
     } = db_tip;
-    let block_timepoint = value.proposal_header.block_timepoint.clone();
+    let block_timepoint = value.proposal_header.block_timepoint;
     Ok(TipReading::new(chain_tip(service, &value)?, network_config)
         .with_block_timepoint(block_timepoint))
 }

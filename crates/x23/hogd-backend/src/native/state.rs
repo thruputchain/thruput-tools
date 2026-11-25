@@ -12,7 +12,7 @@ use super::{height, invalid};
 pub fn single_item(
     payload: DbGatewayPayload,
 ) -> Result<(BlockHeight, DbGatewayItemResult), RpcServerError> {
-    height(&payload.block_height)?;
+    height(payload.block_height)?;
     if payload.items.0.len() != 1 {
         return Err(invalid(
             Reason::InvalidCardinality,
@@ -33,7 +33,7 @@ pub fn storage(
     state_block_height: BlockHeight,
     item: DbGatewayItemResult,
 ) -> Result<out::StorageResult, RpcServerError> {
-    height(&state_block_height)?;
+    height(state_block_height)?;
     let item = crate::db_gateway::stored_item("DbGateway", item)?
         .map(storage_item)
         .transpose()?;
@@ -82,7 +82,7 @@ pub fn registered_auth(
     state_block_height: BlockHeight,
     item: DbGatewayItemResult,
 ) -> Result<out::RegisteredAuthResult, RpcServerError> {
-    height(&state_block_height)?;
+    height(state_block_height)?;
     let configuration = match crate::db_gateway::stored_item("DbGateway", item)? {
         None => None,
         Some(WireStorageItem::kItemTypeAuthData { auth_data }) => Some(out::AuthConfiguration {

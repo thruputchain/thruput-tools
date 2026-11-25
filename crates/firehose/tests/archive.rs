@@ -128,7 +128,7 @@ fn rejects_gaps_rewrites_wrong_parent_and_invalid_epoch() {
     let mut gap = next(&next(&block));
     assert!(store.append(&gap).is_err());
     gap = next(&block);
-    gap.block.payload.consensus_value.prev_hash = block.origin.first_prev_hash.clone();
+    gap.block.payload.consensus_value.prev_hash = block.origin.first_prev_hash;
     rehash(&mut gap);
     assert!(store.append(&gap).is_err());
     gap = next(&block);
@@ -160,9 +160,8 @@ fn epoch_boundary_and_empty_origin_survive_restart() {
         .payload
         .consensus_value
         .proposal_header
-        .block_height
-        .clone();
-    second.origin.first_prev_hash = block.block.identity.consensus_hash.clone();
+        .block_height;
+    second.origin.first_prev_hash = block.block.identity.consensus_hash;
     store.adopt(&second.origin).unwrap();
     store.append(&second).unwrap();
     let expected = store.cursor(false);
@@ -254,8 +253,7 @@ async fn catchup_refuses_archive_corruption_after_recovery() {
         let store = Store::open(dir.path()).unwrap();
         let hub = Hub::new(dir.path().to_owned(), store.height(), config());
         // Keep valid XDR and the expected height, but invalidate its commitment.
-        original.block.payload.consensus_value.prev_hash =
-            original.block.identity.consensus_hash.clone();
+        original.block.payload.consensus_value.prev_hash = original.block.identity.consensus_hash;
         let bytes = if malformed {
             vec![0]
         } else {

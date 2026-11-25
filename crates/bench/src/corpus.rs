@@ -244,7 +244,7 @@ async fn prepare_inner(
         *progress = format!("confirming hash {} of {}", index + 1, corpus.hashes.len());
         let mut committed_height = None;
         loop {
-            let status: TransactionStatus = if let Some(block_height) = committed_height.clone() {
+            let status: TransactionStatus = if let Some(block_height) = committed_height {
                 TransactionStatus::Committed { block_height }
             } else {
                 supported_response(
@@ -262,7 +262,7 @@ async fn prepare_inner(
                 block_height: height,
             } = status
             {
-                committed_height = Some(height.clone());
+                committed_height = Some(height);
                 let receipt: Option<TransactionReceipt> = supported_response(
                     "getTransactionReceipt",
                     rpc(

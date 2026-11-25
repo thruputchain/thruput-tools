@@ -124,10 +124,10 @@ pub async fn native_simulate(
     gas_limit: u64,
 ) -> Result<thruput_json_rpc_types::responses::SimulationResult, RpcServerError> {
     let client = view_client(ctx, "simulateInvocation").await?;
-    let min = request.min_state_block_height.clone();
+    let min = request.min_state_block_height;
     let request = thruput_hogd_backend::native::simulation_request(request)?;
     let stated = shared_view::wall_clock_timepoint();
-    let mut query = shared_view::view_query(request, gas_limit, stated.clone())?;
+    let mut query = shared_view::view_query(request, gas_limit, stated)?;
     let deadline = view_deadline(ctx, context)?;
     let mut result = view_result_from_client(&client, &ctx.metrics, &query, deadline).await?;
     if matches!(result, ViewGatewayResult::ViewGatewayInvalidInput { .. })

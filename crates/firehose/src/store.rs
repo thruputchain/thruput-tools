@@ -246,7 +246,7 @@ impl Store {
         let floor = IndexerInitializedProgress {
             origin: first.origin.clone(),
             contiguous_height: (height - 1).into(),
-            last_consensus_hash: first.block.payload.consensus_value.prev_hash.clone(),
+            last_consensus_hash: first.block.payload.consensus_value.prev_hash,
         };
         let floor_path = self.directory.join("floor.xdr");
         let (old_bytes, old_allocated) = if floor_path.exists() {
@@ -325,7 +325,7 @@ impl Store {
                 return Ok(());
             }
             if origin.epoch_sequence <= previous.origin.epoch_sequence
-                || previous.contiguous_height.checked_add(1) != Some(origin.first_height.clone())
+                || previous.contiguous_height.checked_add(1) != Some(origin.first_height)
                 || origin.first_prev_hash != previous.last_consensus_hash
             {
                 return Err(invalid("epoch does not continue stored cursor"));
@@ -333,7 +333,7 @@ impl Store {
         }
         self.progress = Some(IndexerInitializedProgress {
             contiguous_height: (*origin.first_height - 1).into(),
-            last_consensus_hash: origin.first_prev_hash.clone(),
+            last_consensus_hash: origin.first_prev_hash,
             origin,
         });
         Ok(())
@@ -371,8 +371,7 @@ impl Store {
             return Err(invalid("negative epoch first height"));
         }
         if let Some(previous) = progress {
-            if previous.contiguous_height.checked_add(1)
-                != Some(value.proposal_header.block_height.clone())
+            if previous.contiguous_height.checked_add(1) != Some(value.proposal_header.block_height)
                 || value.prev_hash != previous.last_consensus_hash
             {
                 return Err(invalid("block gap or previous hash mismatch"));
@@ -404,9 +403,8 @@ impl Store {
                 .payload
                 .consensus_value
                 .proposal_header
-                .block_height
-                .clone(),
-            last_consensus_hash: pulled.block.identity.consensus_hash.clone(),
+                .block_height,
+            last_consensus_hash: pulled.block.identity.consensus_hash,
         }
     }
 

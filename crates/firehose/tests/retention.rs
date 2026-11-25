@@ -152,9 +152,8 @@ fn measure_restart_watermark() {
         .payload
         .consensus_value
         .proposal_header
-        .block_height
-        .clone();
-    block.origin.first_prev_hash = block.block.payload.consensus_value.prev_hash.clone();
+        .block_height;
+    block.origin.first_prev_hash = block.block.payload.consensus_value.prev_hash;
     let mut store = Store::open(dir.path()).unwrap();
     store.adopt(&block.origin).unwrap();
     for _ in 0..10_000 {
@@ -184,7 +183,7 @@ fn warm_checkpoint_verifies_new_tail_and_preserves_floor_epoch_origin() {
     let mut fourth = next(&next(&next(&fixture())));
     fourth.origin.epoch_sequence += 1;
     fourth.origin.first_height = 4.into();
-    fourth.origin.first_prev_hash = fourth.block.payload.consensus_value.prev_hash.clone();
+    fourth.origin.first_prev_hash = fourth.block.payload.consensus_value.prev_hash;
     store.append(&fourth).unwrap();
     store.prune(budget(1)).unwrap();
     let cursor = store.cursor(false);

@@ -1215,7 +1215,7 @@ async fn commit_proposed_block(
 ) -> Result<DriveOutcome, BlockProductionError> {
     let block_id = proposed_block.block_id;
     let batch_xdr_bytes = proposed_block.txs.xdr.0.len();
-    let height = proposed_block.proposal.header.block_height.clone();
+    let height = proposed_block.proposal.header.block_height;
     let timepoint = *proposed_block.proposal.header.block_timepoint;
     let value = consensus_value(
         &parent_value,

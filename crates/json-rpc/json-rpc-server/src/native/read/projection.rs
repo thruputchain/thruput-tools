@@ -6,9 +6,9 @@ use thruput_json_rpc_types::{network_config as legacy, responses as out};
 pub(super) fn tip(
     value: &thruput_json_rpc_types::block::ChainTip,
 ) -> Result<out::ChainTip, RpcServerError> {
-    super::service::snapshot(&value.height)?;
+    super::service::snapshot(value.height)?;
     Ok(out::ChainTip {
-        block_height: value.height.clone(),
+        block_height: value.height,
         block_hash: value.block_hash,
     })
 }
