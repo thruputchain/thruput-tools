@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   gasAmount,
+  isThruputError,
   toBase58,
-  TransactionObservationError,
 } from "@thruputchain/client";
 import { Counter } from "./generated/counter";
 import { getSession } from "./wallet";
@@ -91,8 +91,8 @@ function App() {
     } catch (cause) {
       setMessage("");
       setError(
-        cause instanceof TransactionObservationError
-          ? `Confirmation unknown for ${toBase58(cause.transactionHash)}. Inspect this transaction before submitting again.`
+        isThruputError(cause) && cause.transaction?.outcome === "unknown"
+          ? `Confirmation unknown for ${toBase58(cause.transaction.hash)}. Inspect this transaction before submitting again.`
           : cause instanceof Error
             ? cause.message
             : "The operation failed.",
