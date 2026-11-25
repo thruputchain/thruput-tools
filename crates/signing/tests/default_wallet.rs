@@ -31,23 +31,33 @@ fn native_call_binds_address_auth_and_canonical_child_layout() {
     assert!(tx.contracts_to_deploy.is_empty());
     // Canonical WalletCall has fixed eight-byte entrypoint data. A small
     // selector catches accidental compact-integer encoding of that field.
-    let calls: Vec<(ContractAddress, ContractEntrypointID, u64, Vec<u8>)> =
+    type Call = (
+        ContractAddress,
+        ContractEntrypointID,
+        u64,
+        Vec<u8>,
+        Vec<u32>,
+    );
+    let (mints, calls): (Vec<Vec<u8>>, Vec<Call>) =
         xdrs::cxs::decode(&tx.invocation.calldata).unwrap();
+    assert!(mints.is_empty());
     assert_eq!(
         calls,
         vec![(
             target,
             ContractEntrypointID::from(63_u64.to_be_bytes()),
             64,
-            vec![0xab, 0xcd]
+            vec![0xab, 0xcd],
+            vec![]
         )]
     );
-    // CXS: one element, 32-byte target, 8-byte selector, gas 64 (3f 40),
-    // two calldata bytes. Derived from the canonical ABI, not its encoder.
-    let mut expected = vec![1];
+    // CXS: no mints, then one call: 32-byte target, 8-byte selector, gas 64
+    // (3f 40), two calldata bytes, no tokens. Derived from the canonical
+    // ABI, not its encoder.
+    let mut expected = vec![0, 1];
     expected.extend_from_slice(&[22; 32]);
     expected.extend_from_slice(&63_u64.to_be_bytes());
-    expected.extend_from_slice(&[0x3f, 0x40, 2, 0xab, 0xcd]);
+    expected.extend_from_slice(&[0x3f, 0x40, 2, 0xab, 0xcd, 0]);
     assert_eq!(tx.invocation.calldata.0, expected);
     assert_ne!(
         account.address(),

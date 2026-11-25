@@ -6,17 +6,25 @@
 //! Nothing regenerates it: every byte string must be reproduced exactly,
 //! and a disagreement is a bug in the signer or the protocol bindings, not a
 //! reason to edit the file.
+//!
+//! The vectors' wallet calldata is `DefaultWallet.execute` as it was before
+//! hog-devnode 0.1.37: the calls alone, with no `mints` argument and no
+//! `tokens` in a call. `build_default_wallet_call_transaction` now writes the
+//! later form, so these transactions are built from the calldata the vectors
+//! record. What they pin is unchanged: account addresses, the signing
+//! preimage, signatures and envelope encoding. `tests/default_wallet.rs`
+//! pins the current calldata.
 
 use serde::Deserialize;
-use thruput_signing::default_wallet::{
-    BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction,
-};
+use thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT;
 use thruput_signing::{
-    LocalSigner, MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SIGNATURE_LEN, MlDsa65Signer,
-    NATIVE_TOKEN_TRANSFER_ENTRYPOINT, PubkeyAccount, SchemeSigner, SignTransactionParams, Signer,
-    encode_signed_transaction_xdr, encode_transaction_xdr, native_token_transfer_calldata,
-    sign_transaction, transaction_hash, verify_mldsa65,
+    BuildCallTransaction, LocalSigner, MLDSA65_PUBLIC_KEY_LEN, MLDSA65_SIGNATURE_LEN,
+    MlDsa65Signer, NATIVE_TOKEN_TRANSFER_ENTRYPOINT, PubkeyAccount, SchemeSigner,
+    SignTransactionParams, Signer, build_call_transaction, encode_signed_transaction_xdr,
+    encode_transaction_xdr, native_token_transfer_calldata, sign_transaction, transaction_hash,
+    verify_mldsa65,
 };
+use thruput_xdr::contract::ContractEntrypointID;
 use thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN;
 use thruput_xdr::transaction::SignedTransaction;
 use thruput_xdr::types::{ContractAddress, NetworkHash, PublicKey, SHA256Hash, Signature};
@@ -60,6 +68,8 @@ struct Signing {
 #[derive(Deserialize)]
 struct VectorTransaction {
     invoked_address: String,
+    entrypoint: String,
+    calldata: String,
     gas_limit: String,
     block_expiry_height: String,
     uniquifier_nonce: String,
@@ -198,17 +208,33 @@ fn default_wallet_transactions_build_sign_and_encode_identically() {
                 vector.name
             );
         }
-        let unsigned = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
-            account: &account,
-            target_address: ContractAddress::new(bytes(&call.target)),
-            target_entrypoint: bytes::<8>(&call.entrypoint).into(),
-            target_calldata: &target_calldata,
-            target_gas_limit: call.gas_limit.parse().expect("bug: decimal gas"),
+        // The recorded calldata is the one call, in the earlier form.
+        let calldata = hex::decode(&tx.calldata).expect("bug: calldata hex");
+        let recorded_call = (
+            ContractAddress::new(bytes(&call.target)),
+            ContractEntrypointID::from(bytes::<8>(&call.entrypoint)),
+            call.gas_limit.parse::<u64>().expect("bug: decimal gas"),
+            target_calldata.as_slice(),
+        );
+        assert_eq!(
+            xdrs::cxs::encode(&[recorded_call].as_slice()).unwrap(),
+            calldata,
+            "{}",
+            vector.name
+        );
+        assert_eq!(
+            bytes::<8>(&tx.entrypoint),
+            <[u8; 8]>::try_from(DEFAULT_WALLET_EXECUTE_ENTRYPOINT.as_ref()).unwrap()
+        );
+        let unsigned = build_call_transaction(BuildCallTransaction {
+            invoked_address: account.address(),
+            entrypoint: DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
+            calldata,
             gas_limit: tx.gas_limit.parse().expect("bug: decimal gas"),
             block_expiry_height: tx.block_expiry_height.parse().expect("bug: decimal height"),
             nonce: tx.uniquifier_nonce.parse().expect("bug: decimal nonce"),
-        })
-        .unwrap();
+            auth_claim: account.auth_claim(),
+        });
         assert_eq!(
             hex::encode(encode_transaction_xdr(&unsigned).unwrap()),
             vector.transaction_xdr,

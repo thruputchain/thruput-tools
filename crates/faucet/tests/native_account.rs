@@ -65,8 +65,17 @@ fn assert_native_transfers(
             DEFAULT_WALLET_EXECUTE_ENTRYPOINT
         );
         assert!(signed.tx.contracts_to_deploy.is_empty());
-        let calls: Vec<(ContractAddress, ContractEntrypointID, u64, Vec<u8>)> =
+        // `execute(mints, calls)`; a call ends with the tokens it forwards.
+        type Call = (
+            ContractAddress,
+            ContractEntrypointID,
+            u64,
+            Vec<u8>,
+            Vec<u32>,
+        );
+        let (mints, calls): (Vec<Vec<u8>>, Vec<Call>) =
             xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
+        assert!(mints.is_empty());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, descriptor.native_token.token_address.0);
         assert_eq!(
