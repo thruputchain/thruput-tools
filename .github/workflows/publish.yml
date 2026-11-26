@@ -139,7 +139,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-hack
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-hack@0.6.45
 
@@ -190,7 +190,7 @@ jobs:
           scripts/smoke-managed-toolchain.sh
 
       - name: Publish dry run
-        uses: thruputchain/actions/cargo-publish-dry-run@af495ed44f45e032e437b2a8f6e6550a4b9390cc
+        uses: thruputchain/actions/cargo-publish-dry-run@40a1703a22420733850a888d6503cdb8e33940d3
         with:
           registry-name: crates-io
           packages: ${{ env.PACKAGES }}
@@ -199,7 +199,7 @@ jobs:
       # version bump.
       - name: Check release
         id: check
-        uses: thruputchain/actions/crates-io-publish@af495ed44f45e032e437b2a8f6e6550a4b9390cc
+        uses: thruputchain/actions/crates-io-publish@40a1703a22420733850a888d6503cdb8e33940d3
         with:
           mode: check
           packages: ${{ env.PACKAGES }}
@@ -208,14 +208,14 @@ jobs:
       - name: Tag release
         id: tag
         if: ${{ !inputs.dry-run && steps.check.outputs.release == 'true' }}
-        uses: thruputchain/actions/cargo-release-tag@af495ed44f45e032e437b2a8f6e6550a4b9390cc
+        uses: thruputchain/actions/cargo-release-tag@40a1703a22420733850a888d6503cdb8e33940d3
         with:
           packages: ${{ env.PACKAGES }}
           github-token: ${{ github.token }}
 
       - name: Publish
         if: ${{ !inputs.dry-run && steps.check.outputs.release == 'true' }}
-        uses: thruputchain/actions/crates-io-publish@af495ed44f45e032e437b2a8f6e6550a4b9390cc
+        uses: thruputchain/actions/crates-io-publish@40a1703a22420733850a888d6503cdb8e33940d3
         with:
           mode: publish
           packages: ${{ env.PACKAGES }}
