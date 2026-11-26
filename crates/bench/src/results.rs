@@ -127,6 +127,14 @@ pub(super) struct BenchConfiguration {
     pub(super) accounts: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) account_fixture_sha256: Option<String>,
+    /// Expiry height signed into submitted transactions; it sets how long the
+    /// chain keeps their replay-cache entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_expiry_height: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tx_kind: Option<crate::cli::TxKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) transfer_amount_raw: Option<u64>,
     pub(super) transaction_batch_size: usize,
     pub(super) max_skew_seconds: f64,
     pub(super) request_timeout_ms: u64,
