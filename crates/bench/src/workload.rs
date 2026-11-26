@@ -50,8 +50,51 @@ pub(super) fn generate_tx_batch(
     accounts: &[BenchAccount],
     network_hash: &NetworkHash,
     nonce_start: u64,
+    block_expiry_height: i64,
 ) -> Result<Vec<PreparedTransaction>, BenchError> {
-    (0..count)
+    // Signing dominates setup for large batches; split the index range across
+    // threads. Each index still maps to the same account and nonce.
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(count.max(1));
+    let chunk = count.div_ceil(threads.max(1)).max(1);
+    let parts: Vec<Result<Vec<PreparedTransaction>, BenchError>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..count)
+            .step_by(chunk)
+            .map(|start| {
+                let end = (start + chunk).min(count);
+                scope.spawn(move || {
+                    generate_tx_range(
+                        start..end,
+                        accounts,
+                        network_hash,
+                        nonce_start,
+                        block_expiry_height,
+                    )
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("bug: signing thread panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(count);
+    for part in parts {
+        out.extend(part?);
+    }
+    Ok(out)
+}
+
+fn generate_tx_range(
+    range: std::ops::Range<usize>,
+    accounts: &[BenchAccount],
+    network_hash: &NetworkHash,
+    nonce_start: u64,
+    block_expiry_height: i64,
+) -> Result<Vec<PreparedTransaction>, BenchError> {
+    range
         .map(|i| {
             let idx = i % accounts.len();
             let account = &accounts[idx];
@@ -70,7 +113,7 @@ pub(super) fn generate_tx_batch(
                     target_calldata: &calldata,
                     gas_limit: 20_000_000,
                     target_gas_limit: 10_000_000,
-                    block_expiry_height: 10_000_000,
+                    block_expiry_height,
                     nonce: nonce_start.checked_add(i as u64).ok_or_else(|| {
                         BenchError::InvalidConfiguration("seed nonce range overflows u64".into())
                     })?,
@@ -277,7 +320,7 @@ pub(super) fn validate_method(method: &str) -> Result<(), BenchError> {
 mod tests {
     use serde_json::json;
     use thruput_json_rpc_types::base58::Base58;
-    use thruput_xdr::types::{Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash};
+    use thruput_xdr::types::{BlockHeight, Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash};
 
     use super::*;
 
@@ -383,11 +426,53 @@ mod tests {
     }
 
     #[test]
+    fn parallel_batch_keeps_index_order_accounts_nonces_and_expiry() {
+        // Enough transactions to span every signing thread with uneven chunks.
+        let accounts = transaction_inputs_for_method(
+            "sendTransaction",
+            Some(&manifest_with_accounts(3)),
+            3,
+            None,
+        )
+        .unwrap();
+        let network = manifest().network_hash.to_network_hash();
+        let count = std::thread::available_parallelism().map_or(1, |n| n.get()) * 7 + 5;
+        let (nonce_start, expiry) = (1_000_000, 123_456);
+        let batch = generate_tx_batch(count, &accounts, &network, nonce_start, expiry).unwrap();
+        assert_eq!(batch.len(), count);
+        for (i, prepared) in batch.iter().enumerate() {
+            let bytes = hex::decode(prepared.hex.trim_start_matches("0x")).unwrap();
+            let signed: thruput_xdr::transaction::SignedTransaction =
+                xdrs::txs::decode(&bytes).unwrap();
+            let account = &accounts[i % accounts.len()];
+            let native =
+                PubkeyAccount::from_public_key_bytes(account.signer.verifying_key_bytes(), 0);
+            assert_eq!(
+                signed.tx.invocation.invoked_address,
+                native.address(),
+                "account at {i}"
+            );
+            assert_eq!(
+                signed.tx.uniquifier.nonce,
+                nonce_start + i as u64,
+                "nonce at {i}"
+            );
+            assert_eq!(
+                signed.tx.uniquifier.block_expiry_height,
+                BlockHeight::from(expiry),
+                "expiry at {i}"
+            );
+            let hash = TxHash(Base58(transaction_hash(&signed.tx).unwrap()));
+            assert_eq!(hash, prepared.hash, "hash at {i}");
+        }
+    }
+
+    #[test]
     fn send_raw_transaction_uses_native_execute_entrypoint() {
         let accounts =
             transaction_inputs_for_method("sendTransaction", Some(&manifest()), 1, None).unwrap();
         let network = manifest().network_hash.to_network_hash();
-        let transactions = generate_tx_batch(1, &accounts, &network, 42).unwrap();
+        let transactions = generate_tx_batch(1, &accounts, &network, 42, 10_000_000).unwrap();
         let bytes = hex::decode(transactions[0].hex.trim_start_matches("0x")).unwrap();
         let signed: thruput_xdr::transaction::SignedTransaction =
             xdrs::txs::decode(&bytes).unwrap();
