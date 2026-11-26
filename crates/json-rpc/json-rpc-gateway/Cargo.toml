@@ -45,7 +45,7 @@ bytes = { workspace = true }
 jsonrpsee = { workspace = true }
 axum = { workspace = true }
 opentelemetry = { workspace = true }
-opentelemetry-otlp = { workspace = true }
+thruput-telemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }

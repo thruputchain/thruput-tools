@@ -184,7 +184,6 @@ fn validate_scheduler_network_hash(
             .value
             .proposal_header
             .network_hash
-            .clone()
             .into_inner()
             .as_ref(),
     );

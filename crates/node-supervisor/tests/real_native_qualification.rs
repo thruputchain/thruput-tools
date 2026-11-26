@@ -122,7 +122,7 @@ async fn exercise(
         .network_hash
         .to_network_hash();
     require(
-        network.0 == signing_network.clone().into_inner(),
+        network.0 == signing_network.into_inner(),
         "native network differs from validated manifest",
     )?;
     let recipient = random_signer()?;
@@ -135,8 +135,7 @@ async fn exercise(
         .ok_or_else(|| std::io::Error::other("authoritative execution config missing"))?
         .storage_costs;
     let expected_free_balance = i128::try_from(AMOUNT)? - i128::from(costs.balance_cost);
-    let receipt =
-        send_transfer(node, &native, sender, recipient, signing_network.clone(), 1).await?;
+    let receipt = send_transfer(node, &native, sender, recipient, signing_network, 1).await?;
     require(
         matches!(receipt.execution, output::ReceiptExecution::Return { .. }),
         "transfer execution did not return successfully",
@@ -173,8 +172,7 @@ async fn exercise(
         funded,
     )
     .await?;
-    let second =
-        send_transfer(node, &native, sender, recipient, signing_network.clone(), 2).await?;
+    let second = send_transfer(node, &native, sender, recipient, signing_network, 2).await?;
     check_history(
         &native,
         Base58(account.address()),
@@ -182,16 +180,15 @@ async fn exercise(
         [&receipt, &second],
     )
     .await?;
-    check_block_continuations(node, &native, sender, recipient, signing_network.clone()).await?;
-    check_invalid_signature_rejected(&native, sender, recipient, signing_network.clone()).await?;
-    check_unfunded_deployment_conflict(node, &native, sender, signing_network.clone(), deployable)
-        .await?;
+    check_block_continuations(node, &native, sender, recipient, signing_network).await?;
+    check_invalid_signature_rejected(&native, sender, recipient, signing_network).await?;
+    check_unfunded_deployment_conflict(node, &native, sender, signing_network, deployable).await?;
     for (atomic, salt, nonce) in [(false, 2, 3_000), (true, 3, 3_100)] {
         check_deployment_accounting(
             node,
             &native,
             sender,
-            signing_network.clone(),
+            signing_network,
             deployable,
             Deployment {
                 atomic,
@@ -248,7 +245,7 @@ async fn check_deployment_accounting(
             native,
             sender,
             Base58(account.address()),
-            signing_network.clone(),
+            signing_network,
             nonce,
         )
         .await?;
@@ -268,15 +265,7 @@ async fn check_deployment_accounting(
     let amount = i128::try_from(AMOUNT)?;
     let before = free_balance(native, Base58(account.address())).await?;
     if !deployment.atomic {
-        send_transfer(
-            node,
-            native,
-            &owner,
-            Base58(target),
-            signing_network.clone(),
-            1,
-        )
-        .await?;
+        send_transfer(node, native, &owner, Base58(target), signing_network, 1).await?;
         let after = free_balance(native, Base58(account.address())).await?;
         require(
             after == before - amount - replay_cost,
@@ -542,7 +531,7 @@ async fn send_transfer(
     signing_network: thruput_xdr::types::NetworkHash,
     nonce: u64,
 ) -> TestResult<output::TransactionReceipt> {
-    let hash = submit_transfer(native, sender, recipient, signing_network.clone(), nonce).await?;
+    let hash = submit_transfer(native, sender, recipient, signing_network, nonce).await?;
     node.block_producer().produce_block().await?;
     wait_for_receipt(native, signing_network, hash).await
 }
@@ -600,7 +589,7 @@ async fn wait_for_receipt(
 ) -> TestResult<output::TransactionReceipt> {
     let receipt = poll_receipt(
         native,
-        Base58(signing_network.clone().into_inner()),
+        Base58(signing_network.into_inner()),
         expected_hash,
         None,
         ReceiptPollConfig {
@@ -684,7 +673,7 @@ async fn check_simulation(
                 caller: Some(sender),
                 assumed_auth: None,
                 gas_limit: Some(GAS),
-                min_state_block_height: Some(before.state_block_height.clone()),
+                min_state_block_height: Some(before.state_block_height),
             })
             .await?,
     )?;
@@ -720,7 +709,7 @@ async fn check_block(
     let block = known(
         native
             .get_block_by_height(input::BlockQuery {
-                block_height: height.clone(),
+                block_height: *height,
             })
             .await?,
     )?
@@ -881,7 +870,7 @@ async fn check_event_history(
         // transfer so this walk can be compared exactly with its two receipts.
         start: Some(input::HistoryStart::Ascending {
             anchor: input::AscendingAnchor::AtHeight {
-                block_height: receipts[0].block_height.clone(),
+                block_height: receipts[0].block_height,
             },
         }),
         cursor: None,
@@ -927,7 +916,7 @@ async fn check_event_history(
         filters: event_query.filters,
         start: Some(input::HistoryStart::Descending {
             anchor: input::DescendingAnchor::AtHeight {
-                block_height: receipts[1].block_height.clone(),
+                block_height: receipts[1].block_height,
             },
         }),
         cursor: None,
@@ -1006,7 +995,7 @@ async fn check_block_history(
         let block = known(
             native
                 .get_transactions_by_block(input::BlockPageRequest {
-                    block_height: receipt.block_height.clone(),
+                    block_height: receipt.block_height,
                     start: Some(input::BlockStart {
                         order: IterationOrder::Ascending,
                     }),
@@ -1037,13 +1026,11 @@ async fn check_block_continuations(
     // there is no timer or race with the instant block driver.
     let mut hashes = Vec::new();
     for nonce in [3, 4] {
-        hashes.push(
-            submit_transfer(native, sender, recipient, signing_network.clone(), nonce).await?,
-        );
+        hashes.push(submit_transfer(native, sender, recipient, signing_network, nonce).await?);
     }
     let block = node.block_producer().produce_block().await?;
     for hash in &hashes {
-        let receipt = wait_for_receipt(native, signing_network.clone(), *hash).await?;
+        let receipt = wait_for_receipt(native, signing_network, *hash).await?;
         require(
             *receipt.block_height == block.height,
             "batch transactions committed in different blocks",

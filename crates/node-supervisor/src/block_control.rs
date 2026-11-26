@@ -118,6 +118,8 @@ impl NativeBlockControlPlane for LocalBlockControl {
     }
 }
 
+// By value: both callers pass it to `map` over owned blocks.
+#[allow(clippy::needless_pass_by_value)]
 fn produced_block(block: ProducedBlock) -> out::ProducedBlock {
     out::ProducedBlock {
         block_height: block.height.into(),

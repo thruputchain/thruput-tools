@@ -143,7 +143,7 @@ pub fn run(
                         false,
                         phase != crate::native_rpc::SubmissionPhase::NotSent,
                     ),
-                    network_hash: prepared.network_hash.clone().into_inner().into(),
+                    network_hash: prepared.network_hash.into_inner().into(),
                     submission: phase,
                     signed_transaction: HexBytes(prepared.signed_transaction.clone()),
                     evidence,
@@ -194,7 +194,7 @@ fn prepare_plan(
             block_expiry_height: expiry_height,
             nonce: nonce_from_timestamp(),
         },
-        wallet_context.network_hash.clone(),
+        wallet_context.network_hash,
     )
     .map_err(|error| CliError::Other(error.to_string()))?
     .transaction()

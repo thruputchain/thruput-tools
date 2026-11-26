@@ -262,7 +262,7 @@ fn identified(receipts: &[output::TransactionReceipt]) -> Vec<output::Identified
             if event.address == Base58(ADDRESS_NATIVE_TOKEN) {
                 events.push(output::IdentifiedEvent {
                     transaction_hash: receipt.transaction_hash,
-                    block_height: receipt.block_height.clone(),
+                    block_height: receipt.block_height,
                     sequence_number: u32::try_from(sequence).unwrap(),
                     event: event.clone(),
                 });
@@ -367,15 +367,15 @@ async fn walk_root(
         .iter()
         .map(|receipt| output::TransactionRef {
             transaction_hash: receipt.transaction_hash,
-            block_height: receipt.block_height.clone(),
+            block_height: receipt.block_height,
         })
         .collect::<Vec<_>>();
     expected.sort_by_key(|item| (*item.block_height, item.transaction_hash.0.0));
     let height = match order {
-        IterationOrder::Ascending => expected[0].block_height.clone(),
+        IterationOrder::Ascending => expected[0].block_height,
         IterationOrder::Descending => {
             expected.reverse();
-            expected[0].block_height.clone()
+            expected[0].block_height
         }
     };
     let mut query = input::RootAddressQuery {
@@ -424,11 +424,7 @@ async fn save_cursors(
     faucet: ContractAddress,
     receipts: &[output::TransactionReceipt],
 ) -> Result<SavedCursors> {
-    let mut events = event_query(
-        IterationOrder::Ascending,
-        receipts[0].block_height.clone(),
-        None,
-    );
+    let mut events = event_query(IterationOrder::Ascending, receipts[0].block_height, None);
     events.limit = Some(1);
     events.cursor = rpc
         .request::<output::EventPage, _>("getEvents", NamedParams(events.clone()))
@@ -437,10 +433,7 @@ async fn save_cursors(
     events.start = None;
     let mut root = input::RootAddressQuery {
         address: faucet,
-        start: Some(start(
-            IterationOrder::Ascending,
-            receipts[0].block_height.clone(),
-        )),
+        start: Some(start(IterationOrder::Ascending, receipts[0].block_height)),
         cursor: None,
         limit: Some(1),
     };
@@ -453,7 +446,7 @@ async fn save_cursors(
         .next_cursor;
     root.start = None;
     let mut block = input::BlockPageRequest {
-        block_height: receipts[1].block_height.clone(),
+        block_height: receipts[1].block_height,
         start: Some(input::BlockStart {
             order: IterationOrder::Ascending,
         }),
@@ -613,7 +606,7 @@ async fn verify_history(
         if order == IterationOrder::Descending {
             expected.reverse();
         }
-        let height = expected[0].block_height.clone();
+        let height = expected[0].block_height;
         let sparse = expected
             .iter()
             .filter(|event| event.event.topics.get(2) == Some(&special_topic))
@@ -631,18 +624,18 @@ async fn verify_history(
         )?;
         for (label, rpc) in [("local", local), ("gateway", remote)] {
             eprintln!("checking {label} history in {order:?} order");
-            let mut all_query = event_query(order, height.clone(), None);
+            let mut all_query = event_query(order, height, None);
             all_query.filters[0].topics = Some(input::TopicFilter {
                 topic2: Some(vec![special_topic, Topic(ordinary.0.as_ref().try_into()?)]),
                 ..Default::default()
             });
             walk_events(rpc, all_query, &expected, false).await?;
-            let mut sparse_query = event_query(order, height.clone(), Some(special_topic));
+            let mut sparse_query = event_query(order, height, Some(special_topic));
             sparse_query.limit = Some(1);
             walk_events(rpc, sparse_query, &sparse, true).await?;
             walk_events(
                 rpc,
-                event_query(order, height.clone(), Some(absent_topic)),
+                event_query(order, height, Some(absent_topic)),
                 &[],
                 true,
             )
@@ -688,10 +681,7 @@ async fn check_restored(
                 "getTransactionsByRootAddress",
                 NamedParams(input::RootAddressQuery {
                     address: faucet,
-                    start: Some(start(
-                        IterationOrder::Ascending,
-                        receipts[0].block_height.clone(),
-                    )),
+                    start: Some(start(IterationOrder::Ascending, receipts[0].block_height)),
                     cursor: None,
                     limit: Some(1),
                 }),

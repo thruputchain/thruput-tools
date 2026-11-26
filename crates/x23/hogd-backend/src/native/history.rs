@@ -26,7 +26,7 @@ fn position(
             match anchor {
                 AscendingAnchor::AtBeginning {} => Anchor::AnchorAtBeginning,
                 AscendingAnchor::AtHeight { block_height } => Anchor::AnchorAtHeight {
-                    height: block_height.clone(),
+                    height: *block_height,
                 },
                 _ => {
                     return Err(RpcServerError::InvalidParam(
@@ -40,7 +40,7 @@ fn position(
             match anchor {
                 DescendingAnchor::AtEnd {} => Anchor::AnchorAtEnd,
                 DescendingAnchor::AtHeight { block_height } => Anchor::AnchorAtHeight {
-                    height: block_height.clone(),
+                    height: *block_height,
                 },
                 _ => {
                     return Err(RpcServerError::InvalidParam(
@@ -132,7 +132,7 @@ pub fn root_query(
 /// Convert a validated exact-block request, preserving its height and cursor.
 pub fn block_query(value: &input::BlockPageRequest) -> wire::BlockTransactionQuery {
     wire::BlockTransactionQuery {
-        height: value.block_height.clone(),
+        height: value.block_height,
         order: value.start.as_ref().map_or(
             pagination::IterationOrder::IterationOrderAscending,
             |start| start.order.into(),

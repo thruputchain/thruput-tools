@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.48.0
+
+### hog-devnode 0.1.37, protocol 0.69.0 and SDK 0.64.0
+
+The managed runtime is now hog-devnode 0.1.37. Tools move to protocol crates
+0.69.0 and SDK 0.64.0 to match it.
+
+- `thruput node` installs 0.1.37 on first start unless it runs offline. A
+  runtime pinned to 0.1.36 or earlier no longer starts, because it uses an
+  earlier protocol. Select 0.1.37 with `thruput toolchain use`.
+- New projects pin SDK 0.64.0. It adds `mul_div_i128` and typed addresses,
+  code hashes and time, and makes `U256` and 128-bit division calls to the
+  runtime.
+- The default wallet's `execute` now takes the auth tokens to mint before
+  the calls, and each call lists the tokens it forwards.
+  `build_default_wallet_call_transaction` writes that form, minting and
+  forwarding none. hog-devnode 0.1.36 and earlier cannot decode it.
+- The local block driver computes the `ProposalTxsHash` and batch hashes as
+  hog-devnode 0.1.37 does, from a `ProposalTxsCommit` and a `BatchCommit`.
+- `thruput-u256` is built with `software-arithmetic`, so the CLI formats
+  and divides `U256` values without a runtime.
+- The counter app from `thruput new --template counter-app` pins
+  `@thruputchain/client` 0.29.0, the first client whose wallet transactions
+  hog-devnode 0.1.37 accepts, and reads an unknown transaction outcome from
+  the client's `ThruputError`.
+
 ## 0.47.0
 
 ### Contract views run at the chain's time

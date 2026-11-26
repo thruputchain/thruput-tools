@@ -49,7 +49,7 @@ async fn committed_timepoint(client: &HttpClient, height: u64) -> u64 {
                 .request::<output::BlockResult, _>(
                     "getBlockByHeight",
                     NamedParams(input::BlockQuery {
-                        block_height: height.clone(),
+                        block_height: height,
                     }),
                 )
                 .await

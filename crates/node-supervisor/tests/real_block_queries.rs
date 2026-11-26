@@ -77,7 +77,7 @@ async fn verify(
         .request::<output::BlockResult, _>(
             "getBlockByHeight",
             NamedParams(input::BlockQuery {
-                block_height: height.clone(),
+                block_height: height,
             }),
         )
         .await
@@ -121,7 +121,7 @@ async fn verify(
     );
     for order in [IterationOrder::Ascending, IterationOrder::Descending] {
         let mut query = input::BlockPageRequest {
-            block_height: height.clone(),
+            block_height: height,
             start: Some(input::BlockStart { order }),
             cursor: None,
             limit: Some(1),
@@ -175,7 +175,7 @@ async fn verify(
             .request::<output::BlockResult, _>(
                 "getBlockByHeight",
                 NamedParams(input::BlockQuery {
-                    block_height: empty_height.clone()
+                    block_height: empty_height
                 })
             )
             .await
@@ -302,7 +302,7 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
         .request::<output::BlockResult, _>(
             "getBlockByHeight",
             NamedParams(input::BlockQuery {
-                block_height: height.clone(),
+                block_height: height,
             }),
         )
         .await
@@ -328,7 +328,7 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
             .request::<output::BlockResult, _>(
                 "getBlockByHeight",
                 NamedParams(input::BlockQuery {
-                    block_height: empty_height.clone(),
+                    block_height: empty_height,
                 }),
             )
             .await
@@ -341,8 +341,8 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
     .await
     .unwrap();
     let (mut process, remote) = gateway(&node, &dir.path().join("gateway.log")).await;
-    verify(&client, height.clone(), &hashes, empty_height.clone()).await;
-    verify(&remote, height.clone(), &hashes, empty_height.clone()).await;
+    verify(&client, height, &hashes, empty_height).await;
+    verify(&remote, height, &hashes, empty_height).await;
     process.kill().await.unwrap();
     process.wait().await.unwrap();
     node.stop().await.unwrap();
@@ -350,7 +350,7 @@ async fn block_queries_match_receipts_through_both_servers_before_and_after_rest
     let node = NodeSupervisorHandle::start(config).await.unwrap();
     let client = node_client(&node);
     let (mut process, remote) = gateway(&node, &dir.path().join("gateway-restart.log")).await;
-    verify(&client, height.clone(), &hashes, empty_height.clone()).await;
+    verify(&client, height, &hashes, empty_height).await;
     verify(&remote, height, &hashes, empty_height).await;
     process.kill().await.unwrap();
     process.wait().await.unwrap();

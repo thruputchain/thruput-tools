@@ -256,7 +256,7 @@ async fn history(
                 .request::<output::BlockTransactionPage, _>(
                     "getTransactionsByBlock",
                     NamedParams(input::BlockPageRequest {
-                        block_height: latest.clone(),
+                        block_height: *latest,
                         start: Some(input::BlockStart {
                             order: IterationOrder::Ascending,
                         }),
@@ -348,7 +348,7 @@ async fn event_history(
                 }],
                 start: Some(input::HistoryStart::Ascending {
                     anchor: input::AscendingAnchor::AtHeight {
-                        block_height: expected.block_height.clone(),
+                        block_height: expected.block_height,
                     },
                 }),
                 cursor: None,

@@ -45,8 +45,8 @@ pub(crate) fn rpc_error(error: &NativeRpcError) -> CliError {
         NativeRpcError::Unsupported { method, raw } => json!({"method": method, "result": raw}),
         NativeRpcError::NetworkMismatch { expected, actual } => json!({
             "preflightReason": "networkMismatch",
-            "expectedNetworkHash": thruput_json_rpc_types::NetworkHash::from(expected.clone().into_inner()),
-            "actualNetworkHash": thruput_json_rpc_types::NetworkHash::from(actual.clone().into_inner()),
+            "expectedNetworkHash": thruput_json_rpc_types::NetworkHash::from((*expected).into_inner()),
+            "actualNetworkHash": thruput_json_rpc_types::NetworkHash::from((*actual).into_inner()),
         }),
         NativeRpcError::MissingMethods { methods } => json!({
             "preflightReason": "missingMethods", "missingMethods": methods,
@@ -303,7 +303,7 @@ where
         evidence["submission"] = json!(phase);
         evidence["transactionHash"] = json!(transaction_hash);
         evidence["networkHash"] = json!(thruput_json_rpc_types::NetworkHash::from(
-            network_hash.clone().into_inner()
+            (*network_hash).into_inner()
         ));
         SubmissionFailure {
             phase,
@@ -382,7 +382,7 @@ where
     submitted
         .wait(
             client,
-            network_hash.clone().into_inner().into(),
+            (*network_hash).into_inner().into(),
             config,
             &mut cancelled,
         )
@@ -461,10 +461,7 @@ mod tests {
             thruput_xdr::types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from([1; 32]));
         let actual =
             thruput_xdr::types::NetworkHash::from(thruput_xdr::types::SHA256Hash::from([2; 32]));
-        let error = rpc_error(&NativeRpcError::NetworkMismatch {
-            expected: expected.clone(),
-            actual,
-        });
+        let error = rpc_error(&NativeRpcError::NetworkMismatch { expected, actual });
         let details = error.details_json().unwrap();
         assert_eq!(details["preflightReason"], "networkMismatch");
         assert_eq!(

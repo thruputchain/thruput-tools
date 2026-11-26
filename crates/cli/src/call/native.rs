@@ -255,7 +255,7 @@ impl NativeCallCommon {
             )?),
             wallet_entrypoint: prepared.wallet_entrypoint_id.clone(),
             wallet_entrypoint_source: prepared.wallet_entrypoint_source.to_owned(),
-            network_hash: prepared.network_hash.clone().into_inner().into(),
+            network_hash: prepared.network_hash.into_inner().into(),
             method: prepared.method.clone(),
             entrypoint: HexBytes(prepared.resolved.entrypoint.into_inner().to_vec()),
             calldata: HexBytes(prepared.calldata.clone()),

@@ -109,7 +109,7 @@ pub(crate) fn record_from_bytes(block: &EventIndexerPulledBlock, bytes: Vec<u8>)
     Record {
         schema_version: crate::types::RECORD_SCHEMA_VERSION,
         height: crate::block_height(block),
-        consensus_hash: Base58(block.block.identity.consensus_hash.clone().into_inner()),
+        consensus_hash: Base58(block.block.identity.consensus_hash.into_inner()),
         byte_length: bytes.len(),
         record: HexBytes::from(bytes),
         ingested_at_unix_micros: None,

@@ -162,7 +162,7 @@ pub async fn validate_network<C: ClientT + Sync>(
     let actual = SigningNetworkHash::from(info.network_hash.0);
     if &actual != expected {
         return Err(NativeRpcError::NetworkMismatch {
-            expected: expected.clone(),
+            expected: *expected,
             actual,
         });
     }

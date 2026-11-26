@@ -29,11 +29,11 @@ impl NativeSimulationPlane for HogdDevViewBackend {
         else {
             return Err(RpcServerError::NotImplemented("simulateInvocation".into()));
         };
-        let min_height = request.min_state_block_height.clone();
+        let min_height = request.min_state_block_height;
         let request = decode::simulation_request(request)?;
         let result = within_request_deadline(context.capped(*request_timeout), async {
             let (stated, parent_height) = Self::view_time(clock, scheduler.as_ref()).await;
-            let mut query = shared_view::view_query(request, gas_limit, stated.clone())?;
+            let mut query = shared_view::view_query(request, gas_limit, stated)?;
             let result = view(client, &query).await?;
             let refused = matches!(result, ViewGatewayResult::ViewGatewayInvalidInput { .. });
             let Some(stale) = stale_view(refused, snapshot_height(&result), parent_height) else {

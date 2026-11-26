@@ -14,7 +14,7 @@ pub fn input_lookup(
         indexed_status(hash, result)?;
         return Ok(out::TransactionInputResult::Unavailable {});
     };
-    identity(hash, &info.height, &info.events)?;
+    identity(hash, info.height, &info.events)?;
     let bytes = xdrs::txs::encode(&info.tx.signed_tx.tx).map_err(|_| {
         invalid(
             Reason::InvalidEncoding,

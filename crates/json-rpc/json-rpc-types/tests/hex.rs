@@ -109,3 +109,38 @@ fn sha256_prefixed_hex_matches_reference_digest() {
         "0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
 }
+
+#[test]
+fn decoding_matches_reference_for_ascii_pairs() {
+    for first in 0..=127u8 {
+        for second in 0..=127u8 {
+            let bytes = [first, second];
+            let text = std::str::from_utf8(&bytes).unwrap();
+            for prefix in ["", "0x", "0X"] {
+                let input = format!("{prefix}{text}");
+                assert_eq!(
+                    decode_prefixed_hex(&input),
+                    hex::decode(strip_hex_prefix(&input))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn decoding_preserves_errors_and_round_trips_across_chunk_lengths() {
+    for text in ["", "0", "g", "0g0", "gg", "01zz", "000x", "é", "😀", "0é0"] {
+        for prefix in ["", "0x", "0X"] {
+            assert_eq!(
+                decode_prefixed_hex(&format!("{prefix}{text}")),
+                hex::decode(text)
+            );
+        }
+    }
+    let bytes = (0..=u8::MAX).cycle().take(1025).collect::<Vec<_>>();
+    for len in 0..=bytes.len() {
+        for text in [hex::encode(&bytes[..len]), hex::encode_upper(&bytes[..len])] {
+            assert_eq!(decode_prefixed_hex(&text).unwrap(), bytes[..len]);
+        }
+    }
+}

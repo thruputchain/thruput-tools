@@ -86,13 +86,13 @@ fn validate_filters(filters: &[input::EventFilter]) -> Result<(), RpcServerError
 fn page(
     count: usize,
     next: Option<&HexBytes>,
-    oldest: &BlockHeight,
-    latest: &BlockHeight,
+    oldest: BlockHeight,
+    latest: BlockHeight,
     cursor: Option<&HexBytes>,
     limit: Option<u32>,
     max_cursor_bytes: usize,
 ) -> Result<(), RpcServerError> {
-    if **oldest < 0 || latest < oldest || count > limit.unwrap_or(0) as usize {
+    if *oldest < 0 || latest < oldest || count > limit.unwrap_or(0) as usize {
         return Err(invalid("history page has invalid bounds or cardinality"));
     }
     if next.is_some_and(|next| {
@@ -121,9 +121,9 @@ fn ordered(
 }
 
 fn in_range(
-    height: &BlockHeight,
-    oldest: &BlockHeight,
-    latest: &BlockHeight,
+    height: BlockHeight,
+    oldest: BlockHeight,
+    latest: BlockHeight,
     start: Option<&input::HistoryStart>,
 ) -> bool {
     if height < oldest || height > latest {
@@ -132,20 +132,20 @@ fn in_range(
     match start {
         Some(input::HistoryStart::Ascending {
             anchor: input::AscendingAnchor::AtHeight { block_height },
-        }) => height >= block_height,
+        }) => height >= *block_height,
         Some(input::HistoryStart::Descending {
             anchor: input::DescendingAnchor::AtHeight { block_height },
-        }) => height <= block_height,
+        }) => height <= *block_height,
         _ => true,
     }
 }
 
 fn retained_anchor(
     start: Option<&input::HistoryStart>,
-    oldest: &BlockHeight,
+    oldest: BlockHeight,
 ) -> Result<(), RpcServerError> {
     if let Some(start) = start
-        && anchor(start)?.is_some_and(|height| height < oldest)
+        && anchor(start)?.is_some_and(|height| *height < oldest)
     {
         return Err(invalid(
             "successful history page excludes the requested anchor",
@@ -185,13 +185,13 @@ pub fn validate_event_page(
     page(
         result.events.len(),
         result.next_cursor.as_ref(),
-        &result.oldest_indexed_block_height,
-        &result.latest_indexed_block_height,
+        result.oldest_indexed_block_height,
+        result.latest_indexed_block_height,
         request.cursor.as_ref(),
         request.limit,
         max_cursor_bytes,
     )?;
-    retained_anchor(request.start.as_ref(), &result.oldest_indexed_block_height)?;
+    retained_anchor(request.start.as_ref(), result.oldest_indexed_block_height)?;
     let mut identities = std::collections::BTreeSet::new();
     for event in &result.events {
         let hash: &[u8] = event.transaction_hash.0.0.as_ref();
@@ -199,9 +199,9 @@ pub fn validate_event_page(
             return Err(invalid("history page repeats an event identity"));
         }
         if !in_range(
-            &event.block_height,
-            &result.oldest_indexed_block_height,
-            &result.latest_indexed_block_height,
+            event.block_height,
+            result.oldest_indexed_block_height,
+            result.latest_indexed_block_height,
             request.start.as_ref(),
         ) || event.event.topics.len() > 3
             || !request
@@ -259,18 +259,18 @@ pub fn validate_root_transaction_page(
     page(
         result.transactions.len(),
         result.next_cursor.as_ref(),
-        &result.oldest_indexed_block_height,
-        &result.latest_indexed_block_height,
+        result.oldest_indexed_block_height,
+        result.latest_indexed_block_height,
         request.cursor.as_ref(),
         request.limit,
         max_cursor_bytes,
     )?;
-    retained_anchor(request.start.as_ref(), &result.oldest_indexed_block_height)?;
+    retained_anchor(request.start.as_ref(), result.oldest_indexed_block_height)?;
     if result.transactions.iter().any(|item| {
         !in_range(
-            &item.block_height,
-            &result.oldest_indexed_block_height,
-            &result.latest_indexed_block_height,
+            item.block_height,
+            result.oldest_indexed_block_height,
+            result.latest_indexed_block_height,
             request.start.as_ref(),
         )
     }) {
@@ -290,8 +290,8 @@ pub fn validate_block_transaction_page(
     page(
         result.transactions.len(),
         result.next_cursor.as_ref(),
-        &result.oldest_indexed_block_height,
-        &result.latest_indexed_block_height,
+        result.oldest_indexed_block_height,
+        result.latest_indexed_block_height,
         request.cursor.as_ref(),
         request.limit,
         max_cursor_bytes,
@@ -309,9 +309,9 @@ pub fn validate_block_transaction_page(
         || result.transactions.iter().any(|item| {
             item.block_height != request.block_height
                 || !in_range(
-                    &item.block_height,
-                    &result.oldest_indexed_block_height,
-                    &result.latest_indexed_block_height,
+                    item.block_height,
+                    result.oldest_indexed_block_height,
+                    result.latest_indexed_block_height,
                     None,
                 )
         })

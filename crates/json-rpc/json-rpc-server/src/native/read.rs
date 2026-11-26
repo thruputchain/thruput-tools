@@ -178,8 +178,8 @@ pub(super) fn rpc_error(error: &RpcServerError) -> ErrorObjectOwned {
             (
                 codes::STATE_HEIGHT_UNAVAILABLE,
                 ErrorData::StateHeightUnavailable {
-                    requested_state_block_height: value.requested.clone(),
-                    observed_state_block_height: value.observed.clone(),
+                    requested_state_block_height: value.requested,
+                    observed_state_block_height: value.observed,
                 },
             )
         }

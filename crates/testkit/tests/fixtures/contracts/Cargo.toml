@@ -1,0 +1,18 @@
+# Contracts that testkit's live tests deploy. This is its own workspace, so
+# it builds for the RV32 target with its own toolchain (rust-toolchain.toml)
+# and SDK pin, separate from the thruput-tools workspace.
+#
+# Build each artifact with `thruput build -p <package> --target-dir <dir>`
+# from this directory; scripts/smoke-testkit-local.sh does this.
+[workspace]
+resolver = "3"
+members = ["block-clock", "caller-counter"]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# Keep on the SDK release that the thruput-tools workspace pins.
+thruput-sdk = { version = "=0.64.0" }

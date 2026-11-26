@@ -303,7 +303,7 @@ mod tests {
             nonce: 7,
         };
         let network = NetworkHash::from(SHA256Hash::from([8; 32]));
-        let legacy = prepare_call(request, network.clone()).unwrap();
+        let legacy = prepare_call(request, network).unwrap();
         assert_eq!(legacy.transaction(), prepared().transaction());
         let legacy = legacy.sign(&key).unwrap();
         assert!(!legacy.is_native());

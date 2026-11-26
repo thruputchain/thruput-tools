@@ -584,7 +584,7 @@ Start each new walk with an empty cursor at the last stored row's height from
 that ascending scan, and deduplicate the reread block. Save rows and progress
 together. A descending scan's last row is not a forward checkpoint, and
 `latestBlock` is the indexer's head, not proof of processed data. See the
-[restart walkthrough](https://docs.thruput.network/typescript/events/#resume-without-missing-events).
+[restart walkthrough](https://www.thruput.network/docs/typescript/events/#resume-without-missing-events).
 
 A receipt timeout includes the last successfully observed status and inspection
 guidance to reuse the original profile and RPC endpoint. Endpoint URLs are omitted
@@ -1039,9 +1039,9 @@ chain's initial blocks, the next block still takes the wall clock. Clearing the 
 continues from the tip's time, not from today.
 
 A contract view runs at the time the next block would get, so it sees a time
-change at once. This needs hog-devnode 0.1.36, the managed default. hog-devnode
-0.1.35 runs views at the later of the wall clock and the tip's time, and earlier
-runtimes at the wall clock. For example, move 30 days ahead with an empty block:
+change at once. This needs hog-devnode 0.1.36 or later; the managed default is
+0.1.37. hog-devnode 0.1.35 runs views at the later of the wall clock and the
+tip's time, and earlier runtimes at the wall clock. For example, move 30 days ahead with an empty block:
 
 ```bash
 curl -s http://127.0.0.1:9545 -H 'content-type: application/json' \

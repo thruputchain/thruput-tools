@@ -145,7 +145,7 @@ pub fn simulation(
 ) -> Result<out::SimulationResult, RpcServerError> {
     match result {
         ViewGatewayResult::ViewGatewayOk { payload } => {
-            height(&payload.height)?;
+            height(payload.height)?;
             let output = output(payload.output)?;
             let events = events(payload.events)?;
             if let Some(requested) = min_height.filter(|requested| payload.height < *requested) {
@@ -186,7 +186,7 @@ pub fn simulations(
     use thruput_view::ViewGatewayBatchOutcome as Outcome;
     match result {
         ViewGatewayBatchResult::ViewGatewayBatchOk { payload } => {
-            height(&payload.height)?;
+            height(payload.height)?;
             if payload.results.0.len() != query.calls.0.len() {
                 return Err(invalid(
                     Reason::InvalidCardinality,
@@ -223,7 +223,7 @@ pub fn simulations(
         ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
             height_unavailable: value,
         } => {
-            height(&value.observed)?;
+            height(value.observed)?;
             if query.min_height.as_ref() != Some(&value.requested)
                 || value.observed >= value.requested
             {
