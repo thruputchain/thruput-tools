@@ -357,7 +357,7 @@ pub struct TransactionRef {
 ///
 /// Opaque cursors continue one historical walk; an empty cursor ends it.
 /// For restart rules, see the
-/// [pagination contract](https://docs.thruput.network/reference/json-rpc-api/#pagination).
+/// [pagination contract](https://www.thruput.network/docs/reference/json-rpc-api/#pagination).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionRefPage {
