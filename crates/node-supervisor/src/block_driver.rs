@@ -1215,7 +1215,7 @@ async fn commit_proposed_block(
 ) -> Result<DriveOutcome, BlockProductionError> {
     let block_id = proposed_block.block_id;
     let batch_xdr_bytes = proposed_block.txs.xdr.0.len();
-    let height = proposed_block.proposal.header.block_height.clone();
+    let height = proposed_block.proposal.header.block_height;
     let timepoint = *proposed_block.proposal.header.block_timepoint;
     let value = consensus_value(
         &parent_value,
@@ -1299,47 +1299,41 @@ const fn domain_separator_cxs<const N: usize>(name: &[u8]) -> [u8; N] {
     writer.into_bytes()
 }
 
-// Matches hogd's proposal_txs_compatibility_hash (hogd/xdr/proposal_hash.h):
-//   SHA-256(cxs(DomainSeparator("ProposalTxs")) || SHA-256(base) ||
-//           batch_hash(signed_hash) || batch_hash(nondeterministic_data))
-// where base is the ProposalTxs with both batches emptied. hogd rejects a
-// commit whose hash differs, so this changes only in lockstep with hogd.
+// Matches hogd's proposal_txs_compatibility_hash (hogd/xdr/proposal_hash.h),
+// as of hog-devnode 0.1.37:
+//   SHA-256(cxs(DomainSeparator("ProposalTxs")) || cxs(ProposalTxsCommit))
+// A ProposalTxsCommit is the ext of the ProposalTxs, then the hashes of its
+// signed_hash and nondeterministic_data batches. The pinned protocol crates
+// have no such struct yet, so the fields are encoded in order, which gives
+// the same bytes. hogd rejects a commit whose hash differs, so this changes
+// only in lockstep with hogd.
 fn proposal_txs_compatibility_hash(
     proposal_txs: &thruput_node_rpc::ProposalTxs,
 ) -> Result<ProposalTxsHash, BlockProductionError> {
-    let mut base = proposal_txs.clone();
-    base.signed_hash.segment_tokens.0.clear();
-    base.signed_hash.segment_bytes.0.clear();
-    base.signed_hash.xdr.0.clear();
-    base.nondeterministic_data.segment_tokens.0.clear();
-    base.nondeterministic_data.segment_bytes.0.clear();
-    base.nondeterministic_data.xdr.0.clear();
-
-    let base_hash =
-        hash_xdr(&base).map_err(|source| BlockProductionError::ConsensusHashEncoding {
-            value: "proposal transactions base",
-            source,
-        })?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(PROPOSAL_TXS_DOMAIN_SEPARATOR_CXS);
-    hasher.update(base_hash.into_inner());
-    hasher.update(hash_parallel_batch_compatibility(
-        "signed_hash",
-        &proposal_txs.signed_hash,
-    )?);
-    hasher.update(hash_parallel_batch_compatibility(
+    let signed_hash = hash_parallel_batch_compatibility("signed_hash", &proposal_txs.signed_hash)?;
+    let nondeterministic_data = hash_parallel_batch_compatibility(
         "nondeterministic_data",
         &proposal_txs.nondeterministic_data,
-    )?);
+    )?;
+
+    let encoding = |source| BlockProductionError::ConsensusHashEncoding {
+        value: "proposal transactions commit",
+        source,
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(PROPOSAL_TXS_DOMAIN_SEPARATOR_CXS);
+    hasher.update(xdrs::cxs::encode(&proposal_txs.ext).map_err(encoding)?);
+    hasher.update(xdrs::cxs::encode(&SHA256Hash::from(signed_hash)).map_err(encoding)?);
+    hasher.update(xdrs::cxs::encode(&SHA256Hash::from(nondeterministic_data)).map_err(encoding)?);
     Ok(ProposalTxsHash::new(SHA256Hash::from(<[u8; 32]>::from(
         hasher.finalize(),
     ))))
 }
 
-// SHA-256(cxs(DomainSeparator("ParallelBatch")) || SHA-256(index) ||
-//         SHA-256(segment_0) || ... || SHA-256(segment_{n-1}))
-// where index is the batch with its payload emptied.
+// SHA-256(cxs(DomainSeparator("ParallelBatch")) || cxs(BatchCommit))
+// A BatchCommit is an ext of 0, the batch's segment_tokens and segment_bytes,
+// and the array of the SHA-256 hashes of its segments, encoded in order as
+// above.
 fn hash_parallel_batch_compatibility(
     batch_name: &'static str,
     batch: &thruput_node_rpc::ParallelBatch,
@@ -1351,18 +1345,7 @@ fn hash_parallel_batch_compatibility(
             detail: error.to_string(),
         })?;
 
-    let mut index = batch.clone();
-    index.xdr.0.clear();
-    let index_hash =
-        hash_xdr(&index).map_err(|source| BlockProductionError::ConsensusHashEncoding {
-            value: batch_name,
-            source,
-        })?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(PARALLEL_BATCH_DOMAIN_SEPARATOR_CXS);
-    hasher.update(index_hash.into_inner());
-
+    let mut segment_hashes = Vec::with_capacity(batch.segment_bytes.0.len());
     let mut offset = 0usize;
     for &segment_size in &batch.segment_bytes.0 {
         let end = offset.checked_add(segment_size as usize).ok_or_else(|| {
@@ -1380,7 +1363,7 @@ fn hash_parallel_batch_compatibility(
                 ),
             }
         })?;
-        hasher.update(Sha256::digest(segment));
+        segment_hashes.push(SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(segment))));
         offset = end;
     }
     if offset != batch.xdr.len() {
@@ -1392,6 +1375,18 @@ fn hash_parallel_batch_compatibility(
             ),
         });
     }
+
+    let encoding = |source| BlockProductionError::ConsensusHashEncoding {
+        value: batch_name,
+        source,
+    };
+    let segment_hashes: xdrs::VecM<SHA256Hash> = xdrs::VecM(segment_hashes);
+    let mut hasher = Sha256::new();
+    hasher.update(PARALLEL_BATCH_DOMAIN_SEPARATOR_CXS);
+    hasher.update(xdrs::cxs::encode(&ExtensionPoint::_0).map_err(encoding)?);
+    hasher.update(xdrs::cxs::encode(&batch.segment_tokens).map_err(encoding)?);
+    hasher.update(xdrs::cxs::encode(&batch.segment_bytes).map_err(encoding)?);
+    hasher.update(xdrs::cxs::encode(&segment_hashes).map_err(encoding)?);
     Ok(hasher.finalize().into())
 }
 
@@ -1846,10 +1841,80 @@ mod hash_tests {
                 .into_inner(),
             // hogd's Mempool.ProposalTxsCompatibilityHashGoldenVector.
             SHA256Hash::from([
-                0xac, 0x7e, 0x6e, 0x65, 0xe3, 0xf3, 0x6e, 0xc7, 0x88, 0x45, 0xdd, 0xf3, 0xf3, 0xd9,
-                0x5a, 0xcf, 0x99, 0xea, 0xdb, 0xbd, 0xbc, 0xfd, 0x39, 0x1e, 0x44, 0x23, 0x9a, 0x7d,
-                0xc4, 0xb5, 0x2c, 0x03,
+                0x55, 0x6a, 0xf4, 0x47, 0x8a, 0x82, 0xe4, 0x99, 0x1f, 0x0e, 0x59, 0x42, 0xaf, 0xce,
+                0x8b, 0x66, 0xe6, 0x83, 0x4c, 0xb4, 0xec, 0xf8, 0x82, 0x65, 0xd8, 0xac, 0xa7, 0x48,
+                0x5d, 0x2d, 0x3e, 0xa3,
             ])
+        );
+    }
+
+    /// hogd's Mempool.ParallelBatchHashGoldenVectors, shared with chuckd and
+    /// the coordinator. The last two have multi-byte counts.
+    #[test]
+    fn parallel_batch_hash_matches_hogd_golden_vectors() {
+        let hash = |batch: &ParallelBatch| {
+            super::hash_parallel_batch_compatibility("test", batch)
+                .expect("bug: valid batch should hash")
+        };
+
+        let empty = ParallelBatch {
+            segment_tokens: VecM(vec![]),
+            segment_bytes: VecM(vec![]),
+            xdr: BytesM(vec![]),
+        };
+        assert_eq!(
+            hash(&empty),
+            [
+                0xe9, 0xd1, 0xec, 0xea, 0x10, 0x86, 0x05, 0xd0, 0x61, 0xcb, 0x8d, 0xaf, 0xb3, 0x96,
+                0x2b, 0x43, 0xc9, 0xf9, 0x66, 0xd0, 0xe0, 0xb5, 0x6b, 0xb7, 0x6a, 0x4f, 0xb9, 0x0b,
+                0xb0, 0x02, 0xbf, 0x0d,
+            ]
+        );
+
+        let multibyte = ParallelBatch {
+            segment_tokens: VecM(vec![63, 300, 70000]),
+            segment_bytes: VecM(vec![1, 2, 3]),
+            xdr: BytesM(vec![1, 2, 3, 4, 5, 6]),
+        };
+        assert_eq!(
+            hash(&multibyte),
+            [
+                0x51, 0xe3, 0x89, 0x59, 0x81, 0x61, 0x4d, 0x63, 0x5e, 0x2c, 0xed, 0xc6, 0x9a, 0xae,
+                0x85, 0xc4, 0xe1, 0x49, 0x06, 0x3d, 0x2b, 0x05, 0xb8, 0x95, 0x7c, 0xb2, 0x51, 0x00,
+                0x84, 0xe8, 0x68, 0x90,
+            ]
+        );
+
+        let mut segment_bytes = vec![1; 64];
+        segment_bytes[0] = 300;
+        segment_bytes[1] = 70000;
+        let many_segments = ParallelBatch {
+            segment_tokens: VecM((0..64).collect()),
+            segment_bytes: VecM(segment_bytes),
+            xdr: BytesM((0..70362_u32).map(|j| (j % 251) as u8).collect()),
+        };
+        assert_eq!(
+            hash(&many_segments),
+            [
+                0x9f, 0xd6, 0xa1, 0x93, 0x8f, 0x57, 0x79, 0x4d, 0x14, 0x75, 0x83, 0x68, 0xf5, 0xa6,
+                0xe7, 0xbf, 0xcc, 0x82, 0x90, 0x05, 0x22, 0x31, 0x89, 0x1d, 0x20, 0xba, 0x9e, 0xc6,
+                0x90, 0xf3, 0x7a, 0x6d,
+            ]
+        );
+    }
+
+    /// The token counts are part of the preimage, though no segment hash
+    /// reads them.
+    #[test]
+    fn parallel_batch_hash_binds_segment_tokens() {
+        let batch = |segment_tokens| ParallelBatch {
+            segment_tokens: VecM(segment_tokens),
+            segment_bytes: VecM(vec![8, 8]),
+            xdr: BytesM(vec![0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4]),
+        };
+        assert_ne!(
+            super::hash_parallel_batch_compatibility("test", &batch(vec![2, 2])).unwrap(),
+            super::hash_parallel_batch_compatibility("test", &batch(vec![1, 3])).unwrap()
         );
     }
 

@@ -65,8 +65,17 @@ fn returned(entrypoint: ContractEntrypointID) -> Vec<u8> {
     }
 }
 
-/// One `DefaultWallet.execute` child call: target, entrypoint, gas, calldata.
-type WalletCall = (ContractAddress, ContractEntrypointID, u64, Vec<u8>);
+/// One `DefaultWallet.execute` child call: target, entrypoint, gas, calldata,
+/// and the auth tokens it forwards (none here).
+type WalletCall = (
+    ContractAddress,
+    ContractEntrypointID,
+    u64,
+    Vec<u8>,
+    Vec<u32>,
+);
+/// `DefaultWallet.execute`'s arguments: the tokens to mint, then the calls.
+type WalletExecute = (Vec<Vec<u8>>, Vec<WalletCall>);
 
 #[derive(Default)]
 struct Recorded {
@@ -120,7 +129,8 @@ async fn scenario(recorded: Arc<Recorded>) -> (Scenario, jsonrpsee::server::Serv
                 .iter()
                 .find(|signed| transaction_hash(&signed.tx).unwrap() == hash.0.0)
                 .unwrap();
-            let calls: Vec<WalletCall> = xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
+            let (_, calls): WalletExecute =
+                xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
             // The wallet wraps the child's return, one buffer per child call.
             let wrapped = xdrs::cxs::encode(&vec![returned(calls[0].1)]).unwrap();
             Ok::<_, ErrorObjectOwned>(Some(TransactionReceipt {
@@ -220,8 +230,9 @@ async fn generated_proxy_methods_simulate_reads_and_submit_calls() {
         signed.tx.invocation.entrypoint,
         DEFAULT_WALLET_EXECUTE_ENTRYPOINT
     );
-    let calls: Vec<WalletCall> = xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
-    let [(target, entrypoint, _, calldata)] = calls.as_slice() else {
+    let (mints, calls): WalletExecute = xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
+    assert!(mints.is_empty());
+    let [(target, entrypoint, _, calldata, _)] = calls.as_slice() else {
         panic!("expected one wallet child call, got {}", calls.len());
     };
     assert_eq!(*target, ContractAddress::from(TARGET));

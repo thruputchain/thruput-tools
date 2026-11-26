@@ -126,7 +126,7 @@ async fn read_after_each_commit(node: &NodeSupervisorHandle, sender: &LocalSigne
         // Instant mode produces the block; no block is requested here.
         let receipt = poll_receipt(
             &native,
-            Base58(network.clone().into_inner()),
+            Base58(network.into_inner()),
             hash,
             None,
             ReceiptPollConfig {
@@ -145,7 +145,7 @@ async fn read_after_each_commit(node: &NodeSupervisorHandle, sender: &LocalSigne
                     caller: Some(Base58(account.address())),
                     assumed_auth: None,
                     gas_limit: Some(GAS),
-                    min_state_block_height: Some(receipt.block_height.clone()),
+                    min_state_block_height: Some(receipt.block_height),
                 })
                 .await?,
         )?;

@@ -149,7 +149,7 @@ impl SubmittedDeploy {
                 tx_hash: format!("{:?}", self.tx_hash),
                 status: Box::new(
                     thruput_json_rpc_types::responses::TransactionStatus::Committed {
-                        block_height: receipt.block_height.clone(),
+                        block_height: receipt.block_height,
                     },
                 ),
             });
@@ -397,9 +397,7 @@ fn native_account(dev: &TestAccount) -> PubkeyAccount {
 }
 
 fn network_hash(dev: &TestAccount, operation: &'static str) -> Result<NetworkHash> {
-    dev.network_hash
-        .clone()
-        .ok_or(TestkitError::Offline { operation })
+    dev.network_hash.ok_or(TestkitError::Offline { operation })
 }
 
 pub(crate) fn prepare_call(

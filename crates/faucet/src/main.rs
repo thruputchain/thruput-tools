@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let airdrop_submitter = RpcAirdropSubmitter::new(
         &parts.network_descriptor,
         &parts.airdrop,
-        parts.network_hash.clone(),
+        parts.network_hash,
     )?;
     let mut config = FaucetConfig::new(parts.network_descriptor, Arc::new(airdrop_submitter))?;
     if let Some(listen) = parts.listen_address {

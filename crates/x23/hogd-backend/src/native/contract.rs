@@ -17,7 +17,7 @@ pub fn contract_deployment(
     state_block_height: BlockHeight,
     item: DbGatewayItemResult,
 ) -> Result<out::ContractDeploymentResult, RpcServerError> {
-    height(&state_block_height)?;
+    height(state_block_height)?;
     let deployment = match crate::db_gateway::stored_item("DbGateway", item)? {
         None => None,
         Some(WireStorageItem::kItemTypeDeployedContractHash {

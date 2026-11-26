@@ -26,6 +26,17 @@ use thruput_xdr::{
 };
 use zeroize::Zeroizing;
 
+/// One `DefaultWallet.execute` child call: target, entrypoint, gas, calldata,
+/// and the auth tokens it forwards. `execute` takes the tokens to mint, then
+/// the calls.
+type WalletCall = (
+    ContractAddress,
+    ContractEntrypointID,
+    u64,
+    Vec<u8>,
+    Vec<u32>,
+);
+
 fn descriptor(account: &PubkeyAccount, rpc_url: String) -> NetworkDescriptor {
     NetworkDescriptor::new(
         "devnet".into(),
@@ -65,8 +76,9 @@ fn assert_native_transfers(
             DEFAULT_WALLET_EXECUTE_ENTRYPOINT
         );
         assert!(signed.tx.contracts_to_deploy.is_empty());
-        let calls: Vec<(ContractAddress, ContractEntrypointID, u64, Vec<u8>)> =
+        let (mints, calls): (Vec<Vec<u8>>, Vec<WalletCall>) =
             xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
+        assert!(mints.is_empty());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, descriptor.native_token.token_address.0);
         assert_eq!(

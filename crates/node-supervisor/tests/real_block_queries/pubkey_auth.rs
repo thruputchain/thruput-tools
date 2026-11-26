@@ -440,7 +440,7 @@ async fn history(
         .request::<output::BlockTransactionPage, _>(
             "getTransactionsByBlock",
             NamedParams(input::BlockPageRequest {
-                block_height: height.clone(),
+                block_height: *height,
                 start: Some(input::BlockStart {
                     order: IterationOrder::Ascending,
                 }),

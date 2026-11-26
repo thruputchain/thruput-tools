@@ -215,7 +215,7 @@ fn prepare_call_plan_with_runtime(
 
     let (wallet_context, block_expiry_height) = native::prepare_context(&sender, rpc_url, rt)?;
     let wallet_entrypoint_id = format_entrypoint_id(wallet_context.entrypoints.do_action);
-    let network_hash = wallet_context.network_hash.clone();
+    let network_hash = wallet_context.network_hash;
 
     let tx = thruput_client::prepare_call(
         CallRequest {

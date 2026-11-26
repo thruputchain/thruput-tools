@@ -658,7 +658,7 @@ fn traffic_fixture() -> EventIndexerPulledBlock {
         .consensus_value
         .proposal_header
         .block_height = 1.into();
-    block.block.payload.consensus_value.prev_hash = block.origin.first_prev_hash.clone();
+    block.block.payload.consensus_value.prev_hash = block.origin.first_prev_hash;
     rehash(&mut block);
     block
 }

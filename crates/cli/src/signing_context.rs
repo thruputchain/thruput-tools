@@ -61,7 +61,7 @@ pub(crate) fn pinned_signing_context(
     native: bool,
 ) -> WalletSigningContext {
     WalletSigningContext {
-        network_hash: pinned.clone(),
+        network_hash: *pinned,
         entrypoints: if native {
             native_entrypoints()
         } else {

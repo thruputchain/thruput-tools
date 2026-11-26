@@ -688,7 +688,7 @@ async fn probe_once(
     let faucet = probes.faucet.result;
 
     if let Some(tip) = db_gateway.tip.as_ref() {
-        state.last_tip = Some(tip.clone());
+        state.last_tip = Some(*tip);
     }
     let chain_tip = state.last_tip.as_ref().map_or(
         ChainTipHealth {
@@ -696,7 +696,7 @@ async fn probe_once(
             age_ms: None,
         },
         |(height, seen_at)| ChainTipHealth {
-            height: Some(height.clone()),
+            height: Some(*height),
             age_ms: Some(u64::try_from(seen_at.elapsed().as_millis()).unwrap_or(u64::MAX)),
         },
     );
@@ -1005,7 +1005,6 @@ fn successful_scheduler_probe(
             .value
             .proposal_header
             .network_hash
-            .clone()
             .into_inner()
             .into_inner(),
     );

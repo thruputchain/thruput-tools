@@ -136,7 +136,7 @@ pub(crate) fn derive_native_accounts(
                 index: u32::try_from(index).unwrap_or(u32::MAX),
                 wallet_address: account.address(),
                 signer,
-                network_hash: network_hash.cloned(),
+                network_hash: network_hash.copied(),
             }
         })
         .collect()

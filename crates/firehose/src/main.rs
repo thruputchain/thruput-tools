@@ -776,8 +776,7 @@ mod tests {
             .collect();
         let first: EventIndexerPulledBlock = xdrs::txs::decode(&hex::decode(hex).unwrap()).unwrap();
         let mut second = first.clone();
-        second.block.payload.consensus_value.prev_hash =
-            first.block.identity.consensus_hash.clone();
+        second.block.payload.consensus_value.prev_hash = first.block.identity.consensus_hash;
         second
             .block
             .payload
@@ -1066,7 +1065,7 @@ mod tests {
         test_blocks::rehash(&mut gap);
         let mut wrong_parent = second;
         wrong_parent.block.payload.consensus_value.prev_hash =
-            first.block.payload.consensus_value.prev_hash.clone();
+            first.block.payload.consensus_value.prev_hash;
         test_blocks::rehash(&mut wrong_parent);
         let mut origin = first.origin.clone();
         origin.epoch_sequence += 1;

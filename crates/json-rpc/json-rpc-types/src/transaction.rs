@@ -315,7 +315,7 @@ impl From<&thruput_trace::DbConflictDiagnostic> for ConflictDiagnostic {
 impl From<&thruput_trace::TxFailureDiagnostic> for TransactionStatus {
     fn from(diagnostic: &thruput_trace::TxFailureDiagnostic) -> Self {
         Self::RecentFailure {
-            attempt_height: diagnostic.attempt_height.clone(),
+            attempt_height: diagnostic.attempt_height,
             cause: (&diagnostic.cause).into(),
         }
     }

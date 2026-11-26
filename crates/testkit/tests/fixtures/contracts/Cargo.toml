@@ -15,4 +15,4 @@ publish = false
 
 [workspace.dependencies]
 # Keep on the SDK release that the thruput-tools workspace pins.
-thruput-sdk = { version = "=0.62.0" }
+thruput-sdk = { version = "=0.64.0" }

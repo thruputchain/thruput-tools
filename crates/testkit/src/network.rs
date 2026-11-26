@@ -587,7 +587,7 @@ impl Network {
             |result| {
                 floor
                     .as_ref()
-                    .is_some_and(|floor| storage_below_floor(result, floor))
+                    .is_some_and(|floor| storage_below_floor(result, *floor))
             },
         )
         .await;
@@ -625,7 +625,7 @@ impl Network {
         let min_state_block_height = self.read_floor();
         let request = requests::SimulateInvocationRequest {
             assumed_auth: None,
-            min_state_block_height: min_state_block_height.clone(),
+            min_state_block_height,
             address: Base58(contract),
             entrypoint: HexBytes(entrypoint.into_inner().to_vec()),
             calldata: HexBytes(calldata.to_vec()),
@@ -862,11 +862,11 @@ fn below_floor<T>(result: &std::result::Result<T, NativeClientError>) -> bool {
 /// Whether a storage read answered from a state below `floor`.
 fn storage_below_floor<E>(
     result: &std::result::Result<DecodedResponse<StorageResult>, E>,
-    floor: &BlockHeight,
+    floor: BlockHeight,
 ) -> bool {
     matches!(
         result,
-        Ok(DecodedResponse::Known(storage)) if *storage.state_block_height < **floor
+        Ok(DecodedResponse::Known(storage)) if *storage.state_block_height < *floor
     )
 }
 

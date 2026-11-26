@@ -248,7 +248,7 @@ async fn fetch_transaction(
             Ok(status) => (status, None),
             Err(error) => (
                 TransactionStatus::Committed {
-                    block_height: receipt.block_height.clone(),
+                    block_height: receipt.block_height,
                 },
                 Some(serde_json::json!({
                     "message": error.to_string(), "evidence": error.details_json(),

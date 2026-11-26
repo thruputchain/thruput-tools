@@ -16406,15 +16406,20 @@ fn decode_wallet_action(
     if signed_tx.tx.invocation.entrypoint
         == thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
     {
+        // `execute(mints, calls)`; a call ends with the tokens it forwards.
         type Call = (
             thruput_xdr::types::ContractAddress,
             thruput_xdr::contract::ContractEntrypointID,
             u64,
             Vec<u8>,
+            Vec<u32>,
         );
-        let calls: Vec<Call> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata).unwrap();
+        let (mints, calls): (Vec<Vec<u8>>, Vec<Call>) =
+            xdrs::cxs::decode(&signed_tx.tx.invocation.calldata).unwrap();
+        assert!(mints.is_empty());
         assert_eq!(calls.len(), 1);
-        let (address, entrypoint, gas, calldata) = &calls[0];
+        let (address, entrypoint, gas, calldata, tokens) = &calls[0];
+        assert!(tokens.is_empty());
         assert_eq!(*gas, thruput_signing::DEFAULT_TX_GAS_LIMIT);
         return (
             thruput_encoding::encode(address.as_ref()),

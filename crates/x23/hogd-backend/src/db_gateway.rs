@@ -32,7 +32,6 @@ pub fn tip_reading(
                 .value
                 .proposal_header
                 .network_hash
-                .clone()
                 .into_inner()
                 .into_inner(),
         );
@@ -74,7 +73,7 @@ pub fn tip_reading(
         (&config.storage_cost_model).into(),
     );
     let wallet = config.tip.default_wallet;
-    let block_timepoint = config.tip.value.proposal_header.block_timepoint.clone();
+    let block_timepoint = config.tip.value.proposal_header.block_timepoint;
     Ok(TipReading::new(tip, config.tip.network_config)
         .with_execution(execution)
         .with_block_timepoint(block_timepoint)

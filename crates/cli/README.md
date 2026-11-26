@@ -1039,9 +1039,9 @@ chain's initial blocks, the next block still takes the wall clock. Clearing the 
 continues from the tip's time, not from today.
 
 A contract view runs at the time the next block would get, so it sees a time
-change at once. This needs hog-devnode 0.1.36, the managed default. hog-devnode
-0.1.35 runs views at the later of the wall clock and the tip's time, and earlier
-runtimes at the wall clock. For example, move 30 days ahead with an empty block:
+change at once. This needs hog-devnode 0.1.36 or later; the managed default is
+0.1.37. hog-devnode 0.1.35 runs views at the later of the wall clock and the
+tip's time, and earlier runtimes at the wall clock. For example, move 30 days ahead with an empty block:
 
 ```bash
 curl -s http://127.0.0.1:9545 -H 'content-type: application/json' \
