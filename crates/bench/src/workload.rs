@@ -514,10 +514,20 @@ mod tests {
                     signed.tx.invocation.entrypoint,
                     thruput_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
                 );
-                let calls: Vec<(ContractAddress, ContractEntrypointID, u64, Vec<u8>)> =
+                // `execute(mints, calls)`; each call carries the tokens it forwards.
+                type WalletCall = (
+                    ContractAddress,
+                    ContractEntrypointID,
+                    u64,
+                    Vec<u8>,
+                    Vec<u32>,
+                );
+                let (mints, calls): (Vec<Vec<u8>>, Vec<WalletCall>) =
                     xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
+                assert!(mints.is_empty());
                 assert_eq!(calls.len(), 1);
-                let (target, entrypoint, gas, calldata) = &calls[0];
+                let (target, entrypoint, gas, calldata, tokens) = &calls[0];
+                assert!(tokens.is_empty());
                 assert_eq!(
                     *target,
                     thruput_xdr::genesis_addresses::ADDRESS_NATIVE_TOKEN
