@@ -2,6 +2,7 @@ use super::{
     ErrorData,
     catalogue::{EVIDENCE_FIELDS, allowed_evidence, kind_allowed, kind_code},
 };
+use serde::Deserialize;
 use serde_json::Value;
 
 /// Interpretation of a JSON-RPC **error object**, not the enclosing response.
@@ -52,7 +53,7 @@ impl DecodedError {
         {
             return None;
         }
-        serde_json::from_value(data.clone()).ok()
+        ErrorData::deserialize(data).ok()
     }
 }
 

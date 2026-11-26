@@ -31,8 +31,7 @@ pub enum AirdropExecution {
 impl<'de> Deserialize<'de> for AirdropExecution {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let raw = Value::deserialize(d)?;
-        let execution: ReceiptExecution =
-            serde_json::from_value(raw.clone()).map_err(serde::de::Error::custom)?;
+        let execution = ReceiptExecution::deserialize(&raw).map_err(serde::de::Error::custom)?;
         match execution {
             ReceiptExecution::Return { return_data } => Ok(Self::Return { return_data }),
             ReceiptExecution::Unsupported(_) | ReceiptExecution::Other {} => {
