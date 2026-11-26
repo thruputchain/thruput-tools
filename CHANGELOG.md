@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.48.0
 
 ### hog-devnode 0.1.37, protocol 0.69.0 and SDK 0.64.0
 
@@ -21,6 +21,10 @@ The managed runtime is now hog-devnode 0.1.37. Tools move to protocol crates
   hog-devnode 0.1.37 does, from a `ProposalTxsCommit` and a `BatchCommit`.
 - `thruput-u256` is built with `software-arithmetic`, so the CLI formats
   and divides `U256` values without a runtime.
+- The counter app from `thruput new --template counter-app` pins
+  `@thruputchain/client` 0.29.0, the first client whose wallet transactions
+  hog-devnode 0.1.37 accepts, and reads an unknown transaction outcome from
+  the client's `ThruputError`.
 
 ## 0.47.0
 
