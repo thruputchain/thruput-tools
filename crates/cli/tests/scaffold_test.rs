@@ -52,11 +52,14 @@ fn assert_scaffold_cargo_config(dir: &std::path::Path) {
     assert!(config.contains("[target.riscv32im-unknown-none-elf]"));
     // The canonical rv32 flag set, verbatim: `+relax` and the two extra link
     // args are measured size wins, and a substring match on the bare
-    // `+unaligned-scalar-mem` would not notice them going missing.
+    // `+unaligned-scalar-mem` would not notice them going missing. Without
+    // `-expand-div-rem-bits=128`, a 128-bit division never reaches the SDK's
+    // `U128MulDivRem` path.
     assert_contains_all(
         &config,
         &[
             "target-feature=+unaligned-scalar-mem,+relax",
+            "llvm-args=-expand-div-rem-bits=128",
             "link-arg=-Tthruput-rv32.ld",
             "link-arg=--icf=all",
             "link-arg=--relax-gp",
