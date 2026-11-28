@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.48.1
+
+- Refresh the offline site and Markdown export bundled with `thruput docs`
+  for Futurenet 0.1.38.
+- Generate RV32 projects with a compiler setting that routes 128-bit division
+  and remainder through the SDK's runtime helpers.
+
 ## 0.48.0
 
 ### hog-devnode 0.1.37, protocol 0.69.0 and SDK 0.64.0
