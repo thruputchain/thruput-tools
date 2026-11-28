@@ -402,9 +402,8 @@ fn validate_sections(
             && section.size > 0
     });
 
-    // (guest address, file offset, size) of every section with file bytes to
-    // stage, and the address range they span together.
-    let mut placements: Vec<(usize, usize, usize)> = Vec::new();
+    // Only nonzero bytes at the edges determine the stored image bounds.
+    let mut placements = Vec::new();
     let mut lowest = usize::MAX;
     let mut extent = 0usize;
     let mut data_ranges: Vec<(String, u32, u32)> = Vec::new();
@@ -485,34 +484,29 @@ fn validate_sections(
                 section.name
             )));
         }
-        if size == 0 {
+        let bytes = &data[off..off + size];
+        let Some(first) = bytes.iter().position(|&b| b != 0) else {
             continue;
-        }
-        let addr = section.addr as usize;
+        };
+        let bytes = &bytes[first..];
+        let last = bytes
+            .iter()
+            .rposition(|&b| b != 0)
+            .expect("bug: first byte is nonzero");
+        let bytes = &bytes[..=last];
+        let addr = section.addr as usize + first;
         lowest = lowest.min(addr);
-        extent = extent.max(addr + size);
-        placements.push((addr, off, size));
+        extent = extent.max(addr + bytes.len());
+        placements.push((addr, bytes));
     }
 
-    // Stage only the span the ELF places data in, not the address space
-    // around it: `memory_bytes` is the caller's and can be far larger than any
-    // image, and a section may sit high inside it. The per-section check
-    // above already bounds `extent` by `memory_bytes`.
+    // The runtime zero-fills the address space outside the stored span.
     let base = if placements.is_empty() { 0 } else { lowest };
     let mut memory = vec![0u8; extent - base];
-    for (addr, off, size) in placements {
-        memory[addr - base..addr - base + size].copy_from_slice(&data[off..off + size]);
+    for (addr, bytes) in placements {
+        let offset = addr - base;
+        memory[offset..offset + bytes.len()].copy_from_slice(bytes);
     }
 
-    let code = data[text_off..text_off + text_size].to_vec();
-    // Store the minimal nonzero span; the runtime zero-fills everything
-    // outside `[start, start + len)`, so edge zeros carry no information.
-    let (initial_memory, start) = match (
-        memory.iter().position(|&b| b != 0),
-        memory.iter().rposition(|&b| b != 0),
-    ) {
-        (Some(low), Some(high)) => (memory[low..=high].to_vec(), base + low),
-        _ => (Vec::new(), 0),
-    };
-    Ok((code, initial_memory, start))
+    Ok((data[text_off..text_off + text_size].to_vec(), memory, base))
 }
